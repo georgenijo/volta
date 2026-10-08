@@ -241,6 +241,30 @@ test('Fleet series query errors preserve detail and log only a fixed code',async
   expect(JSON.stringify(logs)).not.toContain(privateText);
 });
 
+test('one-hour mixed-cadence drive is served before ANALYZE',async()=>{
+  await owner`UPDATE drives SET end_date=start_date+interval '1 hour' WHERE id=1`;
+  await owner`INSERT INTO volta_telemetry.power_calibration(vehicle_id,sign,source,evidence_note)
+    VALUES(1,'discharge_positive','operator_live_gate','synthetic fixture')`;
+  // 1 Hz speed, pack and GPS; three 10 s and four 60 s fields, each offset so
+  // timestamps rarely coincide. Before ANALYZE the planner sees a tiny table.
+  await owner`INSERT INTO volta_telemetry.samples(vehicle_id,field,source_ts,received_at,value_num,latitude,longitude,invalid,quality,payload_id)
+    SELECT 1,m.field,${start}::timestamptz+(n*m.every+m.offset_ms/1000.0)*interval '1 second',${start},
+      CASE WHEN m.field='Location' THEN NULL WHEN m.field='PackVoltage' THEN 400 ELSE 20+n%50 END,
+      CASE WHEN m.field='Location' THEN 37.4+n/1e5 END,CASE WHEN m.field='Location' THEN -122.1+n/1e5 END,
+      false,'ok','mixed'||m.offset_ms||'-'||n
+    FROM (VALUES ('VehicleSpeed',1,0),('PackVoltage',1,0),('PackCurrent',1,0),('Location',1,250),
+      ('BatteryLevel',10,100),('EnergyRemaining',10,350),('RatedRange',10,700),
+      ('InsideTemp',60,150),('OutsideTemp',60,450),('ModuleTempMin',60,650),('ModuleTempMax',60,850))
+      AS m(field,every,offset_ms)
+    CROSS JOIN LATERAL generate_series(0,3600/m.every-1) n`;
+  const started=Date.now();
+  const telemetry=(await get('/v1/drives/1')).telemetry;
+  expect(Date.now()-started).toBeLessThan(5000);
+  expect(telemetry).not.toBeNull();
+  expect(telemetry.coverage.sourceSampleCount).toBeGreaterThan(7000);
+  expect(telemetry.samples.map((p:any)=>p.powerKw)).toContain(8);
+},30000);
+
 test('eight-hour co-timed electrical history has identical selection and coverage before and after ANALYZE',async()=>{
   await owner`UPDATE drives SET end_date=start_date+interval '8 hours' WHERE id=1`;
   await owner`INSERT INTO volta_telemetry.power_calibration(vehicle_id,sign,source,evidence_note)

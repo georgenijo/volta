@@ -31,6 +31,14 @@ WITH resolved AS (
     END AS power_kw
   FROM packs p LEFT JOIN volta_telemetry.power_calibration c USING (vehicle_id)
   GROUP BY p.vehicle_id,p.source_ts,c.sign
+), merged AS (
+  -- powers has one row per (vehicle_id, source_ts), so appending it to the
+  -- per-field rows and grouping once equals a join without depending on
+  -- planner estimates: before ANALYZE a join here was planned as a quadratic
+  -- nested loop.
+  SELECT vehicle_id,source_ts,field,n,lat,lon,NULL::double precision AS power_kw FROM resolved
+  UNION ALL
+  SELECT vehicle_id,source_ts,NULL,NULL,NULL,NULL,power_kw FROM powers
 )
 SELECT r.vehicle_id,r.source_ts,
   max(r.lat) FILTER (WHERE field='Location') AS latitude,
@@ -49,7 +57,7 @@ SELECT r.vehicle_id,r.source_ts,
   -- meanings. Expose both internally; API selects according to session kind.
   max(n) FILTER (WHERE field='ACChargingPower') AS ac_power_kw,
   max(n) FILTER (WHERE field='DCChargingPower') AS dc_power_kw,
-  max(p.power_kw) AS power_kw,
+  max(r.power_kw) AS power_kw,
   -- Absence and an explicit invalid/conflicting observation are distinct.
   -- Clients can keep a slow signal's cadence without bridging invalid data.
   array_agg(r.field) FILTER (WHERE r.n IS NULL AND r.field IN
@@ -59,7 +67,7 @@ SELECT r.vehicle_id,r.source_ts,
      'LongitudinalAcceleration','LateralAcceleration')) AS invalid_fields,
   max(n) FILTER (WHERE field='LongitudinalAcceleration') AS longitudinal_acceleration_mps2,
   max(n) FILTER (WHERE field='LateralAcceleration') AS lateral_acceleration_mps2
-FROM resolved r LEFT JOIN powers p USING (vehicle_id,source_ts)
+FROM merged r
 GROUP BY r.vehicle_id,r.source_ts;
 
 REVOKE ALL ON volta_telemetry.api_vehicle_bindings,volta_telemetry.session_samples FROM PUBLIC;

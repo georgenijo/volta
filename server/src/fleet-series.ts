@@ -141,7 +141,7 @@ export class FleetSeries {
               extract(epoch FROM b.start)::double precision,extract(epoch FROM b.finish)::double precision,c.n)-1))
             ELSE 0 END AS bucket
         FROM numbered n CROSS JOIN representative_capacity c CROSS JOIN source_bounds b
-        WHERE n.rn NOT IN (SELECT rn FROM mandatory) AND c.n>0
+        WHERE n.rn NOT IN (SELECT rn FROM mandatory WHERE rn IS NOT NULL) AND c.n>0
       ), bucket_representatives AS MATERIALIZED (
         SELECT DISTINCT ON(bucket) rn FROM remaining ORDER BY bucket,rn
       ), metric_representatives AS MATERIALIZED (
@@ -153,7 +153,7 @@ export class FleetSeries {
           greatest(0,width_bucket(extract(epoch FROM mv.t)::double precision,
             extract(epoch FROM b.start)::double precision,extract(epoch FROM b.finish)::double precision,c.n)-1))
           ELSE 0 END AS bucket) grid
-        WHERE mv.rn NOT IN (SELECT rn FROM mandatory) AND c.n>0
+        WHERE mv.rn NOT IN (SELECT rn FROM mandatory WHERE rn IS NOT NULL) AND c.n>0
         ORDER BY bucket,mv.key,mv.rn
       ), representatives AS MATERIALIZED (
         SELECT rn FROM bucket_representatives UNION SELECT rn FROM metric_representatives
@@ -168,8 +168,8 @@ export class FleetSeries {
               extract(epoch FROM b.start)::double precision,extract(epoch FROM b.finish)::double precision,c.n)-1))
             ELSE 0 END AS bucket
         FROM numbered n CROSS JOIN fill_capacity c CROSS JOIN source_bounds b
-        WHERE n.rn NOT IN (SELECT rn FROM mandatory)
-          AND n.rn NOT IN (SELECT rn FROM representatives) AND c.n>0
+        WHERE n.rn NOT IN (SELECT rn FROM mandatory WHERE rn IS NOT NULL)
+          AND n.rn NOT IN (SELECT rn FROM representatives WHERE rn IS NOT NULL) AND c.n>0
       ), even_rows AS (
         SELECT DISTINCT ON(bucket) rn FROM fill_remaining ORDER BY bucket,rn
       ), selected_ids AS MATERIALIZED (
