@@ -1,0 +1,28 @@
+# Reference config. Deploy only with owner approval. Cloudflare matches a route
+# against the whole URL including its query string, and patterns may not
+# contain one, so the callback route needs a trailing * to receive Tesla's
+# ?code|error&state return. That * also claims /volta/oauth/callback<anything>;
+# worker.js answers only the exact pathname and 404s the rest locally. The key
+# route stays exact (Tesla fetches it without a query). The rest of the site
+# keeps its existing hosting untouched.
+name = "volta-tesla-edge"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+preview_urls = false
+routes = [
+  { pattern = "georgenijo.com/volta/oauth/callback*", zone_name = "georgenijo.com" },
+  { pattern = "georgenijo.com/.well-known/appspecific/com.tesla.3p.public-key.pem", zone_name = "georgenijo.com" },
+]
+
+# No request logs, traces, or Logpush for these routes: the callback URL holds
+# a one-time authorization code.
+logpush = false
+[observability]
+enabled = false
+[observability.logs]
+enabled = false
+
+# TESLA_PUBLIC_KEY_PEM is set as a plain-text variable (it is public), e.g.
+#   wrangler deploy --var "TESLA_PUBLIC_KEY_PEM:$(cat public-key.pem)"
+# Never bind the private key; the worker refuses anything but a public key.

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 478 100" width="478" height="100">
+  <title>VOLTA wordmark</title>
+  <!-- Geometric caps on a 100-unit cap height, 22-24 unit stems. The A is a crossbar-less
+       mirror of the V, so the word opens and closes on the same chevron. -->
+  <g fill="#FFFFFF" fill-rule="evenodd">
+    <path d="M0 0H24L48 66.7L72 0H96L60 100H36Z"/>
+    <path transform="translate(108 0)" d="M28 0H68A28 28 0 0 1 96 28V72A28 28 0 0 1 68 100H28A28 28 0 0 1 0 72V28A28 28 0 0 1 28 0Z M30 22A8 8 0 0 0 22 30V70A8 8 0 0 0 30 78H66A8 8 0 0 0 74 70V30A8 8 0 0 0 66 22Z"/>
+    <path transform="translate(218 0)" d="M0 0H22V78H80V100H0Z"/>
+    <path transform="translate(306 0)" d="M0 0H88V22H55V100H33V22H0Z"/>
+    <path transform="translate(382 0)" d="M36 0H60L96 100H72L48 33.3L24 100H0Z"/>
+  </g>
+</svg>

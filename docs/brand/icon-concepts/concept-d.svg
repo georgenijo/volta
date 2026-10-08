@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs><linearGradient id="d-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4F8FF8"/><stop offset="1" stop-color="#1D4ED8"/></linearGradient><radialGradient id="d-hl" cx="0.3" cy="0.0" r="0.9"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient><clipPath id="d-clip"><rect x="0" y="300" width="1024" height="424"/></clipPath></defs>
+<rect width="1024" height="1024" fill="url(#d-bg)"/><rect width="1024" height="1024" fill="url(#d-hl)"/>
+<g fill="none" stroke-linejoin="miter" stroke-miterlimit="10" stroke-width="88">
+<polyline clip-path="url(#d-clip)" points="262.4,240 436,724 588,300 761.6,784" stroke="#FFFFFF"/>
+</g>
+</svg>

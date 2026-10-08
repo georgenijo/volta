@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<defs><linearGradient id="c-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1D2025"/><stop offset="1" stop-color="#0A0B0D"/></linearGradient><radialGradient id="c-hl" cx="0.5" cy="0.08" r="0.75"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/></radialGradient><radialGradient id="c-halo" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#3B82F6" stop-opacity="0.55"/><stop offset="1" stop-color="#3B82F6" stop-opacity="0"/></radialGradient></defs>
+<rect width="1024" height="1024" fill="url(#c-bg)"/><rect width="1024" height="1024" fill="url(#c-hl)"/>
+<g stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="26" fill="none" stroke-linecap="round">
+<path d="M-40 300 C 260 360, 520 180, 1100 260"/><path d="M-40 820 C 300 700, 700 940, 1100 760"/><path d="M180 -40 C 260 300, 120 700, 260 1100"/><path d="M880 -40 C 780 380, 940 640, 820 1100"/></g>
+<ellipse cx="512" cy="836" rx="190" ry="60" fill="url(#c-halo)"/>
+<path d="M512 840 C 440 740, 300 620, 300 452 A212 212 0 1 1 724 452 C 724 620, 584 740, 512 840Z" fill="#FFFFFF"/>
+<path transform="translate(420.8 358) scale(1.9)" d="M0 0H24L48 66.7L72 0H96L60 100H36Z" fill="#0E0F11"/>
+</svg>

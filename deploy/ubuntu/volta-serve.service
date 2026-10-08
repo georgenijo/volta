@@ -1,0 +1,15 @@
+[Unit]
+Description=Proxy Tailscale Serve loopback requests to Volta's tailnet bind
+Requires=volta-serve.socket
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/volta/relay.env
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd ${TAILSCALE_IP}:8080
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_UNIX

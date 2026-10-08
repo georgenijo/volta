@@ -1,0 +1,76 @@
+name: Server
+
+on:
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'deploy/**'
+      - '.github/workflows/server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: volta
+          POSTGRES_PASSWORD: volta_ci
+          POSTGRES_DB: volta_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U volta -d volta_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Disposable CI database only, with the production reader/auth role grants.
+      TEST_DATABASE_URL: postgres://volta:volta_ci@127.0.0.1:5432/volta_test
+      TESLAMATE_DATABASE_URL: postgres://volta_reader:volta_reader_ci@127.0.0.1:5432/volta_test
+      AUTH_DATABASE_URL: postgres://volta_auth:volta_auth_ci@127.0.0.1:5432/volta_test
+      TZ: UTC
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.1'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-1.4.1-${{ hashFiles('server/bun.lock', 'server/bun.lockb') }}
+          restore-keys: bun-${{ runner.os }}-1.4.1-
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Restore TeslaMate schema and bootstrap restricted roles
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          # The service is isolated. Never run this setup against a real database.
+          docker exec -i "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 \
+            < test/teslamate-v4.3.0.sql
+          sql_dir=$(mktemp -d)
+          trap 'rm -rf "$sql_dir"' EXIT
+          sed '/^\\password /d' ../deploy/bootstrap.sql > "$sql_dir/bootstrap.sql"
+          docker cp "$sql_dir/bootstrap.sql" "$POSTGRES_CONTAINER:/tmp/bootstrap.sql"
+          for file in auth-schema.sql history-schema.sql auth-grants.sql privilege-checks.sql; do
+            docker cp "../deploy/$file" "$POSTGRES_CONTAINER:/tmp/$file"
+          done
+          docker exec "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 -f /tmp/bootstrap.sql
+          docker exec -i "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER ROLE volta_reader PASSWORD 'volta_reader_ci';
+          ALTER ROLE volta_auth PASSWORD 'volta_auth_ci';
+          SQL
+      - run: bun test

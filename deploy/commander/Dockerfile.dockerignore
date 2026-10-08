@@ -1,0 +1,14 @@
+# This per-Dockerfile BuildKit ignore applies when context is the repo root.
+# Allowlist only source needed for the wrapper. Never upload private/runtime data.
+**
+!commander/*.go
+!commander/go.mod
+!commander/cmd/commander/*.go
+!commander/cmd/fakefleet/*.go
+commander/**/.env
+commander/**/*.pem
+commander/**/*.key
+commander/**/secrets/
+commander/**/data/
+commander/**/*.enc
+commander/**/*.lock

@@ -1,0 +1,9 @@
+[Unit]
+Description=Let TeslaMate discover vehicles on the newly linked Tesla account
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+# Replace with the verified TeslaMate container name when installing.
+ExecStart=/usr/bin/docker restart REPLACE_TESLAMATE_CONTAINER

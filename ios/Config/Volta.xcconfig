@@ -1,0 +1,4 @@
+// Project-wide build settings. The signing team is personal, so it lives in the
+// untracked Signing.local.xcconfig (see Signing.local.xcconfig.example). Without
+// it, simulator builds still work and device builds need a team picked in Xcode.
+#include? "Signing.local.xcconfig"

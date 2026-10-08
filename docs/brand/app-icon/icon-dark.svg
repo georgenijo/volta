@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<!-- iOS dark appearance: transparent background; the system supplies the dark backdrop. -->
+<defs><linearGradient id="bar" x1="0" x2="1"><stop offset="0" stop-color="#3B82F6"/><stop offset="1" stop-color="#7AB4FF"/></linearGradient><filter id="glow" x="-30%" y="-300%" width="160%" height="700%"><feGaussianBlur stdDeviation="18"/></filter></defs>
+<path transform="translate(310.4 226) scale(4.2)" d="M0 0H24L48 66.7L72 0H96L60 100H36Z" fill="#F2F4F7"/>
+<rect x="287" y="748" width="450" height="36" rx="18" fill="#FFFFFF" fill-opacity="0.14"/>
+<rect x="287" y="748" width="351" height="36" rx="18" fill="#3B82F6" filter="url(#glow)" opacity="0.8"/>
+<rect x="287" y="748" width="351" height="36" rx="18" fill="url(#bar)"/>
+</svg>

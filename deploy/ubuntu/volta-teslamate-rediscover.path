@@ -1,0 +1,9 @@
+[Unit]
+Description=Restart TeslaMate once after a new Sign in with Tesla link
+
+[Path]
+# commander writes only a timestamp here after a successful link.
+PathChanged=/var/lib/volta/commander/linked
+
+[Install]
+WantedBy=multi-user.target

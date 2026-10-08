@@ -1,0 +1,75 @@
+name: Volta
+# XcodeGen includes are enabled only when their file exists. ios-build.sh sets
+# these flags automatically; direct xcodegen callers can export them explicitly.
+include:
+  - path: project.widgets.yml
+    enable: ${VOLTA_INCLUDE_WIDGETS}
+  - path: project.uitests.yml
+    enable: ${VOLTA_INCLUDE_UITESTS}
+configFiles:
+  Debug: Config/Volta.xcconfig
+  Release: Config/Volta.xcconfig
+options:
+  bundleIdPrefix: com.georgenijo
+  deploymentTarget:
+    iOS: '26.0'
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: '6.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: '26.0'
+targets:
+  Volta:
+    type: application
+    platform: iOS
+    sources:
+      - path: Volta
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.georgenijo.volta
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: '1'
+        GENERATE_INFOPLIST_FILE: NO
+    entitlements:
+      path: Volta/App/Volta.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.georgenijo.volta
+    info:
+      path: Volta/Info.plist
+      properties:
+        CFBundleDisplayName: Volta
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSFaceIDUsageDescription: Unlock Volta to view your private vehicle history.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+  VoltaTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: VoltaTests
+        excludes:
+          - Fixtures
+      - path: VoltaTests/Fixtures
+        buildPhase: resources
+        type: folder
+    dependencies:
+      - target: Volta
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.georgenijo.volta.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Volta:
+    build:
+      targets:
+        Volta: all
+        VoltaTests: [test]
+    test:
+      targets:
+        - VoltaTests

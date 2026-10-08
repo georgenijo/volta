@@ -1,0 +1,21 @@
+[Unit]
+Description=Start Volta only after its Tailscale address is assigned
+Requires=docker.service tailscaled.service
+After=docker.service tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Replace with the verified absolute checkout path when installing this unit.
+WorkingDirectory=/home/REPLACE_USER/code/volta/deploy/ubuntu
+EnvironmentFile=/etc/volta/relay.env
+ExecStartPre=/usr/local/libexec/volta-wait-tailnet ${TAILSCALE_IP}
+ExecStart=/usr/bin/docker compose up -d api
+ExecStop=/usr/bin/docker compose stop api
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

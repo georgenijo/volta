@@ -1,0 +1,91 @@
+name: iOS
+
+on:
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'scripts/screenshots.sh'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prerequisites:
+    # Fail cheaply while the frame target/include is still landing.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require integrated frame project
+        run: |
+          if [[ ! -f ios/project.yml ]]; then
+            echo '::error::Missing ios/project.yml. Integrate feat/ios-frame and include project.uitests.yml before simulator CI.'
+            exit 1
+          fi
+
+  test:
+    needs: prerequisites
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      DERIVED_DATA_PATH: ${{ github.workspace }}/ios/DerivedData
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          brew install xcodegen
+          xcodegen --version
+      - name: Cache compiler and package downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/DerivedData/ModuleCache.noindex
+            ios/DerivedData/CompilationCache.noindex
+            ios/DerivedData/SourcePackages
+          key: ios-${{ runner.os }}-${{ runner.arch }}-xcode26.6-${{ hashFiles('ios/**/*.yml', 'ios/**/Package.resolved') }}
+      - name: Generate project
+        run: |
+          if [[ -f ios/project.widgets.yml ]]; then export VOLTA_INCLUDE_WIDGETS=true; else export VOLTA_INCLUDE_WIDGETS=false; fi
+          export VOLTA_INCLUDE_UITESTS=true
+          xcodegen generate --spec ios/project.yml
+      - name: Select available iPhone
+        run: |
+          destination=$(bash scripts/screenshots.sh --print-destination)
+          echo "IOS_DESTINATION=$destination" >> "$GITHUB_ENV"
+      - name: Build app and test runners once
+        id: build
+        run: |
+          xcodebuild build-for-testing -project ios/Volta.xcodeproj -scheme VoltaCI \
+            -destination "$IOS_DESTINATION" -destination-timeout 60 \
+            -derivedDataPath "$DERIVED_DATA_PATH" COMPILATION_CACHE_ENABLE_CACHING=YES
+      - name: Unit tests
+        run: |
+          xcodebuild test-without-building -project ios/Volta.xcodeproj -scheme VoltaCI \
+            -destination "$IOS_DESTINATION" -destination-timeout 60 \
+            -derivedDataPath "$DERIVED_DATA_PATH" -only-testing:VoltaTests \
+            -parallel-testing-enabled NO -resultBundlePath build/unit-tests.xcresult
+      - name: UI screenshots
+        # Capture other screens even if unit tests failed; reuse the built runners.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash scripts/screenshots.sh --skip-build
+      - name: Upload screenshots and diagnostic results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            docs/screens/latest/
+            build/*.xcresult
+            build/screenshots.log
+          if-no-files-found: warn
+          retention-days: 7

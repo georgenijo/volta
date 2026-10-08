@@ -1,0 +1,7 @@
+.env
+*.pem
+*.key
+*.enc
+*.lock
+data/
+bin/

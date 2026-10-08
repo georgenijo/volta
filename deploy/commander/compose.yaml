@@ -1,0 +1,74 @@
+# Standalone fragment, not automatically included in the Phase 1 stack.
+# Use --env-file deploy/commander/.env -f deploy/commander/compose.yaml.
+services:
+  commander:
+    build:
+      context: ../..
+      dockerfile: deploy/commander/Dockerfile
+      target: commander
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "65532:65532"
+    environment:
+      COMMANDER_MODE: ${COMMANDER_MODE:-stub}
+      COMMANDER_COMMANDS_ENABLED: ${COMMANDER_COMMANDS_ENABLED:-false}
+      COMMANDER_OAUTH_ENABLED: ${COMMANDER_OAUTH_ENABLED:-false}
+      COMMANDER_LISTEN: "0.0.0.0:8090"
+      COMMANDER_CALLBACK_LISTEN: "0.0.0.0:8091"
+      COMMANDER_DATA_DIR: /data
+      COMMANDER_INTERNAL_SECRET: ${COMMANDER_INTERNAL_SECRET:?set a random internal secret}
+      COMMANDER_ENCRYPTION_KEY: ${COMMANDER_ENCRYPTION_KEY:?set a base64 32-byte key}
+      COMMANDER_VEHICLES: ${COMMANDER_VEHICLES:?set COMMANDER_VEHICLES to a JSON object}
+      COMMANDER_STUB_URL: http://127.0.0.1:19090
+      TESLA_CLIENT_ID: ${TESLA_CLIENT_ID:-}
+      TESLA_CLIENT_SECRET: ${TESLA_CLIENT_SECRET:-}
+      TESLA_REDIRECT_URI: ${TESLA_REDIRECT_URI:-}
+      TESLA_AUDIENCE: ${TESLA_AUDIENCE:-https://fleet-api.prd.na.vn.cloud.tesla.com}
+      TESLA_PROXY_URL: https://tesla-command-proxy:4443
+      TESLA_PROXY_CA_FILE: ${TESLA_PROXY_CA_FILE:-}
+      TESLA_PUBLIC_KEY_FILE: ${TESLA_PUBLIC_KEY_FILE:-}
+    volumes:
+      - ${COMMANDER_DATA_PATH:-/var/lib/volta/commander}:/data
+      # This directory contains ONLY tls-cert.pem and public-key.pem.
+      - ${COMMANDER_PUBLIC_PATH:-/etc/volta/commander-public}:/public:ro
+    ports:
+      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:8091:8091"
+    networks: [volta-commander, command-signing]
+    stop_grace_period: 80s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  tesla-command-proxy:
+    profiles: [live]
+    build:
+      context: ../..
+      dockerfile: deploy/commander/Dockerfile
+      target: proxy
+      args: {VEHICLE_COMMAND_VERSION: v0.4.1}
+    # Stable service DNS survives commander restarts/recreation. The signing
+    # network has only these two services; the egress network has only proxy.
+    # Raw proxy has no host port publication or connection to volta-api's net.
+    networks: [command-signing, proxy-egress]
+    command: ["-host", "0.0.0.0", "-port", "4443", "-key-file", "/secrets/fleet-key.pem", "-tls-key", "/secrets/tls-key.pem", "-cert", "/secrets/tls-cert.pem", "-timeout", "10s"]
+    volumes:
+      - ${COMMANDER_SECRET_PATH:-/etc/volta/commander-secrets}:/secrets:ro
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "65532:65532"
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+networks:
+  command-signing:
+    internal: true
+  proxy-egress: {}
+  volta-commander:
+    # Backend worker may attach volta-api to this network and use
+    # http://commander:8090, with internal authentication. Never public ingress.
+    name: volta-commander

@@ -1,0 +1,297 @@
+{
+  "health": {
+    "ok": true,
+    "version": "1.0.0",
+    "teslamate": {
+      "reachable": true,
+      "lastDataAt": "2026-10-06T12:30:00.123Z"
+    }
+  },
+  "device": {
+    "id": 1,
+    "name": "Fixture iPhone",
+    "createdAt": "2026-10-06T12:00:00Z",
+    "lastSeenAt": null
+  },
+  "pair": {
+    "token": "synthetic-test-token",
+    "device": {
+      "id": 1,
+      "name": "Fixture iPhone",
+      "createdAt": "2026-10-06T12:00:00Z",
+      "lastSeenAt": null
+    }
+  },
+  "vehicle": {
+    "id": 1,
+    "name": "Friday",
+    "model": "Model Y",
+    "trim": "Long Range AWD",
+    "exteriorColor": "Midnight Silver Metallic",
+    "vinSuffix": "DEMO01",
+    "firmware": "2026.32.6"
+  },
+  "status": {
+    "vehicleId": 1,
+    "state": "online",
+    "updatedAt": "2026-10-06T12:30:00.123Z",
+    "batteryLevel": 72,
+    "usableBatteryLevel": 71,
+    "ratedRangeKm": 354,
+    "estRangeKm": null,
+    "chargeLimit": 80,
+    "chargingState": "disconnected",
+    "chargerPowerKw": null,
+    "minutesToFull": null,
+    "insideTempC": 21,
+    "outsideTempC": 16,
+    "climateOn": false,
+    "driverTempSettingC": 20,
+    "locked": true,
+    "sentryMode": true,
+    "odometerKm": 38642,
+    "location": {
+      "latitude": 37.4419,
+      "longitude": -122.1430,
+      "heading": null,
+      "address": "Palo Alto, CA",
+      "placeName": "Home"
+    },
+    "firmware": "2026.32.6"
+  },
+  "location": {
+    "latitude": 37.4419,
+    "longitude": -122.1430,
+    "heading": null,
+    "address": "Palo Alto, CA",
+    "placeName": "Home"
+  },
+  "summary": {
+    "range": "7d",
+    "distanceKm": 310,
+    "driveCount": 14,
+    "chargeCount": 3,
+    "energyUsedKwh": 50.84,
+    "efficiencyWhPerKm": 164,
+    "energyAddedKwh": 67.8,
+    "chargeCost": 15.59,
+    "currency": "USD"
+  },
+  "timeline": {
+    "kind": "drive",
+    "start": "2026-10-06T12:00:00Z",
+    "end": "2026-10-06T12:30:00.123Z"
+  },
+  "drive": {
+    "id": 10,
+    "start": "2026-10-06T12:00:00Z",
+    "end": "2026-10-06T12:30:00.123Z",
+    "startAddress": "Palo Alto, CA",
+    "endAddress": "Union City, CA",
+    "distanceKm": 24.8,
+    "durationMin": 30,
+    "startBatteryLevel": 80,
+    "endBatteryLevel": 74,
+    "energyUsedKwh": 4.1,
+    "efficiencyWhPerKm": 165.3,
+    "maxSpeedKph": 104,
+    "avgSpeedKph": 49.6,
+    "outsideTempAvgC": 16
+  },
+  "drivePoint": {
+    "t": "2026-10-06T12:00:00Z",
+    "latitude": 37.4419,
+    "longitude": -122.1430,
+    "speedKph": 0,
+    "powerKw": null,
+    "elevationM": 35,
+    "batteryLevel": 80
+  },
+  "driveDetail": {
+    "id": 10,
+    "start": "2026-10-06T12:00:00Z",
+    "end": "2026-10-06T12:30:00.123Z",
+    "startAddress": "Palo Alto, CA",
+    "endAddress": "Union City, CA",
+    "distanceKm": 24.8,
+    "durationMin": 30,
+    "startBatteryLevel": 80,
+    "endBatteryLevel": 74,
+    "energyUsedKwh": 4.1,
+    "efficiencyWhPerKm": 165.3,
+    "maxSpeedKph": 104,
+    "avgSpeedKph": 49.6,
+    "outsideTempAvgC": 16,
+    "path": [
+      {
+        "t": "2026-10-06T12:00:00Z",
+        "latitude": 37.4419,
+        "longitude": -122.1430,
+        "speedKph": 0,
+        "powerKw": null,
+        "elevationM": 35,
+        "batteryLevel": 80
+      }
+    ],
+    "elevationGainM": 86
+  },
+  "charge": {
+    "id": 20,
+    "start": "2026-10-06T12:00:00Z",
+    "end": "2026-10-06T12:30:00.123Z",
+    "address": "Mountain View, CA",
+    "placeName": "Mountain View Supercharger",
+    "energyAddedKwh": 40.2,
+    "energyUsedKwh": 43.7,
+    "startBatteryLevel": 25,
+    "endBatteryLevel": 80,
+    "durationMin": 30,
+    "maxPowerKw": 175,
+    "fastCharger": true,
+    "cost": 16.48,
+    "currency": "USD",
+    "outsideTempAvgC": 16
+  },
+  "chargeSample": {
+    "t": "2026-10-06T12:30:00.123Z",
+    "batteryLevel": 80,
+    "powerKw": 35,
+    "voltage": 375,
+    "currentA": 93.3,
+    "ratedRangeKm": 392
+  },
+  "chargeDetail": {
+    "id": 20,
+    "start": "2026-10-06T12:00:00Z",
+    "end": "2026-10-06T12:30:00.123Z",
+    "address": "Mountain View, CA",
+    "placeName": "Mountain View Supercharger",
+    "energyAddedKwh": 40.2,
+    "energyUsedKwh": 43.7,
+    "startBatteryLevel": 25,
+    "endBatteryLevel": 80,
+    "durationMin": 30,
+    "maxPowerKw": 175,
+    "fastCharger": true,
+    "cost": 16.48,
+    "currency": "USD",
+    "outsideTempAvgC": 16,
+    "samples": [
+      {
+        "t": "2026-10-06T12:30:00.123Z",
+        "batteryLevel": 80,
+        "powerKw": 35,
+        "voltage": 375,
+        "currentA": 93.3,
+        "ratedRangeKm": 392
+      }
+    ],
+    "efficiency": 0.92
+  },
+  "idle": {
+    "id": 30,
+    "start": "2026-10-06T12:00:00Z",
+    "end": "2026-10-06T12:30:00.123Z",
+    "address": null,
+    "placeName": null,
+    "durationMin": 30,
+    "startBatteryLevel": null,
+    "endBatteryLevel": 71,
+    "rangeLostKm": null,
+    "energyLostKwh": null,
+    "sentryMinutes": 0,
+    "climateMinutes": null,
+    "asleepMinutes": 30
+  },
+  "batteryPoint": {
+    "date": "2026-10-06T12:00:00Z",
+    "ratedRangeAt100Km": 489.8,
+    "capacityKwh": null
+  },
+  "battery": {
+    "capacityNewKwh": 78.1,
+    "capacityNowKwh": 73.54,
+    "healthPercent": 94.16,
+    "ratedRangeAt100Km": 489.8,
+    "history": [
+      {
+        "date": "2026-10-06T12:00:00Z",
+        "ratedRangeAt100Km": 489.8,
+        "capacityKwh": null
+      }
+    ],
+    "avgIdleDrainPctPerDay": 0.8
+  },
+  "mileage": {
+    "start": "2026-10-06T12:00:00Z",
+    "distanceKm": 24.8,
+    "driveCount": 1,
+    "energyUsedKwh": 4.1
+  },
+  "firmware": {
+    "version": "2026.32.6",
+    "installedAt": "2026-10-06T12:30:00.123Z",
+    "previousVersion": null
+  },
+  "place": {
+    "id": 1,
+    "name": "Home",
+    "latitude": 37.4419,
+    "longitude": -122.1430,
+    "radiusM": 120,
+    "costPerKwh": 0.23
+  },
+  "drivePage": {
+    "items": [
+      {
+        "id": 10,
+        "start": "2026-10-06T12:00:00Z",
+        "end": "2026-10-06T12:30:00.123Z",
+        "startAddress": "Palo Alto, CA",
+        "endAddress": "Union City, CA",
+        "distanceKm": 24.8,
+        "durationMin": 30,
+        "startBatteryLevel": 80,
+        "endBatteryLevel": 74,
+        "energyUsedKwh": 4.1,
+        "efficiencyWhPerKm": 165.3,
+        "maxSpeedKph": 104,
+        "avgSpeedKph": 49.6,
+        "outsideTempAvgC": 16
+      }
+    ],
+    "nextCursor": "opaque+cursor/="
+  },
+  "chargePage": {
+    "items": [
+      {
+        "id": 20,
+        "start": "2026-10-06T12:00:00Z",
+        "end": "2026-10-06T12:30:00.123Z",
+        "address": "Mountain View, CA",
+        "placeName": "Mountain View Supercharger",
+        "energyAddedKwh": 40.2,
+        "energyUsedKwh": 43.7,
+        "startBatteryLevel": 25,
+        "endBatteryLevel": 80,
+        "durationMin": 30,
+        "maxPowerKw": 175,
+        "fastCharger": true,
+        "cost": 16.48,
+        "currency": "USD",
+        "outsideTempAvgC": 16
+      }
+    ],
+    "nextCursor": null
+  },
+  "idlePage": {
+    "items": [],
+    "nextCursor": null
+  },
+  "error": {
+    "error": {
+      "code": "commands_unavailable",
+      "message": "Commands are unavailable."
+    }
+  }
+}

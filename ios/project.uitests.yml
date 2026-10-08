@@ -1,0 +1,33 @@
+# Include from project.yml: include: [project.uitests.yml]
+targets:
+  VoltaUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: '26.0'
+    sources:
+      - path: VoltaUITests
+        excludes:
+          - README.md
+    dependencies:
+      - target: Volta
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.georgenijo.volta.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: '6.0'
+        SWIFT_STRICT_CONCURRENCY: complete
+        TEST_TARGET_NAME: Volta
+schemes:
+  VoltaCI:
+    build:
+      targets:
+        Volta: all
+        VoltaTests: [test]
+        VoltaUITests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - name: VoltaTests
+          parallelizable: false
+        - name: VoltaUITests
+          parallelizable: false

@@ -1,0 +1,14 @@
+# Optional overlay: lets the API relay Sign in with Tesla to commander over the
+# private volta-commander network. Enable with, in /etc/volta/relay.env:
+#   COMPOSE_FILE=compose.yml:compose.tesla.yml
+# Requires the commander stack (deploy/commander) to be running first.
+services:
+  api:
+    environment:
+      COMMANDER_URL: http://commander:8090
+      COMMANDER_INTERNAL_SECRET: ${COMMANDER_INTERNAL_SECRET:?set the same internal secret as commander}
+    networks: [teslamate, volta-commander]
+networks:
+  volta-commander:
+    external: true
+    name: volta-commander

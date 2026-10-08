@@ -1,0 +1,23 @@
+{
+  "name": "volta-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "cli": "bun src/cli.ts",
+    "pair": "bun src/cli.ts pair",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:local": "bash scripts/test-local.sh",
+    "schema:refresh": "bash scripts/refresh-schema.sh"
+  },
+  "dependencies": {
+    "hono": "4.13.13",
+    "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "5.9.3"
+  }
+}

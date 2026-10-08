@@ -1,0 +1,9 @@
+**
+!server/
+!server/package.json
+!server/bun.lock
+!server/src/
+!server/src/**
+!deploy/
+!deploy/Dockerfile
+!deploy/Dockerfile.dockerignore

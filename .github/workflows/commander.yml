@@ -1,0 +1,55 @@
+name: Commander
+
+on:
+  pull_request:
+    paths:
+      - 'commander/**'
+      - 'deploy/commander/**'
+      - 'deploy/edge/**'
+      - '.github/workflows/commander.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commander-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: commander
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: commander/go.mod
+          # Standard library only; no go.sum to key a cache on.
+          cache: false
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+      # Synthetic end-to-end sign-in, collector and command flow against fakefleet.
+      - run: python3 scripts/smoke-stub.py
+      - name: Linux release builds
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/commander
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /dev/null ./cmd/commander
+
+  edge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: deploy/edge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.1'
+      - run: bun test ./worker.test.js

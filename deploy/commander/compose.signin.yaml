@@ -1,0 +1,31 @@
+# Read-only "Sign in with Tesla" overlay. Commands stay disabled; no signing
+# proxy runs. Start with:
+#   docker compose --env-file deploy/commander/.env \
+#     -f deploy/commander/compose.yaml -f deploy/commander/compose.signin.yaml up -d commander
+# The client secret is a single-value file readable only by uid 65532 (see
+# deploy/commander/stage-client-secret.py). Only that one file is mounted.
+services:
+  commander:
+    environment:
+      COMMANDER_MODE: live
+      COMMANDER_OAUTH_ENABLED: "true"
+      COMMANDER_COMMANDS_ENABLED: "false"
+      TESLA_CLIENT_ID: ${TESLA_CLIENT_ID:?set the Tesla client ID}
+      TESLA_CLIENT_SECRET: ""
+      TESLA_CLIENT_SECRET_FILE: /run/secrets/tesla-client-secret
+      TESLA_REDIRECT_URI: ${TESLA_REDIRECT_URI:-https://georgenijo.com/volta/oauth/callback}
+      TESLA_PARTNER_DOMAIN: ${TESLA_PARTNER_DOMAIN:-georgenijo.com}
+      COMMANDER_COLLECTOR_ENABLED: "true"
+      # Reachable only on the private volta-collector network; no host port.
+      COMMANDER_COLLECTOR_LISTEN: "0.0.0.0:8092"
+      COMMANDER_COLLECTOR_SECRET: ${COMMANDER_COLLECTOR_SECRET:?set a random collector secret distinct from the internal secret}
+      COMMANDER_MONTHLY_BUDGET_USD: ${COMMANDER_MONTHLY_BUDGET_USD:-20}
+      COMMANDER_CACHE_SECONDS: ${COMMANDER_CACHE_SECONDS:-60}
+    volumes:
+      - ${TESLA_CLIENT_SECRET_HOST_FILE:-/etc/volta/tesla/client-secret}:/run/secrets/tesla-client-secret:ro
+    networks: [volta-collector]
+networks:
+  volta-collector:
+    # TeslaMate joins this network as external and polls http://commander:8092.
+    name: volta-collector
+    internal: true

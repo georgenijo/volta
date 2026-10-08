@@ -1,0 +1,9 @@
+.DS_Store
+xcuserdata/
+*.xcodeproj/
+DerivedData/
+build/
+node_modules/
+.env
+docs/screens/latest/
+ios/Config/Signing.local.xcconfig
