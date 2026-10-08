@@ -18,7 +18,8 @@ while read -r _ local_sha _ remote_sha; do
   [[ $local_sha == "$zero" ]] && continue
   tip=$local_sha
   while [[ $(git cat-file -t "$tip") == tag ]]; do inspect "$tip"; tip=$(git cat-file -p "$tip" | awk '/^object /{print $2; exit}'); done
-  [[ $(git cat-file -t "$tip") == commit ]] || continue
+  # A ref naming a bare tree or blob would publish content no check has seen.
+  [[ $(git cat-file -t "$tip") == commit ]] || { echo "privacy-check: $tip is not a commit; refusing to push it" >&2; exit 1; }
   # Only history already on this destination remote is skipped; anything that
   # cannot be enumerated fails the push.
   if [[ $remote_sha != "$zero" ]]; then

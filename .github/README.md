@@ -76,12 +76,13 @@ It rejects real tailnet hostnames (use `volta-node.example.ts.net`), Tailscale
 addresses outside the `100.64.0.0/24` test range, a hard-coded
 `DEVELOPMENT_TEAM`, and tracked files under `docs/reference/` or `docs/screens/`.
 Locally the same script also rejects every string in a denylist kept outside
-the repo (`~/.config/volta/private-denylist`). Run `scripts/install-hooks.sh` in every
+the repo (`~/.config/volta/private-denylist`). File paths are checked as well
+as contents, and a scan that cannot read everything fails (exit 2). Run `scripts/install-hooks.sh` in every
 clone (and again after the hooks change): it copies the hooks into the git
 directory, outside the worktree, so checking out an old branch cannot drop them.
 `pre-commit` scans the staged tree and requires a `users.noreply.github.com`
 identity; `pre-push` rescans every outgoing commit and tag, including messages
-and identities. Images, videos, archives and databases must be reviewed and
+and identities, and refuses refs that name a bare tree or blob. Images, videos, archives and databases must be reviewed and
 pinned by blob hash in `scripts/privacy-allowed-binaries.txt`. Fixtures use
 synthetic Bay Area places only. Merge PRs by fast-forwarding `main` from a
 local clone so GitHub never authors a merge commit.
