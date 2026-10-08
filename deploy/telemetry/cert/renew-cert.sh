@@ -17,7 +17,11 @@ ENV_FILE="${TELEMETRY_ENV_FILE:-/opt/volta-telemetry/telemetry.env}"
 OWNER="${TELEMETRY_CERT_OWNER:-65532}"
 GROUP="${TELEMETRY_CERT_GROUP:-65532}"
 
-install -d -m 0750 -o "$(id -u)" -g "$GROUP" "$CERT_DIR"
+# Ownership is set with chown, not install -o/-g: Ubuntu 26.04's install
+# (uutils) rejects numeric ids that have no passwd/group entry, like 65532.
+install -d -m 0750 "$CERT_DIR"
+chown "$(id -u):$GROUP" "$CERT_DIR"
+chmod 0750 "$CERT_DIR"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 tailscale cert --cert-file "$tmp/tls.crt" --key-file "$tmp/tls.key" "$HOST" >/dev/null
@@ -43,9 +47,11 @@ if cmp -s "$tmp/tls.crt" "$CERT_DIR/tls.crt" 2>/dev/null; then
   echo "certificate unchanged"
   exit 0
 fi
-install -m 0400 -o "$OWNER" -g "$GROUP" "$tmp/tls.key" "$CERT_DIR/tls.key.new"
-install -m 0444 -o "$OWNER" -g "$GROUP" "$tmp/tls.crt" "$CERT_DIR/tls.crt.new"
-install -m 0444 -o "$OWNER" -g "$GROUP" "$tmp/ca-chain.pem" "$CERT_DIR/ca-chain.pem"
+install -m 0400 "$tmp/tls.key" "$CERT_DIR/tls.key.new"
+install -m 0444 "$tmp/tls.crt" "$CERT_DIR/tls.crt.new"
+install -m 0444 "$tmp/ca-chain.pem" "$CERT_DIR/ca-chain.pem.new"
+chown "$OWNER:$GROUP" "$CERT_DIR/tls.key.new" "$CERT_DIR/tls.crt.new" "$CERT_DIR/ca-chain.pem.new"
+mv -f "$CERT_DIR/ca-chain.pem.new" "$CERT_DIR/ca-chain.pem"
 mv -f "$CERT_DIR/tls.key.new" "$CERT_DIR/tls.key"
 mv -f "$CERT_DIR/tls.crt.new" "$CERT_DIR/tls.crt"
 echo "certificate installed; expires $(openssl x509 -in "$CERT_DIR/tls.crt" -noout -enddate | cut -d= -f2)"

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Mimics Ubuntu 26.04's uutils install, which rejects numeric owner/group ids
+# that have no passwd/group entry. renew-cert.sh must not depend on them.
+for a in "$@"; do
+  case $a in -o|-g|--owner*|--group*|-o*|-g*) echo "install-stub: owner/group options are not portable" >&2; exit 1 ;; esac
+done
+exec "$REAL_INSTALL" "$@"
