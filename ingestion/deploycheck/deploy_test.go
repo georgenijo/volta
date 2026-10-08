@@ -128,8 +128,10 @@ func TestComposeExposure(t *testing.T) {
 		}
 	}
 	r := c.Services["receiver"]
-	if len(r.Ports) != 1 || r.Ports[0] != "127.0.0.1:8448:8448" {
-		t.Errorf("receiver ports %v, want only 127.0.0.1:8448:8448", r.Ports)
+	// One host address only: loopback by default, or the single LAN address
+	// a router forwards (ops/check.sh rejects wildcard binds at runtime).
+	if len(r.Ports) != 1 || r.Ports[0] != "${TELEMETRY_RECEIVER_BIND:-127.0.0.1}:8448:8448" {
+		t.Errorf("receiver ports %v, want only ${TELEMETRY_RECEIVER_BIND:-127.0.0.1}:8448:8448", r.Ports)
 	}
 	if r.Build == nil || r.Image != "volta-telemetry-receiver:local" {
 		t.Errorf("receiver must be the guarded image built from ingestion/Dockerfile")
