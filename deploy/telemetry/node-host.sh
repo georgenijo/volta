@@ -7,18 +7,17 @@ node_host() {
 }
 
 # Reads KEY=value from a Compose-style dotenv file without executing it:
-# leading whitespace and "export " are ignored, the last assignment wins, a
-# quoted value ends at its closing quote, and an unquoted value ends at
-# " #" (inline comment) with trailing whitespace removed. Prints nothing
-# when the file or key is absent.
+# leading whitespace, "export" and spaces around "=" are ignored, the last
+# assignment wins, a quoted value ends at its closing quote, and an unquoted
+# value ends at " #" (inline comment) with trailing whitespace removed.
+# Prints nothing when the file or key is absent.
 env_value() {
   [[ -r $1 ]] || return 0
   local line v out=""
   while IFS= read -r line || [[ -n $line ]]; do
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line#export }"
-    [[ $line == "$2="* ]] || continue
-    v="${line#"$2="}"
+    [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]] || continue
+    [[ ${BASH_REMATCH[2]} == "$2" ]] || continue
+    v="${BASH_REMATCH[3]}"
     v="${v#"${v%%[![:space:]]*}"}"
     case $v in
       \"*) v="${v#\"}"; v="${v%%\"*}" ;;

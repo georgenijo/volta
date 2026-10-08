@@ -106,7 +106,7 @@ grep -q restart "$DOCKER_LOG" && fail "started or restarted a stopped receiver"
 
 # Settings come from telemetry.env when not in the environment, including
 # Compose dotenv forms: export, inline comments, quotes.
-printf '# comment\n  export TELEMETRY_CERT_SOURCE=private # local issuer\nTELEMETRY_HOST="telemetry.example.com" # name\n' >"$w/telemetry.env"
+printf '# comment\n  export   TELEMETRY_CERT_SOURCE = private # local issuer\nTELEMETRY_HOST ="telemetry.example.com" # name\n' >"$w/telemetry.env"
 env -u TELEMETRY_HOST PATH="$w/nots:$PATH" TELEMETRY_ENV_FILE="$w/telemetry.env" TELEMETRY_CERT_DIR="$w/pcerts" TELEMETRY_CA_DIR="$w/pca" \
   "$here/renew-cert.sh" | grep -qx "certificate unchanged" || fail "telemetry.env settings ignored"
 
