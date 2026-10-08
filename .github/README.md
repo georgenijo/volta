@@ -76,8 +76,10 @@ It rejects real tailnet hostnames (use `volta-node.example.ts.net`), Tailscale
 addresses outside the `100.64.0.0/24` test range, a hard-coded
 `DEVELOPMENT_TEAM`, and tracked files under `docs/reference/` or `docs/screens/`.
 Locally the same script also rejects every string in a denylist kept outside
-the repo (`~/.config/volta/private-denylist`); enable it before committing with
-`git config core.hooksPath .githooks`.
+the repo (`~/.config/volta/private-denylist`). Enable the hooks in every clone
+with `git config core.hooksPath .githooks`: `pre-commit` scans the staged tree
+and requires a `users.noreply.github.com` author email, and `pre-push` rescans
+every outgoing commit. Fixtures use synthetic Bay Area places only.
 
 Personal values live outside Git: the signing team in
 `ios/Config/Signing.local.xcconfig`, deploy hostnames in each node's `.env`,

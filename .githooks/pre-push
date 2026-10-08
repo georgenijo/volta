@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Enable with: git config core.hooksPath .githooks
+# Rechecks every outgoing commit, so history (not just the tip) stays clean.
+set -euo pipefail
+check="$(git rev-parse --show-toplevel)/scripts/privacy-check.sh"
+zero=0000000000000000000000000000000000000000
+while read -r _ local_sha _ remote_sha; do
+  [[ $local_sha == "$zero" ]] && continue
+  if [[ $remote_sha == "$zero" ]]; then range=("$local_sha" --not --remotes); else range=("$remote_sha..$local_sha"); fi
+  for c in $(git rev-list "${range[@]}"); do
+    if git log -1 --format='%ae%n%ce' "$c" | grep -qv '@users\.noreply\.github\.com$'; then
+      echo "privacy-check: commit $c has a non-noreply author or committer email" >&2; exit 1
+    fi
+    "$check" "$c" || { echo "privacy-check: commit $c failed" >&2; exit 1; }
+  done
+done

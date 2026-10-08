@@ -11,7 +11,8 @@ services:
       COMMANDER_TELEMETRY_METER_URL: http://consumer:8449/v1/usage
       COMMANDER_TELEMETRY_METER_SECRET: ""
       COMMANDER_TELEMETRY_METER_SECRET_FILE: /run/secrets/telemetry-status-secret
-      COMMANDER_TELEMETRY_HOSTNAME: ${COMMANDER_TELEMETRY_HOSTNAME:?set COMMANDER_TELEMETRY_HOSTNAME to the node full ts.net name}
+      # Commander refuses to start telemetry without the node's full ts.net name.
+      COMMANDER_TELEMETRY_HOSTNAME: ${COMMANDER_TELEMETRY_HOSTNAME:-}
       COMMANDER_TELEMETRY_PORT: ${COMMANDER_TELEMETRY_PORT:-10000}
       COMMANDER_TELEMETRY_CA_FILE: /telemetry-certs/ca-chain.pem
       COMMANDER_TELEMETRY_WARN_USD: ${COMMANDER_TELEMETRY_WARN_USD:-20}
