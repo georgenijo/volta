@@ -1,6 +1,7 @@
 package commander
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -94,6 +95,7 @@ type telemetryFake struct {
 	statusReads     int
 	deleteCode      int
 	postDrop        bool
+	postReply       string
 	profiles        []map[string]telemetryFieldConfig
 }
 
@@ -139,6 +141,10 @@ func (f *telemetryFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				_ = conn.Close()
 			}
+			return
+		}
+		if f.postReply != "" {
+			_, _ = io.WriteString(w, f.postReply)
 			return
 		}
 		_, _ = io.WriteString(w, `{"response":{"updated_vehicles":1,"skipped_vehicles":{}}}`)
@@ -233,6 +239,26 @@ func TestTelemetryCreatePreflightGates(t *testing.T) {
 			t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
 		}
 	})
+}
+
+func TestTelemetryRejectedCreateLogsReasonWithoutVIN(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	fake := &telemetryFake{meter: completeMeter(now, "ok", 1), paired: true, version: "1.3.0",
+		postReply: `{"response":{"updated_vehicles":0,"skipped_vehicles":{"unsupported_firmware":["` + telemetryTestVIN + `"]}},"error":"vehicle ` + telemetryTestVIN + ` rejected"}`}
+	s, _, _ := telemetryService(t, fake, now)
+	var log bytes.Buffer
+	s.audit = slog.New(slog.NewTextHandler(&log, nil))
+	w := telemetryRequest(s, http.MethodPost, "/v1/vehicles/1/telemetry/config")
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "telemetry_config_rejected") {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
+	}
+	out := log.String()
+	if !strings.Contains(out, "telemetry_config_rejected") || !strings.Contains(out, "unsupported_firmware:1") || !strings.Contains(out, "vehicle <vin> rejected") {
+		t.Fatalf("reason not logged: %s", out)
+	}
+	if strings.Contains(out, telemetryTestVIN) {
+		t.Fatalf("VIN logged: %s", out)
+	}
 }
 
 func TestTelemetryCreateFailsClosedOnMeter(t *testing.T) {

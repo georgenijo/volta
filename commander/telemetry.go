@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -676,11 +677,19 @@ func (t *TelemetryController) applyProfile(ctx context.Context, id string, state
 		Updated int                 `json:"updated_vehicles"`
 		Skipped map[string][]string `json:"skipped_vehicles"`
 	}
-	if status < 200 || status >= 300 || reply.Error != "" || json.Unmarshal(reply.Response, &response) != nil || response.Updated != 1 {
+	decodeErr := json.Unmarshal(reply.Response, &response)
+	if status < 200 || status >= 300 || reply.Error != "" || decodeErr != nil || response.Updated != 1 {
 		code := "telemetry_config_rejected"
 		if len(response.Skipped["missing_key"]) > 0 {
 			code = "virtual_key_not_paired"
 		}
+		// Tesla's reason is otherwise lost; log it without VINs.
+		skipped := map[string]int{}
+		for reason, vins := range response.Skipped {
+			skipped[redactVINs(reason)] = len(vins)
+		}
+		t.service.audit.Warn("telemetry_config_rejected", "vehicle", id, "httpStatus", status, "updated", response.Updated,
+			"skipped", skipped, "error", redactVINs(reply.Error), "description", redactVINs(reply.Description))
 		t.failAction(id, state, code)
 		r := failure(409, code, "Tesla did not apply the Fleet Telemetry configuration.")
 		return &r
@@ -699,6 +708,17 @@ func (t *TelemetryController) applyProfile(ctx context.Context, id string, state
 		return &r
 	}
 	return nil
+}
+
+var vinInText = regexp.MustCompile(`[A-HJ-NPR-Z0-9]{17}`)
+
+// redactVINs masks VIN-shaped strings and bounds the length of upstream text
+// before it is logged.
+func redactVINs(text string) string {
+	if len(text) > 300 {
+		text = text[:300]
+	}
+	return vinInText.ReplaceAllString(text, "<vin>")
 }
 
 func (t *TelemetryController) failAction(id string, state TelemetryManaged, code string) {
