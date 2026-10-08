@@ -14,8 +14,10 @@ inspect() { # $1 = object id of a commit or tag
   if ! noreply <<<"$obj"; then echo "privacy-check: $1 has a non-noreply identity" >&2; exit 1; fi
   "$check" --stdin <<<"$obj" || { echo "privacy-check: $1 message or metadata failed" >&2; exit 1; }
 }
-while read -r _ local_sha _ remote_sha; do
+while read -r local_ref local_sha remote_ref remote_sha; do
   [[ $local_sha == "$zero" ]] && continue
+  # Ref names are published too.
+  printf '%s\n%s\n' "$remote_ref" "$local_ref" | "$check" --stdin || { echo "privacy-check: ref name failed" >&2; exit 1; }
   tip=$local_sha
   while [[ $(git cat-file -t "$tip") == tag ]]; do inspect "$tip"; tip=$(git cat-file -p "$tip" | awk '/^object /{print $2; exit}'); done
   # A ref naming a bare tree or blob would publish content no check has seen.

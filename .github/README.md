@@ -81,7 +81,7 @@ as contents, and a scan that cannot read everything fails (exit 2). Run `scripts
 clone (and again after the hooks change): it copies the hooks into the git
 directory, outside the worktree, so checking out an old branch cannot drop them.
 `pre-commit` scans the staged tree and requires a `users.noreply.github.com`
-identity; `pre-push` rescans every outgoing commit and tag, including messages
+identity; `pre-push` rescans every outgoing commit, tag and ref name, including messages
 and identities, and refuses refs that name a bare tree or blob. Images, videos, archives and databases must be reviewed and
 pinned by blob hash in `scripts/privacy-allowed-binaries.txt`. Fixtures use
 synthetic Bay Area places only. Merge PRs by fast-forwarding `main` from a
