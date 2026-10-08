@@ -261,6 +261,33 @@ func TestTelemetryRejectedCreateLogsReasonWithoutVIN(t *testing.T) {
 	}
 }
 
+func TestRedactUpstream(t *testing.T) {
+	vin := "5YJ3E1EA0XF000000"
+	jwt := "eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"
+	cases := []string{
+		"vehicle " + strings.ToLower(vin) + " rejected",
+		strings.Repeat(".", 284) + vin,
+		strings.Repeat(".", 290) + strings.ToLower(vin),
+		"Authorization: Bearer short-token rejected",
+		"token " + jwt + " expired",
+		"secret test-token-value echoed",
+	}
+	for _, in := range cases {
+		out := redactUpstream(in, "test-token-value")
+		for _, leak := range []string{vin, strings.ToLower(vin), vin[:12], strings.ToLower(vin[:12]), "short-token", jwt[:20], "test-token-value"} {
+			if strings.Contains(out, leak) {
+				t.Fatalf("%q leaked %q: %q", in, leak, out)
+			}
+		}
+		if len([]rune(out)) > 300 {
+			t.Fatalf("not bounded: %d", len(out))
+		}
+	}
+	if got := redactUpstream("unsupported_firmware"); got != "unsupported_firmware" {
+		t.Fatalf("plain reason changed: %q", got)
+	}
+}
+
 func TestTelemetryCreateFailsClosedOnMeter(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	for name, mutate := range map[string]func(*telemetryFake){

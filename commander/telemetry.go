@@ -686,10 +686,10 @@ func (t *TelemetryController) applyProfile(ctx context.Context, id string, state
 		// Tesla's reason is otherwise lost; log it without VINs.
 		skipped := map[string]int{}
 		for reason, vins := range response.Skipped {
-			skipped[redactVINs(reason)] = len(vins)
+			skipped[redactUpstream(reason, tokens.Access, tokens.Refresh)] += len(vins)
 		}
-		t.service.audit.Warn("telemetry_config_rejected", "vehicle", id, "httpStatus", status, "updated", response.Updated,
-			"skipped", skipped, "error", redactVINs(reply.Error), "description", redactVINs(reply.Description))
+		t.service.audit.Warn("telemetry_config_rejected", "vehicle", id, "httpStatus", status, "updated", response.Updated, "skipped", skipped,
+			"error", redactUpstream(reply.Error, tokens.Access, tokens.Refresh), "description", redactUpstream(reply.Description, tokens.Access, tokens.Refresh))
 		t.failAction(id, state, code)
 		r := failure(409, code, "Tesla did not apply the Fleet Telemetry configuration.")
 		return &r
@@ -710,15 +710,28 @@ func (t *TelemetryController) applyProfile(ctx context.Context, id string, state
 	return nil
 }
 
-var vinInText = regexp.MustCompile(`[A-HJ-NPR-Z0-9]{17}`)
+var (
+	bearerInText = regexp.MustCompile(`(?i)bearer\s+\S+`)
+	vinInText    = regexp.MustCompile(`(?i)[A-HJ-NPR-Z0-9]{17}`)
+	tokenInText  = regexp.MustCompile(`[A-Za-z0-9._~+/=-]{24,}`)
+)
 
-// redactVINs masks VIN-shaped strings and bounds the length of upstream text
-// before it is logged.
-func redactVINs(text string) string {
-	if len(text) > 300 {
-		text = text[:300]
+// redactUpstream masks secrets, bearer credentials, VIN-shaped strings and
+// long token-like runs in upstream text, then bounds its length. Masking
+// happens first so truncation cannot leave a partial match behind.
+func redactUpstream(text string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, "<redacted>")
+		}
 	}
-	return vinInText.ReplaceAllString(text, "<vin>")
+	text = bearerInText.ReplaceAllString(text, "<redacted>")
+	text = vinInText.ReplaceAllString(text, "<vin>")
+	text = tokenInText.ReplaceAllString(text, "<redacted>")
+	if r := []rune(text); len(r) > 300 {
+		text = string(r[:300])
+	}
+	return text
 }
 
 func (t *TelemetryController) failAction(id string, state TelemetryManaged, code string) {
