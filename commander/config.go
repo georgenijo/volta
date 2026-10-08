@@ -224,7 +224,7 @@ func ConfigFromEnv() (Config, error) {
 			return c, errors.New("COMMANDER_TELEMETRY_METER_URL must be the internal consumer usage endpoint or loopback")
 		}
 		if c.TelemetryCAFile == "" || !regexp.MustCompile(`^[A-Za-z0-9.-]+$`).MatchString(c.TelemetryHostname) {
-			return c, errors.New("COMMANDER_TELEMETRY_HOSTNAME (the node's full ts.net name) and COMMANDER_TELEMETRY_CA_FILE are required")
+			return c, errors.New("COMMANDER_TELEMETRY_HOSTNAME (the receiver's public name under the Tesla partner domain) and COMMANDER_TELEMETRY_CA_FILE are required")
 		}
 		if !(c.TelemetryWarnUSD < c.TelemetryStopUSD && c.TelemetryStopUSD < c.TelemetryCapUSD && c.TelemetryCapUSD+c.MonthlyBudgetUSD <= c.TotalMonthlyCapUSD && c.TelemetryDeleteReserveUSD > 0 && c.TelemetryStopUSD+c.MonthlyBudgetUSD <= c.TotalMonthlyCapUSD-c.TelemetryDeleteReserveUSD) {
 			return c, errors.New("telemetry budgets must preserve warning, stop, cap, polling, total, and delete-reserve ordering")

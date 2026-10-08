@@ -1,14 +1,17 @@
 # Volta Fleet Telemetry capture stack. Staged OFF: nothing here is started
 # by any existing unit, and nothing is reachable from outside the host until
-# an operator runs funnel/stage-funnel.sh --apply after the live gates in
+# an operator exposes the receiver after the live gates in
 # docs/TELEMETRY_CAPTURE.md.
 #
 #   docker compose --env-file /opt/volta-telemetry/telemetry.env \
 #     -f deploy/telemetry/compose.yaml up -d
 #
-# Exposure: the receiver publishes 127.0.0.1:8448 only. Redpanda and the
-# consumer publish nothing. The only public path is the raw TCP Funnel
-# 10000 -> 127.0.0.1:8448, and TLS (mutual) terminates in the receiver.
+# Exposure: the receiver publishes 8448 on one address,
+# TELEMETRY_RECEIVER_BIND (default 127.0.0.1). Redpanda and the consumer
+# publish nothing. The public path is a router port-forward to that LAN
+# address under the partner-domain name (or, for a ts.net partner domain,
+# the raw TCP Funnel 10000 -> 127.0.0.1:8448). TLS (mutual) terminates in
+# the receiver.
 name: volta-telemetry
 
 x-hardening: &hardening
@@ -51,7 +54,7 @@ services:
       # Written by cert/renew-cert.sh: tls.crt + tls.key, owned by 65532.
       - ${TELEMETRY_CERT_DIR:-/opt/volta-telemetry/certs}:/etc/certs/server:ro
     ports:
-      - "127.0.0.1:8448:8448"
+      - "${TELEMETRY_RECEIVER_BIND:-127.0.0.1}:8448:8448"
     networks: [telemetry-edge, telemetry]
     mem_limit: 256m
     pids_limit: 256

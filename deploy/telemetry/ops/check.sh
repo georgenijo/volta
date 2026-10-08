@@ -14,11 +14,14 @@
 set -uo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 . "$here/node-host.sh"
-HOST="${TELEMETRY_HOST:-$(node_host)}"
+ENV_FILE="${TELEMETRY_ENV_FILE:-/opt/volta-telemetry/telemetry.env}"
+HOST="${TELEMETRY_HOST:-$(env_value "$ENV_FILE" TELEMETRY_HOST)}"
+HOST="${HOST:-$(node_host)}"
 [[ -n $HOST ]] || { echo "check: set TELEMETRY_HOST or log in to tailscale" >&2; exit 1; }
+BIND="${TELEMETRY_RECEIVER_BIND:-$(env_value "$ENV_FILE" TELEMETRY_RECEIVER_BIND)}"
+BIND="${BIND:-127.0.0.1}"
 CERT_DIR="${TELEMETRY_CERT_DIR:-/opt/volta-telemetry/certs}"
 SECRET_DIR="${TELEMETRY_SECRET_DIR:-/opt/volta-telemetry/secrets}"
-ENV_FILE="${TELEMETRY_ENV_FILE:-/opt/volta-telemetry/telemetry.env}"
 DB_CONTAINER="${TELEMETRY_DB_CONTAINER:-teslamate-database-1}"
 
 COMMANDER_CURL_CONFIG="${COMMANDER_CURL_CONFIG:-/etc/volta/commander-operator.curl}"
@@ -84,27 +87,33 @@ for svc in redpanda receiver consumer; do
   fi
 done
 
-# Exposure: 8448 on loopback only; the usage (8449) and liveness (8450)
-# ports are never published on the host.
+# Exposure: 8448 on exactly the configured address (loopback by default,
+# or one LAN address that a router forwards); never on all interfaces. The
+# usage (8449) and liveness (8450) ports are never published on the host.
 listeners="$(ss -Hltn 'sport = :8448' 2>/dev/null | awk '{print $4}' | sort -u)"
-if [[ -z "$listeners" ]]; then
+if ! [[ $BIND =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || [[ $BIND == 0.0.0.0 ]]; then
+  fail "receiver bind address is not one IPv4 address"
+  listeners=""
+elif [[ -z "$listeners" ]]; then
   fail "receiver port 8448 is not listening"
-elif grep -Evq '^127\.0\.0\.1:8448$' <<<"$listeners"; then
+elif [[ "$listeners" != "$BIND:8448" ]]; then
   if grep -Eq '^(0\.0\.0\.0|\*|\[::\]|::):8448$' <<<"$listeners"; then
     fail "8448 listens on all interfaces"
   else
-    fail "8448 listens on a non-loopback address"
+    fail "8448 listens on an unexpected address"
   fi
-else
+elif [[ $BIND == 127.0.0.1 ]]; then
   ok "8448 listens on loopback only"
+else
+  ok "8448 listens on the configured LAN address only"
 fi
 for p in 8449 8450; do
   [[ -z "$(ss -Hltn "sport = :$p" 2>/dev/null)" ]] && ok "$p not published on the host" || fail "$p is published on the host"
 done
 if [[ -n "$listeners" ]]; then
-  served="$(openssl s_client -connect 127.0.0.1:8448 -servername "$HOST" </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null)"
+  served="$(openssl s_client -connect "$BIND:8448" -servername "$HOST" </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null)"
   grep -q "DNS:$HOST" <<<"$served" && ok "receiver serves the host certificate" || fail "receiver certificate mismatch"
-  if curl -sk --max-time 5 -o /dev/null "https://127.0.0.1:8448/" 2>/dev/null; then
+  if curl -sk --max-time 5 -o /dev/null "https://$BIND:8448/" 2>/dev/null; then
     fail "receiver answered a client without a certificate"
   else
     ok "receiver refuses clients without a certificate"

@@ -8,7 +8,7 @@ Deployment follows the lead's cross-family review and merge; see
 
 ## Private data flow
 
-Car mTLS → raw TCP Funnel :10000 → loopback :8448 → official receiver → durable
+Car mTLS → partner-domain name → router TCP forward :443 → node LAN :8448 → official receiver → durable
 Redpanda dispatcher → Go consumer → TeslaMate PostgreSQL `volta_telemetry` →
 read-only Volta API → SwiftUI trip/charge detail.
 
@@ -127,7 +127,7 @@ bash deploy/telemetry/ops/test-check.sh
 bash deploy/telemetry/test/run-acceptance.sh .
 ```
 
-Acceptance is synthetic. Live gates: Tesla config adoption, Funnel reachability,
+Acceptance is synthetic. Live gates: Tesla config adoption, public reachability,
 real field density/units, billing agreement/month/credit semantics, physical-car
 PackCurrent sign, TeslaMate segmentation under reduced polling and physical iPhone
 runtime. Module-temperature units are inferred and require live confirmation;

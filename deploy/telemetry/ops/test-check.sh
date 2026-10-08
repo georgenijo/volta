@@ -105,7 +105,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 reset() {
   unset STUB_DOCKER_DOWN STUB_RUNNING STUB_UNHEALTHY STUB_NETMODE_receiver STUB_NETS_receiver STUB_DB \
-    STUB_LISTEN_8448 STUB_LISTEN_8449 STUB_LISTEN_8450 STUB_CURL_EXIT STUB_GUARD_DOWN STUB_GUARD_STATUS
+    STUB_LISTEN_8448 STUB_LISTEN_8449 STUB_LISTEN_8450 STUB_CURL_EXIT STUB_GUARD_DOWN STUB_GUARD_STATUS \
+    TELEMETRY_RECEIVER_BIND
   cp "$tele/funnel/testdata/serve-baseline.json" "$TS_STATE"; : >"$TS_LOG"
   chmod -R u+w "$work/certs" "$work/secrets"; rm -f "$work/certs/"* "$work/secrets/"*
   for f in tls.crt ca-chain.pem; do echo cert >"$work/certs/$f"; done
@@ -163,7 +164,23 @@ case=wildcard-listener; reset; export STUB_LISTEN_8448="0.0.0.0:8448"
 expect 1 '^FAIL  8448 listens on all interfaces'
 
 case=private-address; reset; export STUB_LISTEN_8448="127.0.0.1:8448 192.168.1.20:8448"
-expect 1 '^FAIL  8448 listens on a non-loopback address'
+expect 1 '^FAIL  8448 listens on an unexpected address'
+
+case=lan-bind; reset; export TELEMETRY_RECEIVER_BIND=192.168.1.20 STUB_LISTEN_8448="192.168.1.20:8448"
+expect 0 '^ok    8448 listens on the configured LAN address only'
+
+case=lan-bind-from-env-file; reset; export STUB_LISTEN_8448="192.168.1.20:8448"
+printf 'TELEMETRY_RECEIVER_BIND=192.168.1.20\n' >"$work/telemetry.env"
+TELEMETRY_ENV_FILE="$work/telemetry.env" expect 0 '^RESULT: READY'
+
+case=lan-bind-but-loopback; reset; export TELEMETRY_RECEIVER_BIND=192.168.1.20
+expect 1 '^FAIL  8448 listens on an unexpected address'
+
+case=lan-bind-plus-loopback; reset; export TELEMETRY_RECEIVER_BIND=192.168.1.20 STUB_LISTEN_8448="127.0.0.1:8448 192.168.1.20:8448"
+expect 1 '^FAIL  8448 listens on an unexpected address'
+
+case=wildcard-bind; reset; export TELEMETRY_RECEIVER_BIND=0.0.0.0 STUB_LISTEN_8448="0.0.0.0:8448"
+expect 1 '^FAIL  receiver bind address is not one IPv4 address'
 
 case=receiver-down; reset; export STUB_LISTEN_8448=""
 expect 1 '^FAIL  receiver port 8448 is not listening'
