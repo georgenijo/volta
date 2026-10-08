@@ -32,6 +32,9 @@ CA_DIR="${TELEMETRY_CA_DIR:-/opt/volta-telemetry/private-ca}"
 COMPOSE_FILE="${TELEMETRY_COMPOSE_FILE:-/opt/volta/deploy/telemetry/compose.yaml}"
 OWNER="${TELEMETRY_CERT_OWNER:-65532}"
 GROUP="${TELEMETRY_CERT_GROUP:-65532}"
+# Marks an installed certificate the running receiver has not loaded yet; it
+# is cleared only after a successful restart (or when the receiver is off).
+RESTART_MARK="${TELEMETRY_RESTART_MARK:-$(dirname "$CERT_DIR")/.receiver-restart-pending}"
 LEAF_DAYS=90
 RENEW_DAYS="${TELEMETRY_RENEW_BEFORE_DAYS:-30}"
 
@@ -42,6 +45,33 @@ chown "$(id -u):$GROUP" "$CERT_DIR"
 chmod 0750 "$CERT_DIR"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+
+# The receiver loads the certificate at start. Restart only if it runs, so
+# renewal never starts a staged-off stack; a failed restart stays pending and
+# fails this run so the next timer run retries it.
+finish() {
+  if [[ -e $RESTART_MARK ]]; then
+    local running
+    running="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps --status running --services 2>/dev/null)" \
+      || { echo "error: cannot read receiver state; restart still pending" >&2; exit 1; }
+    if grep -qx receiver <<<"$running"; then
+      docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart receiver >/dev/null \
+        || { echo "error: receiver restart failed; still pending" >&2; exit 1; }
+      echo "receiver restarted"
+    fi
+    rm -f "$RESTART_MARK"
+  fi
+  exit 0
+}
+
+# The installed key belongs to the installed certificate (an interrupted
+# install can leave them mismatched).
+pair_ok() {
+  [[ -s $1 && -s $2 ]] || return 1
+  local a b
+  a="$(openssl x509 -in "$1" -noout -pubkey 2>/dev/null)" && b="$(openssl pkey -in "$2" -pubout 2>/dev/null)" \
+    && [[ -n $a && $a == "$b" ]]
+}
 
 names_host() {
   openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -qxF "DNS:$HOST"
@@ -67,12 +97,12 @@ if [[ $SOURCE == private ]]; then
     || { echo "error: private CA expires within $((LEAF_DAYS + 1)) days; rotate it" >&2; exit 1; }
   # Keep the installed leaf while it names the host, chains to this CA and
   # has more than RENEW_DAYS left.
-  if [[ -s "$CERT_DIR/tls.crt" && -s "$CERT_DIR/tls.key" ]] && cmp -s "$CA_DIR/ca.crt" "$CERT_DIR/ca-chain.pem" \
+  if pair_ok "$CERT_DIR/tls.crt" "$CERT_DIR/tls.key" && cmp -s "$CA_DIR/ca.crt" "$CERT_DIR/ca-chain.pem" \
     && names_host "$CERT_DIR/tls.crt" \
     && openssl verify -CAfile "$CA_DIR/ca.crt" "$CERT_DIR/tls.crt" >/dev/null 2>&1 \
     && openssl x509 -in "$CERT_DIR/tls.crt" -noout -checkend $(( RENEW_DAYS * 86400 )) >/dev/null 2>&1; then
     echo "certificate unchanged"
-    exit 0
+    finish
   fi
   (umask 077; openssl ecparam -name prime256v1 -genkey -noout -out "$tmp/tls.key")
   openssl req -new -key "$tmp/tls.key" -subj "/CN=$HOST" -out "$tmp/tls.csr" 2>/dev/null
@@ -103,22 +133,19 @@ openssl x509 -in "$tmp/tls.crt" -noout -checkend 604800 >/dev/null
 openssl verify -CAfile "$tmp/ca-chain.pem" "$tmp/tls.crt" >/dev/null \
   || { echo "error: certificate does not verify against ca-chain.pem" >&2; exit 1; }
 
-if cmp -s "$tmp/tls.crt" "$CERT_DIR/tls.crt" 2>/dev/null; then
+if cmp -s "$tmp/tls.crt" "$CERT_DIR/tls.crt" 2>/dev/null && cmp -s "$tmp/ca-chain.pem" "$CERT_DIR/ca-chain.pem" \
+  && pair_ok "$CERT_DIR/tls.crt" "$CERT_DIR/tls.key"; then
   echo "certificate unchanged"
-  exit 0
+  finish
 fi
 install -m 0400 "$tmp/tls.key" "$CERT_DIR/tls.key.new"
 install -m 0444 "$tmp/tls.crt" "$CERT_DIR/tls.crt.new"
 install -m 0444 "$tmp/ca-chain.pem" "$CERT_DIR/ca-chain.pem.new"
 chown "$OWNER:$GROUP" "$CERT_DIR/tls.key.new" "$CERT_DIR/tls.crt.new" "$CERT_DIR/ca-chain.pem.new"
+touch "$RESTART_MARK"
 mv -f "$CERT_DIR/ca-chain.pem.new" "$CERT_DIR/ca-chain.pem"
 mv -f "$CERT_DIR/tls.key.new" "$CERT_DIR/tls.key"
 mv -f "$CERT_DIR/tls.crt.new" "$CERT_DIR/tls.crt"
 echo "certificate installed; expires $(openssl x509 -in "$CERT_DIR/tls.crt" -noout -enddate | cut -d= -f2)"
 
-# The receiver loads the certificate at start. Restart only if it runs, so
-# renewal never starts a staged-off stack.
-if docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps --status running --services 2>/dev/null | grep -qx receiver; then
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart receiver >/dev/null
-  echo "receiver restarted"
-fi
+finish

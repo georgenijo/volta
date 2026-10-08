@@ -80,8 +80,33 @@ TELEMETRY_HOST=telemetry.example.com.evil.test PATH="$w/nots:$PATH" TELEMETRY_CE
 pv | grep -q "certificate installed" || fail "SAN prefix match kept a leaf for another host"
 [[ "$(san "$w/pcerts/tls.crt")" == "DNS:telemetry.example.com" ]] || fail "wrong host after reissue"
 
-# Settings come from telemetry.env when not in the environment.
-printf 'TELEMETRY_CERT_SOURCE=private\nTELEMETRY_HOST="telemetry.example.com"\n' >"$w/telemetry.env"
+# An interrupted install (new key, old certificate) is repaired, not kept.
+openssl ecparam -name prime256v1 -genkey -noout -out "$w/other.key" 2>/dev/null
+chmod u+w "$w/pcerts/tls.key"; cp "$w/other.key" "$w/pcerts/tls.key"
+pv | grep -q "certificate installed" || fail "kept a certificate whose key does not match"
+[[ "$(openssl x509 -in "$w/pcerts/tls.crt" -noout -pubkey)" == "$(openssl pkey -in "$w/pcerts/tls.key" -pubout)" ]] \
+  || fail "installed pair does not match"
+
+# A failed restart stays pending and fails the run; the next run retries it.
+mark="$w/.receiver-restart-pending"
+if TELEMETRY_RENEW_BEFORE_DAYS=100 STUB_RUNNING=1 STUB_RESTART_FAIL=1 pv >/dev/null 2>&1; then fail "restart failure reported success"; fi
+[[ -e $mark ]] || fail "failed restart not left pending"
+: >"$DOCKER_LOG"
+out="$(STUB_RUNNING=1 pv)" || fail "pending restart retry failed"
+grep -qx "certificate unchanged" <<<"$out" && grep -qx "receiver restarted" <<<"$out" || fail "pending restart not retried: $out"
+[[ ! -e $mark ]] || fail "restart mark not cleared"
+STUB_RUNNING=1 pv | grep -q "receiver restarted" && fail "restarted again with nothing pending"
+# Unknown receiver state keeps it pending; a stopped receiver clears it.
+touch "$mark"
+if STUB_PS_FAIL=1 pv >/dev/null 2>&1; then fail "unreadable receiver state reported success"; fi
+[[ -e $mark ]] || fail "mark cleared without knowing receiver state"
+: >"$DOCKER_LOG"; STUB_RUNNING=0 pv >/dev/null || fail "stopped receiver run failed"
+[[ ! -e $mark ]] || fail "mark kept for a stopped receiver"
+grep -q restart "$DOCKER_LOG" && fail "started or restarted a stopped receiver"
+
+# Settings come from telemetry.env when not in the environment, including
+# Compose dotenv forms: export, inline comments, quotes.
+printf '# comment\n  export TELEMETRY_CERT_SOURCE=private # local issuer\nTELEMETRY_HOST="telemetry.example.com" # name\n' >"$w/telemetry.env"
 env -u TELEMETRY_HOST PATH="$w/nots:$PATH" TELEMETRY_ENV_FILE="$w/telemetry.env" TELEMETRY_CERT_DIR="$w/pcerts" TELEMETRY_CA_DIR="$w/pca" \
   "$here/renew-cert.sh" | grep -qx "certificate unchanged" || fail "telemetry.env settings ignored"
 

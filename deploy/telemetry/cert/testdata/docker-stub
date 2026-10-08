@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Records docker calls; reports the receiver as running when STUB_RUNNING=1.
+# STUB_PS_FAIL=1 fails the state read; STUB_RESTART_FAIL=1 fails a restart.
 echo "$*" >>"$DOCKER_LOG"
-if [[ "$*" == *" ps "* ]]; then [[ "${STUB_RUNNING:-0}" == 1 ]] && echo receiver; fi
+if [[ "$*" == *" ps "* ]]; then
+  [[ "${STUB_PS_FAIL:-0}" == 1 ]] && exit 1
+  [[ "${STUB_RUNNING:-0}" == 1 ]] && echo receiver
+fi
+if [[ "$*" == *" restart "* && "${STUB_RESTART_FAIL:-0}" == 1 ]]; then exit 1; fi
 exit 0

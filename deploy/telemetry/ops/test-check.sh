@@ -170,7 +170,7 @@ case=lan-bind; reset; export TELEMETRY_RECEIVER_BIND=192.168.1.20 STUB_LISTEN_84
 expect 0 '^ok    8448 listens on the configured LAN address only'
 
 case=lan-bind-from-env-file; reset; export STUB_LISTEN_8448="192.168.1.20:8448"
-printf 'TELEMETRY_RECEIVER_BIND=192.168.1.20\n' >"$work/telemetry.env"
+printf 'TELEMETRY_RECEIVER_BIND=192.168.1.20 # router forward\n' >"$work/telemetry.env"
 TELEMETRY_ENV_FILE="$work/telemetry.env" expect 0 '^RESULT: READY'
 
 case=lan-bind-but-loopback; reset; export TELEMETRY_RECEIVER_BIND=192.168.1.20
