@@ -3,6 +3,7 @@
 **
 !commander/*.go
 !commander/go.mod
+!commander/telemetry_profiles.json
 !commander/cmd/commander/*.go
 !commander/cmd/fakefleet/*.go
 commander/**/.env
