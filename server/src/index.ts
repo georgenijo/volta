@@ -13,7 +13,10 @@ if (currency !== null && !/^[A-Z]{3}$/.test(currency)) throw new Error('CURRENCY
 const commanderSecret = process.env.COMMANDER_INTERNAL_SECRET || '';
 if (process.env.COMMANDER_URL && commanderSecret.length < 32) throw new Error('COMMANDER_INTERNAL_SECRET must contain at least 32 characters');
 const tesla = process.env.COMMANDER_URL ? new TeslaLink(commanderURL(process.env.COMMANDER_URL), commanderSecret) : null;
-const app = createApp(new Auth(authDb), new Telemetry(telemetryDb, currency), undefined, tesla, new ChargingHistory(authDb, telemetryDb, tesla));
+const fleetEnabled = process.env.FLEET_TELEMETRY_ENABLED === 'true';
+const log = (entry: object) => console.log(JSON.stringify(entry));
+if (process.env.FLEET_TELEMETRY_ENABLED && !['true','false'].includes(process.env.FLEET_TELEMETRY_ENABLED)) throw new Error('FLEET_TELEMETRY_ENABLED must be true or false');
+const app = createApp(new Auth(authDb), new Telemetry(telemetryDb, currency, undefined, fleetEnabled, log), log, tesla, new ChargingHistory(authDb, telemetryDb, tesla));
 const server = Bun.serve({ hostname: process.env.HOST || '127.0.0.1', port: integer(process.env.PORT, 'PORT', 8080, 65535), fetch: app.fetch });
 for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, async () => { server.stop(); await Promise.all([telemetryDb.end(), authDb.end()]); process.exit(0); });
 console.log(JSON.stringify({ event: 'started', port: server.port, version: '0.1.0' }));

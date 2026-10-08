@@ -1,0 +1,34 @@
+{
+  "host": "0.0.0.0",
+  "port": 8448,
+  "log_level": "info",
+  "json_log_enable": true,
+  "namespace": "tesla_telemetry",
+  "use_default_eng_ca": false,
+  "vins_signal_tracking_enabled": [],
+  "rate_limit": {
+    "enabled": true,
+    "message_limit": 600,
+    "message_interval_time": 60
+  },
+  "records": {
+    "V": ["kafka"],
+    "connectivity": ["kafka"]
+  },
+  "reliable_ack_sources": {
+    "V": "kafka"
+  },
+  "kafka": {
+    "bootstrap.servers": "redpanda:9092",
+    "acks": "all",
+    "enable.idempotence": true,
+    "queue.buffering.max.messages": 10000,
+    "queue.buffering.max.kbytes": 65536,
+    "message.timeout.ms": 120000,
+    "socket.keepalive.enable": true
+  },
+  "tls": {
+    "server_cert": "/etc/certs/server/tls.crt",
+    "server_key": "/etc/certs/server/tls.key"
+  }
+}

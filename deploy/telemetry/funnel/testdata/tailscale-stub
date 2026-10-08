@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+# Test double for `tailscale` that models the Serve/Funnel JSON state in
+# $TS_STATE. Implements only the commands the funnel scripts use.
+import json, os, sys
+path = os.environ["TS_STATE"]
+host = os.environ.get("FUNNEL_HOST", "volta-node.example.ts.net")
+d = json.load(open(path))
+a = sys.argv[1:]
+open(os.environ["TS_LOG"], "a").write(" ".join(a) + "\n")
+def save():
+    json.dump(d, open(path, "w"))
+if a[:3] == ["serve", "status", "--json"]:
+    print(json.dumps(d)); sys.exit(0)
+if a[:1] == ["funnel"] and "--tcp" in a and a[-1].startswith("tcp://"):
+    port = a[a.index("--tcp") + 1]
+    d.setdefault("TCP", {})[port] = {"TCPForward": a[-1][len("tcp://"):]}
+    d.setdefault("AllowFunnel", {})[f"{host}:{port}"] = True
+    save(); sys.exit(0)
+if a[:1] in (["funnel"], ["serve"]) and len(a) == 3 and a[1].startswith("--tcp=") and a[2] == "off":
+    port = a[1].split("=", 1)[1]
+    (d.get("AllowFunnel") or {}).pop(f"{host}:{port}", None)
+    if not d.get("AllowFunnel"):
+        d.pop("AllowFunnel", None)
+    if a[0] == "serve" or os.environ.get("TS_FUNNEL_OFF_REMOVES_TCP") == "1":
+        (d.get("TCP") or {}).pop(port, None)
+    save(); sys.exit(0)
+print("stub: unsupported " + " ".join(a), file=sys.stderr); sys.exit(2)

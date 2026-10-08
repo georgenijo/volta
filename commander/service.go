@@ -35,10 +35,14 @@ type Service struct {
 	collector collector
 	// Data reads never use the command proxy or its CA.
 	collectorClient *http.Client
+	telemetry       *TelemetryController
 }
 
 func NewService(c Config, store *Store, client *http.Client, audit *slog.Logger) (*Service, error) {
 	s := &Service{c: c, store: store, oauth: NewOAuth(c, store, client), fleet: &Fleet{c: c, client: client}, audit: audit, commands: make(chan struct{}, 1), collector: collector{cache: map[string]cached{}, served: map[string]time.Time{}, refused: map[string]time.Time{}}, collectorClient: client}
+	if c.TelemetryEnabled {
+		s.telemetry = NewTelemetryController(s, client)
+	}
 	if c.PublicKeyFile != "" {
 		b, err := os.ReadFile(c.PublicKeyFile)
 		if err != nil {
@@ -64,7 +68,7 @@ func NewService(c Config, store *Store, client *http.Client, audit *slog.Logger)
 func (s *Service) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"ok": true, "mode": s.c.Mode, "commandsEnabled": s.c.Enabled, "historyEnabled": s.c.HistoryEnabled, "oauthEnabled": s.c.OAuthEnabled, "authorized": s.store.tokens() != nil})
+		writeJSON(w, 200, map[string]any{"ok": true, "mode": s.c.Mode, "commandsEnabled": s.c.Enabled, "historyEnabled": s.c.HistoryEnabled, "telemetryEnabled": s.c.TelemetryEnabled, "oauthEnabled": s.c.OAuthEnabled, "authorized": s.store.tokens() != nil})
 	})
 	mux.HandleFunc("GET /oauth/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, s.linkStatus())
@@ -119,6 +123,10 @@ func (s *Service) PrivateHandler() http.Handler {
 	})
 	mux.HandleFunc("POST /v1/vehicles/{id}/commands/{name}", s.handleCommand)
 	mux.HandleFunc("GET /v1/history/charging", s.handleChargingHistory)
+	mux.HandleFunc("GET /v1/telemetry/status", s.handleTelemetryStatus)
+	mux.HandleFunc("GET /v1/vehicles/{id}/telemetry/config", s.handleTelemetryRemoteStatus)
+	mux.HandleFunc("POST /v1/vehicles/{id}/telemetry/config", s.handleTelemetryCreate)
+	mux.HandleFunc("DELETE /v1/vehicles/{id}/telemetry/config", s.handleTelemetryDelete)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.c.Secret)) != 1 {

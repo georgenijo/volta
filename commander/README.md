@@ -85,6 +85,14 @@ not vehicle execution or Tesla authentication.
   [INTEGRATION.md](INTEGRATION.md) and [Sign in with Tesla](../docs/TESLA_SIGN_IN.md).
 - The optional read-only collector (`COMMANDER_COLLECTOR_ENABLED`) listens on
   `127.0.0.1:8092` by default and needs `COMMANDER_COLLECTOR_SECRET`.
+- Fleet Telemetry control is separately staged by
+  `COMMANDER_TELEMETRY_ENABLED`. It uses the signing proxy without enabling
+  vehicle commands. The durable guard polls the private usage meter every 15
+  seconds, installs the economy profile at `$20`, and deletes/latches the
+  configuration at `$23`, the `$28` combined operating line, or whenever
+  accounting is unknown. A separate `$2` reserve is usable only for bounded
+  delete retries. See
+  [cost and guard](../docs/TELEMETRY_COST.md).
 - Tesla-billed charging history (`COMMANDER_CHARGING_HISTORY_ENABLED`, off by
   default) is an operator-triggered, one-page private read sharing the
   collector's budget ledger and lock. Its live contract is unverified; see

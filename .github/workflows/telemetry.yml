@@ -1,0 +1,78 @@
+# Telemetry capture stack. Offline only: fake CAs and fake VINs, no Tesla,
+# Tailscale or Fleet access and no repository secret is referenced.
+name: Telemetry
+
+on:
+  pull_request:
+    paths:
+      - 'ingestion/**'
+      - 'deploy/telemetry/**'
+      - 'docs/TELEMETRY_CAPTURE.md'
+      - '.github/workflows/telemetry.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telemetry-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ingestion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ingestion/go.mod
+          cache-dependency-path: ingestion/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: vet
+        run: |
+          go vet ./...
+          go vet -tags acceptance ./acceptance/...
+      - name: go test (includes deploycheck static exposure/trust/CI checks)
+        run: go test -race ./...
+      - name: funnel script tests (stubbed tailscale)
+        run: bash ../deploy/telemetry/funnel/test-funnel.sh
+      - name: cert renewal tests (stubbed tailscale/docker)
+        run: bash ../deploy/telemetry/cert/test-renew.sh
+      - name: operator check tests (stubbed docker/ss/openssl/curl/tailscale)
+        run: bash ../deploy/telemetry/ops/test-check.sh
+      - name: offline credential setup checks
+        run: python3 ../deploy/telemetry/ops/test-prepare-secrets.py
+      - name: compose config
+        run: |
+          TELEMETRY_CERT_DIR=/tmp/c TELEMETRY_SECRET_DIR=/tmp/s \
+            docker compose -f ../deploy/telemetry/compose.yaml config -q
+      - name: build images (guarded receiver on the pinned official image, consumer)
+        run: |
+          docker build --target receiver -t volta-telemetry-ci-receiver:local .
+          docker build --target consumer -t volta-telemetry-ci-consumer:local .
+
+  # Full acceptance against the real pinned receiver (under the guard),
+  # Redpanda and Postgres images. Every resource is named
+  # volta-telemetry-test-* and removed on exit.
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ingestion/go.mod
+          cache-dependency-path: ingestion/go.sum
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.1'
+      - name: Install API dependencies for receiver-to-API acceptance
+        run: cd server && bun install --frozen-lockfile
+      - name: run acceptance (repo checkout is the bundle)
+        run: bash deploy/telemetry/test/run-acceptance.sh .

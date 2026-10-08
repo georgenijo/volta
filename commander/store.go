@@ -52,6 +52,14 @@ type Usage struct {
 	USD   float64 `json:"usd"`
 }
 
+// SafetyUsage is the subset of Usage spent trying to remove a telemetry
+// config after normal paid calls have stopped. It has its own small reserve.
+type SafetyUsage struct {
+	Month string  `json:"month"`
+	Calls int     `json:"calls"`
+	USD   float64 `json:"usd"`
+}
+
 // Charging-history calls for the current UTC day, plus local gates that stop
 // repeated billable calls Tesla has already refused.
 type HistoryUsage struct {
@@ -75,15 +83,51 @@ type Receipt struct {
 	HTTPStatus  int       `json:"httpStatus,omitempty"`
 	RetryAfter  int       `json:"retryAfter,omitempty"`
 }
+type TelemetryManaged struct {
+	// ConfigMayExist is saved before POST and cleared only after DELETE. Legacy
+	// live/pending states also count as ownership until reconciled.
+	DeleteAttemptsMonth string    `json:"deleteAttemptsMonth,omitempty"`
+	DeleteAttempts      int       `json:"deleteAttempts,omitempty"`
+	DeleteConfirmed     bool      `json:"deleteConfirmed,omitempty"`
+	ConfigMayExist      bool      `json:"configMayExist,omitempty"`
+	AutoResumeMonth     string    `json:"autoResumeMonth,omitempty"`
+	AutoResumeAttempts  int       `json:"autoResumeAttempts,omitempty"`
+	NextResume          time.Time `json:"nextResume,omitzero"`
+	HealthySince        time.Time `json:"healthySince,omitzero"`
+	LastHealthyCheck    time.Time `json:"lastHealthyCheck,omitzero"`
+
+	StopReason       string    `json:"stopReason,omitempty"`
+	LastKnownMonth   string    `json:"lastKnownMonth,omitempty"`
+	LastKnownUSD     float64   `json:"lastKnownUsd,omitempty"`
+	LastKnownThrough time.Time `json:"lastKnownThrough,omitzero"`
+	UnknownSince     time.Time `json:"unknownSince,omitzero"`
+
+	Month         string    `json:"month"`
+	Managed       bool      `json:"managed"`
+	Synced        bool      `json:"synced"`
+	Profile       string    `json:"profile"` // normal | economy | stopped
+	StopLatched   bool      `json:"stopLatched"`
+	PendingAction string    `json:"pendingAction,omitempty"`
+	LastMeter     string    `json:"lastMeter,omitempty"`
+	LastChecked   time.Time `json:"lastChecked,omitzero"`
+	LastAction    time.Time `json:"lastAction,omitzero"`
+	NextRetry     time.Time `json:"nextRetry,omitzero"`
+	ConfigExpires time.Time `json:"configExpires,omitzero"`
+	Failures      int       `json:"failures,omitempty"`
+	LastError     string    `json:"lastError,omitempty"`
+	MeterUSD      float64   `json:"meterUsd,omitempty"`
+}
 type diskState struct {
-	Version  int                    `json:"version"`
-	Tokens   *Tokens                `json:"tokens,omitempty"`
-	Receipts map[string]Receipt     `json:"receipts"`
-	Rate     map[string][]time.Time `json:"rate"`
-	Link     *PendingLink           `json:"link,omitempty"`
-	Outcome  *LinkOutcome           `json:"linkOutcome,omitempty"`
-	Usage    *Usage                 `json:"usage,omitempty"`
-	History  *HistoryUsage          `json:"history,omitempty"`
+	Version   int                         `json:"version"`
+	Tokens    *Tokens                     `json:"tokens,omitempty"`
+	Receipts  map[string]Receipt          `json:"receipts"`
+	Rate      map[string][]time.Time      `json:"rate"`
+	Link      *PendingLink                `json:"link,omitempty"`
+	Outcome   *LinkOutcome                `json:"linkOutcome,omitempty"`
+	Usage     *Usage                      `json:"usage,omitempty"`
+	History   *HistoryUsage               `json:"history,omitempty"`
+	Telemetry map[string]TelemetryManaged `json:"telemetry,omitempty"`
+	Safety    *SafetyUsage                `json:"telemetrySafety,omitempty"`
 }
 type Store struct {
 	mu    sync.Mutex
@@ -120,7 +164,7 @@ func OpenStore(dir string, key []byte) (*Store, error) {
 		f.Close()
 		return nil, errors.New("commander state already in use")
 	}
-	s := &Store{path: filepath.Join(dir, "state.enc"), aead: aead, lock: f, state: diskState{Version: 1, Receipts: map[string]Receipt{}, Rate: map[string][]time.Time{}}}
+	s := &Store{path: filepath.Join(dir, "state.enc"), aead: aead, lock: f, state: diskState{Version: 1, Receipts: map[string]Receipt{}, Rate: map[string][]time.Time{}, Telemetry: map[string]TelemetryManaged{}}}
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
 		return s, nil
@@ -141,6 +185,9 @@ func OpenStore(dir string, key []byte) (*Store, error) {
 	if err = json.Unmarshal(plain, &s.state); err != nil || s.state.Version != 1 || s.state.Receipts == nil || s.state.Rate == nil {
 		s.Close()
 		return nil, errors.New("unsupported state format")
+	}
+	if s.state.Telemetry == nil {
+		s.state.Telemetry = map[string]TelemetryManaged{}
 	}
 	return s, nil
 }
@@ -168,16 +215,25 @@ func cloneState(d diskState) diskState {
 	b, _ := json.Marshal(d)
 	var copy diskState
 	_ = json.Unmarshal(b, &copy)
+	if copy.Telemetry == nil {
+		copy.Telemetry = map[string]TelemetryManaged{}
+	}
 	return copy
 }
 
 // Write temp -> fsync -> rename -> fsync directory before considering a token
 // rotation or an idempotency reservation committed.
 func (s *Store) update(fn func(*diskState)) error {
+	return s.updateChecked(func(d *diskState) error { fn(d); return nil })
+}
+
+func (s *Store) updateChecked(fn func(*diskState) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := cloneState(s.state)
-	fn(&next)
+	if err := fn(&next); err != nil {
+		return err
+	}
 	plain, err := json.Marshal(next)
 	if err != nil {
 		return err

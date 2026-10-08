@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Records docker calls; reports the receiver as running when STUB_RUNNING=1.
+echo "$*" >>"$DOCKER_LOG"
+if [[ "$*" == *" ps "* ]]; then [[ "${STUB_RUNNING:-0}" == 1 ]] && echo receiver; fi
+exit 0

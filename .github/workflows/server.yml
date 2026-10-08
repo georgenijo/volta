@@ -69,6 +69,9 @@ jobs:
             docker cp "../deploy/$file" "$POSTGRES_CONTAINER:/tmp/$file"
           done
           docker exec "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 -f /tmp/bootstrap.sql
+          for file in 001_volta_telemetry.sql 002_api_series.sql; do
+            docker exec -i "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 < "../deploy/telemetry/sql/$file"
+          done
           docker exec -i "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 <<'SQL'
           ALTER ROLE volta_reader PASSWORD 'volta_reader_ci';
           ALTER ROLE volta_auth PASSWORD 'volta_auth_ci';

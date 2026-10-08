@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Test double for `tailscale cert`: issues a leaf for $3.. from a throwaway
+# root -> intermediate and writes leaf+intermediate like the real command.
+# The root is installed once into $STUB_TRUST_DIR as <subject_hash>.0, the
+# layout of /etc/ssl/certs.
+set -euo pipefail
+[[ "$1" == cert ]] || { echo "stub: unsupported $*" >&2; exit 2; }
+shift
+while [[ $# -gt 1 ]]; do case "$1" in --cert-file) cf="$2"; shift 2;; --key-file) kf="$2"; shift 2;; *) shift;; esac; done
+host="$1"; w="$(mktemp -d)"; t="$STUB_TRUST_DIR"
+if [[ ! -s "$t/root.key" ]]; then
+  mkdir -p "$t"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=stub root" -days 30 \
+    -keyout "$t/root.key" -out "$t/root.crt" 2>/dev/null
+  cp "$t/root.crt" "$t/$(openssl x509 -in "$t/root.crt" -noout -subject_hash).0"
+fi
+printf 'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign\n' >"$w/caext"
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=stub intermediate" \
+  -keyout "$w/int.key" -out "$w/int.csr" 2>/dev/null
+openssl x509 -req -in "$w/int.csr" -CA "$t/root.crt" -CAkey "$t/root.key" -CAcreateserial -CAserial "$w/root.srl" \
+  -days 20 -extfile "$w/caext" -out "$w/int.crt" 2>/dev/null
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=$host" -keyout "$kf" -out "$w/leaf.csr" 2>/dev/null
+printf 'subjectAltName=DNS:%s\n' "$host" >"$w/ext"
+openssl x509 -req -in "$w/leaf.csr" -CA "$w/int.crt" -CAkey "$w/int.key" -CAcreateserial -CAserial "$w/int.srl" \
+  -days "${STUB_DAYS:-15}" -extfile "$w/ext" -out "$w/leaf.crt" 2>/dev/null
+cat "$w/leaf.crt" "$w/int.crt" >"$cf"
+rm -rf "$w"

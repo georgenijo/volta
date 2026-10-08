@@ -41,7 +41,7 @@ struct MockDataSource: VoltaDataSource {
             let km = i % 9 == 8 ? 126.4 : 12.8 + Double(i % 7) * 3.1
             let duration = km / 0.76
             let start = ago(Double(i / 2) * 24 + (i % 2 == 0 ? 2 : 10))
-            return DriveSummary(id: i + 1, start: start, end: start.addingTimeInterval(duration * 60), startAddress: i % 2 == 0 ? "Union City, CA" : home, endAddress: i % 2 == 0 ? home : "Union City, CA", distanceKm: km, durationMin: duration, startBatteryLevel: 80, endBatteryLevel: max(20, 80 - Int(km / 4.7)), energyUsedKwh: km * 0.164, efficiencyWhPerKm: 164, maxSpeedKph: 104, avgSpeedKph: 45.6, outsideTempAvgC: 12 + Double(i % 10))
+            return TripFixtures.summary(DriveSummary(id: i + 1, start: start, end: start.addingTimeInterval(duration * 60), startAddress: i % 2 == 0 ? "Union City, CA" : home, endAddress: i % 2 == 0 ? home : "Union City, CA", distanceKm: km, durationMin: duration, startBatteryLevel: 80, endBatteryLevel: max(20, 80 - Int(km / 4.7)), energyUsedKwh: km * 0.164, efficiencyWhPerKm: 164, maxSpeedKph: 104, avgSpeedKph: 45.6, outsideTempAvgC: 12 + Double(i % 10)))
         }
     }
     private var allCharges: [ChargeSummary] {
@@ -72,6 +72,7 @@ struct MockDataSource: VoltaDataSource {
     func drives(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<DriveSummary> { try check(vehicleID); return try page(allDrives.filter { within($0.start, range) }, cursor: cursor) }
     func drive(id: Int) async throws -> DriveDetail {
         guard let drive = allDrives.first(where: { $0.id == id }) else { throw VoltaError.notFound }
+        if let fixture = TripFixtures.detail(drive) { return fixture }
         let path = (0...24).map { i in
             let fraction = Double(i) / 24
             return DrivePoint(t: drive.start.addingTimeInterval(drive.durationMin * 60 * fraction), latitude: 37.4419 + fraction * 0.16, longitude: -122.1430 + fraction * 0.135, speedKph: i == 0 || i == 24 ? 0 : 72, powerKw: 12.5, elevationM: 35 + sin(fraction * .pi) * 28, batteryLevel: 80 - Int(fraction * 8))
@@ -85,7 +86,24 @@ struct MockDataSource: VoltaDataSource {
             let f = Double(i) / 20; let power = (charge.maxPowerKw ?? 7.7) * (charge.fastCharger ? 1 - f * 0.75 : 1)
             return ChargeSample(t: charge.start.addingTimeInterval(charge.durationMin * 60 * f), batteryLevel: Int(Double(charge.startBatteryLevel ?? 49) + f * Double(80 - (charge.startBatteryLevel ?? 49))), powerKw: power, voltage: charge.fastCharger ? 375 : 240, currentA: power * 1000 / (charge.fastCharger ? 375 : 240), ratedRangeKm: 250 + f * 143)
         }
-        return ChargeDetail(summary: charge, samples: samples, efficiency: 0.92)
+        let telemetrySamples = (0...max(1, Int(charge.durationMin))).map { minute in
+            let f = Double(minute) / max(charge.durationMin, 1)
+            let power = (charge.maxPowerKw ?? 7.7) * (charge.fastCharger ? 1 - f * 0.75 : 1)
+            let level = Double(charge.startBatteryLevel ?? 49) + f * Double(80 - (charge.startBatteryLevel ?? 49))
+            return FleetTelemetrySample(
+                t: charge.start.addingTimeInterval(Double(minute) * 60), latitude: nil, longitude: nil,
+                speedKph: nil, powerKw: power, elevationM: nil, batteryLevel: level,
+                energyRemainingKwh: level * 0.75, batteryTempMinC: 22 + level / 40,
+                batteryTempMaxC: 27 + level / 30,
+                insideTempC: 20.5, outsideTempC: charge.outsideTempAvgC,
+                voltage: charge.fastCharger ? 375 : 240,
+                currentA: power * 1000 / (charge.fastCharger ? 375 : 240), ratedRangeKm: 250 + f * 143,
+                routeBreakBefore: false
+            )
+        }
+        return ChargeDetail(summary: charge, samples: samples, efficiency: 0.92,
+                            telemetry: FleetTelemetrySeries(source: "fleet_telemetry", samples: telemetrySamples,
+                                                            gaps: [], truncated: false))
     }
     func idles(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<IdleSummary> {
         try check(vehicleID)

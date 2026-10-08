@@ -1,0 +1,170 @@
+# Volta Fleet Telemetry capture stack. Staged OFF: nothing here is started
+# by any existing unit, and nothing is reachable from outside the host until
+# an operator runs funnel/stage-funnel.sh --apply after the live gates in
+# docs/TELEMETRY_CAPTURE.md.
+#
+#   docker compose --env-file /opt/volta-telemetry/telemetry.env \
+#     -f deploy/telemetry/compose.yaml up -d
+#
+# Exposure: the receiver publishes 127.0.0.1:8448 only. Redpanda and the
+# consumer publish nothing. The only public path is the raw TCP Funnel
+# 10000 -> 127.0.0.1:8448, and TLS (mutual) terminates in the receiver.
+name: volta-telemetry
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: local
+    options: {max-size: "10m", max-file: "3"}
+
+services:
+  receiver:
+    <<: *hardening
+    # The official Tesla receiver, unmodified and pinned by digest (tag
+    # v0.9.5, commit bd076fe; see the FROM in ingestion/Dockerfile), run as
+    # the child of volta-receiver-guard. The guard is the only writer to the
+    # container log and emits fixed event codes only: the receiver logs VINs
+    # and client addresses on error paths that no receiver setting removes.
+    # It also serves liveness on :8450 inside the telemetry network (not
+    # published) for the consumer's stream_health.
+    build:
+      context: ../../ingestion
+      dockerfile: Dockerfile
+      target: receiver
+    image: volta-telemetry-receiver:local
+    command: ["-config", "/etc/fleet-telemetry/config.json"]
+    restart: unless-stopped
+    environment:
+      # Kept as defence in depth; it only drops lines starting
+      # "http: TLS handshake error from". The guard covers the rest.
+      SUPPRESS_TLS_HANDSHAKE_ERROR_LOGGING: "true"
+    healthcheck:
+      test: ["CMD", "/volta-receiver-guard", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    volumes:
+      - ./receiver/config.prod.json:/etc/fleet-telemetry/config.json:ro
+      # Written by cert/renew-cert.sh: tls.crt + tls.key, owned by 65532.
+      - ${TELEMETRY_CERT_DIR:-/opt/volta-telemetry/certs}:/etc/certs/server:ro
+    ports:
+      - "127.0.0.1:8448:8448"
+    networks: [telemetry-edge, telemetry]
+    mem_limit: 256m
+    pids_limit: 256
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+
+  redpanda:
+    <<: *hardening
+    read_only: false # Redpanda writes its data dir and runtime files.
+    image: redpandadata/redpanda:v26.2.4@sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89
+    restart: unless-stopped
+    # Not dev-container mode: that enables developer_mode, which relaxes
+    # fsync. acks=all on a single replica is acknowledged after fsync.
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://redpanda:9092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    networks: [telemetry]
+    mem_limit: 1g
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  redpanda-init:
+    <<: *hardening
+    image: redpandadata/redpanda:v26.2.4@sha256:c98c2f04a751e6646012cc701bac5183252cee44c88ba1dfa412e4c7124f2e89
+    entrypoint: ["/bin/bash", "/init/init-topics.sh"]
+    environment:
+      TELEMETRY_NAMESPACE: tesla_telemetry
+      RPK_BROKERS: redpanda:9092
+      RPK_ADMIN_HOSTS: redpanda:9644
+      HOME: /tmp
+    volumes:
+      - ./redpanda/init-topics.sh:/init/init-topics.sh:ro
+    tmpfs: [/tmp]
+    networks: [telemetry]
+    mem_limit: 128m
+    restart: "no"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  consumer:
+    <<: *hardening
+    build:
+      context: ../../ingestion
+      dockerfile: Dockerfile
+      target: consumer
+    image: volta-telemetry-consumer:local
+    restart: unless-stopped
+    user: "65532:65532"
+    environment:
+      TELEMETRY_KAFKA_BROKERS: redpanda:9092
+      TELEMETRY_NAMESPACE: tesla_telemetry
+      TELEMETRY_GROUP: volta-telemetry-consumer
+      TELEMETRY_VEHICLES_FILE: /run/volta-telemetry/vehicles.json
+      TELEMETRY_DATABASE_URL_FILE: /run/volta-telemetry/database-url
+      TELEMETRY_STATUS_SECRET_FILE: /run/volta-telemetry/status-secret
+      TELEMETRY_STATUS_ADDR: ":8449"
+      TELEMETRY_RESERVATION_USD: ${TELEMETRY_RESERVATION_USD:-25}
+      TELEMETRY_WARN_RATIO: ${TELEMETRY_WARN_RATIO:-0.8}
+      TELEMETRY_STOP_RATIO: ${TELEMETRY_STOP_RATIO:-0.92}
+      TELEMETRY_RECEIVER_LIVENESS_URL: http://receiver:8450/v1/liveness
+    volumes:
+      # vehicles.json ({"<id>":"<VIN>"}), database-url, status-secret; 0400.
+      - ${TELEMETRY_SECRET_DIR:-/opt/volta-telemetry/secrets}:/run/volta-telemetry:ro
+    # teslamate_default reaches database:5432 (role volta_telemetry_ingest).
+    # Commander reads /v1/usage over volta-telemetry-usage (attach commander
+    # to it in the integration PR); no host port.
+    networks: [telemetry, teslamate, telemetry-usage]
+    # Healthy only while the status endpoint serves a fresh evaluation (the
+    # watch loop ticks); says nothing about the budget state.
+    healthcheck:
+      test: ["CMD", "/volta-telemetry-consumer", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    mem_limit: 128m
+    pids_limit: 128
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+
+networks:
+  telemetry:
+    name: volta-telemetry
+    internal: true
+  telemetry-usage:
+    name: volta-telemetry-usage
+    internal: true
+  # Only for the receiver's loopback port publication.
+  telemetry-edge:
+    name: volta-telemetry-edge
+  teslamate:
+    name: teslamate_default
+    external: true
+
+volumes:
+  redpanda-data:
+    name: volta-telemetry-redpanda-data

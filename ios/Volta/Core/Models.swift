@@ -138,29 +138,188 @@ struct DrivePoint: Codable, Hashable, Sendable {
     var powerKw: Double?
     var elevationM: Double?
     var batteryLevel: Int?
+    /// True when the receiver says this sample begins after a known stream gap.
+    /// Optional keeps old `path` payloads source-compatible.
+    var routeBreakBefore: Bool? = nil
+}
+
+/// Fleet Telemetry stays separate from TeslaMate's historical path/samples.
+/// A sample may contain a slow signal without a position; nil remains unknown.
+struct FleetTelemetrySample: Codable, Hashable, Sendable {
+    var t: Date
+    var latitude: Double?
+    var longitude: Double?
+    var speedKph: Double?
+    var powerKw: Double?
+    var elevationM: Double?
+    var batteryLevel: Double?
+    var energyRemainingKwh: Double?
+    var batteryTempMinC: Double?
+    var batteryTempMaxC: Double?
+    var insideTempC: Double?
+    var outsideTempC: Double?
+    var voltage: Double?
+    var currentA: Double?
+    var ratedRangeKm: Double?
+    var longitudinalAccelerationMps2: Double? = nil
+    var lateralAccelerationMps2: Double? = nil
+    var routeBreakBefore: Bool
+    /// Tesla field names that were reported but rejected/conflicted at `t`.
+    /// Absent on older servers means no explicit invalid-field evidence.
+    var invalidFields: [String] = []
+}
+
+extension FleetTelemetrySample {
+    private enum CodingKeys: String, CodingKey {
+        case t, latitude, longitude, speedKph, powerKw, elevationM, batteryLevel, energyRemainingKwh
+        case batteryTempMinC, batteryTempMaxC, insideTempC, outsideTempC, voltage, currentA, ratedRangeKm
+        case longitudinalAccelerationMps2, lateralAccelerationMps2
+        case routeBreakBefore, invalidFields
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        t = try c.decode(Date.self, forKey: .t)
+        latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
+        longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
+        speedKph = try c.decodeIfPresent(Double.self, forKey: .speedKph)
+        powerKw = try c.decodeIfPresent(Double.self, forKey: .powerKw)
+        elevationM = try c.decodeIfPresent(Double.self, forKey: .elevationM)
+        batteryLevel = try c.decodeIfPresent(Double.self, forKey: .batteryLevel)
+        energyRemainingKwh = try c.decodeIfPresent(Double.self, forKey: .energyRemainingKwh)
+        batteryTempMinC = try c.decodeIfPresent(Double.self, forKey: .batteryTempMinC)
+        batteryTempMaxC = try c.decodeIfPresent(Double.self, forKey: .batteryTempMaxC)
+        insideTempC = try c.decodeIfPresent(Double.self, forKey: .insideTempC)
+        outsideTempC = try c.decodeIfPresent(Double.self, forKey: .outsideTempC)
+        voltage = try c.decodeIfPresent(Double.self, forKey: .voltage)
+        currentA = try c.decodeIfPresent(Double.self, forKey: .currentA)
+        ratedRangeKm = try c.decodeIfPresent(Double.self, forKey: .ratedRangeKm)
+        longitudinalAccelerationMps2 = try c.decodeIfPresent(Double.self, forKey: .longitudinalAccelerationMps2)
+        lateralAccelerationMps2 = try c.decodeIfPresent(Double.self, forKey: .lateralAccelerationMps2)
+        routeBreakBefore = try c.decodeIfPresent(Bool.self, forKey: .routeBreakBefore) ?? false
+        invalidFields = try c.decodeIfPresent([String].self, forKey: .invalidFields) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(t, forKey: .t)
+        try c.encodeIfPresent(latitude, forKey: .latitude)
+        try c.encodeIfPresent(longitude, forKey: .longitude)
+        try c.encodeIfPresent(speedKph, forKey: .speedKph)
+        try c.encodeIfPresent(powerKw, forKey: .powerKw)
+        try c.encodeIfPresent(elevationM, forKey: .elevationM)
+        try c.encodeIfPresent(batteryLevel, forKey: .batteryLevel)
+        try c.encodeIfPresent(energyRemainingKwh, forKey: .energyRemainingKwh)
+        try c.encodeIfPresent(batteryTempMinC, forKey: .batteryTempMinC)
+        try c.encodeIfPresent(batteryTempMaxC, forKey: .batteryTempMaxC)
+        try c.encodeIfPresent(insideTempC, forKey: .insideTempC)
+        try c.encodeIfPresent(outsideTempC, forKey: .outsideTempC)
+        try c.encodeIfPresent(voltage, forKey: .voltage)
+        try c.encodeIfPresent(currentA, forKey: .currentA)
+        try c.encodeIfPresent(ratedRangeKm, forKey: .ratedRangeKm)
+        try c.encodeIfPresent(longitudinalAccelerationMps2, forKey: .longitudinalAccelerationMps2)
+        try c.encodeIfPresent(lateralAccelerationMps2, forKey: .lateralAccelerationMps2)
+        try c.encode(routeBreakBefore, forKey: .routeBreakBefore)
+        if !invalidFields.isEmpty { try c.encode(invalidFields, forKey: .invalidFields) }
+    }
+}
+
+struct FleetTelemetryGap: Codable, Hashable, Sendable {
+    var start: Date
+    var end: Date
+    var reason: String
+}
+
+/// Coverage of one numeric field before the server's bounded response is
+/// downsampled. `returnedSampleCount` is the number of values the client can
+/// actually draw or analyse; the other fields describe the complete source.
+struct FleetTelemetryMetricCoverage: Codable, Hashable, Sendable {
+    var start: Date
+    var end: Date
+    var sourceSampleCount: Int
+    var returnedSampleCount: Int
+    /// Null for a zero-duration session; density is undefined, not zero.
+    var densityPerMinute: Double?
+    var maxIntervalSeconds: Double?
+    var returnedMaxIntervalSeconds: Double? = nil
+    var gapCount: Int
+    var downsampled: Bool
+    /// True when the bounded gaps array omitted a known gap intersecting this
+    /// metric's span. Metric values are downsampled across the whole session,
+    /// never prefix-truncated.
+    var truncated: Bool
+}
+
+struct FleetTelemetryCoverage: Codable, Hashable, Sendable {
+    var sessionStart: Date
+    var sessionEnd: Date
+    var sampleStart: Date
+    var sampleEnd: Date
+    var sourceSampleCount: Int
+    var returnedSampleCount: Int
+    /// Keys are FleetTelemetrySample JSON fields (`speedKph`, `powerKw`, ...).
+    var metrics: [String: FleetTelemetryMetricCoverage]
+}
+
+struct FleetTelemetrySeries: Codable, Hashable, Sendable {
+    var source: String
+    var samples: [FleetTelemetrySample]
+    var gaps: [FleetTelemetryGap]
+    /// Absent on older servers. Without it the client keeps complete legacy
+    /// history rather than guessing that a telemetry fragment is better.
+    var coverage: FleetTelemetryCoverage? = nil
+    var downsampled: Bool = false
+    var truncated: Bool
+
+    private enum CodingKeys: String, CodingKey { case source, samples, gaps, coverage, downsampled, truncated }
+
+    init(source: String, samples: [FleetTelemetrySample], gaps: [FleetTelemetryGap],
+         coverage: FleetTelemetryCoverage? = nil, downsampled: Bool = false, truncated: Bool) {
+        self.source = source
+        self.samples = samples
+        self.gaps = gaps
+        self.coverage = coverage
+        self.downsampled = downsampled
+        self.truncated = truncated
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        source = try c.decode(String.self, forKey: .source)
+        samples = try c.decode([FleetTelemetrySample].self, forKey: .samples)
+        gaps = try c.decode([FleetTelemetryGap].self, forKey: .gaps)
+        coverage = try c.decodeIfPresent(FleetTelemetryCoverage.self, forKey: .coverage)
+        downsampled = try c.decodeIfPresent(Bool.self, forKey: .downsampled) ?? false
+        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+    }
 }
 
 struct DriveDetail: Codable, Hashable, Sendable {
     var summary: DriveSummary
     var path: [DrivePoint]
     var elevationGainM: Double?
+    var telemetry: FleetTelemetrySeries?
 
     // The API flattens summary fields into the detail object.
-    init(summary: DriveSummary, path: [DrivePoint], elevationGainM: Double?) {
-        self.summary = summary; self.path = path; self.elevationGainM = elevationGainM
+    init(summary: DriveSummary, path: [DrivePoint], elevationGainM: Double?, telemetry: FleetTelemetrySeries? = nil) {
+        self.summary = summary; self.path = path; self.elevationGainM = elevationGainM; self.telemetry = telemetry
     }
-    private enum Keys: String, CodingKey { case path, elevationGainM }
+    private enum Keys: String, CodingKey { case path, elevationGainM, telemetry }
     init(from decoder: Decoder) throws {
         summary = try DriveSummary(from: decoder)
         let c = try decoder.container(keyedBy: Keys.self)
         path = try c.decode([DrivePoint].self, forKey: .path)
         elevationGainM = try c.decodeIfPresent(Double.self, forKey: .elevationGainM)
+        // Telemetry is supplemental. An incompatible or malformed block must
+        // not discard the successfully decoded legacy detail.
+        telemetry = try? c.decodeIfPresent(FleetTelemetrySeries.self, forKey: .telemetry)
     }
     func encode(to encoder: Encoder) throws {
         try summary.encode(to: encoder)
         var c = encoder.container(keyedBy: Keys.self)
         try c.encode(path, forKey: .path)
         try c.encodeIfPresent(elevationGainM, forKey: .elevationGainM)
+        try c.encodeIfPresent(telemetry, forKey: .telemetry)
     }
 }
 
@@ -198,22 +357,27 @@ struct ChargeDetail: Codable, Hashable, Sendable {
     var summary: ChargeSummary
     var samples: [ChargeSample]
     var efficiency: Double?
+    var telemetry: FleetTelemetrySeries?
 
-    init(summary: ChargeSummary, samples: [ChargeSample], efficiency: Double?) {
-        self.summary = summary; self.samples = samples; self.efficiency = efficiency
+    init(summary: ChargeSummary, samples: [ChargeSample], efficiency: Double?, telemetry: FleetTelemetrySeries? = nil) {
+        self.summary = summary; self.samples = samples; self.efficiency = efficiency; self.telemetry = telemetry
     }
-    private enum Keys: String, CodingKey { case samples, efficiency }
+    private enum Keys: String, CodingKey { case samples, efficiency, telemetry }
     init(from decoder: Decoder) throws {
         summary = try ChargeSummary(from: decoder)
         let c = try decoder.container(keyedBy: Keys.self)
         samples = try c.decode([ChargeSample].self, forKey: .samples)
         efficiency = try c.decodeIfPresent(Double.self, forKey: .efficiency)
+        // Telemetry is supplemental. An incompatible or malformed block must
+        // not discard the successfully decoded legacy detail.
+        telemetry = try? c.decodeIfPresent(FleetTelemetrySeries.self, forKey: .telemetry)
     }
     func encode(to encoder: Encoder) throws {
         try summary.encode(to: encoder)
         var c = encoder.container(keyedBy: Keys.self)
         try c.encode(samples, forKey: .samples)
         try c.encodeIfPresent(efficiency, forKey: .efficiency)
+        try c.encodeIfPresent(telemetry, forKey: .telemetry)
     }
 }
 

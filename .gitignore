@@ -7,3 +7,5 @@ node_modules/
 .env
 docs/screens/latest/
 ios/Config/Signing.local.xcconfig
+acceptance.test
+__pycache__/

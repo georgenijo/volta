@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew the Volta Fleet Telemetry receiver certificate
+After=tailscaled.service docker.service
+Wants=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/volta/deploy/telemetry/cert/renew-cert.sh

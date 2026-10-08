@@ -58,6 +58,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if s.TelemetryEnabled() {
+		go s.RunTelemetry(ctx)
+	}
 	private := &http.Server{Addr: c.Listen, Handler: s.PrivateHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 75 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 	public := &http.Server{Addr: c.CallbackListen, Handler: s.PublicHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 	servers := []*http.Server{private, public}
@@ -69,8 +74,6 @@ func run() error {
 		go func() { errCh <- server.ListenAndServe() }()
 	}
 	audit.Info("commander_started", "mode", c.Mode, "commandsEnabled", c.Enabled, "collectorEnabled", c.CollectorEnabled)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	select {
 	case err = <-errCh:
 	case <-ctx.Done():

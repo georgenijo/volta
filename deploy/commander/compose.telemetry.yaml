@@ -1,0 +1,31 @@
+# Operator-selected overlay. It is inert unless COMMANDER_TELEMETRY_ENABLED=true.
+# The usage network is internal to the telemetry stack; no commander port is
+# added and neither the meter nor Tesla credentials become public.
+services:
+  commander:
+    environment:
+      COMMANDER_TELEMETRY_ENABLED: ${COMMANDER_TELEMETRY_ENABLED:-false}
+      # Telemetry create/delete is signed even while physical commands stay off.
+      TESLA_PROXY_URL: https://tesla-command-proxy:4443
+      TESLA_PROXY_CA_FILE: /public/tls-cert.pem
+      COMMANDER_TELEMETRY_METER_URL: http://consumer:8449/v1/usage
+      COMMANDER_TELEMETRY_METER_SECRET: ""
+      COMMANDER_TELEMETRY_METER_SECRET_FILE: /run/secrets/telemetry-status-secret
+      COMMANDER_TELEMETRY_HOSTNAME: ${COMMANDER_TELEMETRY_HOSTNAME:?set COMMANDER_TELEMETRY_HOSTNAME to the node full ts.net name}
+      COMMANDER_TELEMETRY_PORT: ${COMMANDER_TELEMETRY_PORT:-10000}
+      COMMANDER_TELEMETRY_CA_FILE: /telemetry-certs/ca-chain.pem
+      COMMANDER_TELEMETRY_WARN_USD: ${COMMANDER_TELEMETRY_WARN_USD:-20}
+      COMMANDER_TELEMETRY_STOP_USD: ${COMMANDER_TELEMETRY_STOP_USD:-23}
+      COMMANDER_TELEMETRY_CAP_USD: ${COMMANDER_TELEMETRY_CAP_USD:-25}
+      COMMANDER_TELEMETRY_DELETE_RESERVE_USD: ${COMMANDER_TELEMETRY_DELETE_RESERVE_USD:-2}
+      COMMANDER_TOTAL_MONTHLY_CAP_USD: ${COMMANDER_TOTAL_MONTHLY_CAP_USD:-30}
+      COMMANDER_MONTHLY_BUDGET_USD: ${COMMANDER_MONTHLY_BUDGET_USD:-5}
+    volumes:
+      - ${TELEMETRY_CERT_DIR:-/opt/volta-telemetry/certs}:/telemetry-certs:ro
+      - ${TELEMETRY_STATUS_SECRET_FILE:-/opt/volta-telemetry/secrets/status-secret}:/run/secrets/telemetry-status-secret:ro
+    networks: [volta-telemetry-usage]
+
+networks:
+  volta-telemetry-usage:
+    external: true
+    name: volta-telemetry-usage

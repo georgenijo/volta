@@ -9,6 +9,66 @@ HTTP status. `null` means "unknown / not recorded", never zero.
 The Swift mirror of these shapes is `ios/Volta/Core/Models.swift`. Keep both in
 sync; change additively.
 
+## Fleet Telemetry detail (operator opt-in)
+
+`FLEET_TELEMETRY_ENABLED=true` adds `telemetry` to drive/charge detail; null means
+no exact-bound recorded history in that session window. Disabled APIs omit it.
+
+```text
+FleetTelemetrySeries {source:"fleet_telemetry",samples:[FleetTelemetrySample],
+                      gaps:[{start,end,reason}],coverage:FleetTelemetryCoverage,
+                      downsampled:boolean,truncated:boolean}
+FleetTelemetrySample {t,latitude,longitude,speedKph,powerKw,elevationM,batteryLevel,
+                      energyRemainingKwh,batteryTempMinC,batteryTempMaxC,insideTempC,
+                      outsideTempC,voltage,currentA,ratedRangeKm,routeBreakBefore,
+                      longitudinalAccelerationMps2,lateralAccelerationMps2,invalidFields}
+FleetTelemetryCoverage {sessionStart,sessionEnd,sampleStart,sampleEnd,
+                        sourceSampleCount,returnedSampleCount,
+                        metrics:{sampleField:FleetMetricCoverage}}
+FleetMetricCoverage {start,end,sourceSampleCount,returnedSampleCount,
+                     densityPerMinute,maxIntervalSeconds,returnedMaxIntervalSeconds,
+                     gapCount,receiverGapCount,invalidGapCount,downsampled,truncated}
+```
+
+Measurements are nullable metric numbers with no carry-forward. Signal-only rows
+need no GPS. `invalidFields` names Tesla fields explicitly invalid/malformed or
+conflicting, distinct from absent observations; `Power` marks unusable electrical
+power. Known gaps forbid interpolation. At most 2,000 samples cover the complete
+session: each metric's first, last, minimum and maximum valid observations are
+retained. Explicit invalid observations and the neighboring metric observations
+that delimit their unknown spans take priority. Time buckets retain one row per
+metric with observations in that bucket, plus a generic row; unused slots receive
+an additional even time selection. This preserves slow metrics whose fields
+arrive separately from fast signals while respecting the total row bound. `downsampled`
+distinguishes this bounded whole-session representation from source data. Coverage
+counts, bounds, density and intervals are calculated from the complete source
+series; `densityPerMinute` is a nullable number and is null when the session
+duration is zero (undefined density). `maxIntervalSeconds` and
+`returnedMaxIntervalSeconds` are null when fewer than two valid observations
+exist; the latter describes the points actually returned.
+`receiverGapCount` uses the complete receiver gap set, `invalidGapCount` counts
+runs of explicit invalid observations, and `gapCount` is their sum. At most 2,000 gaps are returned; envelope
+`truncated` means gaps were omitted, while a metric's `truncated` means an omitted
+gap intersects that metric's coverage or its invalid break boundaries could not
+fit in the sample budget. Clients must fail closed when required
+coverage is downsampled or truncated beyond what their presentation can support.
+
+Legacy path/samples remain unchanged. Clients treat the telemetry block as
+optional: malformed or incompatible telemetry decodes as absent while valid
+legacy drive/charge detail remains available. A Fleet Telemetry query failure also preserves
+the legacy detail and returns `telemetry:null`; the server logs only a fixed error
+code, without query text, values or database error data. Pack power requires operator sign calibration;
+charge power is AC/DC input power. Invalid PackCurrent/PackVoltage makes drive power
+unknown. Charge power prefers valid positive DC power, then valid positive AC
+power; zero is reported only when both inputs are known zero. Invalid/null DC
+paired with zero/unavailable AC stays unknown. An invalid unused input keeps its
+raw field flag without erasing valid power; `Power` flags an unknown chosen power
+when an electrical input is invalid.
+Elevation reuses only nearby private TeslaMate
+SRTM observations (same drive, 60 seconds, 50 metres), otherwise null. Module
+temperature units are inferred and need live confirmation. See
+[capture](TELEMETRY_CAPTURE.md) and [runbook](TELEMETRY_RUNBOOK.md).
+
 ## Health and auth
 
 | Method | Path | Body / query | Response |

@@ -6,16 +6,30 @@ import SwiftUI
 final class HistoryDetailLoader<Detail: Sendable> {
     private(set) var detail: Detail?
     private(set) var error: String?
+    /// Bumped by every `load`/`reset`; a fetch publishes only if it is still the latest.
+    private var generation = 0
 
     func load(_ fetch: @Sendable () async throws -> Detail) async {
+        generation += 1
+        let token = generation
         error = nil
         do {
-            detail = try await fetch()
+            let result = try await fetch()
+            guard token == generation, !Task.isCancelled else { return }
+            detail = result
         } catch {
-            // Cancelled: leave the state for the reappearing view's task to reload.
-            if error is CancellationError || Task.isCancelled { return }
+            // Cancelled or superseded: leave the state for the newer request.
+            if token != generation || error is CancellationError || Task.isCancelled { return }
             self.error = error.localizedDescription
         }
+    }
+
+    /// Clears state when the subject changes (another drive, vehicle or server)
+    /// and invalidates any request still in flight.
+    func reset() {
+        generation += 1
+        detail = nil
+        error = nil
     }
 }
 
@@ -46,6 +60,7 @@ struct ChargingDetailView: View {
                     stats
                     curveCard
                     socCard
+                    telemetryCards
                     costCard
                 }
                 .padding(.horizontal, HistoryTheme.gutter)
@@ -66,6 +81,8 @@ struct ChargingDetailView: View {
     }
 
     private var samples: [ChargeSample] { loader.detail?.samples ?? [] }
+    private var telemetry: FleetTelemetrySeries? { loader.detail?.telemetry }
+    private var sessionEnd: Date { charge.end ?? charge.start.addingTimeInterval(charge.durationMin * 60) }
 
     // MARK: Hero
 
@@ -137,6 +154,15 @@ struct ChargingDetailView: View {
     // MARK: Charts
 
     private var curveCard: some View {
+        let field = switch series { case .power: "Power"; case .voltage: "ChargerVoltage"; case .current: "ChargeAmps" }
+        let metric = switch series { case .power: "powerKw"; case .voltage: "voltage"; case .current: "currentA" }
+        let telemetrySeries = TelemetryMetricSeries(telemetry, field: field) { sample in
+            switch series {
+            case .power: sample.powerKw
+            case .voltage: sample.voltage
+            case .current: sample.currentA
+            }
+        }
         let points: [HistoryChartPoint] = samples.compactMap { s in
             let v: Double? = switch series {
             case .power: s.powerKw
@@ -147,20 +173,95 @@ struct ChargingDetailView: View {
         }
         let unit = switch series { case .power: "kW"; case .voltage: "V"; case .current: "A" }
         let color = switch series { case .power: HistoryTheme.green; case .voltage: HistoryTheme.blue; case .current: HistoryTheme.amber }
+        let useTelemetry = telemetry?.shouldPrefer(
+            metric: metric,
+            over: .dates(points.map(\.t), sessionStart: charge.start, sessionEnd: sessionEnd)
+        ) == true
         return HistoryChartCard(title: "Charge curve", systemImage: "bolt.fill") {
             VStack(alignment: .leading, spacing: 14) {
                 SegmentedRangePicker(selection: $series, options: Series.allCases) { $0.rawValue }
-                chartBody(points: points, color: color, unit: unit, digits: series == .power ? 1 : 0)
+                if useTelemetry, !telemetrySeries.isEmpty {
+                    TelemetryMetricChart(traces: [.init(label: series.rawValue, color: color, series: telemetrySeries)],
+                                         unit: unit, domain: TripChartDomain.zeroBased(telemetrySeries.values),
+                                         sessionStart: charge.start, sessionEnd: sessionEnd,
+                                         digits: series == .power ? 1 : 0, showsZero: series == .power)
+                    telemetryNote(telemetrySeries)
+                } else {
+                    chartBody(points: points, color: color, unit: unit, digits: series == .power ? 1 : 0)
+                }
             }
         }
     }
 
     private var socCard: some View {
+        let telemetrySeries = TelemetryMetricSeries(telemetry, field: "BatteryLevel") { $0.batteryLevel }
         let points = samples.compactMap { s in s.batteryLevel.map { HistoryChartPoint(t: s.t, value: Double($0)) } }
+        let useTelemetry = telemetry?.shouldPrefer(
+            metric: "batteryLevel",
+            over: .dates(points.map(\.t), sessionStart: charge.start, sessionEnd: sessionEnd)
+        ) == true
         return HistoryChartCard(title: "State of charge", systemImage: "battery.75percent",
                                 value: charge.endBatteryLevel.map(String.init), unit: "%") {
-            chartBody(points: points, color: HistoryTheme.blue, unit: "%", yDomain: 0...100)
+            if useTelemetry, !telemetrySeries.isEmpty {
+                TelemetryMetricChart(traces: [.init(label: "Battery", color: HistoryTheme.blue, series: telemetrySeries)],
+                                     unit: "%", domain: 0...100, sessionStart: charge.start,
+                                     sessionEnd: sessionEnd, digits: 0)
+                telemetryNote(telemetrySeries)
+            } else {
+                chartBody(points: points, color: HistoryTheme.blue, unit: "%", yDomain: 0...100)
+            }
         }
+    }
+
+    @ViewBuilder private var telemetryCards: some View {
+        let energy = TelemetryMetricSeries(telemetry, field: "EnergyRemaining") { $0.energyRemainingKwh }
+        if !energy.isEmpty {
+            telemetryCard("Energy remaining", "bolt.batteryblock.fill", "kWh",
+                          traces: [.init(label: "Energy", color: HistoryTheme.green, series: energy)], digits: 1)
+        }
+        let minimum = TelemetryMetricSeries(telemetry, field: "ModuleTempMin") { $0.batteryTempMinC.map { units.temperatureValue(celsius: $0) } }
+        let maximum = TelemetryMetricSeries(telemetry, field: "ModuleTempMax") { $0.batteryTempMaxC.map { units.temperatureValue(celsius: $0) } }
+        if !minimum.isEmpty || !maximum.isEmpty {
+            telemetryCard("Battery temperature", "thermometer.medium", units.temperatureUnit,
+                          traces: [.init(label: "Min", color: HistoryTheme.blue, series: minimum),
+                                   .init(label: "Max", color: HistoryTheme.red, series: maximum)], digits: 1)
+        }
+        let inside = TelemetryMetricSeries(telemetry, field: "InsideTemp") { $0.insideTempC.map { units.temperatureValue(celsius: $0) } }
+        let outside = TelemetryMetricSeries(telemetry, field: "OutsideTemp") { $0.outsideTempC.map { units.temperatureValue(celsius: $0) } }
+        if !inside.isEmpty || !outside.isEmpty {
+            telemetryCard("Cabin & outside", "thermometer.sun.fill", units.temperatureUnit,
+                          traces: [.init(label: "Inside", color: HistoryTheme.amber, series: inside),
+                                   .init(label: "Outside", color: HistoryTheme.blue, series: outside)], digits: 1)
+        }
+    }
+
+    private func telemetryCard(_ title: String, _ icon: String, _ unit: String,
+                               traces: [TelemetryTrace], digits: Int) -> some View {
+        let values = traces.flatMap(\.series.values)
+        return HistoryChartCard(title: title, systemImage: icon) {
+            VStack(alignment: .leading, spacing: 8) {
+                TelemetryMetricChart(traces: traces, unit: unit,
+                                     domain: TripChartDomain.padded(values, minPad: unit == "kWh" ? 0.5 : 2),
+                                     sessionStart: charge.start, sessionEnd: sessionEnd, digits: digits)
+                telemetryNote(traces.map(\.series))
+            }
+        }
+    }
+
+    private func telemetryNote(_ series: TelemetryMetricSeries) -> some View { telemetryNote([series]) }
+
+    private func telemetryNote(_ series: [TelemetryMetricSeries]) -> some View {
+        let count = series.reduce(0) { $0 + $1.points.count }
+        let gapCount = Set(series.flatMap(\.gaps)).count
+        let downsampled = series.contains { $0.downsampled }
+        let truncated = series.contains { $0.truncated }
+        var note = "Fleet Telemetry · \(count.formatted()) recorded sample\(count == 1 ? "" : "s")"
+        if gapCount > 0 { note += " · \(gapCount) known gap\(gapCount == 1 ? "" : "s") not joined" }
+        if downsampled { note += " · downsampled" }
+        if truncated { note += " · history truncated" }
+        return Text(note).font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("charge.telemetry.provenance")
     }
 
     @ViewBuilder

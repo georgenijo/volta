@@ -151,7 +151,7 @@ Sign in with Tesla is driven by the paired app through volta-api; see
 [Sign in with Tesla](../docs/TESLA_SIGN_IN.md) for the full flow. All routes
 below use the internal shared secret:
 
-- `GET /v1/health` → `{ok, mode, commandsEnabled, oauthEnabled, historyEnabled, authorized}`. This is process
+- `GET /v1/health` → `{ok, mode, commandsEnabled, oauthEnabled, historyEnabled, telemetryEnabled, authorized}`. This is process
   readiness only; it does not call Tesla or prove token validity, proxy health,
   pairing, or live command execution.
 - `GET /oauth/status` → `{available, connected, needsReauth, linkPending,
@@ -165,6 +165,20 @@ below use the internal shared secret:
   budget ledger, plus 12 calls a day and 60 a month, one second apart, holding
   the collector lock. Invoices are never fetched. See
   [Tesla-billed charging history](../docs/CHARGING_HISTORY.md).
+- `GET /v1/telemetry/status` returns only local vehicle ids, guard state and
+  aggregate budget lines. It never returns a VIN, certificate or token.
+- `POST /v1/vehicles/{id}/telemetry/config` is the operator create/update gate.
+  It accepts no body, requires fresh complete meter accounting, reserves the
+  `fleet_status` preflight, requires the paired key and telemetry client 1.3.0,
+  then signs the normal/economy config through the proxy.
+- `DELETE /v1/vehicles/{id}/telemetry/config` durably latches stopped before
+  sending the signed delete. Failed deletes remain pending and retry after
+  restart. See [Fleet Telemetry cost and guard](../docs/TELEMETRY_COST.md).
+- `GET /v1/vehicles/{id}/telemetry/config` performs the metered Tesla status
+  read and records whether the car has adopted the target config (`synced`).
+  Normal telemetry calls atomically reserve from the `$5` polling lane and
+  stop at the `$28` combined operating line. Only DELETE can consume the
+  separate `$2` fail-safe reserve.
 - `POST /oauth/start {"deviceId"}` → `{authorizationUrl, callbackScheme, expiresAt}`.
   Supersedes any earlier pending link. Ten-minute state/verifier are bound to the
   device and stored encrypted (state only as a hash). `already_authorized` unless

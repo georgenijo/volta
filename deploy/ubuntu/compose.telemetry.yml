@@ -1,0 +1,5 @@
+# API opt-in only after the telemetry schema and capture stack are installed.
+services:
+  api:
+    environment:
+      FLEET_TELEMETRY_ENABLED: ${FLEET_TELEMETRY_ENABLED:-false}

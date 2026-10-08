@@ -2,9 +2,20 @@ import type { DB, Row } from './db';
 import { ApiError, missing } from './errors';
 import type { ListInput } from './validation';
 import { summaryPeriod } from './period';
+import { FleetSeries } from './fleet-series';
 
 export class Telemetry {
-  constructor(private sql: DB, private currency: string | null = null, private clock: () => Date = () => new Date()) {}
+  constructor(private sql: DB, private currency: string | null = null, private clock: () => Date = () => new Date(), private fleetEnabled = false,
+    private log: (entry: object) => void = () => {}) {}
+  private async fleetSession(kind: 'drive' | 'charge', id: number) {
+    try { return await new FleetSeries(this.sql).session(kind,id); }
+    catch {
+      // Database errors may contain query text and values. Emit only a stable,
+      // non-sensitive code while preserving the TeslaMate detail response.
+      this.log({event:'fleet_series_failed',code:'telemetry_query_failed'});
+      return null;
+    }
+  }
   async vehicle(id: number) {
     const [car] = await this.sql`SELECT id, efficiency FROM public.cars WHERE id = ${id}`;
     if (!car) throw missing();
@@ -143,7 +154,8 @@ export class Telemetry {
     const [elevation] = await this.sql`SELECT ascent AS "elevationGainM" FROM public.drives WHERE id = ${id}`;
     const { _cursorStart, ...fields } = summary;
     this.requireDrive(fields);
-    return { ...fields, path, elevationGainM: elevation?.elevationGainM ?? null };
+    return { ...fields, path, elevationGainM: elevation?.elevationGainM ?? null,
+      ...(this.fleetEnabled ? {telemetry:await this.fleetSession('drive',id)} : {}) };
   }
   private chargeSelect() {
     const s = this.sql;
@@ -168,7 +180,8 @@ export class Telemetry {
     if (!summary) throw missing();
     const samples = await this.sql`SELECT date AS t, battery_level AS "batteryLevel", charger_power AS "powerKw", charger_voltage AS voltage, charger_actual_current AS "currentA", rated_battery_range_km AS "ratedRangeKm" FROM public.charges WHERE charging_process_id = ${id} ORDER BY date, id`;
     const { _cursorStart, ...fields } = summary;
-    return { ...fields, samples, efficiency: summary.energyUsedKwh > 0 && summary.energyAddedKwh != null ? summary.energyAddedKwh / summary.energyUsedKwh : null };
+    return { ...fields, samples, efficiency: summary.energyUsedKwh > 0 && summary.energyAddedKwh != null ? summary.energyAddedKwh / summary.energyUsedKwh : null,
+      ...(this.fleetEnabled ? {telemetry:await this.fleetSession('charge',id)} : {}) };
   }
   private idleCTE(id: number) {
     const s = this.sql;
