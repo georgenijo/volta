@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Enable with: git config core.hooksPath .githooks
+# Install with scripts/install-hooks.sh (copies the hooks outside the worktree).
 set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+check="$here/privacy-check.sh"
+[[ -x $check ]] || check="$(git rev-parse --show-toplevel)/scripts/privacy-check.sh"
 # Commit metadata is public too: only the GitHub noreply identity may author here.
 for who in GIT_AUTHOR_IDENT GIT_COMMITTER_IDENT; do
   if ! git var "$who" | grep -q '@users\.noreply\.github\.com>'; then
@@ -8,4 +11,4 @@ for who in GIT_AUTHOR_IDENT GIT_COMMITTER_IDENT; do
     exit 1
   fi
 done
-exec "$(git rev-parse --show-toplevel)/scripts/privacy-check.sh"
+exec "$check"

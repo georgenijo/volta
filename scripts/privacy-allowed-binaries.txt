@@ -1,0 +1,10 @@
+# Reviewed binary assets: "<git blob hash> <path>". Rereview and update the hash on any change.
+db5fd0d3731b371fa391be8a665c475b6529960b docs/brand/icon-concepts/comparison.png
+8f29f02da68a3c644b4ce4e3fd944bd64a51f335 docs/brand/icon-concepts/concept-a.png
+2a19e0a7061658c8c092663fefe2b75304c797f2 docs/brand/icon-concepts/concept-b.png
+f2ecfd43033f23d5ba1baf519323d5a4254d5898 docs/brand/icon-concepts/concept-c.png
+421fb5f5293c02f0a0ce532af1be024f88639c7f docs/brand/icon-concepts/concept-d.png
+6effca22d782ea9465291944c649f3366d4418fb docs/brand/wordmark-preview.png
+c37ed9cb365e8e6d41ced750ff982080ce44bb49 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Dark.png
+090c46b834dd2731cde739d910cf71274b25bc09 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Tinted.png
+8f29f02da68a3c644b4ce4e3fd944bd64a51f335 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png

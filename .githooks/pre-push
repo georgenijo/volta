@@ -1,16 +1,35 @@
 #!/usr/bin/env bash
-# Enable with: git config core.hooksPath .githooks
-# Rechecks every outgoing commit, so history (not just the tip) stays clean.
+# Install with scripts/install-hooks.sh (copies the hooks outside the worktree).
+# Rechecks every outgoing commit and tag: trees, messages and identities.
 set -euo pipefail
-check="$(git rev-parse --show-toplevel)/scripts/privacy-check.sh"
+here=$(cd "$(dirname "$0")" && pwd)
+check="$here/privacy-check.sh"
+[[ -x $check ]] || check="$(git rev-parse --show-toplevel)/scripts/privacy-check.sh"
+[[ -x $check ]] || { echo "privacy-check: checker missing; refusing to push" >&2; exit 1; }
+remote=$1
 zero=0000000000000000000000000000000000000000
+noreply() { grep -E '^(author|committer|tagger) ' | grep -vqE '@users\.noreply\.github\.com> [0-9]+ [-+][0-9]{4}$' && return 1 || return 0; }
+inspect() { # $1 = object id of a commit or tag
+  local obj; obj=$(git cat-file -p "$1")
+  if ! noreply <<<"$obj"; then echo "privacy-check: $1 has a non-noreply identity" >&2; exit 1; fi
+  "$check" --stdin <<<"$obj" || { echo "privacy-check: $1 message or metadata failed" >&2; exit 1; }
+}
 while read -r _ local_sha _ remote_sha; do
   [[ $local_sha == "$zero" ]] && continue
-  if [[ $remote_sha == "$zero" ]]; then range=("$local_sha" --not --remotes); else range=("$remote_sha..$local_sha"); fi
-  for c in $(git rev-list "${range[@]}"); do
-    if git log -1 --format='%ae%n%ce' "$c" | grep -qv '@users\.noreply\.github\.com$'; then
-      echo "privacy-check: commit $c has a non-noreply author or committer email" >&2; exit 1
-    fi
-    "$check" "$c" || { echo "privacy-check: commit $c failed" >&2; exit 1; }
+  tip=$local_sha
+  while [[ $(git cat-file -t "$tip") == tag ]]; do inspect "$tip"; tip=$(git cat-file -p "$tip" | awk '/^object /{print $2; exit}'); done
+  [[ $(git cat-file -t "$tip") == commit ]] || continue
+  # Only history already on this destination remote is skipped; anything that
+  # cannot be enumerated fails the push.
+  if [[ $remote_sha != "$zero" ]]; then
+    commits=$(git rev-list "$tip" "^$remote_sha") || { echo "privacy-check: cannot list $remote_sha..$tip; fetch first" >&2; exit 1; }
+  elif git remote get-url "$remote" >/dev/null 2>&1; then
+    commits=$(git rev-list "$tip" --not --remotes="$remote") || exit 1
+  else
+    commits=$(git rev-list "$tip") || exit 1
+  fi
+  for c in $commits; do
+    inspect "$c"
+    "$check" "$c" || { echo "privacy-check: commit $c tree failed" >&2; exit 1; }
   done
 done
