@@ -173,6 +173,10 @@ case=lan-bind-from-env-file; reset; export STUB_LISTEN_8448="192.168.1.20:8448"
 printf 'TELEMETRY_RECEIVER_BIND = 192.168.1.20 # router forward\n' >"$work/telemetry.env"
 TELEMETRY_ENV_FILE="$work/telemetry.env" expect 0 '^RESULT: READY'
 
+case=empty-bind-with-comment; reset
+printf 'TELEMETRY_RECEIVER_BIND = # use the default\n' >"$work/telemetry.env"
+TELEMETRY_ENV_FILE="$work/telemetry.env" expect 0 '^ok    8448 listens on loopback only'
+
 case=lan-bind-but-loopback; reset; export TELEMETRY_RECEIVER_BIND=192.168.1.20
 expect 1 '^FAIL  8448 listens on an unexpected address'
 

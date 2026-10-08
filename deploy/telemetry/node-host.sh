@@ -18,6 +18,8 @@ env_value() {
     [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]] || continue
     [[ ${BASH_REMATCH[2]} == "$2" ]] || continue
     v="${BASH_REMATCH[3]}"
+    # An unquoted value that is only whitespace and a comment is empty.
+    [[ $v =~ ^[[:space:]]+# ]] && v=""
     v="${v#"${v%%[![:space:]]*}"}"
     case $v in
       \"*) v="${v#\"}"; v="${v%%\"*}" ;;
