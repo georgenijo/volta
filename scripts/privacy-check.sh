@@ -44,6 +44,8 @@ shopt -s nocasematch
 while IFS= read -r -d '' rec; do
   path=${rec#*$'\t'}
   if [[ $path == *[[:cntrl:]]* ]]; then fail 'path contains a control character'; continue; fi
+  # git grep skips symlink targets, so symlinks are not allowed at all.
+  if [[ $rec == 120000\ * ]]; then fail "symlink: $path"; fi
   printf '%s\n' "$path" >>"$tmp/paths"
   if [[ $path =~ $media ]]; then
     read -r -a meta <<<"${rec%%$'\t'*}"

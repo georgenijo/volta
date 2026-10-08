@@ -6,7 +6,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 check="$here/privacy-check.sh"
 [[ -x $check ]] || check="$(git rev-parse --show-toplevel)/scripts/privacy-check.sh"
 [[ -x $check ]] || { echo "privacy-check: checker missing; refusing to push" >&2; exit 1; }
-remote=$1
+
 zero=0000000000000000000000000000000000000000
 noreply() { grep -E '^(author|committer|tagger) ' | grep -vqE '@users\.noreply\.github\.com> [0-9]+ [-+][0-9]{4}$' && return 1 || return 0; }
 inspect() { # $1 = object id of a commit or tag
@@ -20,12 +20,11 @@ while read -r _ local_sha _ remote_sha; do
   while [[ $(git cat-file -t "$tip") == tag ]]; do inspect "$tip"; tip=$(git cat-file -p "$tip" | awk '/^object /{print $2; exit}'); done
   # A ref naming a bare tree or blob would publish content no check has seen.
   [[ $(git cat-file -t "$tip") == commit ]] || { echo "privacy-check: $tip is not a commit; refusing to push it" >&2; exit 1; }
-  # Only history already on this destination remote is skipped; anything that
-  # cannot be enumerated fails the push.
+  # Only history the destination itself reports for this ref is skipped (local
+  # tracking refs can be stale or belong to another repo); a new ref rescans its
+  # whole history, and anything that cannot be enumerated fails the push.
   if [[ $remote_sha != "$zero" ]]; then
     commits=$(git rev-list "$tip" "^$remote_sha") || { echo "privacy-check: cannot list $remote_sha..$tip; fetch first" >&2; exit 1; }
-  elif git remote get-url "$remote" >/dev/null 2>&1; then
-    commits=$(git rev-list "$tip" --not --remotes="$remote") || exit 1
   else
     commits=$(git rev-list "$tip") || exit 1
   fi
