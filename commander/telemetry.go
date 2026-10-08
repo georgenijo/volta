@@ -688,7 +688,7 @@ func (t *TelemetryController) applyProfile(ctx context.Context, id string, state
 		for reason, vins := range response.Skipped {
 			skipped[redactUpstream(reason, tokens.Access, tokens.Refresh)] += len(vins)
 		}
-		t.service.audit.Warn("telemetry_config_rejected", "vehicle", id, "httpStatus", status, "updated", response.Updated, "skipped", skipped,
+		t.service.audit.Warn("telemetry_config_rejected", "vehicle", redactUpstream(id), "httpStatus", status, "updated", response.Updated, "skipped", skipped,
 			"error", redactUpstream(reply.Error, tokens.Access, tokens.Refresh), "description", redactUpstream(reply.Description, tokens.Access, tokens.Refresh))
 		t.failAction(id, state, code)
 		r := failure(409, code, "Tesla did not apply the Fleet Telemetry configuration.")
@@ -711,23 +711,32 @@ func (t *TelemetryController) applyProfile(ctx context.Context, id string, state
 }
 
 var (
-	bearerInText = regexp.MustCompile(`(?i)bearer\s+\S+`)
-	vinInText    = regexp.MustCompile(`(?i)[A-HJ-NPR-Z0-9]{17}`)
-	tokenInText  = regexp.MustCompile(`[A-Za-z0-9._~+/=-]{24,}`)
+	bearerInText  = regexp.MustCompile(`(?i)bearer\s+\S+`)
+	longRunInText = regexp.MustCompile(`[A-Za-z0-9._~+/=-]{17,}`)
 )
 
-// redactUpstream masks secrets, bearer credentials, VIN-shaped strings and
-// long token-like runs in upstream text, then bounds its length. Masking
-// happens first so truncation cannot leave a partial match behind.
+// redactUpstream masks credentials and identifiers in upstream text before it
+// is logged, then bounds its length. Known secrets go first, longest first so
+// an overlapping shorter one cannot split a longer one. Then every maximal run
+// of token characters long enough to hold a VIN or credential is masked whole:
+// 17+ characters with a digit (VINs and tokens) or 24+ without. Short reason
+// codes such as "missing_key" survive. Masking precedes truncation, so a cut
+// cannot expose a partial match.
 func redactUpstream(text string, secrets ...string) string {
+	secrets = slices.Clone(secrets)
+	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
 	for _, secret := range secrets {
 		if secret != "" {
 			text = strings.ReplaceAll(text, secret, "<redacted>")
 		}
 	}
 	text = bearerInText.ReplaceAllString(text, "<redacted>")
-	text = vinInText.ReplaceAllString(text, "<vin>")
-	text = tokenInText.ReplaceAllString(text, "<redacted>")
+	text = longRunInText.ReplaceAllStringFunc(text, func(run string) string {
+		if len(run) >= 24 || strings.ContainsAny(run, "0123456789") {
+			return "<redacted>"
+		}
+		return run
+	})
 	if r := []rune(text); len(r) > 300 {
 		text = string(r[:300])
 	}

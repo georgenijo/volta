@@ -253,7 +253,7 @@ func TestTelemetryRejectedCreateLogsReasonWithoutVIN(t *testing.T) {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
 	}
 	out := log.String()
-	if !strings.Contains(out, "telemetry_config_rejected") || !strings.Contains(out, "unsupported_firmware:1") || !strings.Contains(out, "vehicle <vin> rejected") {
+	if !strings.Contains(out, "telemetry_config_rejected") || !strings.Contains(out, "unsupported_firmware:1") || !strings.Contains(out, "vehicle <redacted> rejected") {
 		t.Fatalf("reason not logged: %s", out)
 	}
 	if strings.Contains(out, telemetryTestVIN) {
@@ -271,10 +271,14 @@ func TestRedactUpstream(t *testing.T) {
 		"Authorization: Bearer short-token rejected",
 		"token " + jwt + " expired",
 		"secret test-token-value echoed",
+		strings.Repeat("x", 16) + vin,
+		"key AAAAAAAAAAAAAAAAAio-secret here",
+		"refresh access-secret-refresh-secret echoed",
+		"skip_" + vin + "_reason",
 	}
 	for _, in := range cases {
-		out := redactUpstream(in, "test-token-value")
-		for _, leak := range []string{vin, strings.ToLower(vin), vin[:12], strings.ToLower(vin[:12]), "short-token", jwt[:20], "test-token-value"} {
+		out := redactUpstream(in, "test-token-value", "access-secret", "access-secret-refresh-secret")
+		for _, leak := range []string{vin, strings.ToLower(vin), vin[:12], strings.ToLower(vin[:12]), vin[1:13], "short-token", jwt[:20], "test-token-value", "io-secret", "refresh-secret"} {
 			if strings.Contains(out, leak) {
 				t.Fatalf("%q leaked %q: %q", in, leak, out)
 			}
@@ -283,8 +287,13 @@ func TestRedactUpstream(t *testing.T) {
 			t.Fatalf("not bounded: %d", len(out))
 		}
 	}
-	if got := redactUpstream("unsupported_firmware"); got != "unsupported_firmware" {
-		t.Fatalf("plain reason changed: %q", got)
+	for _, plain := range []string{"unsupported_firmware", "missing_key", "max_configs", "1", "invalid config: port"} {
+		if got := redactUpstream(plain); got != plain {
+			t.Fatalf("plain text changed: %q -> %q", plain, got)
+		}
+	}
+	if got := redactUpstream(vin); got != "<redacted>" {
+		t.Fatalf("VIN-shaped vehicle id not masked: %q", got)
 	}
 }
 
