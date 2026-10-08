@@ -716,31 +716,54 @@ var (
 )
 
 // redactUpstream masks credentials and identifiers in upstream text before it
-// is logged, then bounds its length. Known secrets go first, longest first so
-// an overlapping shorter one cannot split a longer one. Then every maximal run
-// of token characters long enough to hold a VIN or credential is masked whole:
-// 17+ characters with a digit (VINs and tokens) or 24+ without. Short reason
-// codes such as "missing_key" survive. Masking precedes truncation, so a cut
-// cannot expose a partial match.
+// is logged, then bounds its length. Every match is found in the original
+// text first and the union of matched spans is masked in one pass, so
+// overlapping secrets cannot split each other. Masked: every occurrence of a
+// known secret, bearer credentials, and every maximal run of token characters
+// long enough to hold a VIN or credential (17+ with a digit, or 24+). Short
+// reason codes such as "missing_key" survive. Masking precedes truncation.
 func redactUpstream(text string, secrets ...string) string {
-	secrets = slices.Clone(secrets)
-	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
+	masked := make([]bool, len(text))
+	mark := func(start, end int) {
+		for i := start; i < end; i++ {
+			masked[i] = true
+		}
+	}
 	for _, secret := range secrets {
-		if secret != "" {
-			text = strings.ReplaceAll(text, secret, "<redacted>")
+		for i := 0; secret != ""; {
+			j := strings.Index(text[i:], secret)
+			if j < 0 {
+				break
+			}
+			mark(i+j, i+j+len(secret))
+			i += j + 1
 		}
 	}
-	text = bearerInText.ReplaceAllString(text, "<redacted>")
-	text = longRunInText.ReplaceAllStringFunc(text, func(run string) string {
-		if len(run) >= 24 || strings.ContainsAny(run, "0123456789") {
-			return "<redacted>"
-		}
-		return run
-	})
-	if r := []rune(text); len(r) > 300 {
-		text = string(r[:300])
+	for _, m := range bearerInText.FindAllStringIndex(text, -1) {
+		mark(m[0], m[1])
 	}
-	return text
+	for _, m := range longRunInText.FindAllStringIndex(text, -1) {
+		if m[1]-m[0] >= 24 || strings.ContainsAny(text[m[0]:m[1]], "0123456789") {
+			mark(m[0], m[1])
+		}
+	}
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if !masked[i] {
+			b.WriteByte(text[i])
+			i++
+			continue
+		}
+		b.WriteString("<redacted>")
+		for i < len(text) && masked[i] {
+			i++
+		}
+	}
+	out := b.String()
+	if r := []rune(out); len(r) > 300 {
+		out = string(r[:300])
+	}
+	return out
 }
 
 func (t *TelemetryController) failAction(id string, state TelemetryManaged, code string) {

@@ -275,10 +275,12 @@ func TestRedactUpstream(t *testing.T) {
 		"key AAAAAAAAAAAAAAAAAio-secret here",
 		"refresh access-secret-refresh-secret echoed",
 		"skip_" + vin + "_reason",
+		"overlap left12345shared67890right123 echoed",
+		"overlap shared67890right123left12345 echoed",
 	}
 	for _, in := range cases {
-		out := redactUpstream(in, "test-token-value", "access-secret", "access-secret-refresh-secret")
-		for _, leak := range []string{vin, strings.ToLower(vin), vin[:12], strings.ToLower(vin[:12]), vin[1:13], "short-token", jwt[:20], "test-token-value", "io-secret", "refresh-secret"} {
+		out := redactUpstream(in, "test-token-value", "access-secret", "access-secret-refresh-secret", "left12345shared67890", "shared67890right123")
+		for _, leak := range []string{"right123", "left123", "shared6", vin, strings.ToLower(vin), vin[:12], strings.ToLower(vin[:12]), vin[1:13], "short-token", jwt[:20], "test-token-value", "io-secret", "refresh-secret"} {
 			if strings.Contains(out, leak) {
 				t.Fatalf("%q leaked %q: %q", in, leak, out)
 			}
