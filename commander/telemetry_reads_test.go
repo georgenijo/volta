@@ -184,6 +184,8 @@ func TestTelemetryDrivingChargingEnums(t *testing.T) {
 			s.Samples[2].Text = textPtr("DetailedChargeState" + state)
 			if state == "Starting" || state == "Charging" {
 				s.Samples = append(s.Samples,
+					telemetrySample{Field: "BatteryLevel", At: now, Num: floatPtr(70), Unit: "%", Quality: "ok"},
+					telemetrySample{Field: "Soc", At: now, Num: floatPtr(69), Unit: "%", Quality: "ok"},
 					telemetrySample{Field: "IdealBatteryRange", At: now, Num: floatPtr(200), Unit: "mi", Quality: "ok"},
 					telemetrySample{Field: "DCChargingEnergyIn", At: now, Num: floatPtr(1), Unit: "kWh", Quality: "ok"},
 					telemetrySample{Field: "ACChargingPower", At: now, Num: floatPtr(7), Unit: "kW", Quality: "ok"})
@@ -285,6 +287,8 @@ func TestTelemetryChargeSessionFence(t *testing.T) {
 				telemetrySample{Field: "DCChargingEnergyIn", At: now.Add(-time.Minute), Num: floatPtr(40), Unit: "kWh", Quality: "ok"},
 				telemetrySample{Field: "DCChargingPower", At: now.Add(-time.Minute), Num: floatPtr(150), Unit: "kW", Quality: "ok"},
 				telemetrySample{Field: "ACChargingPower", At: now, Num: floatPtr(7), Unit: "kW", Quality: "ok"},
+				telemetrySample{Field: "BatteryLevel", At: now, Num: floatPtr(70), Unit: "%", Quality: "ok"},
+				telemetrySample{Field: "Soc", At: now, Num: floatPtr(69), Unit: "%", Quality: "ok"},
 				telemetrySample{Field: "IdealBatteryRange", At: now, Num: floatPtr(200), Unit: "mi", Quality: "ok"})
 			e, _, _ := telemetryTemplate(readTemplate(), "1")
 			if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
@@ -363,10 +367,18 @@ func TestTelemetryUnsupportedTemplateFields(t *testing.T) {
 		}
 	}
 	for _, key := range []string{"df", "dr", "pf", "pr", "ft", "rt"} {
+		if r["vehicle_state"].(map[string]any)[key] != nil {
+			t.Fatal("stale closed closure served", key)
+		}
+	}
+	for _, key := range []string{"df", "dr", "pf", "pr", "ft", "rt", "fd_window", "fp_window", "rd_window", "rp_window"} {
 		e, _, _ = telemetryTemplate(readTemplate(), "1")
 		e["response"].(map[string]any)["vehicle_state"].(map[string]any)[key] = json.Number("1")
-		if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
-			t.Fatal("open closure template served", key)
+		if !overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+			t.Fatal("unknown closure rejected", key)
+		}
+		if e["response"].(map[string]any)["vehicle_state"].(map[string]any)[key] != nil {
+			t.Fatal("stale closure served", key)
 		}
 	}
 	e, _, _ = telemetryTemplate(readTemplate(), "1")
@@ -442,24 +454,26 @@ func TestTelemetryChargingRequiresParserFields(t *testing.T) {
 	now := time.Now().UTC()
 	// Economy omits IdealBatteryRange. Never emit a charging response that
 	// TeslaMate would silently discard instead of recording the charge row.
-	for _, missing := range []string{"IdealBatteryRange", "DCChargingEnergyIn", "ACChargingPower"} {
-		t.Run(missing, func(t *testing.T) {
-			s := readSnapshot(now)
-			s.Samples[1].Text = textPtr("ShiftStateP")
-			s.Samples[2].Text = textPtr("DetailedChargeStateCharging")
-			for _, v := range []struct {
-				f, u string
-				n    float64
-			}{{"IdealBatteryRange", "mi", 200}, {"DCChargingEnergyIn", "kWh", 1}, {"ACChargingPower", "kW", 7}} {
-				if v.f != missing {
-					s.Samples = append(s.Samples, telemetrySample{Field: v.f, At: now, Num: floatPtr(v.n), Unit: v.u, Quality: "ok"})
+	for _, state := range []string{"Starting", "Charging"} {
+		for _, missing := range []string{"BatteryLevel", "Soc", "IdealBatteryRange", "DCChargingEnergyIn", "ACChargingPower"} {
+			t.Run(state+"/"+missing, func(t *testing.T) {
+				s := readSnapshot(now)
+				s.Samples[1].Text = textPtr("ShiftStateP")
+				s.Samples[2].Text = textPtr("DetailedChargeState" + state)
+				for _, v := range []struct {
+					f, u string
+					n    float64
+				}{{"BatteryLevel", "%", 70}, {"Soc", "%", 69}, {"IdealBatteryRange", "mi", 200}, {"DCChargingEnergyIn", "kWh", 1}, {"ACChargingPower", "kW", 7}} {
+					if v.f != missing {
+						s.Samples = append(s.Samples, telemetrySample{Field: v.f, At: now, Num: floatPtr(v.n), Unit: v.u, Quality: "ok"})
+					}
 				}
-			}
-			e, _, _ := telemetryTemplate(readTemplate(), "1")
-			if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
-				t.Fatal("incomplete charging reply served")
-			}
-		})
+				e, _, _ := telemetryTemplate(readTemplate(), "1")
+				if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+					t.Fatal("incomplete charging reply served")
+				}
+			})
+		}
 	}
 }
 
@@ -471,6 +485,8 @@ func TestTelemetryDerivedChargeFloor(t *testing.T) {
 	s.Samples[2].At = now.Add(-time.Second)
 	s.ChargeStart = now.Add(-30 * time.Second)
 	s.Samples = append(s.Samples,
+		telemetrySample{Field: "BatteryLevel", At: now, Num: floatPtr(70), Unit: "%", Quality: "ok"},
+		telemetrySample{Field: "Soc", At: now, Num: floatPtr(69), Unit: "%", Quality: "ok"},
 		telemetrySample{Field: "IdealBatteryRange", At: now, Num: floatPtr(200), Unit: "mi", Quality: "ok"},
 		telemetrySample{Field: "DCChargingEnergyIn", At: now.Add(-10 * time.Second), Num: floatPtr(1), Unit: "kWh", Quality: "ok"},
 		telemetrySample{Field: "ACChargingPower", At: now.Add(-10 * time.Second), Num: floatPtr(7), Unit: "kW", Quality: "ok"})

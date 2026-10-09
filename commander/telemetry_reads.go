@@ -283,23 +283,16 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 	// Keep only parser scaffolding and static identity/version metadata.
 	// Every unsupported dynamic value is unknown, rather than timestamped anew.
 	vehicleState := r["vehicle_state"].(map[string]any)
-	for _, key := range []string{"df", "dr", "pf", "pr", "ft", "rt"} {
-		value, ok := vehicleState[key].(json.Number)
-		if !ok {
-			return false
-		}
-		n, err := value.Float64()
-		if err != nil || n != 0 {
-			return false
-		}
-	}
 	if update, ok := vehicleState["software_update"].(map[string]any); ok {
 		if status, _ := update["status"].(string); status != "" {
 			return false
 		}
 	}
-	keep := map[string]bool{"api_version": true, "car_version": true, "vehicle_name": true,
-		"df": true, "dr": true, "pf": true, "pr": true, "ft": true, "rt": true}
+	// Neither shipped profile requests door/trunk/window signals. TeslaMate
+	// VehicleState.result reads these keys directly and tolerates nil; its
+	// suspension guards test is_number before comparing closure values.
+	// Do not retain even a closed value from an old real snapshot.
+	keep := map[string]bool{"api_version": true, "car_version": true, "vehicle_name": true}
 	for _, section := range []string{"drive_state", "charge_state", "climate_state", "vehicle_state"} {
 		for key := range r[section].(map[string]any) {
 			if section != "vehicle_state" || !keep[key] {
@@ -396,7 +389,7 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 	}
 	if charging == "Starting" || charging == "Charging" {
 		// These fields are required by TeslaMate.Log.Charge's changeset.
-		for _, key := range []string{"ideal_battery_range", "charge_energy_added", "charger_power"} {
+		for _, key := range []string{"battery_level", "usable_battery_level", "ideal_battery_range", "charge_energy_added", "charger_power"} {
 			if charge[key] == nil {
 				return false
 			}

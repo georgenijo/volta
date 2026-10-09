@@ -21,6 +21,11 @@ SELECT format('GRANT CONNECT ON DATABASE %I TO volta_reader, volta_auth', curren
 GRANT USAGE ON SCHEMA public TO volta_readonly;
 GRANT SELECT ON public.cars, public.positions, public.drives, public.charging_processes,
   public.charges, public.states, public.updates, public.geofences, public.addresses, public.car_settings TO volta_readonly;
+-- Route thumbnail seeks need a B-tree, rather than TeslaMate's BRIN history
+-- index. Restrict it to valid GPS so invalid runs cannot make each seek scan.
+CREATE INDEX IF NOT EXISTS volta_positions_drive_route_idx ON public.positions (drive_id, date, id)
+  INCLUDE (latitude, longitude)
+  WHERE latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180;
 -- No grants on private.tokens, unrelated tables, or future tables.
 \ir auth-schema.sql
 \ir history-schema.sql

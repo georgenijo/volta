@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { DB } from './db';
+import type { DB, Row } from './db';
 import { endpointEnergy } from './drive-parity';
 
 const sampleLimit = 2000, gapLimit = 2000;
@@ -15,17 +15,33 @@ export class FleetSeries {
       FROM public.drives d JOIN public.cars c ON c.id=d.car_id
       JOIN volta_telemetry.api_vehicle_bindings b ON b.vehicle_id=c.id
       WHERE d.id=ANY(${ids}::integer[]) AND d.end_date IS NOT NULL`;
-    for (const d of drives) {
-      if (typeof d.vin!=='string' || !/^[A-HJ-NPR-Z0-9]{17}$/.test(d.vin)) continue;
-      const digest=createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(d.vin,'utf8').digest('hex');
-      if (d.vin_digest!==digest) continue;
-      const points=await this.sql`SELECT source_ts AS t,energy_remaining_kwh AS remaining,lifetime_energy_used_kwh AS lifetime,
-        invalid_fields AS invalid FROM volta_telemetry.session_samples
-        WHERE vehicle_id=${d.car_id} AND source_ts>=${d.start}::timestamp AT TIME ZONE 'UTC'
-          AND source_ts<=${d.finish}::timestamp AT TIME ZONE 'UTC' ORDER BY source_ts`;
-      const gaps=await this.sql`SELECT 1 FROM volta_telemetry.gaps WHERE vehicle_id=${d.car_id}
-        AND start_ts<=${d.finish}::timestamp AT TIME ZONE 'UTC' AND end_ts>=${d.start}::timestamp AT TIME ZONE 'UTC' LIMIT 1`;
-      if (gaps.length) continue;
+    const bound = drives.filter(d => typeof d.vin==='string' && /^[A-HJ-NPR-Z0-9]{17}$/.test(d.vin)
+      && d.vin_digest===createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(d.vin,'utf8').digest('hex'));
+    if (!bound.length) return out;
+    // Retain the identity and windows validated above across both queries;
+    // a concurrent drive edit must not redirect samples to another car.
+    const windows = this.sql.json(bound.map(d => ({id:d.id,car_id:d.car_id,start:d.start,finish:d.finish})));
+    const [samples,gaps] = await Promise.all([
+      this.sql`SELECT d.id,p.source_ts AS t,p.energy_remaining_kwh AS remaining,p.lifetime_energy_used_kwh AS lifetime,
+        p.invalid_fields AS invalid FROM jsonb_to_recordset(${windows}::jsonb)
+        AS d(id integer,car_id integer,start timestamp,finish timestamp) JOIN volta_telemetry.session_samples p
+        ON p.vehicle_id=d.car_id AND p.source_ts>=d.start AT TIME ZONE 'UTC'
+          AND p.source_ts<=d.finish AT TIME ZONE 'UTC'
+        ORDER BY d.id,p.source_ts`,
+      this.sql`SELECT d.id FROM jsonb_to_recordset(${windows}::jsonb)
+        AS d(id integer,car_id integer,start timestamp,finish timestamp) WHERE EXISTS (
+        SELECT 1 FROM volta_telemetry.gaps g WHERE g.vehicle_id=d.car_id
+          AND g.start_ts<=d.finish AT TIME ZONE 'UTC' AND g.end_ts>=d.start AT TIME ZONE 'UTC')`
+    ]);
+    const pointsById = new Map<number, Row[]>();
+    for (const p of samples) {
+      if (!pointsById.has(p.id)) pointsById.set(p.id,[]);
+      pointsById.get(p.id)!.push(p);
+    }
+    const gapIds = new Set(gaps.map(g => g.id));
+    for (const d of bound) {
+      if (gapIds.has(d.id)) continue;
+      const points = pointsById.get(d.id) ?? [];
       for (const [key,field,source,sign] of [['lifetime','LifetimeEnergyUsed','fleet_lifetime_energy',-1],['remaining','EnergyRemaining','fleet_energy_remaining',1]] as const) {
         if (points.some(p => p.invalid?.includes(field))) continue;
         const measured=points.filter(p => typeof p[key]==='number' && Number.isFinite(p[key]));

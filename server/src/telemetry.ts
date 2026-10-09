@@ -149,8 +149,6 @@ export class Telemetry {
       COALESCE(NULLIF(sa.city,''), NULLIF(sg.name,''), NULLIF(sa.neighbourhood,''), NULLIF(sa.name,'')) AS "startCity",
       COALESCE(NULLIF(ea.city,''), NULLIF(eg.name,''), NULLIF(ea.neighbourhood,''), NULLIF(ea.name,'')) AS "endCity",
       ${efficiency} * 1000 AS "ratedWhPerKm",
-      CASE WHEN ${this.currency}::text IS NOT NULL THEN prices.rate END AS "electricityRatePerKwh",
-      CASE WHEN prices.rate IS NOT NULL THEN ${this.currency}::text END AS "rateCurrency",
       COALESCE(d.distance, COALESCE(d.end_km, ep.odometer) - COALESCE(d.start_km, sp.odometer)) AS "distanceKm",
       COALESCE(d.duration_min, extract(epoch FROM (COALESCE(d.end_date, now() AT TIME ZONE 'UTC') - d.start_date))/60) AS "durationMin",
       sp.battery_level AS "startBatteryLevel", ep.battery_level AS "endBatteryLevel",
@@ -158,9 +156,6 @@ export class Telemetry {
       (COALESCE(d.start_rated_range_km, first_range.rated_battery_range_km) - COALESCE(d.end_rated_range_km, last_range.rated_battery_range_km)) * ${efficiency} * 1000 / NULLIF(COALESCE(d.distance, COALESCE(d.end_km, ep.odometer) - COALESCE(d.start_km, sp.odometer)), 0) AS "efficiencyWhPerKm",
       d.speed_max AS "maxSpeedKph", COALESCE(d.distance, COALESCE(d.end_km, ep.odometer) - COALESCE(d.start_km, sp.odometer)) * 60 / NULLIF(COALESCE(d.duration_min, extract(epoch FROM(COALESCE(d.end_date, now() AT TIME ZONE 'UTC')-d.start_date))/60),0) AS "avgSpeedKph", d.outside_temp_avg AS "outsideTempAvgC"
       FROM ${source} d JOIN rated_efficiency eff ON eff.id = d.car_id
-      LEFT JOIN LATERAL (SELECT sum(cp.cost) / NULLIF(sum(cp.charge_energy_added),0) AS rate
-        FROM public.charging_processes cp WHERE cp.car_id=d.car_id AND cp.end_date<=d.start_date
-          AND cp.cost IS NOT NULL AND cp.cost>=0 AND cp.charge_energy_added>0) prices ON true
       LEFT JOIN public.positions startpoint ON startpoint.id = d.start_position_id
       LEFT JOIN LATERAL (SELECT * FROM public.positions WHERE d.start_position_id IS NULL AND drive_id = d.id AND odometer IS NOT NULL ORDER BY date, id LIMIT 1) live_start ON true
       LEFT JOIN LATERAL (SELECT COALESCE(startpoint.odometer, live_start.odometer) AS odometer, COALESCE(startpoint.battery_level, live_start.battery_level) AS battery_level,
@@ -254,19 +249,54 @@ export class Telemetry {
   private async enrichDrives(rows: Row[]) {
     if (!rows.length) return;
     const ids = rows.map(r => r.id);
-    const routes = await this.sql`WITH points AS (
-      SELECT drive_id,date AS t,latitude,longitude,
-        row_number() OVER(PARTITION BY drive_id ORDER BY date,id) AS rn,
-        count(*) OVER(PARTITION BY drive_id) AS n,
-        date-lag(date) OVER(PARTITION BY drive_id ORDER BY date,id) AS gap
-      FROM public.positions WHERE drive_id=ANY(${ids}::integer[]) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180
-    ), marked AS (
-      SELECT *,sum(CASE WHEN gap>interval '120 seconds' THEN 1 ELSE 0 END) OVER(PARTITION BY drive_id ORDER BY rn) AS segment FROM points
-    ), selected AS (
-      SELECT * FROM marked WHERE rn=1 OR rn=n OR mod(rn-1,greatest(1,ceil(n/62.0)::integer))=0
-    ) SELECT drive_id,t,latitude,longitude,
-      COALESCE(segment<>lag(segment) OVER(PARTITION BY drive_id ORDER BY rn),false) AS "routeBreakBefore"
-      FROM selected ORDER BY drive_id,rn`;
+    // One cumulative pass, including charge events before drive events at equal
+    // timestamps. Summary/mileage never invoke enrichment or compute prices.
+    const rates = this.currency == null ? [] : await this.sql`WITH requested AS MATERIALIZED (
+      SELECT id,car_id,start_date FROM public.drives WHERE id=ANY(${ids}::integer[])
+    ), events AS (
+      SELECT cp.car_id,cp.end_date AS t,0 AS kind,NULL::integer AS id,cp.cost,cp.charge_energy_added AS energy
+      FROM public.charging_processes cp
+      WHERE cp.car_id IN (SELECT car_id FROM requested) AND cp.end_date IS NOT NULL
+        AND cp.end_date<=(SELECT max(start_date) FROM requested)
+        AND cp.cost IS NOT NULL AND cp.cost>=0 AND cp.charge_energy_added>0
+      UNION ALL SELECT car_id,start_date,1,id,0,0 FROM requested
+    ), running AS (
+      SELECT id,kind,sum(cost) OVER w / NULLIF(sum(energy) OVER w,0) AS rate
+      FROM events WINDOW w AS (PARTITION BY car_id ORDER BY t,kind RANGE UNBOUNDED PRECEDING)
+    ) SELECT id,rate FROM running WHERE kind=1`;
+    const rateById = new Map(rates.map(r => [r.id,r.rate]));
+    // Seek at 63 time targets plus the final point. Only this small subset is
+    // windowed. For exact gaps, only the last point of each 120-second bucket
+    // can begin a >120s gap; seek its successor rather than windowing all GPS.
+    const routes = await this.sql`WITH bounds AS MATERIALIZED (
+      SELECT d.id AS drive_id,first.date AS start,last.date AS finish,last.id AS last_id
+      FROM public.drives d
+      CROSS JOIN LATERAL (SELECT date FROM public.positions WHERE drive_id=d.id
+        AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180 ORDER BY date,id LIMIT 1) first
+      CROSS JOIN LATERAL (SELECT date,id FROM public.positions WHERE drive_id=d.id
+        AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180 ORDER BY date DESC,id DESC LIMIT 1) last
+      WHERE d.id=ANY(${ids}::integer[])
+    ), selected AS MATERIALIZED (
+      SELECT DISTINCT b.drive_id,p.id,p.date AS t,p.latitude,p.longitude
+      FROM bounds b CROSS JOIN generate_series(0,62) n
+      CROSS JOIN LATERAL (SELECT id,date,latitude,longitude FROM public.positions
+        WHERE drive_id=b.drive_id AND date>=b.start+(b.finish-b.start)*(n/62.0)
+        AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180 ORDER BY date,id LIMIT 1) p
+      UNION SELECT b.drive_id,p.id,p.date,p.latitude,p.longitude FROM bounds b JOIN public.positions p ON p.id=b.last_id
+    ), gaps AS MATERIALIZED (
+      SELECT b.drive_id,p.date AS start,next.date AS finish
+      FROM bounds b CROSS JOIN LATERAL generate_series(b.start,b.finish,interval '120 seconds') bucket(t)
+      CROSS JOIN LATERAL (SELECT date,id FROM public.positions WHERE drive_id=b.drive_id
+        AND date>=bucket.t AND date<bucket.t+interval '120 seconds'
+        AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180 ORDER BY date DESC,id DESC LIMIT 1) p
+      CROSS JOIN LATERAL (SELECT date FROM public.positions WHERE drive_id=b.drive_id AND date>p.date
+        AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180 ORDER BY date,id LIMIT 1) next
+      WHERE next.date-p.date>interval '120 seconds'
+    ), ordered AS (
+      SELECT *,lag(t) OVER(PARTITION BY drive_id ORDER BY t,id) AS previous FROM selected
+    ) SELECT drive_id,t,latitude,longitude,EXISTS(SELECT 1 FROM gaps g
+      WHERE g.drive_id=o.drive_id AND g.start>=o.previous AND g.finish<=o.t) AS "routeBreakBefore"
+      FROM ordered o ORDER BY drive_id,t,id`;
     let energy = new Map<number, { energy: number | null; source: string | null }>();
     const missingEnergyIds = rows.filter(r => r.energyUsedKwh == null || !Number.isFinite(r.energyUsedKwh)
       || r.energyUsedKwh < 0 || (r.distanceKm > 0 && r.energyUsedKwh === 0)).map(r => r.id);
@@ -275,6 +305,8 @@ export class Telemetry {
       catch { this.log({event:'drive_energy_failed',code:'telemetry_query_failed'}); }
     }
     for (const row of rows) {
+      row.electricityRatePerKwh = rateById.get(row.id) ?? null;
+      row.rateCurrency = row.electricityRatePerKwh == null ? null : this.currency;
       applyDriveEnergy(row, energy.get(row.id));
       row.driveScore = efficiencyScore(row.efficiencyWhPerKm, row.ratedWhPerKm);
       row.route = routes.filter(p => p.drive_id===row.id).map(({drive_id, ...point}) => point);

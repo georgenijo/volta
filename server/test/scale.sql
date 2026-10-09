@@ -1,4 +1,5 @@
--- Two years of synthetic driving volume; real upstream indexes, no custom indexes.
+-- Two years of synthetic driving volume; upstream indexes plus the production
+-- route-seek index installed by bootstrap. All prior charges have known prices.
 INSERT INTO drives (id, car_id, start_date, end_date, distance, duration_min, start_rated_range_km, end_rated_range_km, start_km, end_km)
 SELECT 10000+n, 1, timestamp '2020-01-01' + n * interval '6 hours', timestamp '2020-01-01' + n * interval '6 hours' + interval '1 hour',
   30, 60, 400, 370, 10000+n*30, 10030+n*30 FROM generate_series(1,2500) n;
@@ -10,9 +11,9 @@ SELECT 100000+(n-1)*600+j, 1, 10000+n, timestamp '2020-01-01' + n*interval '6 ho
   CASE WHEN j%15=0 OR j=1 THEN false ELSE NULL END
 FROM generate_series(1,2500) n CROSS JOIN generate_series(1,600) j;
 UPDATE drives SET start_position_id = 100000+(id-10001)*600+1, end_position_id = 100000+(id-10001)*600+600 WHERE id > 10000;
-INSERT INTO charging_processes (id, car_id, position_id, start_date, end_date, duration_min, charge_energy_added, charge_energy_used, start_battery_level, end_battery_level, start_rated_range_km, end_rated_range_km)
+INSERT INTO charging_processes (id, car_id, position_id, start_date, end_date, duration_min, charge_energy_added, charge_energy_used, start_battery_level, end_battery_level, start_rated_range_km, end_rated_range_km, cost)
 SELECT 10000+n, 1, 100000+(n-1)*600+600, timestamp '2020-01-01' + n*interval '6 hours' + interval '90 minutes',
-  timestamp '2020-01-01' + n*interval '6 hours' + interval '150 minutes', 60, 18, 20, 69, 93, 345, 465 FROM generate_series(1,1000) n;
+  timestamp '2020-01-01' + n*interval '6 hours' + interval '150 minutes', 60, 18, 20, 69, 93, 345, 465, 4.50 FROM generate_series(1,1000) n;
 INSERT INTO charges (id, charging_process_id, date, battery_level, usable_battery_level, charge_energy_added, charger_power, ideal_battery_range_km, rated_battery_range_km)
 SELECT 100000+(n-1)*100+j, 10000+n, timestamp '2020-01-01' + n*interval '6 hours' + interval '90 minutes' + (j-1)*interval '36 seconds',
   69+(j-1)*24/99, 69+(j-1)*24/99, (j-1)*18.0/99, 11, 345+(j-1)*120.0/99, 345+(j-1)*120.0/99

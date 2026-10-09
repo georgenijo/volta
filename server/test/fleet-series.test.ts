@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { connect } from '../src/db';
 import { Auth } from '../src/auth';
+import { FleetSeries } from '../src/fleet-series';
 import { Telemetry } from '../src/telemetry';
 import { createApp } from '../src/app';
 
@@ -383,4 +384,44 @@ test('drive energy falls back to exact-bound endpoints, with lifetime precedence
   await owner`DELETE FROM volta_telemetry.gaps`;
   await owner`UPDATE volta_telemetry.vehicle_bindings SET vin_digest=repeat('a',64)`;
   expect((await get('/v1/drives/1')).energyUsedKwh).toBeNull();
+});
+
+
+test('page energy batches disjoint and overlapping windows into three queries',async()=>{
+  for (const id of [1,2,3]) {
+    const [d]=await owner`SELECT start_date AS start,end_date AS finish FROM drives WHERE id=${id}`;
+    await datum('LifetimeEnergyUsed',100,d!.start,`first-${id}`);
+    await datum('LifetimeEnergyUsed',100+id,d!.finish,`last-${id}`);
+    await datum('EnergyRemaining',50,d!.start,`first-${id}`);
+    await datum('EnergyRemaining',45,d!.finish,`last-${id}`);
+  }
+  const [second]=await owner`SELECT start_date FROM drives WHERE id=2`;
+  await datum('LifetimeEnergyUsed',90,new Date(+second!.start_date+60000),'reset');
+  const [third]=await owner`SELECT start_date FROM drives WHERE id=3`;
+  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason)
+    VALUES(1,${third!.start_date},${third!.start_date},'disconnected')`;
+  let queries=0;
+  const counted=new Proxy(reader,{apply(target,thisArg,args){queries++;return Reflect.apply(target,thisArg,args);}});
+  const energy=await new FleetSeries(counted).driveEnergy([1,2,3,4]);
+  expect(queries).toBe(3);
+  expect(energy.get(1)).toEqual({energy:1,source:'fleet_lifetime_energy'});
+  expect(energy.get(2)).toEqual({energy:5,source:'fleet_energy_remaining'});
+  expect(energy.has(3)).toBe(false); expect(energy.has(4)).toBe(false);
+});
+
+test('batched energy retains validated car and windows during concurrent drive edits',async()=>{
+  const [d]=await owner`SELECT start_date AS start,end_date AS finish FROM drives WHERE id=1`;
+  await datum('EnergyRemaining',50,d!.start,'first');
+  await datum('EnergyRemaining',45,d!.finish,'last');
+  let queries=0;
+  const concurrent=new Proxy(reader,{apply(target,thisArg,args){
+    const query=Reflect.apply(target,thisArg,args);
+    if (++queries!==1) return query;
+    return (async()=>{
+      const result=await query;
+      await owner`UPDATE drives SET car_id=3,start_date=start_date+interval '1 day',end_date=end_date+interval '1 day' WHERE id=1`;
+      return result;
+    })();
+  }});
+  expect((await new FleetSeries(concurrent).driveEnergy([1])).get(1)).toEqual({energy:5,source:'fleet_energy_remaining'});
 });

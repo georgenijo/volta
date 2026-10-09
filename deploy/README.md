@@ -41,7 +41,13 @@ run migrations. Use fresh dedicated roles; do not repurpose an existing role
 with broader memberships/privileges. Bootstrap retains the telemetry hardening:
 reader connection limit 10, statement timeout 30s, idle-in-transaction timeout
 60s and lock timeout 5s. The API uses a stricter 15s statement timeout for its
-own connections. Bootstrap rejects administrative role attributes, database
+own connections. Bootstrap also creates `volta_positions_drive_route_idx`, a
+partial covering B-tree on `(drive_id, date, id)` for valid GPS positions. Route
+thumbnail sampling and gap probes depend on this index; existing installations
+need the same index before adopting these queries. Creating it on an existing
+large positions table should follow the owning database maintenance procedure
+(use `CREATE INDEX CONCURRENTLY` outside a transaction). No database changes
+are performed by the API. Bootstrap rejects administrative role attributes, database
 CREATE, unexpected memberships (including non-inherited roles accessible via
 SET ROLE), CREATE on any non-system schema, table writes or sequence USAGE/UPDATE outside the auth
 schema, and private-token access, including inherited/PUBLIC privileges,

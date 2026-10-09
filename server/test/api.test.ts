@@ -453,6 +453,8 @@ describe('metric telemetry contract', () => {
     const vehicles = await timed('vehicles','/v1/vehicles'); expect(vehicles.map((c:any)=>c.hasData)).toEqual([true,false,true]);
     const health = await timed('health','/v1/health'); expect(health.ok).toBe(true);
     const drives = await timed('drives', '/v1/vehicles/1/drives?limit=50'); expect(drives.items).toHaveLength(50);
+    expect(drives.items.every((d:any)=>d.route.length<=64)).toBe(true);
+    expect(drives.items.every((d:any)=>d.electricityRatePerKwh>0)).toBe(true);
     const mileage = await timed('mileage', '/v1/vehicles/1/mileage'); expect(mileage.length).toBeGreaterThan(1);
     const idles = await timed('idles', '/v1/vehicles/1/idles?limit=50'); expect(idles.items).toHaveLength(50);
     await owner`UPDATE drives SET end_position_id=NULL WHERE id>12450`;
@@ -663,6 +665,45 @@ describe('drive list parity inputs', () => {
     expect(listed.route).toEqual(d.route); expect(d.route.length).toBeLessThanOrEqual(64);
     await owner`UPDATE addresses SET city=NULL`;
     expect((await json('/v1/drives/1')).startCity).toBeTruthy();
+  });
+  test('prices retain weighted, inclusive timestamp and vehicle fences across the page', async () => {
+    await owner`UPDATE charging_processes SET cost=NULL`;
+    await owner`INSERT INTO charging_processes(id,car_id,position_id,start_date,end_date,cost,charge_energy_added)
+      SELECT 100+n,1,1,d.start_date-interval '1 hour',d.start_date+offset_seconds*interval '1 second',cost,energy
+      FROM drives d CROSS JOIN (VALUES (1,-1,4,20),(2,0,9,30),(3,0,0,10),(4,1,1000,1),
+        (5,-1,-5,10),(6,-1,5,0),(7,-1,NULL,10)) v(n,offset_seconds,cost,energy) WHERE d.id=1`;
+    await owner`INSERT INTO charging_processes(id,car_id,position_id,start_date,end_date,cost,charge_energy_added)
+      SELECT 200,3,11,start_date-interval '1 hour',start_date,1000,1 FROM drives WHERE id=1`;
+    const detail=await json('/v1/drives/1');
+    expect(detail.electricityRatePerKwh).toBeCloseTo(13/60);
+    const page=(await json('/v1/vehicles/1/drives')).items;
+    for (const drive of page) {
+      const [expected]=await owner`SELECT sum(cost)/NULLIF(sum(charge_energy_added),0) AS rate
+        FROM charging_processes WHERE car_id=1 AND end_date<=${drive.start}::timestamp
+        AND cost>=0 AND charge_energy_added>0`;
+      expect(drive.electricityRatePerKwh).toBeCloseTo(expected!.rate);
+    }
+    const noCurrency:any=await new Telemetry(reader).drive(1);
+    expect(noCurrency.electricityRatePerKwh).toBeNull(); expect(noCurrency.rateCurrency).toBeNull();
+  });
+  test('eight-hour 1Hz routes stay bounded and preserve hidden gaps and endpoints without stats', async () => {
+    await owner`INSERT INTO drives(id,car_id,start_date,end_date,distance,duration_min)
+      VALUES (900,1,'2026-01-01 00:00:00','2026-01-01 08:00:00',400,480)`;
+    await owner`INSERT INTO positions(id,car_id,drive_id,date,latitude,longitude)
+      SELECT 100000+n,1,900,timestamp '2026-01-01'+n*interval '1 second',37.4,-122.1
+      FROM generate_series(0,28800) n WHERE n NOT BETWEEN 10001 AND 10121`;
+    // Invalid GPS in the outage must not bridge the valid-point route.
+    await owner`INSERT INTO positions(id,car_id,drive_id,date,latitude,longitude)
+      VALUES (200000,1,900,'2026-01-01 02:48:00',91,181)`;
+    const began=performance.now();
+    const route=(await json('/v1/vehicles/1/drives?limit=100')).items.find((d:any)=>d.id===900).route;
+    expect(performance.now()-began).toBeLessThan(3000);
+    expect(route.length).toBeLessThanOrEqual(64);
+    expect(route[0].t).toBe('2026-01-01T00:00:00.000Z');
+    expect(route.at(-1).t).toBe('2026-01-01T08:00:00.000Z');
+    expect(route[0].routeBreakBefore).toBe(false);
+    expect(route.filter((p:any)=>p.routeBreakBefore)).toHaveLength(1);
+    expect(route.find((p:any)=>p.routeBreakBefore).t).toBe('2026-01-01T02:50:20.000Z');
   });
   test('rated-only boundary positions work; distant interior points do not fill an endpoint', async () => {
     await owner`UPDATE drives SET start_rated_range_km=NULL,end_rated_range_km=NULL WHERE id=1`;

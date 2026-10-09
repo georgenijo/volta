@@ -276,15 +276,16 @@ valid telemetry source time in milliseconds; `gps_as_of` retains the location's
 source seconds. Static template identity/configuration remains intact. Unsupported dynamic flags
 (user presence, climate operation, battery heaters, warnings, etc.) become null.
 Locked/SentryMode and TPMS pressures are populated from valid telemetry; Version
-updates car_version. An active software-update template or a template without
-known closed doors/trunks falls back to normal polling because those states
-cannot safely be inferred from the configured telemetry fields. Known closed
-closure values and the empty software-update parser sentinel remain scaffolding.
+updates car_version. An active software-update template falls back to normal
+polling. Door/trunk/window keys become null because neither shipped profile
+requests those fields. TeslaMate v4.3.0 VehicleState.result accepts nil and its
+suspension guards check is_number before comparing closure values. The empty
+software-update parser sentinel remains scaffolding.
 Active charge counters/powers must have source times at or after the derived
 current session start (or the current Starting/Charging transition until that
 session is derived), so earlier-session values cannot inflate the next session.
-Starting/Charging overlays additionally require ideal_battery_range,
-charge_energy_added and charger_power: TeslaMate rejects charge rows without these
+Starting/Charging overlays additionally require battery_level,
+usable_battery_level, ideal_battery_range, charge_energy_added and charger_power: TeslaMate rejects charge rows without these
 fields. The current economy profile omits IdealBatteryRange, so charging uses the
 paced fallback under that profile unless the operator includes that field. Missing
 current-session counters also fall back until published. No range/counter is
