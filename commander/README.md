@@ -207,3 +207,78 @@ shared secret; the provided fragment assumes same-host operation. See
 
 There is no installed Docker runtime on the implementation MacBook, so image
 execution is a separate check from local Go tests and Linux cross-compilation.
+
+## Telemetry-backed TeslaMate reads (optional, default off)
+
+`COMMANDER_TELEMETRY_READS=true` lets the private collector answer vehicle
+summary and `vehicle_data` reads from recorded Fleet Telemetry, before its cache
+TTL and monthly pacing checks. These replies make **no Fleet API request**, do
+not reserve or spend polling budget, and never wake a vehicle. This switch is
+independent of `COMMANDER_TELEMETRY_ENABLED` (configuration/budget control).
+Products discovery and every fallback retain the existing budget policy.
+
+Enable only after telemetry migrations 001/002 and the consumer's identity
+binding have been applied. As the local database owner, apply
+`deploy/commander/telemetry-reader.sql`, then set that role's password out of band
+with `\password volta_commander_reader`. The role can select only car identity
+columns and the required telemetry tables/views; it cannot read raw records or
+write either schema. It uses a two-connection pool, read-only transactions and a
+one-second query deadline. Put its private DSN in the untracked
+`deploy/commander/.env` as `COMMANDER_TELEMETRY_DATABASE_URL`; never use the ingest
+role or the TeslaMate owner. Add `deploy/commander/compose.telemetry-reads.yaml`
+to the chosen commander Compose files and set `TESLAMATE_NETWORK` to the existing
+private database network. No new published port or public ingress is needed.
+
+A successful real, complete `vehicle_data` response is required once per vehicle
+and commander process as the parser template. It remains available across later
+408 replies, but is cleared on account replacement/disconnection. Cold starts,
+missing templates, DB failures, bad identities and stale telemetry follow the
+original paced behavior. This may delay bootstrap until an ordinary paid polling
+slot becomes available; the feature does not bypass that budget.
+
+Fresh means a **valid source observation within 90 seconds**, receiver liveness
+and consumer catch-up within 90 seconds, zero recorded queue lag, and a latest
+`CONNECTED` event handed off after the running receiver generation started.
+Future timestamps are refused. Every carried field must belong to the same
+continuous connection, after the newest recorded disconnect/silence gap.
+[Telemetry emits only when values change](https://developer.tesla.com/docs/fleet-api/fleet-telemetry),
+so an unchanged gear/location can be older than 90 seconds while still current.
+A silent stream exceeding 90 seconds falls back even if its socket is connected.
+Invalid/conflicting/malformed latest values are omitted; supported dynamic fields
+without valid telemetry become JSON null rather than refreshing cached readings.
+The `invalid_fields` history pivot is not used: the indexed `latest_samples`
+lookup exposes each field's own `invalid` and `quality`, including conflicts.
+
+Identity is exact: the requested Tesla numeric ID or VIN must match the successful
+Fleet response; that VIN must resolve to exactly one TeslaMate car with matching
+`vehicle_bindings` and `api_vehicle_bindings` SHA-256 digests. No ID guessing or
+numeric TeslaMate-ID/Tesla-ID interchange occurs. IDs remain lossless JSON numbers.
+Binding, health, connectivity and latest fields are read in one SQL snapshot.
+
+| Response | Telemetry fields and units |
+| --- | --- |
+| `drive_state` | Location → latitude/longitude (degrees), GpsHeading → integer heading, VehicleSpeed → integer mph, Gear → D/R/N/P, PackVoltage × PackCurrent → integer kW only with same payload/time and operator-verified sign |
+| `charge_state` | BatteryLevel → battery_level, Soc → usable_battery_level (integer percent); RatedRange/IdealBatteryRange/EstBatteryRange → miles; DetailedChargeState → Disconnected/NoPower/Starting/Charging/Complete/Stopped; AC/DCChargingPower → integer charger_power kW; DCChargingEnergyIn → charge_energy_added kWh; ChargeLimitSoc → integer percent; TimeToFullCharge → hours; ChargerVoltage/ChargeAmps → integer volts/amps; FastChargerPresent/ChargePortDoorOpen → booleans |
+| `climate_state` | InsideTemp/OutsideTemp → degrees Celsius |
+| `vehicle_state` | Odometer → miles |
+
+`source_unit` is checked: native mi/mph remain unchanged; km and km/h convert by
+1.609344, Fahrenheit converts to Celsius, and minutes convert to hours. Unknown
+units and nonfinite numbers are refused. DCChargingEnergyIn is the documented
+battery-side session counter for both AC and DC; ACChargingEnergyIn measures
+charger input and is not substituted or added. Charger power is the larger valid
+AC/DC observation, never their sum. EnergyRemaining has no equivalent vehicle_data
+field and is not invented. All four overlaid section timestamps use the newest
+valid telemetry source time in milliseconds; `gps_as_of` retains the location's
+source seconds. Template metadata/configuration remains intact.
+
+The implementation was checked against TeslaMate commit
+[`6af9a0ff9ec8a6cec2833ae0fde66a929469a15b`](https://github.com/teslamate-org/teslamate/tree/6af9a0ff9ec8a6cec2833ae0fde66a929469a15b):
+`elixir/lib/tesla_api/vehicle/state.ex` and
+`elixir/lib/teslamate/vehicles/vehicle.ex`. Its poll state machine starts a drive
+on D/R/N, ends it on P/null, starts charging on Starting/Charging, reads millisecond
+timestamps and converts mph/miles for storage. Vehicle-data overlays require
+known gear, known detailed charge state and valid location; missing core data
+falls back instead of inventing a session transition. Real-car acceptance and
+compatibility with an operator's installed TeslaMate version remain deployment
+gates; unit/SQL tests do not establish those.

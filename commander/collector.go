@@ -83,6 +83,8 @@ type cached struct {
 type collector struct {
 	mu    sync.Mutex // one upstream call at a time; never double-bill a poll
 	cache map[string]cached
+	// Successful real vehicle_data survives later asleep/error replies.
+	data map[string]cached
 	// account is the OAuth account the cache and pacing belong to.
 	account uint64
 	// The current polling cycle: when it started, which vehicle and read
@@ -205,11 +207,20 @@ func (s *Service) collect(ctx context.Context, key, vehicle string) (int, []byte
 		// Another Tesla account (or none) is linked: nothing cached or paced
 		// for the previous one may be served.
 		c.cache, c.served, c.refused, c.account = map[string]cached{}, map[string]time.Time{}, map[string]time.Time{}, account
+		c.data = map[string]cached{}
 		c.last, c.cycleVehicle, c.cycleKey, c.cycleCalls, c.followUp = time.Time{}, "", "", 0, false
 	}
 	now := time.Now()
 	if c.clock != nil {
 		now = c.clock()
+	}
+	if s.c.TelemetryReads && vehicle != "" && s.telemetryReader != nil {
+		if body, ok := s.telemetryReply(ctx, key, vehicle, now); ok {
+			if s.oauth.Account() != account {
+				return 503, []byte(`{"error":"account changed"}`), 0
+			}
+			return 200, body, 0
+		}
 	}
 	u := s.usage(now)
 	hit, found := c.cache[key]
@@ -305,6 +316,15 @@ func (s *Service) collect(ctx context.Context, key, vehicle string) (int, []byte
 		// Billed replies (data, asleep, forbidden, missing) are reused until
 		// the next paced call instead of being re-requested.
 		c.cache[key] = cached{status: res.StatusCode, body: body, at: now}
+		if s.c.TelemetryReads && res.StatusCode == 200 && strings.Contains(key, "/vehicle_data") {
+			if c.data == nil {
+				c.data = map[string]cached{}
+			}
+			// Only complete parser-compatible responses become overlay templates.
+			if _, _, ok := telemetryTemplate(body, vehicle); ok {
+				c.data[vehicle] = c.cache[key]
+			}
+		}
 	}
 	return res.StatusCode, body, 0
 }

@@ -62,6 +62,8 @@ type Config struct {
 	CollectorListen, CollectorSecret          string
 	MonthlyBudgetUSD, CallCostUSD             float64
 	CacheTTL                                  time.Duration
+	TelemetryReads                            bool
+	TelemetryDatabaseURL                      string
 	TelemetryEnabled                          bool
 	TelemetryMeterURL, TelemetryMeterSecret   string
 	TelemetryHostname, TelemetryCAFile        string
@@ -78,6 +80,11 @@ func ConfigFromEnv() (Config, error) {
 	c := Config{Mode: env("COMMANDER_MODE", "stub"), Listen: env("COMMANDER_LISTEN", "127.0.0.1:8090"), CallbackListen: env("COMMANDER_CALLBACK_LISTEN", "127.0.0.1:8091"), Secret: os.Getenv("COMMANDER_INTERNAL_SECRET"), DataDir: env("COMMANDER_DATA_DIR", "./data"), ClientID: os.Getenv("TESLA_CLIENT_ID"), ClientSecret: os.Getenv("TESLA_CLIENT_SECRET"), RedirectURI: os.Getenv("TESLA_REDIRECT_URI"), Audience: env("TESLA_AUDIENCE", NorthAmerica), ProxyURL: env("TESLA_PROXY_URL", "https://localhost:4443"), ProxyCAFile: os.Getenv("TESLA_PROXY_CA_FILE"), PublicKeyFile: os.Getenv("TESLA_PUBLIC_KEY_FILE"), Enabled: os.Getenv("COMMANDER_COMMANDS_ENABLED") == "true", RateLimit: 6, WakeTimeout: 30 * time.Second, WakeInterval: 2 * time.Second, CommandTimeout: 65 * time.Second}
 	c.OAuthEnabled = c.Enabled || os.Getenv("COMMANDER_OAUTH_ENABLED") == "true"
 	c.HistoryEnabled = os.Getenv("COMMANDER_CHARGING_HISTORY_ENABLED") == "true"
+	c.TelemetryReads = os.Getenv("COMMANDER_TELEMETRY_READS") == "true"
+	c.TelemetryDatabaseURL = os.Getenv("COMMANDER_TELEMETRY_DATABASE_URL")
+	if c.TelemetryReads && c.TelemetryDatabaseURL == "" {
+		return c, errors.New("COMMANDER_TELEMETRY_DATABASE_URL is required for telemetry reads")
+	}
 	c.CollectorEnabled = os.Getenv("COMMANDER_COLLECTOR_ENABLED") == "true"
 	c.TelemetryEnabled = os.Getenv("COMMANDER_TELEMETRY_ENABLED") == "true"
 	c.CollectorListen = env("COMMANDER_COLLECTOR_LISTEN", "127.0.0.1:8092")

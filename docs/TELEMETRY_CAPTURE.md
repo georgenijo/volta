@@ -138,3 +138,21 @@ during an outage. Tesla's portal limit remains the final external safety boundar
 The prior PRs' GitHub jobs failed before running any steps: the annotation reports
 failed account payments or an Actions spending limit. Resolve that account gate;
 local tests do not substitute for required green CI.
+
+### Recording telemetry-only trips through TeslaMate
+
+Commander can now feed fresh recorded telemetry back into TeslaMate's private
+Tesla API facade, so a drive need not already exist in `public.drives` for its
+positions to be recorded. This is optional and off by default:
+`COMMANDER_TELEMETRY_READS=true`, a narrowly granted read-only database DSN, and
+`deploy/commander/compose.telemetry-reads.yaml`. See
+[commander's enabling, identity, freshness and unit contract](../commander/README.md#telemetry-backed-teslamate-reads-optional-default-off).
+The hot path reads indexed `latest_samples`, connectivity and stream health in
+one database snapshot; it never scans trip history or calls Tesla. It overlays a
+successful real response template, keeps exact VIN-digest ownership, and spends
+no polling budget. A newest valid observation and receiver/consumer liveness must
+be within 90 seconds, with zero recorded queue lag. Change-only fields are carried
+only inside their proven continuous link; invalid/latest conflicting fields are
+unknown. Stale/disconnected streams and cold-start templates retain normal paced
+polling. No receiver, profile, ingest or deployed service is changed by enabling
+code in this repository; the operator still controls setup and live acceptance.

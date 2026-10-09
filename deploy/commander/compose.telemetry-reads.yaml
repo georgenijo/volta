@@ -1,0 +1,12 @@
+# Optional telemetry-backed TeslaMate reads. Attach only to the private DB
+# network; no host port, wake call, or signing proxy is added.
+services:
+  commander:
+    environment:
+      COMMANDER_TELEMETRY_READS: ${COMMANDER_TELEMETRY_READS:-false}
+      COMMANDER_TELEMETRY_DATABASE_URL: ${COMMANDER_TELEMETRY_DATABASE_URL:-}
+    networks: [telemetry-db]
+networks:
+  telemetry-db:
+    external: true
+    name: ${TESLAMATE_NETWORK:-teslamate_default}

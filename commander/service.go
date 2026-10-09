@@ -36,6 +36,7 @@ type Service struct {
 	// Data reads never use the command proxy or its CA.
 	collectorClient *http.Client
 	telemetry       *TelemetryController
+	telemetryReader telemetryReader
 }
 
 func NewService(c Config, store *Store, client *http.Client, audit *slog.Logger) (*Service, error) {
@@ -61,6 +62,13 @@ func NewService(c Config, store *Store, client *http.Client, audit *slog.Logger)
 			return nil, errors.New("public key must be P-256")
 		}
 		s.publicKey = b
+	}
+	if c.TelemetryReads {
+		reader, err := newTelemetryDB(c.TelemetryDatabaseURL)
+		if err != nil {
+			return nil, errors.New("invalid telemetry database configuration")
+		}
+		s.telemetryReader = reader
 	}
 	return s, nil
 }

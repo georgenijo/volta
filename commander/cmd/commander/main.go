@@ -58,6 +58,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer s.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if s.TelemetryEnabled() {

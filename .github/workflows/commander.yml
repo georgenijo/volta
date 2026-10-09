@@ -20,6 +20,18 @@ jobs:
   go:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: commander_telemetry_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      COMMANDER_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/commander_telemetry_test?sslmode=disable
     defaults:
       run:
         working-directory: commander
@@ -28,8 +40,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: commander/go.mod
-          # Standard library only; no go.sum to key a cache on.
-          cache: false
+          cache-dependency-path: commander/go.sum
       - name: gofmt
         run: test -z "$(gofmt -l .)"
       - run: go vet ./...
