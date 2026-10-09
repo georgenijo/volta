@@ -285,8 +285,9 @@ Active charge counters/powers must have source times at or after the derived
 current session start (or the current Starting/Charging transition until that
 session is derived), so earlier-session values cannot inflate the next session.
 Starting/Charging overlays additionally require battery_level,
-usable_battery_level, ideal_battery_range, charge_energy_added and charger_power: TeslaMate rejects charge rows without these
-fields. The current economy profile omits IdealBatteryRange, so charging uses the
+usable_battery_level, ideal_battery_range, charge_energy_added and charger_power.
+The overlay requires current SOC readings; TeslaMate's charge changeset requires
+the range, energy and power fields (its SOC columns are nullable). The current economy profile omits IdealBatteryRange, so charging uses the
 paced fallback under that profile unless the operator includes that field. Missing
 current-session counters also fall back until published. No range/counter is
 fabricated from cached data. Closing counters also require the indexed derived charge session

@@ -388,7 +388,8 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 		}
 	}
 	if charging == "Starting" || charging == "Charging" {
-		// These fields are required by TeslaMate.Log.Charge's changeset.
+		// Require SOC readings for a usable charging overlay. The range, energy
+		// and power fields are required by TeslaMate.Log.Charge's changeset.
 		for _, key := range []string{"battery_level", "usable_battery_level", "ideal_battery_range", "charge_energy_added", "charger_power"} {
 			if charge[key] == nil {
 				return false
