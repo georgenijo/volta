@@ -391,7 +391,8 @@ func TestTelemetryCollectorTimestampNeverRegresses(t *testing.T) {
 			s, store, up := collectorFixture(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.Write(readTemplate()) })
 			authorize(t, store, up.URL)
 			s.c.TelemetryReads = true
-			s.collector.clock = func() time.Time { return now }
+			current := now
+			s.collector.clock = func() time.Time { return current }
 			reader := &fakeTelemetryReader{snap: readSnapshot(now)}
 			s.telemetryReader = reader
 			key := "/api/1/vehicles/1/vehicle_data"
@@ -409,6 +410,8 @@ func TestTelemetryCollectorTimestampNeverRegresses(t *testing.T) {
 			case "exhausted budget":
 				reader.snap.Status = "DISCONNECTED"
 				s.c.MonthlyBudgetUSD = s.usage(now).USD
+				current = now.Add(2 * time.Minute)
+				s.collector.last = time.Time{}
 			}
 			for i := 0; i < 3; i++ {
 				status, _, retry := s.collect(context.Background(), key, "1")
@@ -457,5 +460,36 @@ func TestTelemetryChargingRequiresParserFields(t *testing.T) {
 				t.Fatal("incomplete charging reply served")
 			}
 		})
+	}
+}
+
+func TestTelemetryDerivedChargeFloor(t *testing.T) {
+	now := time.Now().UTC()
+	s := readSnapshot(now)
+	s.Samples[1].Text = textPtr("ShiftStateP")
+	s.Samples[2].Text = textPtr("DetailedChargeStateCharging")
+	s.Samples[2].At = now.Add(-time.Second)
+	s.ChargeStart = now.Add(-30 * time.Second)
+	s.Samples = append(s.Samples,
+		telemetrySample{Field: "IdealBatteryRange", At: now, Num: floatPtr(200), Unit: "mi", Quality: "ok"},
+		telemetrySample{Field: "DCChargingEnergyIn", At: now.Add(-10 * time.Second), Num: floatPtr(1), Unit: "kWh", Quality: "ok"},
+		telemetrySample{Field: "ACChargingPower", At: now.Add(-10 * time.Second), Num: floatPtr(7), Unit: "kW", Quality: "ok"})
+	// Starting -> Charging keeps its session. Values emitted between those
+	// transitions belong to the current session even if older than Charging.
+	r := overlayFixture(t, s, now)
+	if c := r["charge_state"].(map[string]any); c["charge_energy_added"] != float64(1) || c["charger_power"] != int64(7) {
+		t.Fatal("between-transition values rejected")
+	}
+	// Until a session is derived, the active transition is the conservative floor.
+	s.ChargeStart = time.Time{}
+	e, _, _ := telemetryTemplate(readTemplate(), "1")
+	if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+		t.Fatal("unbound active-session values accepted")
+	}
+	// An unbound completed session cannot resurrect any older charge counter.
+	s.Samples[2].Text = textPtr("DetailedChargeStateComplete")
+	r = overlayFixture(t, s, now)
+	if c := r["charge_state"].(map[string]any); c["charge_energy_added"] != nil || c["charger_power"] != nil {
+		t.Fatal("unbound completed-session values accepted")
 	}
 }
