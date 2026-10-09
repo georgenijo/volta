@@ -40,10 +40,6 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         SKIP_INSTALL: YES
         ENABLE_PREVIEWS: YES
-        # Must match the Volta app target; delete these two lines if
-        # project.yml defines them at project level.
-        MARKETING_VERSION: '1.0'
-        CURRENT_PROJECT_VERSION: '1'
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks"
         ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME: ""
     info:
