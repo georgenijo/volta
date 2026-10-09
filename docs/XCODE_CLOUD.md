@@ -60,13 +60,35 @@ xcodebuild -project ios/Volta.xcodeproj -scheme Volta -configuration Release \
 ```
 
 Inspect the archive's `Volta.app/Info.plist` and embedded
-`PlugIns/VoltaWidgets.appex/Info.plist` for bundle IDs and matching versions. An
+`PlugIns/VoltaWidgets.appex/Info.plist` for bundle IDs and matching versions. Verify
+the app's `ITSAppUsesNonExemptEncryption` is a Boolean `false`, not a string. An
 unsigned archive proves compilation and packaging, not Apple signing or delivery.
 
-Source inspection found Apple `URLSession` HTTPS, Security keychain storage and
-LocalAuthentication, with no bundled third-party or custom crypto implementation.
-No export-compliance declaration is added here. The owner must resolve export
-compliance in App Store Connect using [Apple's encryption guidance](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations).
+## Encryption declaration
+
+The app declares `ITSAppUsesNonExemptEncryption: false` in `ios/project.yml` and
+the checked-in app `Info.plist`, so regeneration preserves the Boolean declaration.
+Source and target dependency inspection found only Apple-provided encryption:
+`URLSession` HTTPS, Security Keychain storage, LocalAuthentication and
+`ASWebAuthenticationSession` for browser sign-in. App and widget targets link no
+third-party libraries or custom cryptography; server-side OAuth and vehicle
+cryptography are not bundled in the iOS app.
+
+[Apple's encryption guidance](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations)
+identifies operating-system encryption, including `URLSession` HTTPS, as typically
+exempt from export documentation upload requirements. Its
+[`ITSAppUsesNonExemptEncryption` reference](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption)
+specifies Boolean `NO` for apps using only exempt encryption and explains that
+omitting the key causes a questionnaire on each upload. This declaration reflects
+the current shipped app and avoids that recurring manual compliance step; it does
+not mean HTTPS or Keychain are unencrypted, or prove Apple has accepted a build.
+
+Reevaluate the declaration before shipping changes to encryption, authentication,
+networking, linked SDKs or bundled libraries, and when distribution requirements
+change. If non-exempt encryption is introduced, update the metadata and complete
+[Apple's required documentation process](https://developer.apple.com/help/app-store-connect/manage-app-information/determine-and-upload-app-encryption-documentation)
+before distribution. The owner remains responsible for applicable export/import
+requirements, including any reporting obligations described by Apple.
 
 Live acceptance remains: Cloud recognizes post-clone, signs both targets, archives
 and uploads successfully; App Store Connect processes the build; TestFlight shows
