@@ -128,7 +128,6 @@ struct DrivesHistoryView: View {
             .navigationDestination(for: DriveSummary.self) { DriveDetailView(drive: $0) }
         }
         .task(id: range) { await reload(skeleton: true) }
-        .task(id: vehicleID) { await reload(skeleton: true) }
     }
 
     private func reload(skeleton: Bool = false) async {
@@ -234,7 +233,7 @@ struct DrivesHistoryView: View {
                 HistoryInlineMetric(systemImage: "bolt.fill", text: totals.energyUsedKwh.value.map { VoltaFormat.energy($0) } ?? "—", tint: HistoryTheme.green)
                 HistoryInlineMetric(systemImage: "leaf.fill", text: units.formatEfficiency(totals.efficiencyWhPerKm), tint: HistoryTheme.green)
             }
-            HistoryInlineMetric(systemImage: "creditcard", text: cost.display + " estimated", tint: HistoryTheme.green)
+            HistoryInlineMetric(systemImage: "creditcard", text: cost.display == "—" ? "Cost unknown" : cost.display + " estimated", tint: HistoryTheme.green)
             Text("Efficiency score · rated ÷ actual × 100, capped at 100").font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary)
             if scored.count < visible.count && !scored.isEmpty {
                 Text("Score from \(scored.count) of \(visible.count) drives, weighted by distance").font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary)

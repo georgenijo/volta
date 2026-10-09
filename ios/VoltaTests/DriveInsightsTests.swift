@@ -6,6 +6,8 @@ final class DriveInsightsTests: XCTestCase {
         DriveSummary(id: id, start: Date(timeIntervalSince1970: start), end: end.map { Date(timeIntervalSince1970: $0) }, startAddress: nil, endAddress: nil, distanceKm: km, durationMin: 60, startBatteryLevel: nil, endBatteryLevel: nil, energyUsedKwh: kwh, efficiencyWhPerKm: kwh.map { $0 * 1000 / km }, maxSpeedKph: nil, avgSpeedKph: nil, outsideTempAvgC: nil)
     }
     func testCostPrecedenceUnknownFreeAndCurrency() {
+        XCTAssertNil(DrivePricing.cost(drive(kwh: 0), fallback: 0.20))
+        XCTAssertEqual(DrivePricing.cost(drive(kwh: 10), fallback: 0), 0)
         var d = drive()
         XCTAssertEqual(DrivePricing.cost(d, fallback: 0.20), 2)
         d.electricityRatePerKwh = 0.30; d.rateCurrency = "EUR"
@@ -33,6 +35,7 @@ final class DriveInsightsTests: XCTestCase {
         XCTAssertEqual(Roadtrip.group([b, a]).first?.drives.map(\.id), [1, 2])
         XCTAssertTrue(Roadtrip.group([a, drive(2, start: 10801, end: 14400)]).isEmpty)
         XCTAssertTrue(Roadtrip.group([a, drive(2, start: 3600, end: nil)]).isEmpty)
+        XCTAssertTrue(Roadtrip.group([a, drive(3, start: 5000, end: nil), b]).isEmpty)
         XCTAssertTrue(Roadtrip.group([a, drive(2, start: 3000, end: 6000)]).isEmpty)
         XCTAssertEqual(Roadtrip.group([drive(km: 100)]).count, 1)
     }

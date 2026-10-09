@@ -10,14 +10,14 @@ enum DrivePricing {
         return TripRate(perKwh: fallback.isFinite && fallback >= 0 ? fallback : 0.20, currency: "USD", source: .manual)
     }
     static func cost(_ drive: DriveSummary, fallback: Double) -> Double? {
-        rate(drive, fallback: fallback).cost(energyKwh: drive.energyUsedKwh)
+        rate(drive, fallback: fallback).cost(energyKwh: drive.costableEnergyKwh)
     }
     static func total(_ drives: [DriveSummary], fallback: Double) -> (display: String, note: String?) {
         var sums: [String: Double] = [:]
         var known = 0
         for drive in drives {
             let rate = rate(drive, fallback: fallback)
-            guard let cost = rate.cost(energyKwh: drive.energyUsedKwh) else { continue }
+            guard let cost = rate.cost(energyKwh: drive.costableEnergyKwh) else { continue }
             sums[rate.currency, default: 0] += cost
             known += 1
         }
@@ -27,6 +27,20 @@ enum DrivePricing {
 }
 
 extension DriveSummary {
+    /// An unchanged coarse energy reading over a moving drive does not establish zero use.
+    var costableEnergyKwh: Double? {
+        guard let energyUsedKwh, energyUsedKwh.isFinite,
+              energyUsedKwh > 0 || (energyUsedKwh == 0 && distanceKm == 0) else { return nil }
+        return energyUsedKwh
+    }
+    var energyProvenance: String {
+        switch energySource {
+        case "teslamate_rated_range": "Estimated from TeslaMate rated-range change × car efficiency"
+        case "fleet_lifetime_energy": "Estimated from Fleet Telemetry lifetime energy-used counter"
+        case "fleet_energy_remaining": "Estimated net battery energy from Fleet Telemetry energy remaining; regeneration and temperature affect this value"
+        default: "Energy source not supplied by this server"
+        }
+    }
     var startPlace: String { startCity ?? startAddress ?? "Start not recorded" }
     var endPlace: String { endCity ?? endAddress ?? "End not recorded" }
     /// Efficiency score v1: rated / actual × 100, capped. A separate measure from smoothness.

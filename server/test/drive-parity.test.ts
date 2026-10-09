@@ -6,6 +6,8 @@ test('rated energy wins; unknown and negative energy never become costable zero'
   expect(applyDriveEnergy({energyUsedKwh:null,distanceKm:20},{energy:4,source:'fleet_lifetime_energy'})).toMatchObject({energyUsedKwh:4,efficiencyWhPerKm:200,energySource:'fleet_lifetime_energy'});
   expect(applyDriveEnergy({energyUsedKwh:-1,distanceKm:20}).energyUsedKwh).toBeNull();
   expect(applyDriveEnergy({energyUsedKwh:0,distanceKm:0}).efficiencyWhPerKm).toBeNull();
+  expect(applyDriveEnergy({energyUsedKwh:0,distanceKm:20}).energyUsedKwh).toBeNull();
+  expect(applyDriveEnergy({energyUsedKwh:0,distanceKm:20},{energy:4,source:'fleet_lifetime_energy'}).energyUsedKwh).toBe(4);
 });
 test('efficiency score requires real finite positive inputs', () => {
   expect(efficiencyScore(200,160)).toBe(80);
@@ -19,4 +21,5 @@ test('energy endpoints require distinct readings close to both session boundarie
   expect(endpointEnergy({t:start,value:50},{t:new Date(3400000),value:45},start,end)).toBeNull();
   expect(endpointEnergy({t:start,value:40},{t:end,value:45},start,end)).toBeNull();
   expect(endpointEnergy({t:start,value:50},{t:start,value:50},start,end)).toBeNull();
+  expect(endpointEnergy({t:start,value:50},{t:end,value:50},start,end)).toBeNull();
 });

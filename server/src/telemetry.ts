@@ -186,8 +186,10 @@ export class Telemetry {
       COALESCE(segment<>lag(segment) OVER(PARTITION BY drive_id ORDER BY rn),false) AS "routeBreakBefore"
       FROM selected ORDER BY drive_id,rn`;
     let energy = new Map<number, { energy: number | null; source: string | null }>();
-    if (this.fleetEnabled && rows.some(r => r.energyUsedKwh == null || r.energyUsedKwh < 0)) {
-      try { energy = await new FleetSeries(this.sql).driveEnergy(ids); }
+    const missingEnergyIds = rows.filter(r => r.energyUsedKwh == null || !Number.isFinite(r.energyUsedKwh)
+      || r.energyUsedKwh < 0 || (r.distanceKm > 0 && r.energyUsedKwh === 0)).map(r => r.id);
+    if (this.fleetEnabled && missingEnergyIds.length) {
+      try { energy = await new FleetSeries(this.sql).driveEnergy(missingEnergyIds); }
       catch { this.log({event:'drive_energy_failed',code:'telemetry_query_failed'}); }
     }
     for (const row of rows) {

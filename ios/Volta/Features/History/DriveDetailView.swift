@@ -40,8 +40,12 @@ struct DriveDetailView: View {
                     if let timeline = snapshot?.timeline, timeline.quality != .dense {
                         TripSamplingNote(timeline: timeline)
                     }
-                    TripCostCard(energyKwh: summary.energyUsedKwh, rate: DrivePricing.rate(summary, fallback: model?.settings.electricityRate ?? 0.20),
+                    TripCostCard(energyKwh: summary.costableEnergyKwh, rate: DrivePricing.rate(summary, fallback: model?.settings.electricityRate ?? 0.20),
                                  lookup: nil, editable: false) {}
+                    if summary.costableEnergyKwh != nil {
+                        Text(summary.energyProvenance).font(.system(size: 12)).foregroundStyle(HistoryTheme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if let snapshot {
                         TripScoreCard(result: snapshot.score)
                     }

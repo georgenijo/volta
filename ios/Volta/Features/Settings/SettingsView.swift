@@ -160,7 +160,7 @@ private struct ElectricityRateSettingsEditor: View {
                 Section {
                     TextField("Electricity rate, $/kWh", text: $text).keyboardType(.decimalPad)
                 } footer: {
-                    Text("Used for estimated drive costs when TeslaMate has no charge cost in a known currency. Real charge costs take precedence. USD per kWh; 0 means free. Stored on this device.")
+                    Text("Used for estimated drive costs when TeslaMate has no charge cost in a known currency. Real charge costs take precedence. USD per kWh; 0 means free. Stored on this device. This replaces the earlier per-vehicle manual trip-rate editor. Earlier saved rates are preserved but no longer used; enter your USD fallback here.")
                 }
             }
             .navigationTitle("Electricity rate")
