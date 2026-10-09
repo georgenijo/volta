@@ -42,6 +42,7 @@ type telemetrySnapshot struct {
 	ConnectedAt time.Time         `json:"connected_at"`
 	ReceivedAt  time.Time         `json:"received_at"`
 	GapEnd      time.Time         `json:"gap_end"`
+	ChargeStart time.Time         `json:"charge_start"`
 	Sign        string            `json:"sign"`
 	Samples     []telemetrySample `json:"samples"`
 }
@@ -82,6 +83,11 @@ func (db *telemetryDB) Read(ctx context.Context, vin string) (telemetrySnapshot,
  'status',link.status,'connected_at',link.source_ts,'received_at',link.received_at,
  'gap_end',(SELECT max(end_ts) FROM volta_telemetry.gaps WHERE vehicle_id=b.id AND reason IN ('disconnected','silence')),
  'sign',(SELECT sign FROM volta_telemetry.power_calibration WHERE vehicle_id=b.id),
+ 'charge_start',(SELECT start_ts FROM volta_telemetry.sessions
+ WHERE vehicle_id=b.id AND kind='charge'
+ AND start_ts <= (SELECT source_ts FROM volta_telemetry.latest_samples WHERE vehicle_id=b.id AND field='DetailedChargeState')
+ AND end_ts >= (SELECT source_ts FROM volta_telemetry.latest_samples WHERE vehicle_id=b.id AND field='DetailedChargeState')
+ ORDER BY start_ts DESC LIMIT 1),
  'samples',coalesce((SELECT jsonb_agg(to_jsonb(l)) FROM volta_telemetry.latest_samples l WHERE l.vehicle_id=b.id),'[]'::jsonb))
  FROM binding b CROSS JOIN volta_telemetry.stream_health h
  CROSS JOIN LATERAL (SELECT status,source_ts,received_at FROM volta_telemetry.connectivity
@@ -182,6 +188,9 @@ func (s *Service) telemetryReply(ctx context.Context, key, vehicle string, now t
 	if !ok {
 		return nil, false
 	}
+	if !overlayTelemetry(envelope, fields, snap.Sign, snap.ChargeStart) {
+		return nil, false
+	}
 	if !strings.Contains(key, "/vehicle_data") {
 		r := envelope["response"].(map[string]any)
 		for _, g := range dataGroups {
@@ -190,9 +199,6 @@ func (s *Service) telemetryReply(ctx context.Context, key, vehicle string, now t
 		r["state"] = "online"
 		body, err := json.Marshal(envelope)
 		return body, err == nil
-	}
-	if !overlayTelemetry(envelope, fields, snap.Sign) {
-		return nil, false
 	}
 	body, err := json.Marshal(envelope)
 	return body, err == nil
@@ -211,6 +217,10 @@ var telemetryMappings = []telemetryMapping{
 	{"EstBatteryRange", "charge_state", "est_battery_range", "mi", false},
 	{"ChargeLimitSoc", "charge_state", "charge_limit_soc", "%", true}, {"TimeToFullCharge", "charge_state", "time_to_full_charge", "h", false},
 	{"ChargerVoltage", "charge_state", "charger_voltage", "V", true}, {"ChargeAmps", "charge_state", "charger_actual_current", "A", true},
+	{"TpmsPressureFl", "vehicle_state", "tpms_pressure_fl", "bar", false},
+	{"TpmsPressureFr", "vehicle_state", "tpms_pressure_fr", "bar", false},
+	{"TpmsPressureRl", "vehicle_state", "tpms_pressure_rl", "bar", false},
+	{"TpmsPressureRr", "vehicle_state", "tpms_pressure_rr", "bar", false},
 	{"InsideTemp", "climate_state", "inside_temp", "C", false}, {"OutsideTemp", "climate_state", "outside_temp", "C", false},
 }
 
@@ -232,7 +242,7 @@ func telemetryNumber(v telemetrySample, unit string) (float64, bool) {
 	}
 	return 0, false
 }
-func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample, sign string) bool {
+func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample, sign string, chargeStart time.Time) bool {
 	r := envelope["response"].(map[string]any)
 	drive := r["drive_state"].(map[string]any)
 	charge := r["charge_state"].(map[string]any)
@@ -270,25 +280,39 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 		math.Abs(*loc.Latitude) > 90 || math.Abs(*loc.Longitude) > 180 {
 		return false
 	}
-	// Never relabel an invalid/stale dynamic cached value with a new timestamp.
-	for _, m := range telemetryMappings {
-		r[m.section].(map[string]any)[m.key] = nil
-	}
-	for _, k := range []string{"power", "native_latitude", "native_longitude", "native_type", "native_location_supported"} {
-		drive[k] = nil
-	}
-	for _, k := range []string{"charger_power", "charge_energy_added", "charge_miles_added_rated", "charge_miles_added_ideal", "charger_phases", "charger_pilot_current", "fast_charger_present", "charge_port_door_open", "charge_port_latch", "conn_charge_cable"} {
-		charge[k] = nil
-	}
-	times := map[string]time.Time{"drive_state": loc.At, "charge_state": state.At}
-	mark := func(section string, at time.Time) {
-		if at.After(times[section]) {
-			times[section] = at
+	// Keep only parser scaffolding and static identity/version metadata.
+	// Every unsupported dynamic value is unknown, rather than timestamped anew.
+	vehicleState := r["vehicle_state"].(map[string]any)
+	for _, key := range []string{"df", "dr", "pf", "pr", "ft", "rt"} {
+		value, ok := vehicleState[key].(json.Number)
+		if !ok {
+			return false
+		}
+		n, err := value.Float64()
+		if err != nil || n != 0 {
+			return false
 		}
 	}
+	if update, ok := vehicleState["software_update"].(map[string]any); ok {
+		if status, _ := update["status"].(string); status != "" {
+			return false
+		}
+	}
+	keep := map[string]bool{"api_version": true, "car_version": true, "vehicle_name": true,
+		"df": true, "dr": true, "pf": true, "pr": true, "ft": true, "rt": true}
+	for _, section := range []string{"drive_state", "charge_state", "climate_state", "vehicle_state"} {
+		for key := range r[section].(map[string]any) {
+			if section != "vehicle_state" || !keep[key] {
+				r[section].(map[string]any)[key] = nil
+			}
+		}
+	}
+	// TeslaMate expects a software_update object. An empty status is its
+	// parser's no-update sentinel; active update templates use normal polling.
+	vehicleState["software_update"] = map[string]any{"status": ""}
 	drive["latitude"], drive["longitude"], drive["gps_as_of"] = *loc.Latitude, *loc.Longitude, loc.At.Unix()
 	drive["shift_state"] = shift
-	mark("drive_state", gear.At)
+
 	charge["charging_state"] = nil
 	if charging != "" {
 		charge["charging_state"] = charging
@@ -307,7 +331,7 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 		} else {
 			r[m.section].(map[string]any)[m.key] = n
 		}
-		mark(m.section, v.At)
+
 	}
 	// Same payload and verified polarity, as in drive_points; never infer sign.
 	voltage, current := fields["PackVoltage"], fields["PackCurrent"]
@@ -319,28 +343,51 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 			power = -power
 		}
 		drive["power"] = int64(math.Round(power))
-		mark("drive_state", voltage.At)
+
 	}
 	// Battery-side energy is valid for AC and DC. AC input energy is not the
 	// legacy battery-added counter and is deliberately not substituted.
-	if n, ok := telemetryNumber(fields["DCChargingEnergyIn"], "kWh"); ok {
+	sessionValue := func(field string) telemetrySample {
+		value := fields[field]
+		floor := chargeStart
+		if charging == "Starting" || charging == "Charging" {
+			if state.At.After(floor) {
+				floor = state.At
+			}
+		}
+		// Inactive states need a derived session covering their transition,
+		// otherwise a counter from any earlier session would be ambiguous.
+		if floor.IsZero() || value.At.Before(floor) {
+			return telemetrySample{}
+		}
+		return value
+	}
+	if n, ok := telemetryNumber(sessionValue("DCChargingEnergyIn"), "kWh"); ok {
 		charge["charge_energy_added"] = n
-		mark("charge_state", fields["DCChargingEnergyIn"].At)
+
 	}
 	for _, f := range []string{"ACChargingPower", "DCChargingPower"} {
-		if n, ok := telemetryNumber(fields[f], "kW"); ok && n >= 0 {
+		if n, ok := telemetryNumber(sessionValue(f), "kW"); ok && n >= 0 {
 			old, exists := charge["charger_power"].(int64)
 			if !exists || int64(math.Round(n)) > old {
 				charge["charger_power"] = int64(math.Round(n))
-				mark("charge_state", fields[f].At)
+
 			}
 		}
 	}
 	for field, key := range map[string]string{"FastChargerPresent": "fast_charger_present", "ChargePortDoorOpen": "charge_port_door_open"} {
 		if v := fields[field]; v.Bool != nil {
 			charge[key] = *v.Bool
-			mark("charge_state", v.At)
+
 		}
+	}
+	for field, key := range map[string]string{"Locked": "locked", "SentryMode": "sentry_mode"} {
+		if v := fields[field]; v.Bool != nil {
+			vehicleState[key] = *v.Bool
+		}
+	}
+	if version := fields["Version"]; version.Text != nil {
+		vehicleState["car_version"] = *version.Text
 	}
 	// Fields emit on change. Date the coherent current snapshot with its
 	// newest source observation, never with wall-clock time.
@@ -351,12 +398,7 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 		}
 	}
 	for _, section := range []string{"drive_state", "charge_state", "climate_state", "vehicle_state"} {
-		times[section] = snapshotAt
-	}
-	for section, at := range times {
-		if !at.IsZero() {
-			r[section].(map[string]any)["timestamp"] = at.UnixMilli()
-		}
+		r[section].(map[string]any)["timestamp"] = snapshotAt.UnixMilli()
 	}
 	r["state"] = "online"
 	return true

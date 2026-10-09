@@ -29,11 +29,11 @@ func (f *fakeTelemetryReader) Read(_ context.Context, _ string) (telemetrySnapsh
 func floatPtr(n float64) *float64 { return &n }
 func textPtr(s string) *string    { return &s }
 func readTemplate() []byte {
-	return []byte(fmt.Sprintf(`{"response":{"id":9007199254740993,"id_s":"9007199254740993","vehicle_id":1,"vin":%q,"state":"asleep","drive_state":{"timestamp":1,"speed":99,"power":99,"latitude":37.4,"longitude":-122.1,"native_latitude":37.4,"native_longitude":-122.1},"charge_state":{"timestamp":1,"battery_level":99,"charger_power":99,"charge_energy_added":99,"charging_state":"Charging"},"climate_state":{"timestamp":1,"inside_temp":99},"vehicle_state":{"timestamp":1,"odometer":99,"software_update":{"status":""},"car_version":"synthetic"},"gui_settings":{"gui_distance_units":"mi/hr"},"vehicle_config":{"car_type":"model3"}}}`, testVIN))
+	return []byte(fmt.Sprintf(`{"response":{"id":9007199254740993,"id_s":"9007199254740993","vehicle_id":1,"vin":%q,"state":"asleep","drive_state":{"timestamp":1,"speed":99,"power":99,"latitude":37.4,"longitude":-122.1,"native_latitude":37.4,"native_longitude":-122.1},"charge_state":{"timestamp":1,"battery_level":99,"charger_power":99,"charge_energy_added":99,"charging_state":"Charging"},"climate_state":{"timestamp":1,"inside_temp":99},"vehicle_state":{"timestamp":1,"odometer":99,"df":0,"dr":0,"pf":0,"pr":0,"ft":0,"rt":0,"software_update":{"status":""},"car_version":"synthetic"},"gui_settings":{"gui_distance_units":"mi/hr"},"vehicle_config":{"car_type":"model3"}}}`, testVIN))
 }
 func readSnapshot(now time.Time) telemetrySnapshot {
 	start := now.Add(-time.Hour)
-	s := telemetrySnapshot{VIN: testVIN, Digest: telemetryDigest(testVIN), APIDigest: telemetryDigest(testVIN), Generation: "synthetic-generation", Started: start, Seen: now, CaughtUp: now, Status: "CONNECTED", ConnectedAt: start, ReceivedAt: start, Sign: "discharge_positive", LagRecords: new(int64)}
+	s := telemetrySnapshot{VIN: testVIN, Digest: telemetryDigest(testVIN), APIDigest: telemetryDigest(testVIN), Generation: "synthetic-generation", Started: start, Seen: now, CaughtUp: now, Status: "CONNECTED", ConnectedAt: start, ReceivedAt: start, Sign: "discharge_positive", ChargeStart: now.Add(-30 * time.Minute), LagRecords: new(int64)}
 	s.Samples = []telemetrySample{
 		{Field: "Location", At: now, Latitude: floatPtr(37.5), Longitude: floatPtr(-122.2), Unit: "deg", Quality: "ok"},
 		{Field: "Gear", At: now.Add(-30 * time.Minute), Text: textPtr("ShiftStateD"), Quality: "ok"},
@@ -52,7 +52,7 @@ func fieldMap(t *testing.T, s telemetrySnapshot, now time.Time) map[string]telem
 func overlayFixture(t *testing.T, s telemetrySnapshot, now time.Time) map[string]any {
 	t.Helper()
 	e, _, ok := telemetryTemplate(readTemplate(), "1")
-	if !ok || !overlayTelemetry(e, fieldMap(t, s, now), s.Sign) {
+	if !ok || !overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
 		t.Fatal("overlay failed")
 	}
 	return e["response"].(map[string]any)
@@ -141,7 +141,7 @@ func TestTelemetryFreshnessBindingAndContinuity(t *testing.T) {
 		t.Fatal("pre-gap fields carried")
 	}
 	e, _, _ := telemetryTemplate(readTemplate(), "1")
-	if overlayTelemetry(e, f, s.Sign) {
+	if overlayTelemetry(e, f, s.Sign, s.ChargeStart) {
 		t.Fatal("missing gear used cache")
 	}
 }
@@ -166,7 +166,7 @@ func TestTelemetryInvalidAndUnknownValues(t *testing.T) {
 	for _, bad := range []string{"ShiftStateUnknown", "ShiftStateSNA"} {
 		s.Samples[1].Text = textPtr(bad)
 		e, _, _ := telemetryTemplate(readTemplate(), "1")
-		if overlayTelemetry(e, fieldMap(t, s, now), s.Sign) {
+		if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
 			t.Fatal("unknown gear")
 		}
 	}
@@ -262,5 +262,117 @@ func TestTelemetryFlagOffByteIdentical(t *testing.T) {
 	}
 	if reader.calls != 0 {
 		t.Fatal("DB touched")
+	}
+}
+
+func TestTelemetryChargeSessionFence(t *testing.T) {
+	now := time.Now().UTC()
+	for _, state := range []string{"Starting", "Charging"} {
+		t.Run(state, func(t *testing.T) {
+			s := readSnapshot(now)
+			s.Samples[1].Text = textPtr("ShiftStateP")
+			s.Samples[2].Text = textPtr("DetailedChargeState" + state)
+			s.Samples[2].At = now.Add(-time.Second)
+			s.ChargeStart = s.Samples[2].At
+			s.Samples = append(s.Samples,
+				telemetrySample{Field: "DCChargingEnergyIn", At: now.Add(-time.Minute), Num: floatPtr(40), Unit: "kWh", Quality: "ok"},
+				telemetrySample{Field: "DCChargingPower", At: now.Add(-time.Minute), Num: floatPtr(150), Unit: "kW", Quality: "ok"},
+				telemetrySample{Field: "ACChargingPower", At: now, Num: floatPtr(7), Unit: "kW", Quality: "ok"})
+			r := overlayFixture(t, s, now)
+			c := r["charge_state"].(map[string]any)
+			if c["charge_energy_added"] != nil || c["charger_power"] != int64(7) {
+				t.Fatal("previous charge values carried", c)
+			}
+			// A completed session with no counter update cannot reuse old energy.
+			s.Samples[2].Text = textPtr("DetailedChargeStateComplete")
+			r = overlayFixture(t, s, now)
+			if r["charge_state"].(map[string]any)["charge_energy_added"] != nil {
+				t.Fatal("old energy resurrected at completion")
+			}
+			s.Samples[2].Text = textPtr("DetailedChargeState" + state)
+			s.Samples[3].At = now
+			s.Samples[3].Num = floatPtr(0.25)
+			r = overlayFixture(t, s, now)
+			if r["charge_state"].(map[string]any)["charge_energy_added"] != 0.25 {
+				t.Fatal("current session energy lost")
+			}
+			// Completion retains the final reading from this session, before Complete.
+			s.Samples[2].Text = textPtr("DetailedChargeStateComplete")
+			s.Samples[2].At = now
+			s.Samples[3].At = now.Add(-time.Second)
+			r = overlayFixture(t, s, now)
+			if r["charge_state"].(map[string]any)["charge_energy_added"] != 0.25 {
+				t.Fatal("closing energy lost")
+			}
+		})
+	}
+}
+func TestTelemetrySummaryRequiresUsableData(t *testing.T) {
+	now := time.Now().UTC()
+	for _, bad := range []string{"Location", "Gear", "DetailedChargeState"} {
+		t.Run(bad, func(t *testing.T) {
+			s, store, up := collectorFixture(t, func(w http.ResponseWriter, r *http.Request) { t.Fatal("unexpected upstream") })
+			authorize(t, store, up.URL)
+			s.c.TelemetryReads = true
+			s.collector.account = s.oauth.Account()
+			s.collector.clock = func() time.Time { return now }
+			s.collector.data = map[string]cached{"1": {status: 200, body: readTemplate(), at: now}}
+			body := []byte(`{"response":{"state":"asleep"}}`)
+			s.collector.cache["/api/1/vehicles/1"] = cached{status: 200, body: body, at: now}
+			snap := readSnapshot(now)
+			for i := range snap.Samples {
+				if snap.Samples[i].Field == bad {
+					snap.Samples[i].Invalid = true
+				}
+			}
+			snap.Samples = append(snap.Samples, telemetrySample{Field: "InsideTemp", At: now, Num: floatPtr(20), Unit: "C", Quality: "ok"})
+			s.telemetryReader = &fakeTelemetryReader{snap: snap}
+			status, got, _ := s.collect(context.Background(), "/api/1/vehicles/1", "1")
+			if status != 200 || string(got) != string(body) {
+				t.Fatal("summary advertised unusable telemetry")
+			}
+		})
+	}
+}
+func TestTelemetryUnsupportedTemplateFields(t *testing.T) {
+	now := time.Now().UTC()
+	s := readSnapshot(now)
+	e, _, _ := telemetryTemplate(readTemplate(), "1")
+	r := e["response"].(map[string]any)
+	for section, keys := range map[string][]string{"vehicle_state": {"is_user_present", "locked", "sentry_mode", "service_mode", "tpms_soft_warning_fl"}, "climate_state": {"is_preconditioning", "is_climate_on", "battery_heater", "is_front_defroster_on"}, "charge_state": {"battery_heater_on"}} {
+		for _, key := range keys {
+			r[section].(map[string]any)[key] = true
+		}
+	}
+	r["vehicle_state"].(map[string]any)["tpms_pressure_fl"] = 99
+	if !overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+		t.Fatal("overlay")
+	}
+	for section, keys := range map[string][]string{"vehicle_state": {"is_user_present", "locked", "sentry_mode", "service_mode", "tpms_soft_warning_fl", "tpms_pressure_fl"}, "climate_state": {"is_preconditioning", "is_climate_on", "battery_heater", "is_front_defroster_on"}, "charge_state": {"battery_heater_on"}} {
+		for _, key := range keys {
+			if r[section].(map[string]any)[key] != nil {
+				t.Fatal("stale flag refreshed", key)
+			}
+		}
+	}
+	for _, key := range []string{"df", "dr", "pf", "pr", "ft", "rt"} {
+		e, _, _ = telemetryTemplate(readTemplate(), "1")
+		e["response"].(map[string]any)["vehicle_state"].(map[string]any)[key] = json.Number("1")
+		if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+			t.Fatal("open closure template served", key)
+		}
+	}
+	e, _, _ = telemetryTemplate(readTemplate(), "1")
+	e["response"].(map[string]any)["vehicle_state"].(map[string]any)["software_update"] = map[string]any{"status": "installing"}
+	if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+		t.Fatal("active update template served")
+	}
+	f := false
+	tr := true
+	s.Samples = append(s.Samples, telemetrySample{Field: "Locked", At: now, Bool: &f, Quality: "ok"}, telemetrySample{Field: "SentryMode", At: now, Bool: &tr, Quality: "ok"}, telemetrySample{Field: "TpmsPressureFl", At: now, Num: floatPtr(2.5), Unit: "bar", Quality: "ok"}, telemetrySample{Field: "Version", At: now, Text: textPtr("synthetic-new"), Quality: "ok"})
+	r = overlayFixture(t, s, now)
+	v := r["vehicle_state"].(map[string]any)
+	if v["locked"] != false || v["sentry_mode"] != true || v["tpms_pressure_fl"] != 2.5 || v["car_version"] != "synthetic-new" {
+		t.Fatal("vehicle telemetry not mapped")
 	}
 }

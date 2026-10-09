@@ -15,5 +15,5 @@ GRANT USAGE ON SCHEMA public,volta_telemetry TO volta_commander_reader;
 GRANT SELECT (id,vin) ON public.cars TO volta_commander_reader;
 GRANT SELECT ON volta_telemetry.vehicle_bindings,volta_telemetry.api_vehicle_bindings,
  volta_telemetry.latest_samples,volta_telemetry.connectivity,volta_telemetry.stream_health,
- volta_telemetry.gaps,volta_telemetry.power_calibration TO volta_commander_reader;
+ volta_telemetry.gaps,volta_telemetry.sessions,volta_telemetry.power_calibration TO volta_commander_reader;
 COMMIT;

@@ -64,6 +64,11 @@ func TestTelemetryReadOnlyDatabase(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err = admin.Exec(ctx, `INSERT INTO volta_telemetry.sessions
+	 (vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads)
+	 VALUES (1,'charge',$1,$2,'charge_state','charge_state','complete',3)`, start, now); err != nil {
+		t.Fatal(err)
+	}
 	u.User = url.User("volta_commander_reader")
 	db, err := newTelemetryDB(u.String())
 	if err != nil {
@@ -76,6 +81,9 @@ func TestTelemetryReadOnlyDatabase(t *testing.T) {
 	}
 	if _, ok := snap.fields(testVIN, now); !ok {
 		t.Fatal("real query rejected fixture")
+	}
+	if !snap.ChargeStart.Equal(start) {
+		t.Fatal("derived session boundary missing")
 	}
 	if len(snap.Samples) != 3 {
 		t.Fatal("latest query incomplete")

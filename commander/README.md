@@ -260,7 +260,7 @@ Binding, health, connectivity and latest fields are read in one SQL snapshot.
 | `drive_state` | Location → latitude/longitude (degrees), GpsHeading → integer heading, VehicleSpeed → integer mph, Gear → D/R/N/P, PackVoltage × PackCurrent → integer kW only with same payload/time and operator-verified sign |
 | `charge_state` | BatteryLevel → battery_level, Soc → usable_battery_level (integer percent); RatedRange/IdealBatteryRange/EstBatteryRange → miles; DetailedChargeState → Disconnected/NoPower/Starting/Charging/Complete/Stopped; AC/DCChargingPower → integer charger_power kW; DCChargingEnergyIn → charge_energy_added kWh; ChargeLimitSoc → integer percent; TimeToFullCharge → hours; ChargerVoltage/ChargeAmps → integer volts/amps; FastChargerPresent/ChargePortDoorOpen → booleans |
 | `climate_state` | InsideTemp/OutsideTemp → degrees Celsius |
-| `vehicle_state` | Odometer → miles |
+| `vehicle_state` | Odometer → miles; Locked/SentryMode → booleans; TpmsPressureFl/Fr/Rl/Rr → bar; Version → car_version |
 
 `source_unit` is checked: native mi/mph remain unchanged; km and km/h convert by
 1.609344, Fahrenheit converts to Celsius, and minutes convert to hours. Unknown
@@ -270,7 +270,18 @@ charger input and is not substituted or added. Charger power is the larger valid
 AC/DC observation, never their sum. EnergyRemaining has no equivalent vehicle_data
 field and is not invented. All four overlaid section timestamps use the newest
 valid telemetry source time in milliseconds; `gps_as_of` retains the location's
-source seconds. Template metadata/configuration remains intact.
+source seconds. Static template identity/configuration remains intact. Unsupported dynamic flags
+(user presence, climate operation, battery heaters, warnings, etc.) become null.
+Locked/SentryMode and TPMS pressures are populated from valid telemetry; Version
+updates car_version. An active software-update template or a template without
+known closed doors/trunks falls back to normal polling because those states
+cannot safely be inferred from the configured telemetry fields. Known closed
+closure values and the empty software-update parser sentinel remain scaffolding.
+Active charge counters/powers must have source times at or after the latest
+Starting/Charging transition, so values from an earlier session cannot inflate
+the next session. Closing counters also require the indexed derived charge session
+to cover that state transition, keeping the final current-session counter without
+resurrecting an older session when no new counter arrived. Summary replies require the same usable overlay as data reads.
 
 The implementation was checked against TeslaMate commit
 [`6af9a0ff9ec8a6cec2833ae0fde66a929469a15b`](https://github.com/teslamate-org/teslamate/tree/6af9a0ff9ec8a6cec2833ae0fde66a929469a15b):
