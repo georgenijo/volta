@@ -13,9 +13,10 @@ export class FleetLive {
     const [row] = await s`SELECT b.vin_digest,c.vin,
       COALESCE((SELECT jsonb_agg(to_jsonb(l)) FROM volta_telemetry.latest_samples l
         WHERE l.vehicle_id=b.vehicle_id AND l.field=ANY(${liveFields}::text[])), '[]'::jsonb) AS samples,
-      (SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT status,source_ts,received_at
+      (SELECT jsonb_agg(to_jsonb(x)) FROM (SELECT DISTINCT ON(connection_id) status,source_ts,received_at
         FROM volta_telemetry.connectivity WHERE vehicle_id=b.vehicle_id
-        ORDER BY source_ts DESC,received_at DESC,status DESC LIMIT 1) x) AS connections,
+          AND source_ts >= COALESCE((SELECT receiver_started_at FROM volta_telemetry.stream_health WHERE id=1),now()) - interval '1 second'
+        ORDER BY connection_id,source_ts DESC,received_at DESC,status DESC) x) AS connections,
       (SELECT to_jsonb(h) FROM volta_telemetry.stream_health h WHERE id=1) AS health
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;

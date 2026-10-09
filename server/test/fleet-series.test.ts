@@ -335,3 +335,19 @@ test('live overlapping metrics prefer connected change-only data, otherwise comp
   await owner`UPDATE volta_telemetry.latest_samples SET invalid=true,quality='invalid',value_num=NULL`;
   expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(fallback.insideTempC);
 });
+
+
+test('overlapping reconnect keeps the active socket current; late old disconnect cannot mask it',async()=>{
+  const now=new Date(),at=(seconds:number)=>new Date(+now-seconds*1000);
+  await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
+    VALUES(1,'fixture',${at(10)},${now},${at(10)},${now},0,${now})`;
+  await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at) VALUES
+    (1,'old-generation','CONNECTED',${at(20)},${at(20)}),
+    (1,'wifi','CONNECTED',${at(6)},${at(6)}),
+    (1,'cellular','CONNECTED',${at(4)},${at(4)}),
+    (1,'wifi','DISCONNECTED',${at(2)},${at(2)})`;
+  expect((await get('/v1/vehicles/1/status')).telemetryFreshness.connected).toBe(true);
+  await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at)
+    VALUES(1,'cellular','DISCONNECTED',${at(1)},${at(1)})`;
+  expect((await get('/v1/vehicles/1/status')).telemetryFreshness.connected).toBe(false);
+});
