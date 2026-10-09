@@ -4,21 +4,21 @@ set -eu
 
 : "${CI_PRIMARY_REPOSITORY_PATH:?Xcode Cloud must supply the repository path}"
 : "${CI_BUILD_NUMBER:?Xcode Cloud must supply the build number}"
-: "${CI_TEAM_ID:?Xcode Cloud must supply the selected Apple development team}"
+: "${VOLTA_APPLE_TEAM_ID:?Set VOLTA_APPLE_TEAM_ID to the signing team in the workflow environment}"
 case "$CI_BUILD_NUMBER" in
     *[!0-9]* | 0* | '')
         echo 'CI_BUILD_NUMBER must be a positive integer without leading zeros.' >&2
         exit 1
         ;;
 esac
-case "$CI_TEAM_ID" in
+case "$VOLTA_APPLE_TEAM_ID" in
     *[!A-Z0-9]*)
-        echo 'CI_TEAM_ID must contain ten uppercase letters or digits.' >&2
+        echo 'VOLTA_APPLE_TEAM_ID must contain ten uppercase letters or digits.' >&2
         exit 1
         ;;
 esac
-if [ "${#CI_TEAM_ID}" -ne 10 ]; then
-    echo 'CI_TEAM_ID must contain ten uppercase letters or digits.' >&2
+if [ "${#VOLTA_APPLE_TEAM_ID}" -ne 10 ]; then
+    echo 'VOLTA_APPLE_TEAM_ID must contain ten uppercase letters or digits.' >&2
     exit 1
 fi
 
@@ -50,7 +50,7 @@ include:
   - path: '$PWD/project.yml'
 settings:
   base:
-    DEVELOPMENT_TEAM: '$CI_TEAM_ID'
+    DEVELOPMENT_TEAM: '$VOLTA_APPLE_TEAM_ID'
     CURRENT_PROJECT_VERSION: '$CI_BUILD_NUMBER'
 EOF
 "$xcodegen_bin" generate --spec "$work_dir/cloud.yml" --project-root "$PWD" --project "$PWD"

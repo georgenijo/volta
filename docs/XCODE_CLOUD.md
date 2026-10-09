@@ -11,6 +11,8 @@ matches CoachOS/HomeOS: archive on relevant `main` changes, then internal TestFl
   `scripts/ios-build.sh` (the local generation contract).
 - Environment: pin Xcode **26.6** (local build `17F113`), with the iOS 26 SDK.
   Upgrade deliberately after validation.
+- Set workflow environment variable `VOLTA_APPLE_TEAM_ID` to the owner's
+  ten-character Apple Developer signing team ID. Keep the value out of Git.
 - Action: Archive, iOS, configuration `Release`. No simulator, test or screenshot
   actions are needed for this delivery workflow.
 - Post-action: TestFlight Internal Testing, group `Internal` (owner creates or
@@ -24,7 +26,7 @@ Generate locally with the intended team before opening Xcode to discover the
 archivable product (`APPLE_TEAM_ID` is supplied locally, not committed):
 
 ```sh
-CI_PRIMARY_REPOSITORY_PATH="$PWD" CI_BUILD_NUMBER=1 CI_TEAM_ID="$APPLE_TEAM_ID" \
+CI_PRIMARY_REPOSITORY_PATH="$PWD" CI_BUILD_NUMBER=1 VOLTA_APPLE_TEAM_ID="$APPLE_TEAM_ID" \
   ios/ci_scripts/ci_post_clone.sh
 xcodebuild -project ios/Volta.xcodeproj -describeAllArchivableProducts -json
 ```
@@ -41,9 +43,13 @@ The first live Cloud archive must confirm generated-project discovery works.
 
 Both targets inherit marketing version `1.0` and local build number `1`. Post-clone
 uses [Apple's `CI_BUILD_NUMBER`](https://developer.apple.com/documentation/xcode/environment-variable-reference)
-and `CI_TEAM_ID` through a temporary XcodeGen settings overlay, so app and widget
-metadata and signing team match. Cloud supplies the team selected during setup;
-the public repo's privacy checks prohibit committing personal signing team IDs.
+and the explicitly configured `VOLTA_APPLE_TEAM_ID` through a temporary XcodeGen
+settings overlay, so app and widget metadata and signing team match. The first
+live Cloud build supplied an App Store Connect team UUID in `CI_TEAM_ID`, despite
+Apple's reference showing a ten-character signing ID. Do not use that variable
+for `DEVELOPMENT_TEAM`; the script requires the dedicated signing-team variable
+and fails before downloading tools if it is missing or malformed. The public
+repo's privacy checks prohibit committing personal signing team IDs.
 Use Cloud's integer build sequence; if an existing upload would collide, the owner
 must [set the next Cloud build number](https://developer.apple.com/documentation/xcode/setting-the-next-build-number-for-xcode-cloud-builds).
 Commit the app plist's version placeholders, but not the generated project,
@@ -52,7 +58,7 @@ temporary Cloud settings or `Signing.local.xcconfig`.
 ## Local check and live acceptance
 
 ```sh
-CI_PRIMARY_REPOSITORY_PATH="$PWD" CI_BUILD_NUMBER=42 CI_TEAM_ID="$APPLE_TEAM_ID" \
+CI_PRIMARY_REPOSITORY_PATH="$PWD" CI_BUILD_NUMBER=42 VOLTA_APPLE_TEAM_ID="$APPLE_TEAM_ID" \
   ios/ci_scripts/ci_post_clone.sh
 xcodebuild -project ios/Volta.xcodeproj -scheme Volta -configuration Release \
   -destination 'generic/platform=iOS' -archivePath ios/build/Volta.xcarchive \
