@@ -143,6 +143,7 @@ enum ScreenKit {
                 }
                 .padding(.vertical, 14)
                 .padding(.horizontal, 16)
+                .contentShape(Rectangle())
                 if showsDivider { Rectangle().fill(ScreenKit.hairline).frame(height: 1).padding(.leading, 16) }
             }
         }
