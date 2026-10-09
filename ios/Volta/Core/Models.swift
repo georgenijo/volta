@@ -157,6 +157,22 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
     var maxSpeedKph: Double?
     var avgSpeedKph: Double?
     var outsideTempAvgC: Double?
+    var startCity: String? = nil
+    var endCity: String? = nil
+    var ratedWhPerKm: Double? = nil
+    var electricityRatePerKwh: Double? = nil
+    var rateCurrency: String? = nil
+    var energySource: String? = nil
+    var driveScore: Int? = nil
+    var route: [DriveRoutePoint]? = nil
+
+}
+
+struct DriveRoutePoint: Codable, Hashable, Sendable {
+    var t: Date
+    var latitude: Double
+    var longitude: Double
+    var routeBreakBefore: Bool? = nil
 }
 
 struct DrivePoint: Codable, Hashable, Sendable {

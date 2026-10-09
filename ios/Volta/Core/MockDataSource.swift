@@ -47,8 +47,25 @@ struct MockDataSource: VoltaDataSource {
             let km = i % 9 == 8 ? 126.4 : 12.8 + Double(i % 7) * 3.1
             let duration = km / 0.76
             let start = ago(Double(i / 2) * 24 + (i % 2 == 0 ? 2 : 10))
-            return TripFixtures.summary(DriveSummary(id: i + 1, start: start, end: start.addingTimeInterval(duration * 60), startAddress: i % 2 == 0 ? "Union City, CA" : home, endAddress: i % 2 == 0 ? home : "Union City, CA", distanceKm: km, durationMin: duration, startBatteryLevel: 80, endBatteryLevel: max(20, 80 - Int(km / 4.7)), energyUsedKwh: km * 0.164, efficiencyWhPerKm: 164, maxSpeedKph: 104, avgSpeedKph: 45.6, outsideTempAvgC: 12 + Double(i % 10)))
+            return driveOverview(TripFixtures.summary(DriveSummary(id: i + 1, start: start, end: start.addingTimeInterval(duration * 60), startAddress: i % 2 == 0 ? "Union City, CA" : home, endAddress: i % 2 == 0 ? home : "Union City, CA", distanceKm: km, durationMin: duration, startBatteryLevel: 80, endBatteryLevel: max(20, 80 - Int(km / 4.7)), energyUsedKwh: km * 0.164, efficiencyWhPerKm: 164, maxSpeedKph: 104, avgSpeedKph: 45.6, outsideTempAvgC: 12 + Double(i % 10))))
         }
+    }
+    private func driveOverview(_ base: DriveSummary) -> DriveSummary {
+        var drive = base
+        drive.startCity = "Palo Alto"
+        drive.endCity = "Mountain View"
+        drive.ratedWhPerKm = 164
+        drive.energySource = "teslamate_rated_range"
+        let path = TripFixtures.detail(base)?.path
+        drive.route = path.map { points in
+            let stride = max(1, Int(ceil(Double(points.count) / 60)))
+            return points.enumerated().filter { $0.offset % stride == 0 || $0.offset == points.count - 1 }
+                .map { DriveRoutePoint(t: $0.element.t, latitude: $0.element.latitude, longitude: $0.element.longitude, routeBreakBefore: $0.element.routeBreakBefore) }
+        } ?? (0...24).map { i in
+            let fraction = Double(i) / 24
+            return DriveRoutePoint(t: drive.start.addingTimeInterval(drive.durationMin * 60 * fraction), latitude: 37.4419 + fraction * 0.16, longitude: -122.1430 + fraction * 0.135)
+        }
+        return drive
     }
     private var allCharges: [ChargeSummary] {
         guard !empty else { return [] }

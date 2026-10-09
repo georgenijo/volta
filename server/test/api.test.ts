@@ -650,3 +650,25 @@ describe('service log and charger locations', () => {
   });
 
 });
+
+describe('drive list parity inputs', () => {
+  test('cities use local address metadata; prices are energy-weighted before the drive', async () => {
+    await owner`UPDATE addresses SET city='Palo Alto', neighbourhood='Synthetic District'`;
+    await owner`UPDATE charging_processes SET end_date=(SELECT start_date-interval '1 hour' FROM drives WHERE id=1), cost=4,charge_energy_added=20 WHERE id=1`;
+    const d=await json('/v1/drives/1');
+    expect(d.startCity).toBe('Palo Alto'); expect(d.endCity).toBe('Palo Alto');
+    expect(d.electricityRatePerKwh).toBeCloseTo(.2); expect(d.rateCurrency).toBe('USD');
+    expect(d.energySource).toBe('teslamate_rated_range'); expect(d.driveScore).toBeGreaterThan(0);
+    const listed=(await json('/v1/vehicles/1/drives')).items.find((r:any)=>r.id===1);
+    expect(listed.route).toEqual(d.route); expect(d.route.length).toBeLessThanOrEqual(64);
+    await owner`UPDATE addresses SET city=NULL`;
+    expect((await json('/v1/drives/1')).startCity).toBeTruthy();
+  });
+  test('rated-only boundary positions work; distant interior points do not fill an endpoint', async () => {
+    await owner`UPDATE drives SET start_rated_range_km=NULL,end_rated_range_km=NULL WHERE id=1`;
+    await owner`UPDATE positions SET ideal_battery_range_km=NULL WHERE drive_id=1`;
+    expect((await json('/v1/drives/1')).energyUsedKwh).toBeGreaterThan(0);
+    await owner`UPDATE positions SET rated_battery_range_km=NULL WHERE id=3`;
+    expect((await json('/v1/drives/1')).energyUsedKwh).toBeNull();
+  });
+});

@@ -240,6 +240,7 @@ struct TripRate: Equatable, Sendable {
     enum Source: Equatable, Sendable {
         /// Set by the user on this device.
         case manual
+        case chargeAverage
         /// Cost ÷ energy added of the most recent priced charge before the trip.
         case previousCharge(place: String?, date: Date)
     }

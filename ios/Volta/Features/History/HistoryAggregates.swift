@@ -99,10 +99,10 @@ struct DriveTotals: Equatable {
     init(_ drives: [DriveSummary]) {
         distanceKm = drives.reduce(0) { $0 + $1.distanceKm }
         self.drives = drives.count
-        energyUsedKwh = PartialSum(drives.map(\.energyUsedKwh))
-        let measured = drives.filter { $0.energyUsedKwh != nil }
+        energyUsedKwh = PartialSum(drives.map(\.costableEnergyKwh))
+        let measured = drives.filter { $0.costableEnergyKwh != nil }
         let km = measured.reduce(0) { $0 + $1.distanceKm }
-        let kwh = measured.reduce(0) { $0 + ($1.energyUsedKwh ?? 0) }
+        let kwh = measured.reduce(0) { $0 + ($1.costableEnergyKwh ?? 0) }
         efficiencyWhPerKm = km > 0 ? kwh * 1000 / km : nil
     }
 

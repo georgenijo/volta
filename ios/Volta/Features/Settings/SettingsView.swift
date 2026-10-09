@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(AppModel.self) private var model
+    @State private var editingElectricityRate = false
     @State private var vehicle: Vehicle?
     @State private var placeCount: Int?
 
@@ -27,6 +28,12 @@ struct SettingsView: View {
                 row("car.fill", "Vehicle", vehicle.map { [$0.name, $0.model].compactMap { $0 }.joined(separator: " · ") } ?? "Manage your Tesla",
                     trailing: vehicle == nil ? nil : "Active", trailingTint: ScreenKit.green) { VehicleSettingsView() }
                 row("bolt.fill", "Charging", "Session pricing") { ChargingSettingsView() }
+                Button { editingElectricityRate = true } label: {
+                    ScreenKit.CapsRow(symbol: "dollarsign.circle", title: "Electricity rate, $/kWh",
+                        subtitle: "Fallback for estimated drive costs; default $0.20/kWh",
+                        trailing: String(format: "$%.3f", model.settings.electricityRate))
+                }.buttonStyle(.plain)
+
                 row("slider.horizontal.3", "General", "Units, currency & language",
                     trailing: model.units.distance == .miles ? "Miles" : "Km") { GeneralSettingsView() }
                 row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places") { PlacesView() }
@@ -38,6 +45,10 @@ struct SettingsView: View {
             }
             .padding(.top, 4)
             .padding(.bottom, ScreenKit.bottomBarClearance)
+        }
+        .sheet(isPresented: $editingElectricityRate) {
+            ElectricityRateSettingsEditor(settings: model.settings)
+                .presentationDetents([.medium])
         }
         .accessibilityIdentifier("scroll.settings")
         .screenKitPage("Settings")
@@ -133,4 +144,32 @@ struct SettingsWordmark: View {
 
 #Preview("Empty") {
     NavigationStack { SettingsView() }.voltaPreviewEnvironment(empty: true)
+}
+
+private struct ElectricityRateSettingsEditor: View {
+    var settings: UserSettings
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    private var value: Double? {
+        guard let v = Double(text.replacingOccurrences(of: ",", with: ".")), v.isFinite, v >= 0 else { return nil }
+        return v
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Electricity rate, $/kWh", text: $text).keyboardType(.decimalPad)
+                } footer: {
+                    Text("Used for estimated drive costs when TeslaMate has no charge cost in a known currency. Real charge costs take precedence. USD per kWh; 0 means free. Stored on this device. This replaces the earlier per-vehicle manual trip-rate editor. Earlier saved rates are preserved but no longer used; enter your USD fallback here.")
+                }
+            }
+            .navigationTitle("Electricity rate")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { if let value { settings.electricityRate = value }; dismiss() }.disabled(value == nil)
+                }
+            }
+        }.onAppear { text = String(settings.electricityRate) }
+    }
 }

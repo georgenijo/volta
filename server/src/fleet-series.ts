@@ -1,11 +1,43 @@
 import { createHash } from 'node:crypto';
 import type { DB } from './db';
+import { endpointEnergy } from './drive-parity';
 
 const sampleLimit = 2000, gapLimit = 2000;
 
 /** Reads only private recorded history. No Tesla request, geocoder or elevation API. */
 export class FleetSeries {
   constructor(private sql: DB) {}
+
+  /** Endpoint deltas only for exactly bound cars, closed drives and uninterrupted signals. */
+  async driveEnergy(ids: number[]) {
+    const out = new Map<number, { energy: number | null; source: string | null }>();
+    const drives = await this.sql`SELECT d.id,d.car_id,d.start_date AS start,d.end_date AS finish,b.vin_digest,c.vin
+      FROM public.drives d JOIN public.cars c ON c.id=d.car_id
+      JOIN volta_telemetry.api_vehicle_bindings b ON b.vehicle_id=c.id
+      WHERE d.id=ANY(${ids}::integer[]) AND d.end_date IS NOT NULL`;
+    for (const d of drives) {
+      if (typeof d.vin!=='string' || !/^[A-HJ-NPR-Z0-9]{17}$/.test(d.vin)) continue;
+      const digest=createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(d.vin,'utf8').digest('hex');
+      if (d.vin_digest!==digest) continue;
+      const points=await this.sql`SELECT source_ts AS t,energy_remaining_kwh AS remaining,lifetime_energy_used_kwh AS lifetime,
+        invalid_fields AS invalid FROM volta_telemetry.session_samples
+        WHERE vehicle_id=${d.car_id} AND source_ts>=${d.start}::timestamp AT TIME ZONE 'UTC'
+          AND source_ts<=${d.finish}::timestamp AT TIME ZONE 'UTC' ORDER BY source_ts`;
+      const gaps=await this.sql`SELECT 1 FROM volta_telemetry.gaps WHERE vehicle_id=${d.car_id}
+        AND start_ts<=${d.finish}::timestamp AT TIME ZONE 'UTC' AND end_ts>=${d.start}::timestamp AT TIME ZONE 'UTC' LIMIT 1`;
+      if (gaps.length) continue;
+      for (const [key,field,source,sign] of [['lifetime','LifetimeEnergyUsed','fleet_lifetime_energy',-1],['remaining','EnergyRemaining','fleet_energy_remaining',1]] as const) {
+        if (points.some(p => p.invalid?.includes(field))) continue;
+        const measured=points.filter(p => typeof p[key]==='number' && Number.isFinite(p[key]));
+        // The lifetime counter must never reset inside a drive.
+        if (key==='lifetime' && measured.some((p,i) => i>0 && p[key]<measured[i-1]![key])) continue;
+        const values=measured.map(p => ({t:p.t,value:sign*p[key]}));
+        const energy=endpointEnergy(values[0],values.at(-1),d.start,d.finish);
+        if (energy!==null) { out.set(d.id,{energy,source}); break; }
+      }
+    }
+    return out;
+  }
 
   async session(kind: 'drive' | 'charge', id: number) {
     const s = this.sql;

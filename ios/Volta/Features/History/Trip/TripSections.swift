@@ -15,8 +15,9 @@ struct TripHero: View {
                     .accessibilityIdentifier("screen.drive-detail")
                 Spacer(minLength: 12)
                 VStack(alignment: .trailing, spacing: 6) {
+                    if let score = summary.efficiencyScore { DriveScoreRing(score: score, size: 72) }
                     if let eff = summary.efficiencyWhPerKm {
-                        BigNumber(VoltaFormat.number(units.efficiencyValue(whPerKm: eff), digits: 0), unit: units.efficiencyUnit, size: 26)
+                        BigNumber(VoltaFormat.number(units.efficiencyValue(whPerKm: eff), digits: 0), unit: units.efficiencyUnit, size: 20)
                         GradientGauge(value: TripHero.efficiencyFraction(eff), colors: TripHero.efficiencyColors, knob: .ring, height: 4)
                             .frame(width: 128)
                     } else {
@@ -27,8 +28,8 @@ struct TripHero: View {
                 .padding(.top, 6)
             }
             VStack(alignment: .leading, spacing: 12) {
-                endpoint(summary.startAddress, level: summary.startBatteryLevel, color: HistoryTheme.green)
-                endpoint(summary.endAddress, level: summary.endBatteryLevel, color: HistoryTheme.red)
+                endpoint(summary.startCity ?? summary.startAddress, level: summary.startBatteryLevel, color: HistoryTheme.green)
+                endpoint(summary.endCity ?? summary.endAddress, level: summary.endBatteryLevel, color: HistoryTheme.red)
             }
             Text(dateLine)
                 .voltaLabelStyle()
@@ -299,7 +300,9 @@ struct TripCostCard: View {
     private func sourceText(_ rate: TripRate) -> String {
         switch rate.source {
         case .manual:
-            return "Energy used × your rate."
+            return "Estimated · energy used × Settings electricity rate (USD)."
+        case .chargeAverage:
+            return "Estimated · energy used × energy-weighted average of priced TeslaMate charges before this drive."
         case .previousCharge(let place, let date):
             let where_ = place.map { " at \($0)" } ?? ""
             let day = date.formatted(date: .abbreviated, time: .omitted)

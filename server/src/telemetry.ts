@@ -5,6 +5,7 @@ import type { ListInput } from './validation';
 import { summaryPeriod } from './period';
 import { FleetSeries } from './fleet-series';
 import { FleetLive, liveValues } from './fleet-live';
+import { applyDriveEnergy, efficiencyScore } from './drive-parity';
 
 export class Telemetry {
   constructor(private sql: DB, private currency: string | null = null, private clock: () => Date = () => new Date(), private fleetEnabled = false,
@@ -145,6 +146,11 @@ export class Telemetry {
     return s`WITH rated_efficiency AS MATERIALIZED (SELECT car.id, ${this.efficiency()} AS value FROM public.cars car)
       SELECT d.id, to_char(d.start_date, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart", d.start_date AS start, d.end_date AS end,
       COALESCE(sg.name, sa.display_name) AS "startAddress", COALESCE(eg.name, ea.display_name) AS "endAddress",
+      COALESCE(NULLIF(sa.city,''), NULLIF(sg.name,''), NULLIF(sa.neighbourhood,''), NULLIF(sa.name,'')) AS "startCity",
+      COALESCE(NULLIF(ea.city,''), NULLIF(eg.name,''), NULLIF(ea.neighbourhood,''), NULLIF(ea.name,'')) AS "endCity",
+      ${efficiency} * 1000 AS "ratedWhPerKm",
+      CASE WHEN ${this.currency}::text IS NOT NULL THEN prices.rate END AS "electricityRatePerKwh",
+      CASE WHEN prices.rate IS NOT NULL THEN ${this.currency}::text END AS "rateCurrency",
       COALESCE(d.distance, COALESCE(d.end_km, ep.odometer) - COALESCE(d.start_km, sp.odometer)) AS "distanceKm",
       COALESCE(d.duration_min, extract(epoch FROM (COALESCE(d.end_date, now() AT TIME ZONE 'UTC') - d.start_date))/60) AS "durationMin",
       sp.battery_level AS "startBatteryLevel", ep.battery_level AS "endBatteryLevel",
@@ -152,6 +158,9 @@ export class Telemetry {
       (COALESCE(d.start_rated_range_km, first_range.rated_battery_range_km) - COALESCE(d.end_rated_range_km, last_range.rated_battery_range_km)) * ${efficiency} * 1000 / NULLIF(COALESCE(d.distance, COALESCE(d.end_km, ep.odometer) - COALESCE(d.start_km, sp.odometer)), 0) AS "efficiencyWhPerKm",
       d.speed_max AS "maxSpeedKph", COALESCE(d.distance, COALESCE(d.end_km, ep.odometer) - COALESCE(d.start_km, sp.odometer)) * 60 / NULLIF(COALESCE(d.duration_min, extract(epoch FROM(COALESCE(d.end_date, now() AT TIME ZONE 'UTC')-d.start_date))/60),0) AS "avgSpeedKph", d.outside_temp_avg AS "outsideTempAvgC"
       FROM ${source} d JOIN rated_efficiency eff ON eff.id = d.car_id
+      LEFT JOIN LATERAL (SELECT sum(cp.cost) / NULLIF(sum(cp.charge_energy_added),0) AS rate
+        FROM public.charging_processes cp WHERE cp.car_id=d.car_id AND cp.end_date<=d.start_date
+          AND cp.cost IS NOT NULL AND cp.cost>=0 AND cp.charge_energy_added>0) prices ON true
       LEFT JOIN public.positions startpoint ON startpoint.id = d.start_position_id
       LEFT JOIN LATERAL (SELECT * FROM public.positions WHERE d.start_position_id IS NULL AND drive_id = d.id AND odometer IS NOT NULL ORDER BY date, id LIMIT 1) live_start ON true
       LEFT JOIN LATERAL (SELECT COALESCE(startpoint.odometer, live_start.odometer) AS odometer, COALESCE(startpoint.battery_level, live_start.battery_level) AS battery_level,
@@ -159,8 +168,8 @@ export class Telemetry {
       LEFT JOIN public.positions endpoint ON endpoint.id = d.end_position_id
       LEFT JOIN LATERAL (SELECT * FROM public.positions WHERE d.end_position_id IS NULL AND drive_id = d.id ORDER BY date DESC, id DESC LIMIT 1) live ON true
       LEFT JOIN LATERAL (SELECT COALESCE(endpoint.odometer, live.odometer) AS odometer, COALESCE(endpoint.battery_level, live.battery_level) AS battery_level, COALESCE(endpoint.rated_battery_range_km, live.rated_battery_range_km) AS rated_battery_range_km) ep ON true
-      LEFT JOIN LATERAL (SELECT rated_battery_range_km FROM public.positions WHERE d.start_rated_range_km IS NULL AND drive_id = d.id AND ideal_battery_range_km IS NOT NULL AND odometer IS NOT NULL ORDER BY date, id LIMIT 1) first_range ON true
-      LEFT JOIN LATERAL (SELECT rated_battery_range_km FROM public.positions WHERE d.end_rated_range_km IS NULL AND drive_id = d.id AND ideal_battery_range_km IS NOT NULL AND odometer IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1) last_range ON true
+      LEFT JOIN LATERAL (SELECT rated_battery_range_km FROM public.positions WHERE d.start_rated_range_km IS NULL AND drive_id = d.id AND rated_battery_range_km IS NOT NULL AND date<=d.start_date+interval '120 seconds' ORDER BY date, id LIMIT 1) first_range ON true
+      LEFT JOIN LATERAL (SELECT rated_battery_range_km FROM public.positions WHERE d.end_rated_range_km IS NULL AND drive_id = d.id AND rated_battery_range_km IS NOT NULL AND date>=COALESCE(d.end_date,now() AT TIME ZONE 'UTC')-interval '120 seconds' ORDER BY date DESC, id DESC LIMIT 1) last_range ON true
       LEFT JOIN public.addresses sa ON sa.id = d.start_address_id LEFT JOIN public.addresses ea ON ea.id = d.end_address_id
       LEFT JOIN public.geofences sg ON sg.id = d.start_geofence_id LEFT JOIN public.geofences eg ON eg.id = d.end_geofence_id`;
   }
@@ -181,13 +190,15 @@ export class Telemetry {
       AND (${q.before}::timestamp IS NULL OR (start_date, id) < (${q.before}::timestamp, ${q.beforeId}::integer))
       ORDER BY start_date DESC, id DESC LIMIT ${q.limit + 1})`;
     const rows = await this.sql`${this.driveSelect(source)} ORDER BY d.start_date DESC, d.id DESC`;
-        return rows;
+    await this.enrichDrives(rows);
+    return rows;
   }
   async drive(id: number) {
     const [summary] = await this.sql`${this.driveSelect()} WHERE d.id = ${id}`;
     if (!summary) throw missing();
     const path = await this.sql`SELECT date AS t, latitude, longitude, speed AS "speedKph", power AS "powerKw", elevation AS "elevationM", battery_level AS "batteryLevel" FROM public.positions WHERE drive_id = ${id} ORDER BY date, id`;
     const [elevation] = await this.sql`SELECT ascent AS "elevationGainM" FROM public.drives WHERE id = ${id}`;
+    await this.enrichDrives([summary]);
     const { _cursorStart, ...fields } = summary;
     this.requireDrive(fields);
     return { ...fields, path, elevationGainM: elevation?.elevationGainM ?? null,
@@ -238,6 +249,36 @@ export class Telemetry {
       AND (${q.to}::timestamp IS NULL OR cp.start_date<${q.to}::timestamp)
       AND (${q.before}::timestamp IS NULL OR (cp.start_date,cp.id)<(${q.before}::timestamp,${q.beforeId}::integer))
       ORDER BY cp.start_date DESC,cp.id DESC LIMIT ${q.limit+1}`;
+  }
+  /** One bounded route query per page; no per-drive detail fetch or geocoder. */
+  private async enrichDrives(rows: Row[]) {
+    if (!rows.length) return;
+    const ids = rows.map(r => r.id);
+    const routes = await this.sql`WITH points AS (
+      SELECT drive_id,date AS t,latitude,longitude,
+        row_number() OVER(PARTITION BY drive_id ORDER BY date,id) AS rn,
+        count(*) OVER(PARTITION BY drive_id) AS n,
+        date-lag(date) OVER(PARTITION BY drive_id ORDER BY date,id) AS gap
+      FROM public.positions WHERE drive_id=ANY(${ids}::integer[]) AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180
+    ), marked AS (
+      SELECT *,sum(CASE WHEN gap>interval '120 seconds' THEN 1 ELSE 0 END) OVER(PARTITION BY drive_id ORDER BY rn) AS segment FROM points
+    ), selected AS (
+      SELECT * FROM marked WHERE rn=1 OR rn=n OR mod(rn-1,greatest(1,ceil(n/62.0)::integer))=0
+    ) SELECT drive_id,t,latitude,longitude,
+      COALESCE(segment<>lag(segment) OVER(PARTITION BY drive_id ORDER BY rn),false) AS "routeBreakBefore"
+      FROM selected ORDER BY drive_id,rn`;
+    let energy = new Map<number, { energy: number | null; source: string | null }>();
+    const missingEnergyIds = rows.filter(r => r.energyUsedKwh == null || !Number.isFinite(r.energyUsedKwh)
+      || r.energyUsedKwh < 0 || (r.distanceKm > 0 && r.energyUsedKwh === 0)).map(r => r.id);
+    if (this.fleetEnabled && missingEnergyIds.length) {
+      try { energy = await new FleetSeries(this.sql).driveEnergy(missingEnergyIds); }
+      catch { this.log({event:'drive_energy_failed',code:'telemetry_query_failed'}); }
+    }
+    for (const row of rows) {
+      applyDriveEnergy(row, energy.get(row.id));
+      row.driveScore = efficiencyScore(row.efficiencyWhPerKm, row.ratedWhPerKm);
+      row.route = routes.filter(p => p.drive_id===row.id).map(({drive_id, ...point}) => point);
+    }
   }
   private chargeSelect() {
     const s = this.sql;
