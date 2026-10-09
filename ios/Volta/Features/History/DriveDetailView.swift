@@ -337,7 +337,8 @@ struct DriveDetailView: View {
 
     private var batteryAccessory: String? {
         guard let from = summary.startBatteryLevel, let to = summary.endBatteryLevel else { return nil }
-        return "\(from)% → \(to)%"
+        let delta = to - from
+        return "\(from)% → \(to)% · \(delta > 0 ? "+" : "")\(delta)%"
     }
 
     private func chartCard(_ title: String, _ icon: String, _ color: Color, _ unit: String, series: TripChartSeries?,
