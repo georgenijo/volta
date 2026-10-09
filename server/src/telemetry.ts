@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
 import { ApiError, missing } from './errors';
 import type { ListInput } from './validation';
@@ -156,6 +157,52 @@ export class Telemetry {
     this.requireDrive(fields);
     return { ...fields, path, elevationGainM: elevation?.elevationGainM ?? null,
       ...(this.fleetEnabled ? {telemetry:await this.fleetSession('drive',id)} : {}) };
+  }
+  async serviceOdometer(id: number) {
+    const [tm] = await this.sql`SELECT km AS "odometerKm",t AS "recordedAt" FROM (
+      (SELECT odometer AS km,date AS t FROM public.positions WHERE car_id=${id} AND odometer>=0 AND date<=now() AT TIME ZONE 'UTC' ORDER BY date DESC,id DESC LIMIT 1)
+      UNION ALL
+      (SELECT end_km,end_date FROM public.drives WHERE car_id=${id} AND end_km>=0 AND end_date<=now() AT TIME ZONE 'UTC' ORDER BY end_date DESC,id DESC LIMIT 1)
+    ) observations ORDER BY t DESC LIMIT 1`;
+    let result = { odometerKm: tm?.odometerKm ?? null, recordedAt: tm?.recordedAt ?? null, source: tm ? 'teslamate' : null };
+    if (this.fleetEnabled) {
+      try {
+        const [binding] = await this.sql`SELECT b.vin_digest,c.vin FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
+        if (binding?.vin && binding.vin_digest === createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(binding.vin).digest('hex')) {
+          const [live] = await this.sql`SELECT odometer_km AS "odometerKm",source_ts AS "recordedAt" FROM volta_telemetry.service_odometer WHERE vehicle_id=${id} AND source_ts<=now() ORDER BY source_ts DESC LIMIT 1`;
+          if (live?.odometerKm != null && live.odometerKm >= 0 && (!result.recordedAt || new Date(live.recordedAt)>new Date(result.recordedAt))) result = { odometerKm: live.odometerKm, recordedAt: live.recordedAt, source: 'fleet_telemetry' };
+        }
+      } catch { this.log({event:'service_odometer_unavailable',category:'optional_telemetry'}); }
+    }
+    return result;
+  }
+  private chargeLocationKey() {
+    return this.sql`CASE WHEN cp.geofence_id IS NOT NULL THEN 'g:'||cp.geofence_id
+      WHEN cp.address_id IS NOT NULL THEN 'a:'||cp.address_id ELSE 's:'||cp.id END`;
+  }
+  async chargerLocations(id: number) {
+    return this.sql`WITH sessions AS (
+      SELECT ${this.chargeLocationKey()} AS id,cp.start_date,cp.cost,cp.charge_energy_added AS energy,
+        COALESCE(g.name,a.display_name,'Recorded charging location') AS name,
+        COALESCE(g.latitude,p.latitude,a.latitude) AS latitude,COALESCE(g.longitude,p.longitude,a.longitude) AS longitude,
+        cp.charge_energy_used/NULLIF(cp.duration_min/60,0) AS power
+      FROM public.charging_processes cp LEFT JOIN public.geofences g ON g.id=cp.geofence_id
+      LEFT JOIN public.addresses a ON a.id=cp.address_id LEFT JOIN public.positions p ON p.id=cp.position_id WHERE cp.car_id=${id}
+    ) SELECT id,max(name) AS name,
+      (array_agg(latitude ORDER BY start_date DESC) FILTER(WHERE latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180))[1] AS latitude,
+      (array_agg(longitude ORDER BY start_date DESC) FILTER(WHERE latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180))[1] AS longitude,
+      count(*)::integer AS "sessionCount",max(start_date) AS "lastVisit",
+      CASE WHEN count(energy)=count(*) THEN sum(energy) END AS "energyAddedKwh",
+      avg(power) AS "avgPowerKw",count(power)::integer AS "powerSessionCount",
+      CASE WHEN count(cost)=count(*) THEN sum(cost) END AS cost,${this.currency}::text AS currency
+      FROM sessions GROUP BY id ORDER BY "lastVisit" DESC,id`;
+  }
+  async chargerSessions(id: number, location: string, q: ListInput) {
+    return this.sql`${this.chargeSelect()} WHERE cp.car_id=${id} AND ${this.chargeLocationKey()}=${location}
+      AND (${q.from}::timestamp IS NULL OR cp.start_date>=${q.from}::timestamp)
+      AND (${q.to}::timestamp IS NULL OR cp.start_date<${q.to}::timestamp)
+      AND (${q.before}::timestamp IS NULL OR (cp.start_date,cp.id)<(${q.before}::timestamp,${q.beforeId}::integer))
+      ORDER BY cp.start_date DESC,cp.id DESC LIMIT ${q.limit+1}`;
   }
   private chargeSelect() {
     const s = this.sql;

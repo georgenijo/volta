@@ -4,6 +4,7 @@
 BEGIN;
 \ir auth-schema.sql
 \ir history-schema.sql
+\ir service-schema.sql
 \ir auth-grants.sql
 \ir privilege-checks.sql
 COMMIT;

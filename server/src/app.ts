@@ -1,3 +1,4 @@
+import { ServiceLog } from './service';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { ApiError, invalid } from './errors';
@@ -8,7 +9,7 @@ import type { ChargingHistory } from './history';
 import { choice, integer, listInput, page, timeZone } from './validation';
 
 type Device = Awaited<ReturnType<Auth['authenticate']>>;
-export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object) => void = entry => console.log(JSON.stringify(entry)), tesla: TeslaLink | null = null, history: ChargingHistory | null = null) {
+export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object) => void = entry => console.log(JSON.stringify(entry)), tesla: TeslaLink | null = null, history: ChargingHistory | null = null, service: ServiceLog | null = null) {
   const app = new Hono<{ Variables: { device: Device } }>();
   app.use('*', async (c, next) => {
     const started = performance.now();
@@ -63,6 +64,31 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
   app.get('/v1/vehicles/:id/mileage', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.mileage(id, choice(c.req.query('bucket'), ['day','week','month'], 'month'))); });
   app.get('/v1/vehicles/:id/firmware', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.firmware(id)); });
   app.get('/v1/vehicles/:id/places', async c => { await telemetry.vehicle(integer(c.req.param('id'), 'id')); return c.json(await telemetry.places()); });
+  const services = () => { if (!service) throw new ApiError(503, 'service_unavailable', 'Service storage is unavailable'); return service; };
+  app.get('/v1/vehicles/:id/service', async c => {
+    const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
+    return c.json(await services().list(id, await telemetry.serviceOdometer(id)));
+  });
+  const serviceBody = async (c: any) => { try { return await c.req.json(); } catch { throw invalid('Expected JSON body'); } };
+  app.post('/v1/vehicles/:id/service', async c => {
+    const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
+    return c.json(await services().add(id, await serviceBody(c)), 201);
+  });
+  app.post('/v1/vehicles/:id/service/:item/events', async c => {
+    const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
+    return c.json(await services().complete(id, c.req.param('item'), await serviceBody(c)), 201);
+  });
+  app.get('/v1/vehicles/:id/charger-locations', async c => {
+    const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
+    return c.json(await telemetry.chargerLocations(id));
+  });
+  app.get('/v1/vehicles/:id/charger-locations/:location/sessions', async c => {
+    const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
+    const location = c.req.param('location');
+    if (!/^[gas]:[1-9]\d*$/.test(location)) throw invalid('Invalid charging location');
+    const scope = `${id}/charger-locations/${location}`, q = listInput(c.req.query(), scope);
+    return c.json(page(await telemetry.chargerSessions(id, location, q), q, scope));
+  });
   const linked = () => { if (!tesla) throw new ApiError(501, 'tesla_link_unavailable', 'Tesla sign-in is not set up on this server'); return tesla; };
   app.get('/v1/tesla/status', async c => c.json(tesla ? await tesla.status() : unavailableStatus));
   app.post('/v1/tesla/link', async c => c.json(await linked().start(c.get('device').id)));

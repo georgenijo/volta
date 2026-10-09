@@ -157,3 +157,67 @@ struct MockDataSource: VoltaDataSource {
     }
     func command(vehicleID: Int, name: String, params: [String: String]) async throws { throw VoltaError.commandsUnavailable }
 }
+
+extension MockDataSource {
+    func service(vehicleID: Int) async throws -> ServiceState {
+        try check(vehicleID); return await DemoServiceLog.shared.state(empty: empty, now: now)
+    }
+    func addService(vehicleID: Int, item: ServiceItemInput) async throws {
+        try check(vehicleID); await DemoServiceLog.shared.add(item, empty: empty)
+    }
+    func completeService(vehicleID: Int, itemID: String, event: ServiceEventInput) async throws {
+        try check(vehicleID); await DemoServiceLog.shared.complete(itemID, event: event, empty: empty)
+    }
+    func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation] {
+        try check(vehicleID)
+        guard !empty else { return [] }
+        return [ChargerLocation(id: "g:1", name: "Home", latitude: 37.4419, longitude: -122.1430, sessionCount: 12, lastVisit: ago(15), energyAddedKwh: 271.2, avgPowerKw: 7.7, powerSessionCount: 12, cost: 62.38, currency: "USD"),
+                ChargerLocation(id: "g:2", name: "Mountain View Supercharger", latitude: 37.4148, longitude: -122.0782, sessionCount: 3, lastVisit: ago(207), energyAddedKwh: 129.6, avgPowerKw: 104.3, powerSessionCount: 3, cost: nil, currency: nil)]
+    }
+    func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary> {
+        try check(vehicleID)
+        return try page(allCharges.filter { locationID == "g:1" ? !$0.fastCharger : $0.fastCharger }, cursor: cursor)
+    }
+}
+private actor DemoServiceLog {
+    static let shared = DemoServiceLog()
+    private var items: [Bool: [ServiceItem]] = [:]
+    private var events: [Bool: [ServiceEvent]] = [:]
+    private func initialize(empty: Bool, now: Date) {
+        guard items[empty] == nil else { return }
+        items[empty] = []; events[empty] = []
+        if !empty {
+            for preset in ServiceItemInput.presets { add(preset, empty: empty) }
+            for item in items[empty] ?? [] {
+                complete(item.id, event: .init(completedAt: now.addingTimeInterval(-200 * 86400), odometerKm: 31000), empty: empty)
+            }
+        }
+    }
+    func add(_ input: ServiceItemInput, empty: Bool) {
+        if items[empty] == nil { items[empty] = []; events[empty] = [] }
+        items[empty, default: []].append(.init(id: UUID().uuidString, name: input.name, intervalKm: input.intervalKm, intervalMonths: input.intervalMonths))
+    }
+    func complete(_ id: String, event: ServiceEventInput, empty: Bool) {
+        events[empty, default: []].insert(.init(id: UUID().uuidString, itemId: id, completedAt: event.completedAt, odometerKm: event.odometerKm), at: 0)
+    }
+    func state(empty: Bool, now: Date) -> ServiceState {
+        initialize(empty: empty, now: now)
+        let km: Double? = empty ? nil : 38642
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let calculated = (items[empty] ?? []).map { value in
+            var item = value
+            let event = (events[empty] ?? []).filter { $0.itemId == item.id }.max { $0.completedAt < $1.completedAt }
+            if let event {
+                item.nextDate = item.intervalMonths.flatMap { calendar.date(byAdding: .month, value: $0, to: event.completedAt) }
+                item.nextOdometerKm = item.intervalKm.flatMap { interval in event.odometerKm.map { $0 + interval } }
+                item.remainingKm = item.nextOdometerKm.flatMap { next in km.map { next - $0 } }
+                item.remainingDays = item.nextDate.map { Int(ceil($0.timeIntervalSince(now) / 86400)) }
+                let progressKm = item.remainingKm.flatMap { remaining in item.intervalKm.map { 1 - remaining / $0 } }
+                let progressDate = item.nextDate.map { now.timeIntervalSince(event.completedAt) / $0.timeIntervalSince(event.completedAt) }
+                item.progress = [progressKm, progressDate].compactMap { $0 }.max().map { min(1, max(0, $0)) }
+            }
+            return item
+        }
+        return ServiceState(odometerKm: km, recordedAt: empty ? nil : now, source: empty ? nil : "teslamate", items: calculated, events: events[empty] ?? [])
+    }
+}

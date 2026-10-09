@@ -24,6 +24,7 @@ GRANT SELECT ON public.cars, public.positions, public.drives, public.charging_pr
 -- No grants on private.tokens, unrelated tables, or future tables.
 \ir auth-schema.sql
 \ir history-schema.sql
+\ir service-schema.sql
 \ir auth-grants.sql
 \ir privilege-checks.sql
 COMMIT;

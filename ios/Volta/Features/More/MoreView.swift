@@ -14,20 +14,18 @@ struct MoreView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     section("Areas", dot: ScreenKit.blue, identifier: "screen.more", rows: [
                         .init(symbol: "chart.xyaxis.line", tint: ScreenKit.blue, title: "Stats", route: .stats),
-                        .init(symbol: "bolt", tint: ScreenKit.blue, title: "Automations", route: .comingLater(.automations), soon: true),
                     ])
                     section("Vehicle", dot: ScreenKit.mint, rows: [
                         .init(symbol: "battery.100percent.bolt", tint: ScreenKit.mint, title: "Battery Health", route: .batteryHealth),
                         .init(symbol: "thermometer.medium", tint: ScreenKit.mint, title: "Battery Climate", route: .batteryClimate),
                         .init(symbol: "circle.circle", tint: ScreenKit.mint, title: "Tires", route: .comingLater(.tires), soon: true),
-                        .init(symbol: "wrench.and.screwdriver", tint: ScreenKit.mint, title: "Maintenance", route: .comingLater(.maintenance), soon: true),
+                        .init(symbol: "wrench.and.screwdriver", tint: ScreenKit.mint, title: "Maintenance", route: .maintenance),
                         .init(symbol: "cpu", tint: ScreenKit.mint, title: "Firmware Tracker", route: .firmware),
                         .init(symbol: "gauge.with.needle", tint: ScreenKit.mint, title: "Mileage Tracker", route: .mileage),
                         .init(symbol: "checkmark.shield", tint: ScreenKit.mint, title: "Specs & Warranty", route: .specs),
                     ])
                     section("Explore", dot: ScreenKit.blue, rows: [
-                        .init(symbol: "mappin.and.ellipse", tint: ScreenKit.blue, title: "Charger Map", route: .comingLater(.chargerMap), soon: true),
-                        .init(symbol: "point.topleft.down.to.point.bottomright.curvepath", tint: ScreenKit.blue, title: "Plan a route", route: .comingLater(.planRoute), soon: true),
+                        .init(symbol: "mappin.and.ellipse", tint: ScreenKit.blue, title: "Charger Map", route: .chargerMap),
                     ])
 
                     switchVehicle.padding(.top, 36)

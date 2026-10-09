@@ -209,8 +209,8 @@ so no D row is `native-verified` or `source-verified`.
 
 | ID | Wattly feature | Status | Evidence | Gates | Next step |
 |---|---|---|---|---|---|
-| M1 | Service log with reminders and maintenance costs (13) | not-started | More "Maintenance" is `ComingLaterView` only | A private store is needed (Volta `volta` schema table plus endpoints); no dependency on Tesla. | Spec an API (`/v1/vehicles/{id}/service`) and local-first UI. |
-| M2 | Tire rotation / service intervals driven by mileage (13) | not-started | odometer is available | Depends on M1. | After M1. |
+| M1 | Service log with reminders and maintenance costs (13) | in-progress (placeholder-screens) | `MaintenanceView.swift`, `server/src/service.ts`, `deploy/service-schema.sql`: suggested/custom intervals, completion dates/odometers, persisted history and due progress | No maintenance costs or push reminders; displayed in-app. Administrator must apply the schema and grants before API rollout. | Review and merge; verify real data on device. |
+| M2 | Tire rotation / service intervals driven by mileage (13) | in-progress (placeholder-screens) | Maintenance uses newest TeslaMate positions/drive end odometer; optional newer ownership-validated Fleet Odometer; default rotation 6,250 mi | Due remains unknown without a completion baseline or current odometer. | Review and merge; apply optional `003_service_odometer.sql` for telemetry. |
 | M3 | 3D vehicle view and offline saved plan (13) | won't-build-as-is | none | Needs licensed 3D vehicle assets. Honest alternative: a 2D vehicle summary using Volta's own artwork. | None. |
 | M4 | Firmware: own install history and timeline (14) | implemented | `Features/Analytics/FirmwareTrackerView.swift`, `server` `firmware()` | TeslaMate `updates` table. | None. |
 | M5 | Firmware: fleet rollout statistics, release notes, filters (14) | won't-build-as-is | none | Rollout stats are Wattly's community data; release notes come from Tesla/third parties with no authoritative API. Honest alternative: link out to Tesla's release notes page and show only the user's own history. | Optional: static link to Tesla release notes. |
@@ -224,9 +224,9 @@ so no D row is `native-verified` or `source-verified`.
 
 | ID | Wattly feature | Status | Evidence | Gates | Next step |
 |---|---|---|---|---|---|
-| P1 | Nearby charger map with filters (12) | need-data | More "Charger Map" is `ComingLaterView` only | Needs a charger dataset or API (Open Charge Map, Tesla supercharger locations, ChargePoint, etc.) with licence terms; location queries leave the server. George must pick a source. | Choose a provider; start with George's own visited charging places (already recorded). |
+| P1 | Nearby charger map with filters (12) | in-progress (own-history alternative) | `ChargerMapView.swift`, `Telemetry.chargerLocations/chargerSessions`: recorded TeslaMate charging places with per-place sessions | Own visited locations only; no nearby dataset, live stalls, geocoding, search or directions. Null coordinates remain list-only. | Review and merge; verify real TeslaMate history. |
 | P2 | Live stall availability (12) | need-data | none | Needs a provider with live availability or Tesla's signals; not available from TeslaMate. | With P1. |
-| P3 | Route planner with arrival charge estimate (12) | need-data | More "Plan a route" is `ComingLaterView` only | Needs routing and elevation APIs and Volta's own consumption model (from S1). Not a Wattly algorithm. | Spec after P1; use MapKit routing if the licence suffices. |
+| P3 | Route planner with arrival charge estimate (12) | won't-build-as-is | Plan a route row removed on placeholder-screens | Sending coordinates to routing providers is forbidden. No local routing engine or reliable own-history range model exists on this branch. | No routing request or third-party location processing. |
 | P4 | Community prices, photos, comments (12, 18) | won't-build-as-is | none | Requires a multi-user community backend; Volta is single-owner and private. | Honest alternative: private notes per place in the `volta` schema. |
 
 ### Notifications, automations, Apple surfaces (areas 11, 20)
@@ -239,7 +239,7 @@ so no D row is `native-verified` or `source-verified`.
 | N4 | Shortcuts / App Intents / Siri (20) | not-started | none (no `AppIntent` types in the repo) | Read intents need only cached state. Command intents depend on K1. | Spec read-only intents (battery, range, charging state) first. |
 | N5 | Apple Watch app and complications (20) | not-started | none | Needs a watchOS target and shared cached state; controls depend on K1. | Spec after N4. |
 | N6 | Push notifications (charge complete, plugged-in reminder, alerts) (11, 20) | need-consent | none | Needs APNs (a push key on the paid team), a server sender, minimal payloads, and George's privacy decision (Apple processes payloads); needs reliable events (telemetry or collector). | George decision on APNs; minimal-payload design. |
-| N7 | Automations: triggers x actions (battery, temperature, location, schedule, alerts) (11) | not-started | More "Automations" is `ComingLaterView` only | Server-side rules need telemetry that is fresh enough, plus K1 for actions. Notification-only rules need N6. Location rules are privacy-sensitive; no auto-unlock from ambiguous triggers (ROADMAP). | Spec notification-only rules first with dry-run and audit log. |
+| N7 | Automations: triggers x actions (11) | not-started; row removed | Removed on placeholder-screens: commander has manual sentry/climate/charging commands, but API forwarding returns 501, no scheduler/evaluator and no notification sender | A real unattended action requires an evaluator and functioning action/delivery path; scheduled departure/charging commands are absent. | Reintroduce only with tested server evaluation and authorized actions/delivery. |
 | N8 | Shared lock-screen / Control Center controls (20) | not-started | none | Depends on K1. | After K1. |
 
 ### Personalization, data, security (areas 21, 22)
@@ -368,3 +368,63 @@ Uncertainties:
    `<!-- TRIP-CONTRACT-REQUESTS -->` marker; replace the marker line only when
    filling it in, and keep the heading.
 6. Update the "Last updated" date and baseline commit at the top.
+
+## Placeholder sweep on feat/placeholder-screens
+
+Scope: app and widgets, inspected with ComingLater/coming/soon/placeholder/TODO,
+empty-state, and literal em-dash searches. Screens owned by other workers were
+read only. This is branch evidence, not merged/live acceptance.
+
+- **Tires**: the only remaining More ComingLater destination and Soon row
+  (`MoreView.swift`, `MoreRoute.swift`, `ComingLaterView.swift`). Another worker
+  owns it; ComingLater stays until that branch replaces Tires.
+- **Dashboard Pack Temp**: hardcoded em dash and N/A, not a recorded pack
+  temperature (`DashboardView.metricGrid`). **Weather** uses vehicle ambient
+  temperature plus an icon inferred from temperature/device hour and a
+  time-of-day gauge; no weather provider (`DashboardView.weatherCard`).
+- **Controls/climate**: controls default disabled (`commandsAvailable=false`);
+  command forwarding returns 501 on this baseline. Unknown lock/sentry/charge
+  limit/temperature fields render Unknown or em dash. Another worker owns this.
+- **Places / charging cost settings**: `PlacesView` is a real read-only geofence
+  map. `AccountSettingsView` charging-cost settings has a Home-rate fallback
+  “Coming later” card. Time-of-use rates
+  and editing tariffs are not implemented.
+- **Battery Climate** uses outdoor-temperature efficiency bands and estimated
+  range, not pack-temperature conditioning history. **Specs & Warranty** uses
+  TeslaMate vehicle facts but static US Model 3/Y Long Range warranty rules
+  and a device-local purchase date,
+  not a vehicle-specific Tesla warranty contract. Their missing readings use
+  em dashes; they are not empty-only screens.
+- **Battery Health, Stats, Mileage, Firmware, drive/charge/idle history, maps,
+  account/vehicle settings and vehicle switching** have real data paths and
+  specific empty states when no records/vehicle exist. Their conditional em
+  dashes denote unrecorded measurements, unknown costs/currency, missing sample
+  coverage or sparse analytics. They are not ComingLater screens.
+- **Widgets** have real app-written App Group snapshots. Provider placeholder
+  and gallery fixtures are WidgetKit preview data, not a live fake reading.
+  Missing snapshots show “Open Volta”; optional/stale readings render em dashes.
+  Refresh is app-driven, and Live Activities update while the app is active;
+  independent background network/push refresh is not implemented.
+- **Loading/design previews**: history skeleton blocks, dashboard redaction,
+  DesignSystem sample tiles and DEBUG demo fixtures are loading/preview paths.
+  No TODO implementation marker or other empty-only product screen was found.
+
+Maintenance sources: item names/intervals and completion date/odometer are owner
+entries in `volta.service_items/service_events`; next due/progress are derived
+from the latest dated completion. Odometer source/time is shown explicitly.
+Defaults are personal editable-on-creation reminders, not manufacturer guidance.
+Charger sources: grouping is geofence ID, else address ID, else session ID (no
+location inference); names/coordinates come only from TeslaMate geofences,
+addresses and positions. Session count/last visit/energy/cost use charging_processes.
+Average input power is the mean of recorded session energy-used divided by its
+recorded duration, with the measured-session count shown. Incomplete total energy
+or cost stays null; unknown currency is never substituted. MapKit supplies tiles.
+
+Branch validation (2026-10-09): isolated PostgreSQL 17 production bootstrap +
+`bun test` passed 109 tests (0 failures); server TypeScript typecheck and
+`scripts/privacy-check.sh` passed. Xcode 26.6 `scripts/ios-build.sh` on an iOS 26.5
+simulator built the app/widgets and passed 256 unit tests. Synthetic demo native
+flow checked Maintenance rendering and completion reset, Charger Map pins,
+location session navigation and charge detail. These observations do not claim
+real-car acceptance or production schema rollout. No private screenshots are
+tracked or attached to the PR.

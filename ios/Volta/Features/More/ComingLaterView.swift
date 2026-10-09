@@ -50,6 +50,6 @@ struct ComingLaterView: View {
 }
 
 #Preview {
-    NavigationStack { ComingLaterView(feature: .automations) }
+    NavigationStack { ComingLaterView(feature: .tires) }
         .preferredColorScheme(.dark)
 }

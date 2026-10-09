@@ -288,3 +288,18 @@ test('eight-hour co-timed electrical history has identical selection and coverag
   await owner`ANALYZE volta_telemetry.samples`;
   expect((await get('/v1/drives/1')).telemetry).toEqual(before);
 },30000);
+
+test('service odometer prefers only newer, valid, ownership-bound telemetry', async()=>{
+  const telemetry=new Telemetry(reader,'USD',undefined,true);
+  const base=await telemetry.serviceOdometer(1); expect(base.source).toBe('teslamate');
+  const t=new Date(Date.now()-1000);
+  await owner`INSERT INTO volta_telemetry.samples(vehicle_id,field,source_ts,received_at,value_num,invalid,quality,payload_id)
+    VALUES (1,'Odometer',${t},${t},7000,false,'ok','service-a')`;
+  const live=await telemetry.serviceOdometer(1); expect(live.source).toBe('fleet_telemetry'); expect(live.odometerKm).toBeCloseTo(11265.408);
+  await owner`INSERT INTO volta_telemetry.samples(vehicle_id,field,source_ts,received_at,value_num,invalid,quality,payload_id)
+    VALUES (1,'Odometer',${t},${t},7001,false,'ok','service-b')`;
+  expect((await telemetry.serviceOdometer(1)).source).toBe('teslamate');
+  await owner`DELETE FROM volta_telemetry.samples WHERE payload_id='service-b'`;
+  await owner`UPDATE volta_telemetry.vehicle_bindings SET vin_digest=repeat('0',64) WHERE vehicle_id=1`;
+  expect((await telemetry.serviceOdometer(1)).source).toBe('teslamate');
+});

@@ -239,3 +239,39 @@ estimated zero; no recorded climate boolean yields null. Stale, unfinished
 activity rows have unknown end times and extend to now in status/timeline/idle
 derivation; confirm TeslaMate collection before treating these as complete
 history.
+
+## Service log and recorded charging locations (placeholder-screens branch)
+
+All routes require device pairing and validate the TeslaMate vehicle ID. Volta
+is single-owner: service records belong to the vehicle, shared across paired
+phones, not to a phone installation. The API writes only its own `volta` schema.
+
+- `GET /v1/vehicles/{id}/service`: `{odometerKm, recordedAt, source, items, events}`.
+  Items have `id`, `name`, nullable `intervalKm/intervalMonths`, `nextDate`,
+  `nextOdometerKm`, `remainingKm`, `remainingDays`, `progress` (0–1 or null).
+  Events have `id`, `itemId`, `completedAt`, nullable `odometerKm`.
+- `POST /v1/vehicles/{id}/service`: `{name, intervalKm?, intervalMonths?}` → 201
+  item. At least one positive interval required; name ≤100 characters,
+  distance ≤1,000,000 km, whole months 1–1,200.
+- `POST /v1/vehicles/{id}/service/{item}/events`: `{completedAt, odometerKm?}`
+  → 201 event. UTC timestamp must be valid, nonfuture and ≥1970. Odometer
+  0–10,000,000 km or null. Backdated events remain in history; only the latest
+  dated event anchors due calculations. Calendar months clamp month-end dates.
+  A current odometer below the completion reading makes distance due unknown.
+- `GET /v1/vehicles/{id}/charger-locations`: array of `{id, name, latitude,
+  longitude, sessionCount, lastVisit, energyAddedKwh, avgPowerKw,
+  powerSessionCount, cost, currency}`. IDs are `g:<geofence>`, `a:<address>` or
+  `s:<session>` when no named location exists. Unknown coordinates stay null.
+  Total energy/cost requires every session to have that field. Average power is
+  mean recorded energy-used / duration-hours, not sample peak or rated power.
+- `GET /v1/vehicles/{id}/charger-locations/{location}/sessions`: normal
+  `Page<ChargeSummary>`, supporting limit/from/to/cursor; cursor scope binds
+  vehicle, location and filters. No geocoding/search/directions/Tesla calls.
+
+Before rolling out, an administrator applies `service-schema.sql` then
+`auth-grants.sql` in the database (bootstrap/auth recovery include both).
+Fleet odometer is optional behind FLEET_TELEMETRY_ENABLED and requires
+`deploy/telemetry/sql/003_service_odometer.sql` after migrations 001/002.
+A verified vehicle binding and a newer valid nonconflicting observation are
+required; otherwise the API uses the latest TeslaMate position/drive end reading.
+No deployment has been performed for this branch.

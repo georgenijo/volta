@@ -161,3 +161,18 @@ extension APIDataSource: TeslaAccountClient {
 private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
 }
+
+extension APIDataSource {
+    func service(vehicleID: Int) async throws -> ServiceState { try await get("vehicles/\(vehicleID)/service") }
+    func addService(vehicleID: Int, item: ServiceItemInput) async throws {
+        _ = try await request("vehicles/\(vehicleID)/service", method: "POST", body: JSONEncoder().encode(item))
+    }
+    func completeService(vehicleID: Int, itemID: String, event: ServiceEventInput) async throws {
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        _ = try await request("vehicles/\(vehicleID)/service/\(itemID)/events", method: "POST", body: encoder.encode(event))
+    }
+    func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation] { try await get("vehicles/\(vehicleID)/charger-locations") }
+    func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary> {
+        try await get("vehicles/\(vehicleID)/charger-locations/\(locationID)/sessions", query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
+    }
+}
