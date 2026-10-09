@@ -254,9 +254,9 @@ phones, not to a phone installation. The API writes only its own `volta` schema.
   item. At least one positive interval required; name ≤100 characters,
   distance ≤1,000,000 km, whole months 1–1,200.
 - `POST /v1/vehicles/{id}/service/{item}/events`: `{completedAt, odometerKm?}`
-  → 201 event. UTC timestamp must be valid, nonfuture and ≥1970. Odometer
+  → 201 event. UTC timestamp must be valid, with a nonfuture UTC calendar date and year ≥1970. The UI submits the start of the chosen local day. Odometer
   0–10,000,000 km or null. Backdated events remain in history; only the latest
-  dated event anchors due calculations. Calendar months clamp month-end dates.
+  dated event (latest recorded/edited when dates tie) anchors due calculations. Calendar months clamp month-end dates.
   A current odometer below the completion reading makes distance due unknown.
 - `GET /v1/vehicles/{id}/charger-locations`: array of `{id, name, latitude,
   longitude, sessionCount, lastVisit, energyAddedKwh, avgPowerKw,
@@ -275,3 +275,10 @@ Fleet odometer is optional behind FLEET_TELEMETRY_ENABLED and requires
 A verified vehicle binding and a newer valid nonconflicting observation are
 required; otherwise the API uses the latest TeslaMate position/drive end reading.
 No deployment has been performed for this branch.
+
+Service corrections: `PATCH /v1/vehicles/{id}/service/{item}` takes the same
+name/interval body as creation; `DELETE` on that path removes the item and all
+its events atomically. `PATCH /v1/vehicles/{id}/service-events/{event}` takes the
+completion body; `DELETE` removes that completion and recalculates due from the
+remaining history. Every mutation scopes the item/event to its vehicle. iOS
+exposes these via row menus and asks before deleting history.

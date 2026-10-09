@@ -80,7 +80,7 @@ command enablement remain separate approvals.
 
 | Layer | What is on main |
 |---|---|
-| iOS app | SwiftUI, iOS 26. Tabs: Dashboard, Charging, Drives, Idles, More. More hosts Stats, Battery Health, Battery Climate, Mileage, Firmware, Specs and Warranty, Switch Vehicle, Settings. Five More entries (Automations, Tires, Maintenance, Charger Map, Plan a route) route to `ComingLaterView`, a static placeholder. |
+| iOS app | SwiftUI, iOS 26. Tabs: Dashboard, Charging, Drives, Idles, More. More hosts Stats, Battery Health, Battery Climate, Mileage, Firmware, Specs and Warranty, Switch Vehicle, Settings. On placeholder-screens, Maintenance and Charger Map have data-backed destinations; Automations and Plan a route are removed. Only Tires routes to `ComingLaterView`, a static placeholder. |
 | iOS data path | `VoltaDataSource` protocol; `APIDataSource` for the real server, `MockDataSource` for previews and demo mode. Models in `ios/Volta/Core/Models.swift` mirror API.md. |
 | Widgets | `ios/VoltaWidgets/`: Home Screen (small, medium, large) and Lock Screen widgets, charging and driving Live Activities, fed by `WidgetSync` through the App Group. Updates only when the app refreshes status; no push. |
 | Server | `server/src/app.ts`: health, pair, me, vehicles, status, summary, timeline, drives, drive detail, charges, charge detail, idles, battery, mileage, firmware, places, Tesla link status/start/complete/cancel/disconnect. Commands route always returns `501 commands_unavailable`. Reads TeslaMate Postgres only. |
@@ -421,10 +421,19 @@ recorded duration, with the measured-session count shown. Incomplete total energ
 or cost stays null; unknown currency is never substituted. MapKit supplies tiles.
 
 Branch validation (2026-10-09): isolated PostgreSQL 17 production bootstrap +
-`bun test` passed 109 tests (0 failures); server TypeScript typecheck and
+`bun test` passed 115 tests (0 failures); server TypeScript typecheck and
 `scripts/privacy-check.sh` passed. Xcode 26.6 `scripts/ios-build.sh` on an iOS 26.5
-simulator built the app/widgets and passed 256 unit tests. Synthetic demo native
+simulator built the app/widgets and passed 257 unit tests. Synthetic demo native
 flow checked Maintenance rendering and completion reset, Charger Map pins,
 location session navigation and charge detail. These observations do not claim
 real-car acceptance or production schema rollout. No private screenshots are
 tracked or attached to the PR.
+
+Review fixes add correction/removal menus for items and completion records,
+calendar-day completion timestamps, readable number entry, consistent Unicode
+name validation, preserved session pages on returning from detail, guarded
+optional migration grants, and noninteger duration power calculations. Scale
+verification includes the service endpoint: 62–67 ms with 1,722,500 positions;
+all recorded odometers remain eligible even when battery-range fields are absent.
+Suggested interval presets require an owner-added item and a logged completion;
+no fictitious maintenance baseline is created automatically.

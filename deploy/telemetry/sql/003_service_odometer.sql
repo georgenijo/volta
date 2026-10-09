@@ -8,5 +8,9 @@ SELECT vehicle_id, source_ts,
 FROM volta_telemetry.samples WHERE field='Odometer'
 GROUP BY vehicle_id, source_ts;
 REVOKE ALL ON volta_telemetry.service_odometer FROM PUBLIC;
-GRANT SELECT ON volta_telemetry.service_odometer TO volta_readonly;
+DO $$ BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname='volta_readonly') THEN
+    GRANT SELECT ON volta_telemetry.service_odometer TO volta_readonly;
+  END IF;
+END $$;
 COMMIT;

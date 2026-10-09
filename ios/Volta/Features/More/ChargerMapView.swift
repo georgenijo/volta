@@ -70,6 +70,7 @@ struct ChargerLocationSessionsView: View {
     @Environment(\.vehicleID) private var vehicleID
     @State private var state: Loadable<[ChargeSummary]> = .loading
     @State private var cursor: String?
+    @State private var loadedVehicle: Int?
     @State private var paging = false
     @State private var pageError: String?
     @State private var generation = UUID()
@@ -94,7 +95,7 @@ struct ChargerLocationSessionsView: View {
                     if cursor != nil { Button(paging ? "Loading…" : "Load more sessions") { Task { await load(reset: false) } }.disabled(paging) }
                 }
             }.padding(.horizontal, ScreenKit.horizontalPadding).padding(.bottom, ScreenKit.bottomBarClearance)
-        }.screenKitPage(location.name).task(id: vehicleID) { await load(reset: true) }
+        }.screenKitPage(location.name).task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load(reset: true) } }
     }
     @MainActor private func load(reset: Bool) async {
         if !reset && paging { return }
@@ -103,10 +104,12 @@ struct ChargerLocationSessionsView: View {
         let next = reset ? nil : cursor
         if reset { state = .loading; cursor = nil }
         paging = true; pageError = nil
+        defer { if generation == token { paging = false } }
         do {
             let result = try await dataSource.chargerSessions(vehicleID: id, locationID: location.id, cursor: next)
             guard !Task.isCancelled, generation == token, vehicleID == id else { return }
             var seen = Set(previous.map(\.id))
+            loadedVehicle = id
             state = .loaded(previous + result.items.filter { seen.insert($0.id).inserted }); cursor = result.nextCursor
         } catch {
             guard !Task.isCancelled, generation == token, vehicleID == id else { return }

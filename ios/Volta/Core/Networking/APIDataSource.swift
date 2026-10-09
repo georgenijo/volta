@@ -171,6 +171,19 @@ extension APIDataSource {
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         _ = try await request("vehicles/\(vehicleID)/service/\(itemID)/events", method: "POST", body: encoder.encode(event))
     }
+    func updateService(vehicleID: Int, itemID: String, item: ServiceItemInput) async throws {
+        _ = try await request("vehicles/\(vehicleID)/service/\(itemID)", method: "PATCH", body: JSONEncoder().encode(item))
+    }
+    func deleteService(vehicleID: Int, itemID: String) async throws {
+        _ = try await request("vehicles/\(vehicleID)/service/\(itemID)", method: "DELETE")
+    }
+    func updateServiceEvent(vehicleID: Int, eventID: String, event: ServiceEventInput) async throws {
+        let encoder=JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        _ = try await request("vehicles/\(vehicleID)/service-events/\(eventID)", method: "PATCH", body: encoder.encode(event))
+    }
+    func deleteServiceEvent(vehicleID: Int, eventID: String) async throws {
+        _ = try await request("vehicles/\(vehicleID)/service-events/\(eventID)", method: "DELETE")
+    }
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation] { try await get("vehicles/\(vehicleID)/charger-locations") }
     func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary> {
         try await get("vehicles/\(vehicleID)/charger-locations/\(locationID)/sessions", query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])

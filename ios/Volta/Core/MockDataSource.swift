@@ -168,6 +168,18 @@ extension MockDataSource {
     func completeService(vehicleID: Int, itemID: String, event: ServiceEventInput) async throws {
         try check(vehicleID); await DemoServiceLog.shared.complete(itemID, event: event, empty: empty)
     }
+    func updateService(vehicleID: Int, itemID: String, item: ServiceItemInput) async throws {
+        try check(vehicleID); await DemoServiceLog.shared.update(itemID, input: item, empty: empty)
+    }
+    func deleteService(vehicleID: Int, itemID: String) async throws {
+        try check(vehicleID); await DemoServiceLog.shared.remove(itemID, empty: empty)
+    }
+    func updateServiceEvent(vehicleID: Int, eventID: String, event: ServiceEventInput) async throws {
+        try check(vehicleID); await DemoServiceLog.shared.updateEvent(eventID, input: event, empty: empty)
+    }
+    func deleteServiceEvent(vehicleID: Int, eventID: String) async throws {
+        try check(vehicleID); await DemoServiceLog.shared.removeEvent(eventID, empty: empty)
+    }
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation] {
         try check(vehicleID)
         guard !empty else { return [] }
@@ -200,6 +212,18 @@ private actor DemoServiceLog {
     func complete(_ id: String, event: ServiceEventInput, empty: Bool) {
         events[empty, default: []].insert(.init(id: UUID().uuidString, itemId: id, completedAt: event.completedAt, odometerKm: event.odometerKm), at: 0)
     }
+    func update(_ id: String, input: ServiceItemInput, empty: Bool) {
+        guard let index=items[empty]?.firstIndex(where: { $0.id == id }) else { return }
+        items[empty]?[index].name=input.name; items[empty]?[index].intervalKm=input.intervalKm; items[empty]?[index].intervalMonths=input.intervalMonths
+    }
+    func remove(_ id: String, empty: Bool) {
+        items[empty]?.removeAll { $0.id == id }; events[empty]?.removeAll { $0.itemId == id }
+    }
+    func updateEvent(_ id: String, input: ServiceEventInput, empty: Bool) {
+        guard let index=events[empty]?.firstIndex(where: { $0.id == id }) else { return }
+        events[empty]?[index].completedAt=input.completedAt; events[empty]?[index].odometerKm=input.odometerKm
+    }
+    func removeEvent(_ id: String, empty: Bool) { events[empty]?.removeAll { $0.id == id } }
     func state(empty: Bool, now: Date) -> ServiceState {
         initialize(empty: empty, now: now)
         let km: Double? = empty ? nil : 38642

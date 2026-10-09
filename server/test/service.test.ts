@@ -18,3 +18,13 @@ test('unknown baselines stay unknown; earliest interval drives progress', () => 
   expect(due(item,undefined,10000,now)).toMatchObject({remainingKm:null,remainingDays:null,progress:null});
   expect(due(item,{completedAt:'2026-01-01',odometerKm:9000},10100,now)).toMatchObject({remainingKm:-100,progress:1});
 });
+
+test('names use Unicode code points and reject control or format characters',()=>{
+  expect(serviceInput({name:'🔧'.repeat(60),intervalMonths:12}).name).toHaveLength(120);
+  expect(()=>serviceInput({name:'Filter\u0000',intervalMonths:12})).toThrow();
+  expect(()=>serviceInput({name:'Filter\u200b',intervalMonths:12})).toThrow();
+});
+test('today tolerates time skew but future calendar days fail',()=>{
+  expect(eventInput({completedAt:'2026-01-01T23:59:00Z'},new Date('2026-01-01T00:00:00Z')).completedAt).toEqual(new Date('2026-01-01T23:59:00Z'));
+  expect(()=>eventInput({completedAt:'2026-01-02T00:00:00Z'},new Date('2026-01-01T23:59:00Z'))).toThrow();
+});

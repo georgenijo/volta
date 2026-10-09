@@ -8,6 +8,12 @@ struct MaintenanceView: View {
     @State private var generation = UUID()
     @State private var adding = false
     @State private var completing: ServiceItem?
+    @State private var editingItem: ServiceItem?
+    @State private var editingEvent: ServiceEvent?
+    @State private var deletingItem: ServiceItem?
+    @State private var deletingEvent: ServiceEvent?
+    @State private var mutationError: String?
+    @State private var mutating = false
 
     var body: some View {
         ScrollView {
@@ -27,19 +33,24 @@ struct MaintenanceView: View {
                             }
                         }
                     }
-                    Text("Personal reminders, not a service recommendation. Set intervals for your vehicle. Defaults: rotation 6,250 mi, filter 2 years, brake fluid check 4 years, wipers 1 year. Reminders appear here when you open Maintenance.")
+                    Text("Personal reminders, not a service recommendation. Set intervals for your vehicle. Suggested intervals to add: rotation 6,250 mi, filter 2 years, brake fluid check 4 years, wipers 1 year. Add an item and record its last completion to start reminders. Due status appears here when you open Maintenance.")
                         .font(.caption).foregroundStyle(ScreenKit.secondary)
                     Button { adding = true } label: { Label("Add service item", systemImage: "plus.circle.fill").frame(maxWidth: .infinity) }
                         .buttonStyle(.borderedProminent).tint(ScreenKit.mint)
                     if data.items.isEmpty {
                         EmptyState(systemImage: "wrench.and.screwdriver", title: "Start your service log", message: "Add a suggested or custom item, then record the last service date and odometer to establish its next due point.")
                     }
+                    if let mutationError { Text(mutationError).foregroundStyle(ScreenKit.red) }
                     ForEach(data.items) { item in
                         Card {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack {
                                     Text(item.name).font(.headline)
                                     Spacer()
+                                    Menu {
+                                        Button("Edit item") { editingItem = item }
+                                        Button("Delete item and history", role: .destructive) { deletingItem = item }
+                                    } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
                                     if let progress = item.progress {
                                         ZStack {
                                             Circle().stroke(ScreenKit.hairline, lineWidth: 4)
@@ -70,7 +81,14 @@ struct MaintenanceView: View {
                     ForEach(data.events) { event in
                         Card {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(data.items.first { $0.id == event.itemId }?.name ?? "Service").font(.headline)
+                                HStack {
+                                    Text(data.items.first { $0.id == event.itemId }?.name ?? "Service").font(.headline)
+                                    Spacer()
+                                    Menu {
+                                        Button("Correct completion") { editingEvent = event }
+                                        Button("Delete completion", role: .destructive) { deletingEvent = event }
+                                    } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
+                                }
                                 Text(event.completedAt.formatted(date: .abbreviated, time: .omitted))
                                 Text(event.odometerKm.map { units.formatDistance($0, fractionDigits: 0) } ?? "Odometer not recorded").foregroundStyle(ScreenKit.secondary)
                             }
@@ -82,7 +100,7 @@ struct MaintenanceView: View {
         .screenKitPage("Maintenance")
         .task(id: vehicleID) { await load() }
         .refreshable { await load() }
-        .onChange(of: vehicleID) { _, _ in adding = false; completing = nil }
+        .onChange(of: vehicleID) { _, _ in adding = false; completing = nil; editingItem = nil; editingEvent = nil; deletingItem = nil; deletingEvent = nil }
         .sheet(isPresented: $adding) {
             let id = vehicleID
             ServiceItemForm { input in
@@ -97,10 +115,42 @@ struct MaintenanceView: View {
                 await load()
             }
         }
+        .sheet(item: $editingItem) { item in
+            let id = vehicleID
+            ServiceItemForm(existing: item) { input in
+                try await dataSource.updateService(vehicleID: id, itemID: item.id, item: input); await load()
+            }
+        }
+        .sheet(item: $editingEvent) { event in
+            let id = vehicleID
+            if let item = state.value?.items.first(where: { $0.id == event.itemId }) {
+                ServiceCompletionForm(item: item, odometerKm: event.odometerKm, existing: event) { input in
+                    try await dataSource.updateServiceEvent(vehicleID: id, eventID: event.id, event: input); await load()
+                }
+            }
+        }
+        .confirmationDialog("Delete item and all its service history?", isPresented: Binding(get: { deletingItem != nil }, set: { if !$0 { deletingItem = nil } }), presenting: deletingItem) { item in
+            Button("Delete item and history", role: .destructive) {
+                let id = vehicleID
+                Task { await mutate { try await dataSource.deleteService(vehicleID: id, itemID: item.id) } }
+            }
+        }
+        .confirmationDialog("Delete this completion?", isPresented: Binding(get: { deletingEvent != nil }, set: { if !$0 { deletingEvent = nil } }), presenting: deletingEvent) { event in
+            Button("Delete completion", role: .destructive) {
+                let id = vehicleID
+                Task { await mutate { try await dataSource.deleteServiceEvent(vehicleID: id, eventID: event.id) } }
+            }
+        }
+
     }
     private var currentOdometer: Double? { if case .loaded(let data) = state { data.odometerKm } else { nil } }
     private func interval(_ item: ServiceItem) -> String {
         [item.intervalKm.map { "Every \(units.formatDistance($0, fractionDigits: 0))" }, item.intervalMonths.map { "Every \($0) months" }].compactMap { $0 }.joined(separator: " · ")
+    }
+    @MainActor private func mutate(_ operation: () async throws -> Void) async {
+        guard !mutating else { return }; mutating = true; mutationError = nil
+        defer { mutating = false }
+        do { try await operation(); await load() } catch { mutationError = error.localizedDescription }
     }
     @MainActor private func load() async {
         let id = vehicleID, token = UUID(); generation = token; state = .loading
@@ -118,6 +168,7 @@ struct MaintenanceView: View {
 private struct ServiceItemForm: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.units) private var units
+    var existing: ServiceItem? = nil
     let save: (ServiceItemInput) async throws -> Void
     @State private var preset = 0
     @State private var name = ServiceItemInput.presets[0].name
@@ -128,26 +179,32 @@ private struct ServiceItemForm: View {
     var body: some View {
         NavigationStack {
             Form {
-                Picker("Suggested item", selection: $preset) {
+                if existing == nil { Picker("Suggested item", selection: $preset) {
                     ForEach(0..<ServiceItemInput.presets.count, id: \.self) { index in Text(ServiceItemInput.presets[index].name).tag(index) }
                     Text("Custom").tag(ServiceItemInput.presets.count)
-                }.onChange(of: preset) { _, _ in applyPreset() }
+                }.onChange(of: preset) { _, _ in applyPreset() } }
                 TextField("Service name", text: $name)
                 TextField("Distance interval (\(units.distanceUnit), optional)", text: $distance).keyboardType(.decimalPad)
                 TextField("Month interval (optional)", text: $months).keyboardType(.numberPad)
                 Text("Set at least one interval. When both are set, the first reached is due. Log a completion to start the interval.").font(.caption)
                 if let error { Text(error).foregroundStyle(ScreenKit.red) }
-                Button(busy ? "Saving…" : "Add item") { Task { await submit() } }.disabled(busy)
-            }.navigationTitle("Add service item")
+                Button(busy ? "Saving…" : existing == nil ? "Add item" : "Save item") { Task { await submit() } }.disabled(busy)
+            }.navigationTitle(existing == nil ? "Add service item" : "Edit service item")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) } }
                 .disabled(busy).interactiveDismissDisabled(busy)
-                .onAppear { applyPreset() }
+                .onAppear {
+                    if let existing {
+                        preset = ServiceItemInput.presets.count; name = existing.name
+                        distance = existing.intervalKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
+                        months = existing.intervalMonths.map(String.init) ?? ""
+                    } else { applyPreset() }
+                }
         }.preferredColorScheme(.dark)
     }
     private func applyPreset() {
         guard preset < ServiceItemInput.presets.count else { name = ""; distance = ""; months = ""; return }
         let value = ServiceItemInput.presets[preset]; name = value.name
-        distance = value.intervalKm.map { String(units.distanceValue(km: $0)) } ?? ""
+        distance = value.intervalKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
         months = value.intervalMonths.map(String.init) ?? ""
     }
     private func submit() async {
@@ -162,6 +219,7 @@ private struct ServiceCompletionForm: View {
     @Environment(\.units) private var units
     let item: ServiceItem
     let odometerKm: Double?
+    var existing: ServiceEvent? = nil
     let save: (ServiceEventInput) async throws -> Void
     @State private var date = Date.now
     @State private var odometer = ""
@@ -179,7 +237,7 @@ private struct ServiceCompletionForm: View {
             }.navigationTitle("Record completion")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) } }
                 .disabled(busy).interactiveDismissDisabled(busy)
-                .onAppear { odometer = odometerKm.map { String(units.distanceValue(km: $0)) } ?? "" }
+                .onAppear { if let existing { date = existing.completedAt }; odometer = odometerKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? "" }
         }.preferredColorScheme(.dark)
     }
     private func submit() async {
@@ -188,18 +246,23 @@ private struct ServiceCompletionForm: View {
         else if let parsed = ServiceFormValidation.distance(odometer, units: units), parsed >= 0, parsed <= 10000000 { km = parsed }
         else { error = "Enter a valid odometer or leave it blank."; return }
         busy = true; error = nil
-        do { try await save(.init(completedAt: date, odometerKm: km)); dismiss() } catch { self.error = error.localizedDescription }
+        do { try await save(.init(completedAt: Calendar.current.startOfDay(for: date), odometerKm: km)); dismiss() } catch { self.error = error.localizedDescription }
         busy = false
     }
 }
 enum ServiceFormValidation {
+    // Locale-independent editable numbers; truncating avoids making a suggested
+    // completed odometer fractionally greater than the actual recorded reading.
+    static func number(_ value: Double) -> String {
+        (floor(value * 100) / 100).formatted(.number.locale(Locale(identifier: "en_US_POSIX")).grouping(.never).precision(.fractionLength(0...2)))
+    }
     static func distance(_ text: String, units: UnitPreferences) -> Double? {
         guard let number = Double(text.trimmingCharacters(in: .whitespaces)), number.isFinite else { return nil }
         return units.distance == .miles ? number * 1.609344 : number
     }
     static func item(name: String, distance: String, months: String, units: UnitPreferences) -> ServiceItemInput? {
         let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, title.count <= 100 else { return nil }
+        guard !title.isEmpty, title.unicodeScalars.count <= 100, !name.unicodeScalars.contains(where: { $0.properties.generalCategory == .control || $0.properties.generalCategory == .format }) else { return nil }
         let km = distance.isEmpty ? nil : self.distance(distance, units: units)
         let count = months.isEmpty ? nil : Int(months)
         guard distance.isEmpty || (km != nil && km! > 0 && km! <= 1000000),

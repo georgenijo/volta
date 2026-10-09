@@ -69,7 +69,7 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
     const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
     return c.json(await services().list(id, await telemetry.serviceOdometer(id)));
   });
-  const serviceBody = async (c: any) => { try { return await c.req.json(); } catch { throw invalid('Expected JSON body'); } };
+  const serviceBody = async (c: any) => { try { return await c.req.json(); } catch (error) { if (error instanceof Error && error.name === 'BodyLimitError') throw error; throw invalid('Expected JSON body'); } };
   app.post('/v1/vehicles/:id/service', async c => {
     const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
     return c.json(await services().add(id, await serviceBody(c)), 201);
@@ -77,6 +77,22 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
   app.post('/v1/vehicles/:id/service/:item/events', async c => {
     const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
     return c.json(await services().complete(id, c.req.param('item'), await serviceBody(c)), 201);
+  });
+  app.patch('/v1/vehicles/:id/service/:item', async c => {
+    const id=integer(c.req.param('id'),'id'); await telemetry.vehicle(id);
+    return c.json(await services().update(id,c.req.param('item'),await serviceBody(c)));
+  });
+  app.delete('/v1/vehicles/:id/service/:item', async c => {
+    const id=integer(c.req.param('id'),'id'); await telemetry.vehicle(id);
+    await services().remove(id,c.req.param('item')); return c.body(null,204);
+  });
+  app.patch('/v1/vehicles/:id/service-events/:event', async c => {
+    const id=integer(c.req.param('id'),'id'); await telemetry.vehicle(id);
+    return c.json(await services().updateEvent(id,c.req.param('event'),await serviceBody(c)));
+  });
+  app.delete('/v1/vehicles/:id/service-events/:event', async c => {
+    const id=integer(c.req.param('id'),'id'); await telemetry.vehicle(id);
+    await services().removeEvent(id,c.req.param('event')); return c.body(null,204);
   });
   app.get('/v1/vehicles/:id/charger-locations', async c => {
     const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);

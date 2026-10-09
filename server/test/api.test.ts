@@ -460,6 +460,7 @@ describe('metric telemetry contract', () => {
     expect(fallbackIdles.items).toHaveLength(50); expect(fallbackIdles.items.every((r:any)=>r.latitude===40 || r.latitude===40.01)).toBe(true);
     await timed('summaryZone','/v1/vehicles/1/summary?range=30d&tz=America/New_York');
     const battery = await timed('battery', '/v1/vehicles/1/battery'); expect(battery.capacityNowKwh).toBeGreaterThan(0);
+    await timed('service','/v1/vehicles/1/service');
     // Each SQL statement also has the unchanged production 15-second timeout.
     console.log(JSON.stringify({ event:'scale_receipt', added:{drives:2500,positions:1722500,parkedPositions:222500,states:7500,chargingProcesses:1000,chargeSamples:100000}, milliseconds:timings }));
     expect(performance.now()-started).toBeLessThan(15000);
@@ -614,4 +615,38 @@ describe('service log and charger locations', () => {
     expect((await request(`/v1/vehicles/3/charger-locations/g:1/sessions?cursor=${first.nextCursor}`)).status).toBe(400);
     expect((await request(`/v1/vehicles/1/charger-locations/a:1/sessions?cursor=${first.nextCursor}`)).status).toBe(400);
   });
+  test('average input power includes short and fractional-hour sessions', async () => {
+    await owner`UPDATE public.charging_processes SET duration_min=45,charge_energy_used=30 WHERE id=1`;
+    let row=(await json('/v1/vehicles/1/charger-locations'))[0]; expect(row.avgPowerKw).toBeCloseTo(40); expect(row.powerSessionCount).toBe(1);
+    await owner`UPDATE public.charging_processes SET duration_min=90 WHERE id=1`;
+    row=(await json('/v1/vehicles/1/charger-locations'))[0]; expect(row.avgPowerKw).toBeCloseTo(20);
+  });
+  test('service corrections and deletion preserve vehicle boundaries', async () => {
+    const path='/v1/vehicles/1/service';
+    const item=await (await write(path,{name:'Rotation',intervalKm:1000})).json() as any;
+    const event=await (await write(`${path}/${item.id}/events`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:99999})).json() as any;
+    const patch = (p:string,b:object)=>request(p,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+    expect((await patch(`/v1/vehicles/3/service/${item.id}`,{name:'Bad',intervalKm:1})).status).toBe(404);
+    expect((await patch(`/v1/vehicles/3/service-events/${event.id}`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:1})).status).toBe(404);
+    expect((await patch(`${path}/${item.id}`,{name:'Updated rotation',intervalKm:2000})).status).toBe(200);
+    expect((await patch(`/v1/vehicles/1/service-events/${event.id}`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:10000})).status).toBe(200);
+    expect((await json(path)).items[0].remainingKm).toBe(1910);
+    expect((await request(`/v1/vehicles/3/service-events/${event.id}`,{method:'DELETE'})).status).toBe(404);
+    expect((await request(`/v1/vehicles/1/service-events/${event.id}`,{method:'DELETE'})).status).toBe(204);
+    expect((await json(path)).items[0].remainingKm).toBeNull();
+    await write(`${path}/${item.id}/events`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:10000});
+    expect((await request(`${path}/${item.id}`,{method:'DELETE'})).status).toBe(204);
+    expect((await json(path)).items).toEqual([]); expect((await json(path)).events).toEqual([]);
+  });
+
+  test('service includes the newest odometer even without battery-range data',async()=>{
+    await owner`INSERT INTO public.positions(id,car_id,date,latitude,longitude,odometer)
+      SELECT 100,car_id,now() AT TIME ZONE 'UTC'-interval '1 second',latitude,longitude,20000 FROM public.positions WHERE id=1`;
+    expect((await json('/v1/vehicles/1/service')).odometerKm).toBe(20000);
+  });
+  test('chunked oversized service input retains the 413 body-limit response',async()=>{
+    const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(' '.repeat(5000)));controller.close();}});
+    const response=await request('/v1/vehicles/1/service',{method:'POST',body:stream}); expect(response.status).toBe(413);
+  });
+
 });

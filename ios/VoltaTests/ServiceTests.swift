@@ -11,6 +11,12 @@ final class ServiceTests: XCTestCase {
         XCTAssertNil(ServiceFormValidation.item(name: "Wipers", distance: "-1", months: "12", units: .default))
         XCTAssertNil(ServiceFormValidation.item(name: "Wipers", distance: "", months: "", units: .default))
     }
+    func testEditableNumbersAndUnicodeNames() {
+        XCTAssertEqual(ServiceFormValidation.number(6250.000000000001), "6250")
+        XCTAssertEqual(ServiceFormValidation.number(24011.02561043506), "24011.02")
+        XCTAssertNotNil(ServiceFormValidation.item(name: String(repeating: "🔧", count: 60), distance: "", months: "12", units: .default))
+        XCTAssertNil(ServiceFormValidation.item(name: "Filter\u{200b}", distance: "", months: "12", units: .default))
+    }
     func testUnknownCurrencyIsNeverDefaulted() {
         XCTAssertTrue(ChargerPresentation.cost(12, currency: nil).contains("currency unknown"))
         XCTAssertTrue(ChargerPresentation.cost(nil, currency: "USD").contains("Cost unknown"))

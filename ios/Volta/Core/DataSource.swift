@@ -19,6 +19,10 @@ protocol VoltaDataSource: Sendable {
     func service(vehicleID: Int) async throws -> ServiceState
     func addService(vehicleID: Int, item: ServiceItemInput) async throws
     func completeService(vehicleID: Int, itemID: String, event: ServiceEventInput) async throws
+    func updateService(vehicleID: Int, itemID: String, item: ServiceItemInput) async throws
+    func deleteService(vehicleID: Int, itemID: String) async throws
+    func updateServiceEvent(vehicleID: Int, eventID: String, event: ServiceEventInput) async throws
+    func deleteServiceEvent(vehicleID: Int, eventID: String) async throws
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation]
     func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary>
     /// Phase 1 always throws `VoltaError.commandsUnavailable`.
@@ -68,6 +72,10 @@ extension VoltaDataSource {
     func service(vehicleID: Int) async throws -> ServiceState { throw VoltaError.server(code: "service_unavailable", message: "Service storage is unavailable") }
     func addService(vehicleID: Int, item: ServiceItemInput) async throws { throw VoltaError.server(code: "service_unavailable", message: "Service storage is unavailable") }
     func completeService(vehicleID: Int, itemID: String, event: ServiceEventInput) async throws { throw VoltaError.server(code: "service_unavailable", message: "Service storage is unavailable") }
+    func updateService(vehicleID: Int, itemID: String, item: ServiceItemInput) async throws { throw VoltaError.commandsUnavailable }
+    func deleteService(vehicleID: Int, itemID: String) async throws { throw VoltaError.commandsUnavailable }
+    func updateServiceEvent(vehicleID: Int, eventID: String, event: ServiceEventInput) async throws { throw VoltaError.commandsUnavailable }
+    func deleteServiceEvent(vehicleID: Int, eventID: String) async throws { throw VoltaError.commandsUnavailable }
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation] { throw VoltaError.notFound }
     func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary> { throw VoltaError.notFound }
 }

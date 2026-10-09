@@ -168,7 +168,7 @@ export class Telemetry {
     if (this.fleetEnabled) {
       try {
         const [binding] = await this.sql`SELECT b.vin_digest,c.vin FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
-        if (binding?.vin && binding.vin_digest === createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(binding.vin).digest('hex')) {
+        if (binding?.vin && /^[A-HJ-NPR-Z0-9]{17}$/.test(binding.vin) && binding.vin_digest === createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(binding.vin).digest('hex')) {
           const [live] = await this.sql`SELECT odometer_km AS "odometerKm",source_ts AS "recordedAt" FROM volta_telemetry.service_odometer WHERE vehicle_id=${id} AND source_ts<=now() ORDER BY source_ts DESC LIMIT 1`;
           if (live?.odometerKm != null && live.odometerKm >= 0 && (!result.recordedAt || new Date(live.recordedAt)>new Date(result.recordedAt))) result = { odometerKm: live.odometerKm, recordedAt: live.recordedAt, source: 'fleet_telemetry' };
         }
@@ -185,7 +185,7 @@ export class Telemetry {
       SELECT ${this.chargeLocationKey()} AS id,cp.start_date,cp.cost,cp.charge_energy_added AS energy,
         COALESCE(g.name,a.display_name,'Recorded charging location') AS name,
         COALESCE(g.latitude,p.latitude,a.latitude) AS latitude,COALESCE(g.longitude,p.longitude,a.longitude) AS longitude,
-        cp.charge_energy_used/NULLIF(cp.duration_min/60,0) AS power
+        cp.charge_energy_used/NULLIF(cp.duration_min/60.0,0) AS power
       FROM public.charging_processes cp LEFT JOIN public.geofences g ON g.id=cp.geofence_id
       LEFT JOIN public.addresses a ON a.id=cp.address_id LEFT JOIN public.positions p ON p.id=cp.position_id WHERE cp.car_id=${id}
     ) SELECT id,max(name) AS name,
