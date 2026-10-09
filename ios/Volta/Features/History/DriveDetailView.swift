@@ -17,9 +17,6 @@ struct DriveDetailView: View {
     @State private var scrub: Double?
     @State private var replayMinute: Double?
     @State private var replayTask: Task<Void, Never>?
-    @State private var manualRate: TripRate?
-    @State private var rateLoader = TripRateLoader()
-    @State private var editingRate = false
     @State private var shareImage: Image?
 
     /// Identity of what's on screen. A change drops the old state and any in-flight result.
@@ -43,8 +40,8 @@ struct DriveDetailView: View {
                     if let timeline = snapshot?.timeline, timeline.quality != .dense {
                         TripSamplingNote(timeline: timeline)
                     }
-                    TripCostCard(energyKwh: summary.energyUsedKwh, rate: manualRate ?? rateLoader.result?.rate,
-                                 lookup: rateLoader.result, editable: true) { editingRate = true }
+                    TripCostCard(energyKwh: summary.energyUsedKwh, rate: DrivePricing.rate(summary, fallback: model?.settings.electricityRate ?? 0.20),
+                                 lookup: nil, editable: false) {}
                     if let snapshot {
                         TripScoreCard(result: snapshot.score)
                     }
@@ -63,10 +60,6 @@ struct DriveDetailView: View {
         .overlay(alignment: .top) { header }
         .historyScreenBackground()
         .toolbar(.hidden, for: .navigationBar)
-        .sheet(isPresented: $editingRate) {
-            TripRateEditor(initial: manualRate, defaultCurrency: units.currency) { setManualRate($0) }
-                .presentationDetents([.medium])
-        }
         .task(id: key) { await load(key) }
         .onChange(of: units) { rebuild() }
         .onDisappear { stopReplay() }
@@ -80,25 +73,14 @@ struct DriveDetailView: View {
             loader.reset()
             snapshot = nil
             scrub = nil
-            rateLoader.reset()
             shareImage = nil
             loadedKey = key
-            manualRate = rateKey.flatMap { UserDefaults.standard.string(forKey: $0) }.flatMap(TripRate.init(stored:))
         }
-        let ds = dataSource, id = key.driveID, vehicle = key.vehicleID, start = drive.start
+        let ds = dataSource, id = key.driveID
         await loader.load { try await ds.drive(id: id) }
         guard !Task.isCancelled, loadedKey == key else { return }
         rebuild()
-        // Settled answers are kept; a missing or incomplete one is looked up
-        // again. The loader's generation drops any older lookup, including an
-        // earlier reload of this same drive.
-        switch rateLoader.result {
-        case .found, .noPricedCharge, .currencyUnknown: return
-        case .incomplete, nil: break
-        }
-        await rateLoader.load(before: start) { cursor in
-            try await ds.charges(vehicleID: vehicle, range: DateRange(from: nil, to: start), cursor: cursor)
-        }
+
     }
 
     private func reload() { Task { await load(key) } }
@@ -106,19 +88,6 @@ struct DriveDetailView: View {
     private func rebuild() {
         snapshot = loader.detail.map { TripSnapshot($0, units: units) }
         shareImage = loader.detail.flatMap { TripShareCard.render($0.summary, units: units) }
-    }
-
-    private var rateKey: String? {
-        guard let model else { return nil }
-        return TripRate.storageKey(serverURL: model.settings.serverURL, isDemo: model.isDemoMode,
-                                   isLaunchDemo: model.isLaunchDemo, vehicleID: vehicleID)
-    }
-
-    private func setManualRate(_ rate: TripRate?) {
-        manualRate = rate
-        guard let rateKey else { return }
-        if let rate { UserDefaults.standard.set(rate.stored, forKey: rateKey) }
-        else { UserDefaults.standard.removeObject(forKey: rateKey) }
     }
 
     // MARK: Replay
@@ -304,7 +273,7 @@ struct DriveDetailView: View {
                   accessory: snapshot?.power.values.max().map { "\(sampledPrefix(snapshot?.power))PEAK \(VoltaFormat.number($0, digits: 0)) kW" },
                   digits: 1, showsZero: true, domain: { TripChartDomain.zeroBased($0) })
         chartCard("Speed", "speedometer", HistoryTheme.blue, speedUnit, series: snapshot?.speed,
-                  accessory: snapshot?.speed.values.max().map { "\(sampledPrefix(snapshot?.speed))MAX \(VoltaFormat.number($0, digits: 0))" },
+                  accessory: snapshot?.speed.values.max().map { "\(sampledPrefix(snapshot?.speed))MAX \(VoltaFormat.number($0, digits: 0))" + (summary.avgSpeedKph.map { " · AVG \(VoltaFormat.number(units.distanceValue(km: $0), digits: 0))" } ?? "") },
                   gradient: [HistoryTheme.green, HistoryTheme.amber, HistoryTheme.red], domain: { TripChartDomain.zeroBased($0) })
         if let snapshot, !snapshot.longitudinalAcceleration.isEmpty || !snapshot.lateralAcceleration.isEmpty {
             let values = snapshot.longitudinalAcceleration.values + snapshot.lateralAcceleration.values
@@ -316,12 +285,12 @@ struct DriveDetailView: View {
                                showsZero: true, height: 110)
         }
         chartCard("Elevation", "mountain.2.fill", HistoryTheme.purple, heightUnit, series: snapshot?.elevation,
-                  accessory: loader.detail?.elevationGainM.map { "↑ \(VoltaFormat.number(units.distance == .miles ? $0 * 3.28084 : $0, digits: 0)) \(heightUnit)" },
+                  accessory: snapshot.flatMap { rangeAccessory($0.elevation.values, unit: heightUnit) },
                   domain: { TripChartDomain.padded($0) })
         if let snapshot, !snapshot.energyRemaining.isEmpty {
             telemetryChartCard("Energy remaining", "bolt.batteryblock.fill", "kWh",
                                traces: [.init(label: "Energy", color: HistoryTheme.green, series: snapshot.energyRemaining)],
-                               accessory: nil, digits: 1, domain: TripChartDomain.padded(snapshot.energyRemaining.values, minPad: 0.5))
+                               accessory: energyAccessory(snapshot), digits: 1, domain: TripChartDomain.padded(snapshot.energyRemaining.values, minPad: 0.5))
         }
         if let snapshot, !snapshot.batteryTempMin.isEmpty || !snapshot.batteryTempMax.isEmpty {
             let values = snapshot.batteryTempMin.values + snapshot.batteryTempMax.values
@@ -329,7 +298,7 @@ struct DriveDetailView: View {
                                traces: [
                                 .init(label: "Min", color: HistoryTheme.blue, series: snapshot.batteryTempMin),
                                 .init(label: "Max", color: HistoryTheme.red, series: snapshot.batteryTempMax),
-                               ], accessory: "MIN / MAX", digits: 1, domain: TripChartDomain.padded(values, minPad: 2))
+                               ], accessory: rangeAccessory(values, unit: units.temperatureUnit), digits: 1, domain: TripChartDomain.padded(values, minPad: 2))
         }
         if let snapshot, !snapshot.insideTemp.isEmpty || !snapshot.outsideTemp.isEmpty {
             let values = snapshot.insideTemp.values + snapshot.outsideTemp.values
@@ -339,6 +308,17 @@ struct DriveDetailView: View {
                                 .init(label: "Outside", color: HistoryTheme.blue, series: snapshot.outsideTemp),
                                ], accessory: "INSIDE / OUTSIDE", digits: 1, domain: TripChartDomain.padded(values, minPad: 2))
         }
+    }
+
+    private func rangeAccessory(_ values: [Double], unit: String) -> String? {
+        guard let min = values.min(), let max = values.max() else { return nil }
+        return "MIN \(VoltaFormat.number(min, digits: 0)) · MAX \(VoltaFormat.number(max, digits: 0)) \(unit)"
+    }
+
+    private func energyAccessory(_ snapshot: TripSnapshot) -> String? {
+        guard let first = snapshot.energyRemaining.values.first, let last = snapshot.energyRemaining.values.last else { return nil }
+        let used = summary.energyUsedKwh.map { " · USED \(VoltaFormat.number($0)) kWh" } ?? ""
+        return "\(VoltaFormat.number(first)) → \(VoltaFormat.number(last)) kWh" + used
     }
 
     private var supplementalTelemetryMissing: Bool {

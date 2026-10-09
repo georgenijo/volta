@@ -12,6 +12,8 @@ final class UserSettings {
     /// a vehicle that has data. A selection saved before this flag existed has
     /// unknown provenance, so it is kept as the user's.
     var selectedVehicleIsExplicit: Bool { didSet { defaults?.set(selectedVehicleIsExplicit, forKey: "selectedVehicleIsExplicit") } }
+    /// USD/kWh fallback for estimated drive costs when no priced TeslaMate charges exist.
+    var electricityRate: Double { didSet { defaults?.set(electricityRate, forKey: "electricityRate") } }
     var emptyDemo: Bool { didSet { defaults?.set(emptyDemo, forKey: "emptyDemo") } }
     var demoMode: Bool { didSet { defaults?.set(demoMode, forKey: "demoMode") } }
     /// Show a Live Activity while the car is being driven (charging always shows one).
@@ -26,6 +28,8 @@ final class UserSettings {
         self.selectedVehicleID = selectedVehicleID
         selectedVehicleIsExplicit = defaults?.object(forKey: "selectedVehicleIsExplicit") as? Bool ?? (selectedVehicleID != nil)
         demoMode = defaults?.bool(forKey: "demoMode") ?? false
+        let rate = defaults?.object(forKey: "electricityRate") as? Double
+        electricityRate = rate.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0.20
         emptyDemo = defaults?.bool(forKey: "emptyDemo") ?? false
         drivingLiveActivity = defaults?.bool(forKey: "drivingLiveActivity") ?? false
     }

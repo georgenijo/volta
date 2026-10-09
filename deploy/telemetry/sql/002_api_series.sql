@@ -61,12 +61,13 @@ SELECT r.vehicle_id,r.source_ts,
   -- Absence and an explicit invalid/conflicting observation are distinct.
   -- Clients can keep a slow signal's cadence without bridging invalid data.
   array_agg(r.field) FILTER (WHERE r.n IS NULL AND r.field IN
-    ('VehicleSpeed','BatteryLevel','EnergyRemaining','ModuleTempMin','ModuleTempMax',
+    ('VehicleSpeed','BatteryLevel','EnergyRemaining','LifetimeEnergyUsed','ModuleTempMin','ModuleTempMax',
      'InsideTemp','OutsideTemp','ChargerVoltage','ChargeAmps','RatedRange',
      'ACChargingPower','DCChargingPower','PackCurrent','PackVoltage',
      'LongitudinalAcceleration','LateralAcceleration')) AS invalid_fields,
   max(n) FILTER (WHERE field='LongitudinalAcceleration') AS longitudinal_acceleration_mps2,
-  max(n) FILTER (WHERE field='LateralAcceleration') AS lateral_acceleration_mps2
+  max(n) FILTER (WHERE field='LateralAcceleration') AS lateral_acceleration_mps2,
+  max(n) FILTER (WHERE field='LifetimeEnergyUsed') AS lifetime_energy_used_kwh
 FROM merged r
 GROUP BY r.vehicle_id,r.source_ts;
 

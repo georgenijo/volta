@@ -288,3 +288,22 @@ test('eight-hour co-timed electrical history has identical selection and coverag
   await owner`ANALYZE volta_telemetry.samples`;
   expect((await get('/v1/drives/1')).telemetry).toEqual(before);
 },30000);
+
+
+test('drive energy falls back to exact-bound endpoints, with lifetime precedence and gap/reset fences',async()=>{
+  await owner`UPDATE drives SET start_rated_range_km=NULL,end_rated_range_km=NULL WHERE id=1`;
+  await owner`UPDATE positions SET rated_battery_range_km=NULL WHERE drive_id=1`;
+  const finish=(await owner`SELECT end_date FROM drives WHERE id=1`)[0]!.end_date;
+  await datum('EnergyRemaining',50,start,'first'); await datum('EnergyRemaining',45,finish,'last');
+  let d=await get('/v1/drives/1'); expect(d.energyUsedKwh).toBe(5);expect(d.energySource).toBe('fleet_energy_remaining');
+  const list=(await get('/v1/vehicles/1/drives')).items.find((r:any)=>r.id===1);expect(list.energyUsedKwh).toBe(5);
+  await datum('LifetimeEnergyUsed',100,start,'first');await datum('LifetimeEnergyUsed',104,finish,'last');
+  d=await get('/v1/drives/1');expect(d.energyUsedKwh).toBe(4);expect(d.energySource).toBe('fleet_lifetime_energy');
+  await datum('LifetimeEnergyUsed',90,at(60),'reset');
+  expect((await get('/v1/drives/1')).energySource).toBe('fleet_energy_remaining');
+  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason) VALUES(1,${at(60)},${at(70)},'disconnected')`;
+  expect((await get('/v1/drives/1')).energyUsedKwh).toBeNull();
+  await owner`DELETE FROM volta_telemetry.gaps`;
+  await owner`UPDATE volta_telemetry.vehicle_bindings SET vin_digest=repeat('a',64)`;
+  expect((await get('/v1/drives/1')).energyUsedKwh).toBeNull();
+});

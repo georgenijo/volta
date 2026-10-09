@@ -54,7 +54,7 @@ enum DriveSort: String, CaseIterable, Identifiable {
 extension DriveSummary {
     func matches(query: String) -> Bool {
         guard !query.isEmpty else { return true }
-        return [startAddress, endAddress].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }
+        return [startAddress, endAddress, startCity, endCity].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 
     var batteryUsed: Int? {
@@ -74,6 +74,8 @@ struct DrivesHistoryView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+
+    @Environment(AppModel.self) private var model: AppModel?
 
     @State private var feed = HistoryFeed<DriveSummary>()
     @State private var range: HistoryRange
@@ -113,7 +115,7 @@ struct DrivesHistoryView: View {
                     }
                 }
                 if searching {
-                    HistorySearchField(text: $query, prompt: "Search addresses") {
+                    HistorySearchField(text: $query, prompt: "Search cities or addresses") {
                         withAnimation(.snappy) { searching = false }
                     }
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -126,6 +128,7 @@ struct DrivesHistoryView: View {
             .navigationDestination(for: DriveSummary.self) { DriveDetailView(drive: $0) }
         }
         .task(id: range) { await reload(skeleton: true) }
+        .task(id: vehicleID) { await reload(skeleton: true) }
     }
 
     private func reload(skeleton: Bool = false) async {
@@ -164,10 +167,15 @@ struct DrivesHistoryView: View {
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
+                DrivesRouteMap(drives: visible).padding(.bottom, 8)
                 totals.padding(.bottom, 20)
+                HStack(spacing: 12) {
+                    NavigationLink { RoadtripsView(drives: visible, partial: feed.hasMore) } label: { overviewButton("Roadtrips", "road.lanes") }
+                    NavigationLink { DrivesHeatmapView(drives: visible, partial: feed.hasMore) } label: { overviewButton("Heatmap", "square.grid.3x3.fill") }
+                }.buttonStyle(.plain).padding(.bottom, 18)
                 if sort == .newest {
                     ForEach(DayGroup.group(visible, by: \.start)) { group in
-                        SectionLabel(group.title, trailing: units.formatDistance(group.items.reduce(0) { $0 + $1.distanceKm }))
+                        SectionLabel(group.title, trailing: "\(group.items.count) drives · " + units.formatDistance(group.items.reduce(0) { $0 + $1.distanceKm }))
                             .padding(.top, 14)
                             .padding(.bottom, 12)
                         rows(group.items)
@@ -196,21 +204,45 @@ struct DrivesHistoryView: View {
         }
     }
 
+    private func overviewButton(_ title: String, _ icon: String) -> some View {
+        HStack {
+            Image(systemName: icon).foregroundStyle(HistoryTheme.green)
+            Text(title).font(.system(size: 14, weight: .semibold))
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.up.right").foregroundStyle(HistoryTheme.secondary)
+        }.padding(18).background(HistoryTheme.card, in: .rect(cornerRadius: 20))
+    }
+
     private var totals: some View {
         let totals = DriveTotals(visible)
-        return HistoryTotalsBlock(
-            title: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "drives"),
-            isPartial: feed.hasMore,
-            items: [
-                .init(label: units.distanceUnit, value: VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0), unit: nil),
-                .init(label: visible.count == 1 ? "Drive" : "Drives", value: "\(visible.count)\(feed.hasMore ? "+" : "")", unit: nil),
-                .init(label: units.efficiencyUnit, value: totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", unit: nil),
-            ],
-            notes: totals.notes)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityIdentifier("screen.drives")
+        let cost = DrivePricing.total(visible, fallback: model?.settings.electricityRate ?? 0.20)
+        let scored = visible.filter { $0.efficiencyScore != nil }
+        let scoredKm = scored.reduce(0) { $0 + $1.distanceKm }
+        let average = scoredKm > 0 ? Int((scored.reduce(0) { $0 + Double($1.efficiencyScore!) * $1.distanceKm } / scoredKm).rounded()) : nil
+        return VStack(alignment: .leading, spacing: 18) {
+            SectionLabel(HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "drives"))
+            HStack {
+                HistoryValue(value: VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0), unit: units.distanceUnit, size: 72)
+                Spacer()
+                if let average { DriveScoreRing(score: average, size: 84) }
+            }
+            HStack(spacing: 20) {
+                HistoryInlineMetric(systemImage: "clock", text: VoltaFormat.duration(visible.reduce(0) { $0 + $1.durationMin }), tint: HistoryTheme.green)
+                HistoryInlineMetric(systemImage: "road.lanes", text: "\(visible.count)\(feed.hasMore ? "+" : "") drives", tint: HistoryTheme.green)
+            }
+            HStack(spacing: 20) {
+                HistoryInlineMetric(systemImage: "bolt.fill", text: totals.energyUsedKwh.value.map { VoltaFormat.energy($0) } ?? "—", tint: HistoryTheme.green)
+                HistoryInlineMetric(systemImage: "leaf.fill", text: units.formatEfficiency(totals.efficiencyWhPerKm), tint: HistoryTheme.green)
+            }
+            HistoryInlineMetric(systemImage: "creditcard", text: cost.display + " estimated", tint: HistoryTheme.green)
+            Text("Efficiency score · rated ÷ actual × 100, capped at 100").font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary)
+            if scored.count < visible.count && !scored.isEmpty {
+                Text("Score from \(scored.count) of \(visible.count) drives, weighted by distance").font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary)
+            }
+            ForEach(totals.notes + [cost.note].compactMap { $0 }, id: \.self) { Text($0).font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary) }
+        }.accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader).accessibilityIdentifier("screen.drives")
     }
+
 }
 
 // MARK: - Row
@@ -219,60 +251,37 @@ struct DriveRow: View {
     var drive: DriveSummary
     var showsDate = false
     @Environment(\.units) private var units
-
+    @Environment(AppModel.self) private var model: AppModel?
     var body: some View {
         HistoryCard {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    RouteGlyph()
-                        .frame(width: 14, height: 46)
-                        .padding(.top, 4)
-                    VStack(alignment: .leading, spacing: 0) {
-                        endpoint(drive.startAddress, time: drive.start)
-                        Spacer(minLength: 8)
-                        endpoint(drive.endAddress, time: drive.end)
-                    }
-                    .frame(height: 54)
-                    Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 3) {
-                        HistoryValue(value: VoltaFormat.number(units.distanceValue(km: drive.distanceKm)), unit: units.distanceUnit, size: 22)
-                        Text(VoltaFormat.duration(drive.durationMin))
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(HistoryTheme.secondary)
-                            .monospacedDigit()
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 10) {
+                    RouteGlyph().frame(width: 14, height: 52).padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 14) { Text(drive.startPlace); Text(drive.endPlace) }
+                        .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                    Spacer(minLength: 0)
+                    VStack(alignment: .trailing, spacing: 10) {
+                        HistoryValue(value: VoltaFormat.number(units.distanceValue(km: drive.distanceKm)), unit: units.distanceUnit, size: 28)
+                        Text(drive.start.historyTime + " → " + (drive.end?.historyTime ?? "In progress"))
+                            .font(.system(size: 12)).foregroundStyle(HistoryTheme.secondary).monospacedDigit()
                     }
                 }
-                HStack(spacing: 16) {
-                    HistoryInlineMetric(systemImage: "leaf.fill", text: units.formatEfficiency(drive.efficiencyWhPerKm), tint: drive.efficiencyTint)
-                    HistoryInlineMetric(systemImage: "battery.50percent", text: drive.batteryUsed.map { "−\($0)%" } ?? "—")
-                    if let kwh = drive.energyUsedKwh {
-                        HistoryInlineMetric(systemImage: "bolt.fill", text: VoltaFormat.energy(kwh))
+                if showsDate { Text(drive.start.formatted(date: .abbreviated, time: .omitted)).voltaLabelStyle() }
+                HairlineDivider()
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 10) {
+                            HistoryInlineMetric(systemImage: "clock", text: VoltaFormat.duration(drive.durationMin))
+                            HistoryInlineMetric(systemImage: "leaf.fill", text: units.formatEfficiency(drive.efficiencyWhPerKm))
+                        }
+                        HistoryInlineMetric(systemImage: "creditcard", text: DrivePricing.cost(drive, fallback: model?.settings.electricityRate ?? 0.20)
+                            .map { VoltaFormat.money($0, currency: DrivePricing.rate(drive, fallback: model?.settings.electricityRate ?? 0.20).currency) + " est." } ?? "Cost unknown")
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(HistoryTheme.tertiary)
+                    if let score = drive.efficiencyScore { DriveScoreRing(score: score) }
                 }
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func endpoint(_ address: String?, time: Date?) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(address ?? "Unknown")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-            if let time {
-                Text(showsDate ? time.formatted(.dateTime.month(.abbreviated).day().hour().minute()) : time.historyTime)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(HistoryTheme.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-        }
+            }.background { DriveRouteThumbnail(points: drive.route ?? []).frame(width: 100, height: 110) }
+        }.accessibilityElement(children: .combine)
     }
 }
 
@@ -282,7 +291,7 @@ struct RouteGlyph: View {
     var body: some View {
         VStack(spacing: 3) {
             Circle()
-                .strokeBorder(HistoryTheme.secondary, lineWidth: 2)
+                .fill(HistoryTheme.green)
                 .frame(width: 10, height: 10)
             Line()
                 .stroke(HistoryTheme.tertiary, style: StrokeStyle(lineWidth: 1.5, dash: [2, 3]))
