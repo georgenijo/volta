@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Every destination reachable from More. Hashable so it can drive a NavigationStack path.
 enum MoreRoute: Hashable, Sendable {
-    case stats, batteryHealth, batteryClimate, mileage, firmware, specs
+    case tires, stats, batteryHealth, batteryClimate, mileage, firmware, specs
     case switchVehicle, settings
     case comingLater(ComingLaterFeature)
 }
@@ -46,6 +46,7 @@ extension View {
     func moreDestinations() -> some View {
         navigationDestination(for: MoreRoute.self) { route in
             switch route {
+            case .tires: TiresView()
             case .stats: StatsView()
             case .batteryHealth: BatteryHealthView()
             case .batteryClimate: BatteryClimateView()

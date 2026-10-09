@@ -3,12 +3,16 @@ import SwiftUI
 
 struct UnitPreferences: Codable, Hashable, Sendable {
     enum Distance: String, Codable, Sendable, CaseIterable { case miles, kilometers }
+    enum Pressure: String, Codable, Sendable, CaseIterable { case psi, bar }
     enum Temperature: String, Codable, Sendable, CaseIterable { case fahrenheit, celsius }
     var distance: Distance = .miles
     var temperature: Temperature = .fahrenheit
+    var pressure: Pressure? = nil
     var currency: String = "USD"
     static let `default` = UnitPreferences()
 
+    var pressureUnit: String { pressure == .bar ? "bar" : "psi" }
+    func pressureValue(bar: Double) -> Double { pressure == .bar ? bar : bar * 14.5037738 }
     var distanceUnit: String { distance == .miles ? "mi" : "km" }
     var temperatureUnit: String { temperature == .fahrenheit ? "°F" : "°C" }
     var efficiencyUnit: String { distance == .miles ? "Wh/mi" : "Wh/km" }

@@ -19,7 +19,7 @@ struct MoreView: View {
                     section("Vehicle", dot: ScreenKit.mint, rows: [
                         .init(symbol: "battery.100percent.bolt", tint: ScreenKit.mint, title: "Battery Health", route: .batteryHealth),
                         .init(symbol: "thermometer.medium", tint: ScreenKit.mint, title: "Battery Climate", route: .batteryClimate),
-                        .init(symbol: "circle.circle", tint: ScreenKit.mint, title: "Tires", route: .comingLater(.tires), soon: true),
+                        .init(symbol: "circle.circle", tint: ScreenKit.mint, title: "Tires", route: .tires),
                         .init(symbol: "wrench.and.screwdriver", tint: ScreenKit.mint, title: "Maintenance", route: .comingLater(.maintenance), soon: true),
                         .init(symbol: "cpu", tint: ScreenKit.mint, title: "Firmware Tracker", route: .firmware),
                         .init(symbol: "gauge.with.needle", tint: ScreenKit.mint, title: "Mileage Tracker", route: .mileage),
