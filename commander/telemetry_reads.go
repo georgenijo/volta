@@ -351,7 +351,7 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 		value := fields[field]
 		floor := chargeStart
 		if charging == "Starting" || charging == "Charging" {
-			if state.At.After(floor) {
+			if floor.IsZero() {
 				floor = state.At
 			}
 		}
@@ -381,9 +381,25 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 
 		}
 	}
-	for field, key := range map[string]string{"Locked": "locked", "SentryMode": "sentry_mode"} {
+	for field, key := range map[string]string{"Locked": "locked"} {
 		if v := fields[field]; v.Bool != nil {
 			vehicleState[key] = *v.Bool
+		}
+	}
+	if sentry := fields["SentryMode"]; sentry.Text != nil {
+		switch *sentry.Text {
+		case "SentryModeStateOff":
+			vehicleState["sentry_mode"] = false
+		case "SentryModeStateIdle", "SentryModeStateArmed", "SentryModeStateAware", "SentryModeStatePanic", "SentryModeStateQuiet":
+			vehicleState["sentry_mode"] = true
+		}
+	}
+	if charging == "Starting" || charging == "Charging" {
+		// These fields are required by TeslaMate.Log.Charge's changeset.
+		for _, key := range []string{"ideal_battery_range", "charge_energy_added", "charger_power"} {
+			if charge[key] == nil {
+				return false
+			}
 		}
 	}
 	if version := fields["Version"]; version.Text != nil {
@@ -409,4 +425,19 @@ func (s *Service) Close() {
 	if db, ok := s.telemetryReader.(*telemetryDB); ok {
 		db.pool.Close()
 	}
+}
+
+func collectorDataTimestamp(body []byte) (int64, bool) {
+	var envelope struct {
+		Response struct {
+			Drive struct {
+				Timestamp json.Number `json:"timestamp"`
+			} `json:"drive_state"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return 0, false
+	}
+	ts, err := envelope.Response.Drive.Timestamp.Int64()
+	return ts, err == nil && ts > 0
 }

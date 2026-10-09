@@ -246,6 +246,9 @@ so an unchanged gear/location can be older than 90 seconds while still current.
 A silent stream exceeding 90 seconds falls back even if its socket is connected.
 Invalid/conflicting/malformed latest values are omitted; supported dynamic fields
 without valid telemetry become JSON null rather than refreshing cached readings.
+An opt-in per-vehicle timestamp watermark rejects both cached replies and overlays
+older than the last served data with 429 / Retry-After: 30 seconds. This prevents
+TeslaMate's zero-delay stale-response refetch loop; the feature-off path is unchanged.
 The `invalid_fields` history pivot is not used: the indexed `latest_samples`
 lookup exposes each field's own `invalid` and `quality`, including conflicts.
 
@@ -277,9 +280,15 @@ updates car_version. An active software-update template or a template without
 known closed doors/trunks falls back to normal polling because those states
 cannot safely be inferred from the configured telemetry fields. Known closed
 closure values and the empty software-update parser sentinel remain scaffolding.
-Active charge counters/powers must have source times at or after the latest
-Starting/Charging transition, so values from an earlier session cannot inflate
-the next session. Closing counters also require the indexed derived charge session
+Active charge counters/powers must have source times at or after the derived
+current session start (or the current Starting/Charging transition until that
+session is derived), so earlier-session values cannot inflate the next session.
+Starting/Charging overlays additionally require ideal_battery_range,
+charge_energy_added and charger_power: TeslaMate rejects charge rows without these
+fields. The current economy profile omits IdealBatteryRange, so charging uses the
+paced fallback under that profile unless the operator includes that field. Missing
+current-session counters also fall back until published. No range/counter is
+fabricated from cached data. Closing counters also require the indexed derived charge session
 to cover that state transition, keeping the final current-session counter without
 resurrecting an older session when no new counter arrived. Summary replies require the same usable overlay as data reads.
 

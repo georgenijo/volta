@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -181,6 +182,12 @@ func TestTelemetryDrivingChargingEnums(t *testing.T) {
 			s := readSnapshot(now)
 			s.Samples[1].Text = textPtr("ShiftState" + gear)
 			s.Samples[2].Text = textPtr("DetailedChargeState" + state)
+			if state == "Starting" || state == "Charging" {
+				s.Samples = append(s.Samples,
+					telemetrySample{Field: "IdealBatteryRange", At: now, Num: floatPtr(200), Unit: "mi", Quality: "ok"},
+					telemetrySample{Field: "DCChargingEnergyIn", At: now, Num: floatPtr(1), Unit: "kWh", Quality: "ok"},
+					telemetrySample{Field: "ACChargingPower", At: now, Num: floatPtr(7), Unit: "kW", Quality: "ok"})
+			}
 			r := overlayFixture(t, s, now)
 			if r["drive_state"].(map[string]any)["shift_state"] != gear || r["charge_state"].(map[string]any)["charging_state"] != state {
 				t.Fatal("enum mapping")
@@ -277,15 +284,15 @@ func TestTelemetryChargeSessionFence(t *testing.T) {
 			s.Samples = append(s.Samples,
 				telemetrySample{Field: "DCChargingEnergyIn", At: now.Add(-time.Minute), Num: floatPtr(40), Unit: "kWh", Quality: "ok"},
 				telemetrySample{Field: "DCChargingPower", At: now.Add(-time.Minute), Num: floatPtr(150), Unit: "kW", Quality: "ok"},
-				telemetrySample{Field: "ACChargingPower", At: now, Num: floatPtr(7), Unit: "kW", Quality: "ok"})
-			r := overlayFixture(t, s, now)
-			c := r["charge_state"].(map[string]any)
-			if c["charge_energy_added"] != nil || c["charger_power"] != int64(7) {
-				t.Fatal("previous charge values carried", c)
+				telemetrySample{Field: "ACChargingPower", At: now, Num: floatPtr(7), Unit: "kW", Quality: "ok"},
+				telemetrySample{Field: "IdealBatteryRange", At: now, Num: floatPtr(200), Unit: "mi", Quality: "ok"})
+			e, _, _ := telemetryTemplate(readTemplate(), "1")
+			if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+				t.Fatal("starting charge with old counter accepted")
 			}
 			// A completed session with no counter update cannot reuse old energy.
 			s.Samples[2].Text = textPtr("DetailedChargeStateComplete")
-			r = overlayFixture(t, s, now)
+			r := overlayFixture(t, s, now)
 			if r["charge_state"].(map[string]any)["charge_energy_added"] != nil {
 				t.Fatal("old energy resurrected at completion")
 			}
@@ -368,11 +375,87 @@ func TestTelemetryUnsupportedTemplateFields(t *testing.T) {
 		t.Fatal("active update template served")
 	}
 	f := false
-	tr := true
-	s.Samples = append(s.Samples, telemetrySample{Field: "Locked", At: now, Bool: &f, Quality: "ok"}, telemetrySample{Field: "SentryMode", At: now, Bool: &tr, Quality: "ok"}, telemetrySample{Field: "TpmsPressureFl", At: now, Num: floatPtr(2.5), Unit: "bar", Quality: "ok"}, telemetrySample{Field: "Version", At: now, Text: textPtr("synthetic-new"), Quality: "ok"})
+	s.Samples = append(s.Samples, telemetrySample{Field: "Locked", At: now, Bool: &f, Quality: "ok"}, telemetrySample{Field: "SentryMode", At: now, Text: textPtr("SentryModeStateArmed"), Quality: "ok"}, telemetrySample{Field: "TpmsPressureFl", At: now, Num: floatPtr(2.5), Unit: "bar", Quality: "ok"}, telemetrySample{Field: "Version", At: now, Text: textPtr("synthetic-new"), Quality: "ok"})
 	r = overlayFixture(t, s, now)
 	v := r["vehicle_state"].(map[string]any)
 	if v["locked"] != false || v["sentry_mode"] != true || v["tpms_pressure_fl"] != 2.5 || v["car_version"] != "synthetic-new" {
 		t.Fatal("vehicle telemetry not mapped")
+	}
+}
+
+func TestTelemetryCollectorTimestampNeverRegresses(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, scenario := range []string{"disconnect", "older overlay", "exhausted budget"} {
+		t.Run(scenario, func(t *testing.T) {
+			var calls atomic.Int32
+			s, store, up := collectorFixture(t, func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.Write(readTemplate()) })
+			authorize(t, store, up.URL)
+			s.c.TelemetryReads = true
+			s.collector.clock = func() time.Time { return now }
+			reader := &fakeTelemetryReader{snap: readSnapshot(now)}
+			s.telemetryReader = reader
+			key := "/api/1/vehicles/1/vehicle_data"
+			if status, _, _ := s.collect(context.Background(), key, "1"); status != 200 {
+				t.Fatal("bootstrap")
+			}
+			if status, _, _ := s.collect(context.Background(), key, "1"); status != 200 {
+				t.Fatal("overlay")
+			}
+			switch scenario {
+			case "disconnect":
+				reader.snap.Status = "DISCONNECTED"
+			case "older overlay":
+				reader.snap.Samples[0].At = now.Add(-time.Second)
+			case "exhausted budget":
+				reader.snap.Status = "DISCONNECTED"
+				s.c.MonthlyBudgetUSD = s.usage(now).USD
+			}
+			for i := 0; i < 3; i++ {
+				status, _, retry := s.collect(context.Background(), key, "1")
+				if status != 429 || retry != 30 {
+					t.Fatal("stale successful data returned", status, retry)
+				}
+			}
+			if calls.Load() != 1 {
+				t.Fatal("timestamp guard called Tesla")
+			}
+		})
+	}
+	// A fresh real response can be ahead of a still-current telemetry source.
+	s, store, up := collectorFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(strings.ReplaceAll(string(readTemplate()), `"timestamp":1`, fmt.Sprintf(`"timestamp":%d`, now.Add(time.Second).UnixMilli()))))
+	})
+	authorize(t, store, up.URL)
+	s.c.TelemetryReads = true
+	s.collector.clock = func() time.Time { return now }
+	s.telemetryReader = &fakeTelemetryReader{snap: readSnapshot(now)}
+	key := "/api/1/vehicles/1/vehicle_data"
+	s.collect(context.Background(), key, "1")
+	if status, _, retry := s.collect(context.Background(), key, "1"); status != 429 || retry != 30 {
+		t.Fatal("older telemetry bypassed watermark")
+	}
+}
+func TestTelemetryChargingRequiresParserFields(t *testing.T) {
+	now := time.Now().UTC()
+	// Economy omits IdealBatteryRange. Never emit a charging response that
+	// TeslaMate would silently discard instead of recording the charge row.
+	for _, missing := range []string{"IdealBatteryRange", "DCChargingEnergyIn", "ACChargingPower"} {
+		t.Run(missing, func(t *testing.T) {
+			s := readSnapshot(now)
+			s.Samples[1].Text = textPtr("ShiftStateP")
+			s.Samples[2].Text = textPtr("DetailedChargeStateCharging")
+			for _, v := range []struct {
+				f, u string
+				n    float64
+			}{{"IdealBatteryRange", "mi", 200}, {"DCChargingEnergyIn", "kWh", 1}, {"ACChargingPower", "kW", 7}} {
+				if v.f != missing {
+					s.Samples = append(s.Samples, telemetrySample{Field: v.f, At: now, Num: floatPtr(v.n), Unit: v.u, Quality: "ok"})
+				}
+			}
+			e, _, _ := telemetryTemplate(readTemplate(), "1")
+			if overlayTelemetry(e, fieldMap(t, s, now), s.Sign, s.ChargeStart) {
+				t.Fatal("incomplete charging reply served")
+			}
+		})
 	}
 }

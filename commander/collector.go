@@ -84,7 +84,8 @@ type collector struct {
 	mu    sync.Mutex // one upstream call at a time; never double-bill a poll
 	cache map[string]cached
 	// Successful real vehicle_data survives later asleep/error replies.
-	data map[string]cached
+	data       map[string]cached
+	lastDataTS map[string]int64
 	// account is the OAuth account the cache and pacing belong to.
 	account uint64
 	// The current polling cycle: when it started, which vehicle and read
@@ -198,7 +199,7 @@ func collectorKey(r *http.Request) (string, string, bool) {
 	return r.URL.Path + "?" + url.Values{"endpoints": {strings.Join(groups, ";")}}.Encode(), m[1], true
 }
 
-func (s *Service) collect(ctx context.Context, key, vehicle string) (int, []byte, int) {
+func (s *Service) collect(ctx context.Context, key, vehicle string) (status int, body []byte, retryAfter int) {
 	c := &s.collector
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -208,8 +209,33 @@ func (s *Service) collect(ctx context.Context, key, vehicle string) (int, []byte
 		// for the previous one may be served.
 		c.cache, c.served, c.refused, c.account = map[string]cached{}, map[string]time.Time{}, map[string]time.Time{}, account
 		c.data = map[string]cached{}
+		c.lastDataTS = map[string]int64{}
 		c.last, c.cycleVehicle, c.cycleKey, c.cycleCalls, c.followUp = time.Time{}, "", "", 0, false
 	}
+	defer func() {
+		if !s.c.TelemetryReads {
+			return
+		}
+		if s.oauth.Account() != account {
+			status, body, retryAfter = 503, []byte(`{"error":"account changed"}`), 0
+			return
+		}
+		if status != 200 || !strings.Contains(key, "/vehicle_data") {
+			return
+		}
+		if ts, ok := collectorDataTimestamp(body); ok {
+			if ts < c.lastDataTS[vehicle] {
+				// TeslaMate immediately refetches older 200s. A normal rate-limit
+				// reply backs it off without lying about the cached data's time.
+				status, body, retryAfter = 429, []byte(`{"error":"vehicle data older than last served observation"}`), 30
+				return
+			}
+			if c.lastDataTS == nil {
+				c.lastDataTS = map[string]int64{}
+			}
+			c.lastDataTS[vehicle] = ts
+		}
+	}()
 	now := time.Now()
 	if c.clock != nil {
 		now = c.clock()
@@ -294,7 +320,7 @@ func (s *Service) collect(ctx context.Context, key, vehicle string) (int, []byte
 		return 504, []byte(`{"error":"upstream unavailable"}`), 0
 	}
 	defer res.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(res.Body, 2<<20))
+	body, err = io.ReadAll(io.LimitReader(res.Body, 2<<20))
 	if err != nil {
 		return 502, []byte(`{"error":"upstream read failed"}`), 0
 	}
