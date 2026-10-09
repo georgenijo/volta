@@ -182,6 +182,11 @@ struct DashboardView: View {
                             .padding(.bottom, VoltaSpacing.lg)
                     }
                     identityRow(status)
+                    if let freshness = status.telemetryFreshness {
+                        Text(freshness.label)
+                            .font(.caption).foregroundStyle(Color.voltaTextSecondary)
+                            .padding(.top, VoltaSpacing.sm)
+                    }
                     batteryBlock(status)
                         .padding(.top, VoltaSpacing.xl)
                     HairlineDivider().padding(.top, VoltaSpacing.xl)
@@ -331,11 +336,12 @@ struct DashboardView: View {
     private func metricGrid(_ status: VehicleStatus) -> some View {
         let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
         return LazyVGrid(columns: columns, spacing: 14) {
-            // Pack temperature isn't recorded by TeslaMate; keep the tile, show "—".
             MetricCard(systemImage: "minus.plus.batteryblock", title: "Pack Temp",
-                       value: "—", unit: units.temperatureUnit,
-                       badge: .init(text: "N/A", color: .voltaTextTertiary),
-                       gauge: GradientGauge(value: nil))
+                       value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
+                       gauge: GradientGauge(value: status.packTempMaxC.map(Self.tempFraction))) {
+                Text(status.packTempMaxC == nil ? "Streams when awake" : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "No minimum recorded")
+                    .font(.caption).foregroundStyle(Color.voltaTextSecondary)
+            }
             efficiencyCard
             climateCard(status)
             weatherCard(status)

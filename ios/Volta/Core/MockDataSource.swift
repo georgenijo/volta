@@ -33,7 +33,13 @@ struct MockDataSource: VoltaDataSource {
             throw VoltaError.server(code: "data_unavailable", message: "TeslaMate has not recorded a battery observation for this vehicle")
         }
         try check(vehicleID)
-        return VehicleStatus(vehicleId: vehicleID, state: .online, updatedAt: now, batteryLevel: 72, usableBatteryLevel: 71, ratedRangeKm: 354, estRangeKm: 328, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil, minutesToFull: nil, insideTempC: 21, outsideTempC: 16, climateOn: false, driverTempSettingC: 20, locked: true, sentryMode: true, odometerKm: 38642, location: Location(latitude: 37.4419, longitude: -122.1430, heading: 115, address: home, placeName: "Home"), firmware: "2026.32.6")
+        return VehicleStatus(vehicleId: vehicleID, state: .online, updatedAt: now, batteryLevel: 72, usableBatteryLevel: 71, ratedRangeKm: 354, estRangeKm: 328, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil, minutesToFull: nil, insideTempC: 21, outsideTempC: 16, climateOn: false, driverTempSettingC: 20, locked: true, sentryMode: true, odometerKm: 38642, location: Location(latitude: 37.4419, longitude: -122.1430, heading: 115, address: home, placeName: "Home"), firmware: "2026.32.6", packTempMaxC: 38, packTempMinC: 31,
+            energyRemainingKwh: 43.2, chargePortDoorOpen: false, chargePortLatch: "ChargePortLatchEngaged",
+            tpms: TirePressures(fl: TireReading(pressureBar: 2.9, updatedAt: now.addingTimeInterval(-7200)),
+                               fr: TireReading(pressureBar: 2.9, updatedAt: now.addingTimeInterval(-7200)),
+                               rl: TireReading(pressureBar: 2.3, updatedAt: now.addingTimeInterval(-3600)),
+                               rr: TireReading(pressureBar: 2.8, updatedAt: now.addingTimeInterval(-3600))),
+            telemetryFreshness: TelemetryFreshness(connected: true, lastSeenAt: now, recordedAt: [:]))
     }
     private var allDrives: [DriveSummary] {
         guard !empty else { return [] }

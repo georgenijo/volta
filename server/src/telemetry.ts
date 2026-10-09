@@ -3,6 +3,7 @@ import { ApiError, missing } from './errors';
 import type { ListInput } from './validation';
 import { summaryPeriod } from './period';
 import { FleetSeries } from './fleet-series';
+import { FleetLive, liveValues } from './fleet-live';
 
 export class Telemetry {
   constructor(private sql: DB, private currency: string | null = null, private clock: () => Date = () => new Date(), private fleetEnabled = false,
@@ -42,12 +43,22 @@ export class Telemetry {
       LEFT JOIN LATERAL (SELECT * FROM public.charges WHERE charging_process_id = cp.id ORDER BY date DESC, id DESC LIMIT 1) ch ON true`;
   }
   async vehicles() {
-    return this.sql`SELECT car.id, COALESCE(car.name, 'Tesla') AS name, car.model, car.trim_badging AS trim,
+    const rows = await this.sql`SELECT car.id, COALESCE(car.name, 'Tesla') AS name, car.model, car.trim_badging AS trim,
       car.exterior_color AS "exteriorColor", right(car.vin, 6) AS "vinSuffix",
       (SELECT version FROM public.updates WHERE car_id = car.id AND end_date IS NOT NULL ORDER BY end_date DESC, id DESC LIMIT 1) AS firmware,
       -- Exactly status's 409 condition over the same rows: says whether status has a battery reading now, not how fresh it is.
       (p.battery_level IS NOT NULL OR ch.battery_level IS NOT NULL) AS "hasData"
       FROM public.cars car JOIN public.car_settings cs ON cs.id = car.settings_id ${this.batterySources()} ORDER BY car.display_priority, car.id`;
+    if (this.fleetEnabled) {
+      for (const row of rows) {
+        if (row.hasData) continue;
+        try {
+          const live = liveValues(await new FleetLive(this.sql).read(row.id), this.clock());
+          row.hasData = live?.values.batteryLevel != null;
+        } catch { this.log({event:'fleet_live_failed',code:'telemetry_query_failed'}); }
+      }
+    }
+    return rows;
   }
   async health() {
     try {
@@ -71,12 +82,13 @@ export class Telemetry {
     await this.vehicle(id);
     const s = this.sql;
     const [row] = await s`SELECT p.*, poll.usable_battery_level AS polled_usable, poll.rated_battery_range_km AS polled_rated,
-      poll.est_battery_range_km AS polled_est, poll.inside_temp AS polled_inside, poll.outside_temp AS polled_outside,
+      poll.date AS polled_at, poll.est_battery_range_km AS polled_est, poll.inside_temp AS polled_inside, poll.outside_temp AS polled_outside,
       poll.is_climate_on AS polled_climate, poll.driver_temp_setting AS polled_driver_temp, st.state, st.start_date AS state_at,
       d.id AS active_drive_id, d.start_date AS drive_at, cp.id AS charge_id, cp.start_date AS charge_at,
       u.id AS update_id, u.start_date AS update_at, ch.date AS charge_sample_at, ch.battery_level AS charge_battery,
       ch.usable_battery_level AS charge_usable, ch.rated_battery_range_km AS charge_range, ch.charger_power,
       (SELECT version FROM public.updates WHERE car_id = ${id} AND end_date IS NOT NULL ORDER BY end_date DESC, id DESC LIMIT 1) AS firmware,
+      (SELECT end_date FROM public.updates WHERE car_id = ${id} AND end_date IS NOT NULL ORDER BY end_date DESC,id DESC LIMIT 1) AS firmware_at,
       a.display_name AS address, g.name AS place_name
       FROM public.cars car
       ${this.batterySources()}
@@ -89,12 +101,17 @@ export class Telemetry {
         6371000 * 2 * asin(least(1.0, sqrt(power(sin(radians((latitude-p.latitude)/2)),2) + cos(radians(p.latitude))*cos(radians(latitude))*power(sin(radians((longitude-p.longitude)/2)),2)))) <= radius
         ORDER BY radius, id LIMIT 1) g ON true
       WHERE car.id = ${id}`;
-    if (!row || (row.battery_level == null && row.charge_battery == null)) throw new ApiError(409, 'data_unavailable', 'TeslaMate has not recorded a battery observation for this vehicle');
+    let live = null;
+    if (this.fleetEnabled) {
+      try { live = liveValues(await new FleetLive(s).read(id), this.clock()); }
+      catch { this.log({event:'fleet_live_failed',code:'telemetry_query_failed'}); }
+    }
+    if (!row || (row.battery_level == null && row.charge_battery == null && live?.values.batteryLevel == null)) throw new ApiError(409, 'data_unavailable', 'TeslaMate has not recorded a battery observation for this vehicle');
     const chargeNewer = row.charge_sample_at && (!row.date || row.charge_sample_at >= row.date);
-    const updatedAt = [row.date, row.state_at, row.drive_at, row.charge_at, row.charge_sample_at, row.update_at].filter(Boolean).sort((a, b) => +b - +a)[0];
+    const updatedAt = [live?.values.batteryLevel != null ? new Date(live.by.get('BatteryLevel')!.source_ts) : null, row.date, row.state_at, row.drive_at, row.charge_at, row.charge_sample_at, row.update_at].filter(Boolean).sort((a, b) => +b - +a)[0];
     // Historical fields remain timestamped; logger reachability cannot prove live Tesla connectivity.
     const state = row.update_id ? 'updating' : row.active_drive_id ? 'driving' : row.charge_id ? 'charging' : row.state ?? 'offline';
-    return { vehicleId: id, state, updatedAt,
+    const result = { vehicleId: id, state, updatedAt,
       batteryLevel: chargeNewer ? row.charge_battery ?? row.battery_level : row.battery_level ?? row.charge_battery,
       usableBatteryLevel: chargeNewer ? row.charge_usable : row.polled_usable ?? null,
       ratedRangeKm: chargeNewer ? row.charge_range : row.polled_rated ?? null,
@@ -103,6 +120,24 @@ export class Telemetry {
       insideTempC: row.polled_inside ?? null, outsideTempC: row.polled_outside ?? null, climateOn: row.polled_climate ?? null,
       driverTempSettingC: row.polled_driver_temp ?? null, locked: null, sentryMode: null, odometerKm: row.odometer ?? null,
       location: row.latitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
+    if (!live) return result;
+    const sources: Record<string,string> = {batteryLevel:'BatteryLevel',usableBatteryLevel:'Soc',ratedRangeKm:'RatedRange',estRangeKm:'EstBatteryRange',chargeLimit:'ChargeLimitSoc',insideTempC:'InsideTemp',outsideTempC:'OutsideTemp',odometerKm:'Odometer',firmware:'Version',packTempMaxC:'ModuleTempMax',packTempMinC:'ModuleTempMin',locked:'Locked',sentryMode:'SentryMode',chargePortDoorOpen:'ChargePortDoorOpen',chargePortLatch:'ChargePortLatch',energyRemainingKwh:'EnergyRemaining'};
+    for (const [key,value] of Object.entries(live.values)) {
+      const field = sources[key];
+      if (field && value == null) {
+        (result as Record<string,unknown>)[key] ??= null;
+        continue;
+      }
+      const baseline = ['batteryLevel','usableBatteryLevel','ratedRangeKm'].includes(key) && chargeNewer ? row.charge_sample_at : key === 'firmware' ? row.firmware_at : key === 'odometerKm' || key === 'batteryLevel' ? row.date : row.polled_at;
+      // A connected change-only stream carries current values regardless of
+      // per-field age; disconnected overlapping metrics compete by timestamp.
+      const sample = field && live.by.get(field);
+      if (!field || result[key as keyof typeof result] == null || live.freshness.connected || (sample && (!baseline || +new Date(sample.source_ts) >= +new Date(baseline)))) {
+        (result as Record<string,unknown>)[key] = ['batteryLevel','usableBatteryLevel','chargeLimit'].includes(key) && typeof value === 'number' ? Math.round(value) : value;
+        if (sample && (!result.updatedAt || +new Date(sample.source_ts) > +result.updatedAt)) result.updatedAt = new Date(sample.source_ts);
+      }
+    }
+    return {...result,tpms:live.tpms,telemetryFreshness:live.freshness};
   }
   private driveSelect(source = this.sql`public.drives`) {
     const s = this.sql, efficiency = s`eff.value`;

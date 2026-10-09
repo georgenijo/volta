@@ -13,7 +13,7 @@ const digest=createHash('sha256').update('volta-telemetry-vin-binding-v1\0').upd
 const auth=new Auth(authDB),app=createApp(auth,new Telemetry(reader,'USD',undefined,true),()=>{});
 let start:Date,chargeStart:Date,token:string;
 beforeEach(async()=>{
-  await owner`TRUNCATE volta_telemetry.samples,volta_telemetry.gaps,volta_telemetry.power_calibration,volta_telemetry.vehicle_bindings`;
+  await owner`TRUNCATE volta_telemetry.latest_samples,volta_telemetry.connectivity,volta_telemetry.stream_health,volta_telemetry.samples,volta_telemetry.gaps,volta_telemetry.power_calibration,volta_telemetry.vehicle_bindings`;
   await owner`TRUNCATE public.charges,public.charging_processes,public.positions,public.drives,public.states,public.updates,public.cars,public.car_settings,public.addresses,public.geofences,volta.devices,volta.pairing_codes,volta.rate_limits RESTART IDENTITY CASCADE`;
   await owner.file(new URL('fixtures.sql',import.meta.url));
   await owner`UPDATE cars SET vin=${vin} WHERE id=1`;
@@ -288,3 +288,66 @@ test('eight-hour co-timed electrical history has identical selection and coverag
   await owner`ANALYZE volta_telemetry.samples`;
   expect((await get('/v1/drives/1')).telemetry).toEqual(before);
 },30000);
+
+test('live status uses exact binding, change-only security and tire units; mismatch falls back',async()=>{
+  await owner`TRUNCATE volta_telemetry.latest_samples,volta_telemetry.connectivity,volta_telemetry.stream_health`;
+  const t=new Date();
+  await owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_bool,invalid,quality,payload_id)
+    VALUES(1,'Locked',${t},${t},true,false,'ok','live-fixture')`;
+  await owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_num,source_unit,invalid,quality,payload_id)
+    VALUES(1,'TpmsPressureFl',${t},${t},2.9,'bar',false,'ok','live-fixture')`;
+  let status=await get('/v1/vehicles/1/status');
+  expect(status.locked).toBe(true);expect(status.tpms.fl.pressureBar).toBe(2.9);expect(status.telemetryFreshness.connected).toBe(false);
+  await owner`UPDATE cars SET vin='5YJ3E1EA0XF000002' WHERE id=1`;
+  status=await get('/v1/vehicles/1/status');expect(status.locked).toBeNull();expect(status.tpms).toBeUndefined();
+  await owner`TRUNCATE volta_telemetry.latest_samples,volta_telemetry.connectivity,volta_telemetry.stream_health`;
+});
+
+test('telemetry-only battery supports vehicle selection and a backward-compatible status timestamp',async()=>{
+  await owner`TRUNCATE volta_telemetry.latest_samples,volta_telemetry.connectivity,volta_telemetry.stream_health`;
+  await owner`UPDATE positions SET battery_level=NULL WHERE car_id=1`;
+  await owner`UPDATE charging_processes SET end_date=now() AT TIME ZONE 'UTC' WHERE car_id=1`;
+  const t=new Date();
+  await owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_num,source_unit,invalid,quality,payload_id)
+    VALUES(1,'BatteryLevel',${t},${t},72.4,'%',false,'ok','live-battery')`;
+  const vehicles=await get('/v1/vehicles');
+  expect(vehicles.find((v:any)=>v.id===1).hasData).toBe(true);
+  const status=await get('/v1/vehicles/1/status');expect(status.batteryLevel).toBe(72);expect(status.updatedAt).toBeDefined();
+  await owner`TRUNCATE volta_telemetry.latest_samples,volta_telemetry.connectivity,volta_telemetry.stream_health`;
+});
+
+
+test('live overlapping metrics prefer connected change-only data, otherwise compare per-field time',async()=>{
+  const now=new Date(),old=new Date('2000-01-01T00:00:00Z');
+  await owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_num,source_unit,invalid,quality,payload_id)
+    VALUES(1,'InsideTemp',${old},${old},38,'C',false,'ok','old-temp')`;
+  const fallback=await new Telemetry(reader).status(1);
+  expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(fallback.insideTempC);
+  await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at)
+    VALUES(1,'fixture','CONNECTED',${old},${old})`;
+  await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
+    VALUES(1,'fixture',${old},${now},${old},${now},0,${now})`;
+  expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(38);
+  await owner`UPDATE volta_telemetry.connectivity SET status='DISCONNECTED'`;
+  expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(fallback.insideTempC);
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${now},received_at=${now}`;
+  expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(38);
+  await owner`UPDATE volta_telemetry.latest_samples SET invalid=true,quality='invalid',value_num=NULL`;
+  expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(fallback.insideTempC);
+});
+
+
+test('overlapping reconnect keeps the active socket current; late old disconnect cannot mask it',async()=>{
+  const now=new Date(),at=(seconds:number)=>new Date(+now-seconds*1000);
+  await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
+    VALUES(1,'fixture',${at(10)},${now},${at(10)},${now},0,${now})`;
+  await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at) VALUES
+    (1,'old-generation','CONNECTED',${at(20)},${at(20)}),
+    (1,'wifi','CONNECTED',${at(6)},${at(6)}),
+    (1,'cellular','CONNECTED',${at(4)},${at(4)}),
+    (1,'wifi','DISCONNECTED',${at(2)},${at(2)})`;
+  expect((await get('/v1/vehicles/1/status')).telemetryFreshness.connected).toBe(true);
+  await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at)
+    VALUES(1,'cellular','DISCONNECTED',${at(1)},${at(1)})`;
+  expect((await get('/v1/vehicles/1/status')).telemetryFreshness.connected).toBe(false);
+});

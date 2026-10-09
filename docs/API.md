@@ -110,7 +110,12 @@ VehicleStatus  { vehicleId, state: online|asleep|offline|driving|charging|updati
                  chargeLimit, chargingState: disconnected|stopped|charging|complete|null,
                  chargerPowerKw, minutesToFull, insideTempC, outsideTempC, climateOn,
                  driverTempSettingC, locked, sentryMode, odometerKm,
-                 location: Location|null, firmware }
+                 location: Location|null, firmware,
+                 packTempMaxC, packTempMinC, energyRemainingKwh, chargePortDoorOpen,
+                 chargePortLatch, tpms: { fl, fr, rl, rr }, telemetryFreshness }
+TireReading    { pressureBar: number|null, updatedAt: timestamp|null }
+TelemetryFreshness { connected: boolean, lastSeenAt: timestamp|null,
+                     recordedAt: { telemetryField: timestamp } }
 Location       { latitude, longitude, heading, address, placeName }
 ActivitySummary{ range, distanceKm, driveCount, chargeCount, energyUsedKwh,
                  efficiencyWhPerKm, energyAddedKwh, chargeCost, currency,
@@ -226,7 +231,7 @@ returns 409 `data_unavailable`. Existing JSON shapes remain unchanged. A vehicle
 without a recorded SOC observation also returns 409 for status. `Vehicle.hasData`
 is evaluated over the same rows status reads (the latest position from the last 24
 hours or within 15 minutes of the latest full poll, and the newest sample of an
-open charging session): it is false exactly when status for that vehicle would
+open charging session), plus exact-bound Fleet Telemetry BatteryLevel when enabled: it is false exactly when status for that vehicle would
 return 409 at that moment. Clients prefer a vehicle with data as the default
 selection. True only means status has a battery reading, not that recording is
 recent or densely sampled. Servers predating the field omit it
@@ -239,3 +244,5 @@ estimated zero; no recorded climate boolean yields null. Stale, unfinished
 activity rows have unknown end times and extend to now in status/timeline/idle
 derivation; confirm TeslaMate collection before treating these as complete
 history.
+
+Live Fleet Telemetry additions are gated by `FLEET_TELEMETRY_ENABLED=true` and an exact VIN-digest binding. TPMS corners contain `TireReading`; temperatures are Celsius, odometer and ranges kilometres, energy kWh, pressures bar. `SentryModeStateOff` is false, known active sentry states are true, unknown/invalid is null. `chargePortLatch` preserves the upstream enum name. A change-only field can remain current for hours: freshness comes from connectivity and receiver/consumer health, not per-field expiry. Disconnected streams retain observations and their timestamps. New clients accept older responses without these optional fields.

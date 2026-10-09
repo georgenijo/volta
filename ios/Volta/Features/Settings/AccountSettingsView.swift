@@ -212,6 +212,9 @@ struct GeneralSettingsView: View {
     private var temperature: Binding<UnitPreferences.Temperature> {
         Binding(get: { model.units.temperature }, set: { model.units.temperature = $0 })
     }
+    private var pressure: Binding<UnitPreferences.Pressure> {
+        Binding(get: { model.units.pressure ?? .psi }, set: { model.units.pressure = $0 })
+    }
     private var drivingLiveActivity: Binding<Bool> {
         Binding(get: { model.drivingLiveActivity }, set: { model.drivingLiveActivity = $0 })
     }
@@ -229,6 +232,10 @@ struct GeneralSettingsView: View {
                     }
                     ScreenKit.ValueRow(title: "Temperature") {
                         ScreenKit.Segmented(options: [(UnitPreferences.Temperature.fahrenheit, "°F"), (.celsius, "°C")], selection: temperature)
+                            .frame(width: 150)
+                    }
+                    ScreenKit.ValueRow(title: "Tire pressure") {
+                        ScreenKit.Segmented(options: [(UnitPreferences.Pressure.psi, "psi"), (.bar, "bar")], selection: pressure)
                             .frame(width: 150)
                     }
                     ScreenKit.ValueRow(title: "Currency", showsDivider: false) {

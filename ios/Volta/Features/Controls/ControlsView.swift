@@ -267,6 +267,9 @@ struct ControlsView: View {
 
     private var identity: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let freshness = model.status?.telemetryFreshness {
+                Text(freshness.label).font(.caption).foregroundStyle(Color.voltaTextSecondary)
+            }
             Text(vehicleName ?? "Vehicle")
                 .font(.system(.title, weight: .semibold))
                 .foregroundStyle(Color.voltaTextPrimary)
@@ -301,7 +304,7 @@ struct ControlsView: View {
                 run(VehicleCommand.actuateTrunk, params: ["which_trunk": "rear"], label: "Open trunk")
             }
             HairlineDivider(leadingInset: iconInset)
-            pairRow(icon: "powerplug", title: "Charge port", subtitle: "No data",
+            pairRow(icon: "powerplug", title: "Charge port", subtitle: chargePortStatus,
                     left: ("Open", { run(VehicleCommand.chargePortOpen, label: "Open charge port") }),
                     right: ("Close", { run(VehicleCommand.chargePortClose, label: "Close charge port") }))
             HairlineDivider()
@@ -309,6 +312,17 @@ struct ControlsView: View {
                     left: ("Vent", { run(VehicleCommand.windowControl, params: ["command": "vent"], label: "Vent windows") }),
                     right: ("Close", { run(VehicleCommand.windowControl, params: ["command": "close"], label: "Close windows") }))
         }
+    }
+
+    private var chargePortStatus: String {
+        let door = model.status?.chargePortDoorOpen.map { $0 ? "Open" : "Closed" } ?? "Door state not recorded"
+        let latch: String? = switch model.status?.chargePortLatch {
+        case "ChargePortLatchEngaged": "Latched"
+        case "ChargePortLatchDisengaged": "Unlatched"
+        case "ChargePortLatchBlocking": "Latch blocked"
+        default: nil
+        }
+        return latch.map { "\(door) · \($0)" } ?? door
     }
 
     private var chargingSection: some View {

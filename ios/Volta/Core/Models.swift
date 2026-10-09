@@ -74,6 +74,35 @@ struct VehicleStatus: Codable, Hashable, Sendable {
     var odometerKm: Double?
     var location: Location?
     var firmware: String?
+    var packTempMaxC: Double? = nil
+    var packTempMinC: Double? = nil
+    var energyRemainingKwh: Double? = nil
+    var chargePortDoorOpen: Bool? = nil
+    var chargePortLatch: String? = nil
+    var tpms: TirePressures? = nil
+    var telemetryFreshness: TelemetryFreshness? = nil
+}
+
+struct TireReading: Codable, Hashable, Sendable {
+    var pressureBar: Double?
+    var updatedAt: Date?
+    /// Visual guide only; the door placard is the authority for cold pressure.
+    var isLow: Bool { pressureBar.map { $0 < 2.5 } ?? false }
+}
+struct TirePressures: Codable, Hashable, Sendable {
+    var fl: TireReading
+    var fr: TireReading
+    var rl: TireReading
+    var rr: TireReading
+}
+struct TelemetryFreshness: Codable, Hashable, Sendable {
+    var connected: Bool
+    var lastSeenAt: Date?
+    var recordedAt: [String: Date]
+    var label: String {
+        if connected { return "Telemetry connected" }
+        return lastSeenAt.map { "Last telemetry as of \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Telemetry disconnected · no observations yet"
+    }
 }
 
 enum SummaryRange: String, Codable, Sendable, CaseIterable, Identifiable {
