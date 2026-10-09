@@ -23,11 +23,12 @@ export TEST_DATABASE_URL="postgres://$(id -un)@127.0.0.1:$port/volta_test"
 # Run exactly the production bootstrap, omitting only the interactive passwords:
 # this isolated cluster uses trust for fixture-only localhost connections.
 sed '/^\\password /d' ../deploy/bootstrap.sql > "$cluster/bootstrap.sql"
-cp ../deploy/auth-schema.sql ../deploy/history-schema.sql "$cluster/"
+cp ../deploy/auth-schema.sql ../deploy/history-schema.sql ../deploy/service-schema.sql "$cluster/"
 cp ../deploy/auth-grants.sql ../deploy/privilege-checks.sql "$cluster/"
 "$PG_BIN/psql" "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$cluster/bootstrap.sql" >"$cluster/bootstrap.log"
 "$PG_BIN/psql" "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../deploy/telemetry/sql/001_volta_telemetry.sql >"$cluster/telemetry.log"
 "$PG_BIN/psql" "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../deploy/telemetry/sql/002_api_series.sql >>"$cluster/telemetry.log"
+"$PG_BIN/psql" "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../deploy/telemetry/sql/003_service_odometer.sql >>"$cluster/telemetry.log"
 export TESLAMATE_DATABASE_URL="postgres://volta_reader@127.0.0.1:$port/volta_test"
 export AUTH_DATABASE_URL="postgres://volta_auth@127.0.0.1:$port/volta_test"
 echo "Postgres $($PG_BIN/postgres --version), restored TeslaMate v4.3.0; database=volta_test (isolated loopback cluster)"

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ServiceLog } from '../src/service';
 import { Auth } from '../src/auth';
 import { createApp } from '../src/app';
 import { connect } from '../src/db';
@@ -13,13 +14,13 @@ if (!url || new URL(url).pathname !== '/volta_test' || !['127.0.0.1','localhost'
 const owner = connect(url, false, 120000), reader = connect(process.env.TESLAMATE_DATABASE_URL!, true), authDb = connect(process.env.AUTH_DATABASE_URL!);
 const auth = new Auth(authDb), telemetry = new Telemetry(reader, 'USD');
 let logs: object[] = [], token = '';
-const app = createApp(auth, telemetry, entry => logs.push(entry));
+const app = createApp(auth, telemetry, entry => logs.push(entry), null, null, new ServiceLog(authDb));
 const request = (path: string, options: RequestInit = {}, authenticated = true) => app.request(path, { ...options, headers: { ...(authenticated ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
 const json = async (path: string) => { const response = await request(path); const body = await response.json(); if (response.status !== 200) throw new Error(`${path}: ${response.status} ${JSON.stringify(body)}`); return body as any; };
 const pair = (code: string, name = 'Synthetic phone') => request('/v1/auth/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, deviceName: name }) }, false);
 beforeAll(async () => { await owner`SELECT 1`; });
 beforeEach(async () => {
-  await owner`TRUNCATE public.charges, public.charging_processes, public.positions, public.drives, public.states, public.updates, public.cars, public.car_settings, public.addresses, public.geofences, volta.devices, volta.pairing_codes, volta.rate_limits RESTART IDENTITY CASCADE`;
+  await owner`TRUNCATE public.charges, public.charging_processes, public.positions, public.drives, public.states, public.updates, public.cars, public.car_settings, public.addresses, public.geofences, volta.service_events, volta.service_items, volta.devices, volta.pairing_codes, volta.rate_limits RESTART IDENTITY CASCADE`;
   await owner.file(new URL('./fixtures.sql', import.meta.url));
   const response = await pair(await auth.createPairingCode());
   expect(response.status).toBe(200); token = (await response.json() as any).token; logs = [];
@@ -459,6 +460,7 @@ describe('metric telemetry contract', () => {
     expect(fallbackIdles.items).toHaveLength(50); expect(fallbackIdles.items.every((r:any)=>r.latitude===40 || r.latitude===40.01)).toBe(true);
     await timed('summaryZone','/v1/vehicles/1/summary?range=30d&tz=America/New_York');
     const battery = await timed('battery', '/v1/vehicles/1/battery'); expect(battery.capacityNowKwh).toBeGreaterThan(0);
+    await timed('service','/v1/vehicles/1/service');
     // Each SQL statement also has the unchanged production 15-second timeout.
     console.log(JSON.stringify({ event:'scale_receipt', added:{drives:2500,positions:1722500,parkedPositions:222500,states:7500,chargingProcesses:1000,chargeSamples:100000}, milliseconds:timings }));
     expect(performance.now()-started).toBeLessThan(15000);
@@ -475,7 +477,7 @@ describe('database privilege boundaries', () => {
   const runAdmin = async (entry: string, prefix = '', suffix = '') => {
     const dir = await mkdtemp(join(tmpdir(),'volta-bootstrap-check-'));
     try {
-      for (const name of ['bootstrap.sql','auth-recover.sql','auth-schema.sql','history-schema.sql','auth-grants.sql','privilege-checks.sql']) {
+      for (const name of ['bootstrap.sql','auth-recover.sql','auth-schema.sql','history-schema.sql','service-schema.sql','auth-grants.sql','privilege-checks.sql']) {
         const script = (await Bun.file(new URL(`../../deploy/${name}`,import.meta.url)).text()).split('\n').filter(line=>!line.startsWith('\\password ')).join('\n');
         await Bun.write(join(dir,name),script);
       }
@@ -576,4 +578,75 @@ describe('database privilege boundaries', () => {
     await expect(Promise.resolve(authDb`SELECT * FROM private.tokens`)).rejects.toBeDefined();
     await expect(Promise.resolve(authDb`CREATE TABLE public.should_not_exist (id integer)`)).rejects.toBeDefined();
   });
+});
+
+describe('service log and charger locations', () => {
+  const write = (path: string, body: object) => request(path, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  test('authentication, validation, persistence and vehicle ownership', async () => {
+    for (const path of ['/v1/vehicles/1/service','/v1/vehicles/1/charger-locations','/v1/vehicles/1/charger-locations/g:1/sessions']) expect((await request(path,{},false)).status).toBe(401);
+    expect((await request('/v1/vehicles/999/service')).status).toBe(404);
+    const path='/v1/vehicles/1/service';
+    expect((await write(path,{name:'Filter'})).status).toBe(400);
+    expect((await json(path)).items).toEqual([]);
+    const item=await (await write(path,{name:'Rotation',intervalKm:1000})).json() as any;
+    expect((await write(`${path}/${item.id}/events`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:10000})).status).toBe(201);
+    expect((await write(`${path}/${item.id}/events`,{completedAt:'2025-01-01T00:00:00Z',odometerKm:9000})).status).toBe(201);
+    const restarted=createApp(auth,telemetry,()=>{},null,null,new ServiceLog(authDb));
+    const response=await restarted.request(path,{headers:{Authorization:`Bearer ${token}`}});
+    const state=await response.json() as any;
+    expect(state.events).toHaveLength(2); expect(state.items[0].nextOdometerKm).toBe(11000);
+    expect(state.odometerKm).toBe(10090); expect(state.items[0].remainingKm).toBe(910);
+    expect((await write(`/v1/vehicles/3/service/${item.id}/events`,{completedAt:'2026-01-01T00:00:00Z'})).status).toBe(404);
+    expect((await json('/v1/vehicles/3/service')).items).toEqual([]);
+  });
+  test('charger aggregate and sessions preserve scope and unknown totals', async () => {
+    const locations=await json('/v1/vehicles/1/charger-locations');
+    expect(locations).toHaveLength(1); expect(locations[0]).toMatchObject({id:'g:1',sessionCount:1,energyAddedKwh:21,cost:4.8,avgPowerKw:24});
+    expect((await json('/v1/vehicles/1/charger-locations/g:1/sessions')).items.map((s:any)=>s.id)).toEqual([1]);
+    expect((await json('/v1/vehicles/3/charger-locations/g:1/sessions')).items).toEqual([]);
+    expect((await json('/v1/vehicles/3/charger-locations'))[0].cost).toBeNull();
+    await owner`UPDATE public.charging_processes SET charge_energy_added=NULL,cost=NULL WHERE id=1`;
+    const unknown=await json('/v1/vehicles/1/charger-locations'); expect(unknown[0].energyAddedKwh).toBeNull(); expect(unknown[0].cost).toBeNull();
+  });
+  test('pagination cursors are bound to location and vehicle', async () => {
+    await owner`INSERT INTO public.charging_processes(id,car_id,position_id,start_date,geofence_id) SELECT 100,car_id,position_id,start_date+interval '1 minute',geofence_id FROM public.charging_processes WHERE id=1`;
+    const first=await json('/v1/vehicles/1/charger-locations/g:1/sessions?limit=1'); expect(first.nextCursor).not.toBeNull();
+    const next=await json(`/v1/vehicles/1/charger-locations/g:1/sessions?limit=1&cursor=${first.nextCursor}`); expect(next.items[0].id).not.toBe(first.items[0].id);
+    expect((await request(`/v1/vehicles/3/charger-locations/g:1/sessions?cursor=${first.nextCursor}`)).status).toBe(400);
+    expect((await request(`/v1/vehicles/1/charger-locations/a:1/sessions?cursor=${first.nextCursor}`)).status).toBe(400);
+  });
+  test('average input power includes short and fractional-hour sessions', async () => {
+    await owner`UPDATE public.charging_processes SET duration_min=45,charge_energy_used=30 WHERE id=1`;
+    let row=(await json('/v1/vehicles/1/charger-locations'))[0]; expect(row.avgPowerKw).toBeCloseTo(40); expect(row.powerSessionCount).toBe(1);
+    await owner`UPDATE public.charging_processes SET duration_min=90 WHERE id=1`;
+    row=(await json('/v1/vehicles/1/charger-locations'))[0]; expect(row.avgPowerKw).toBeCloseTo(20);
+  });
+  test('service corrections and deletion preserve vehicle boundaries', async () => {
+    const path='/v1/vehicles/1/service';
+    const item=await (await write(path,{name:'Rotation',intervalKm:1000})).json() as any;
+    const event=await (await write(`${path}/${item.id}/events`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:99999})).json() as any;
+    const patch = (p:string,b:object)=>request(p,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+    expect((await patch(`/v1/vehicles/3/service/${item.id}`,{name:'Bad',intervalKm:1})).status).toBe(404);
+    expect((await patch(`/v1/vehicles/3/service-events/${event.id}`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:1})).status).toBe(404);
+    expect((await patch(`${path}/${item.id}`,{name:'Updated rotation',intervalKm:2000})).status).toBe(200);
+    expect((await patch(`/v1/vehicles/1/service-events/${event.id}`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:10000})).status).toBe(200);
+    expect((await json(path)).items[0].remainingKm).toBe(1910);
+    expect((await request(`/v1/vehicles/3/service-events/${event.id}`,{method:'DELETE'})).status).toBe(404);
+    expect((await request(`/v1/vehicles/1/service-events/${event.id}`,{method:'DELETE'})).status).toBe(204);
+    expect((await json(path)).items[0].remainingKm).toBeNull();
+    await write(`${path}/${item.id}/events`,{completedAt:'2026-01-01T00:00:00Z',odometerKm:10000});
+    expect((await request(`${path}/${item.id}`,{method:'DELETE'})).status).toBe(204);
+    expect((await json(path)).items).toEqual([]); expect((await json(path)).events).toEqual([]);
+  });
+
+  test('service includes the newest odometer even without battery-range data',async()=>{
+    await owner`INSERT INTO public.positions(id,car_id,date,latitude,longitude,odometer)
+      SELECT 100,car_id,now() AT TIME ZONE 'UTC'-interval '1 second',latitude,longitude,20000 FROM public.positions WHERE id=1`;
+    expect((await json('/v1/vehicles/1/service')).odometerKm).toBe(20000);
+  });
+  test('chunked oversized service input retains the 413 body-limit response',async()=>{
+    const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(' '.repeat(5000)));controller.close();}});
+    const response=await request('/v1/vehicles/1/service',{method:'POST',body:stream}); expect(response.status).toBe(413);
+  });
+
 });

@@ -70,6 +70,7 @@ fleet exec --timeout 60 ubuntu -- 'sudo python3 /opt/volta/deploy/telemetry/ops/
 fleet exec --timeout 60 ubuntu -- 'sudo python3 /opt/volta/deploy/telemetry/ops/prepare-secrets.py --apply'
 fleet exec --timeout 60 ubuntu -- 'sudo sh -c "cat /opt/volta/deploy/telemetry/sql/001_volta_telemetry.sql | docker compose --env-file /opt/teslamate-host/ubuntu/.env -f /opt/teslamate-host/ubuntu/compose.yml exec -T database psql -X -v ON_ERROR_STOP=1 -U teslamate -d teslamate >/dev/null 2>&1"'
 fleet exec --timeout 60 ubuntu -- 'sudo sh -c "cat /opt/volta/deploy/telemetry/sql/002_api_series.sql | docker compose --env-file /opt/teslamate-host/ubuntu/.env -f /opt/teslamate-host/ubuntu/compose.yml exec -T database psql -X -v ON_ERROR_STOP=1 -U teslamate -d teslamate >/dev/null 2>&1"'
+fleet exec --timeout 60 ubuntu -- 'sudo sh -c "cat /opt/volta/deploy/telemetry/sql/003_service_odometer.sql | docker compose --env-file /opt/teslamate-host/ubuntu/.env -f /opt/teslamate-host/ubuntu/compose.yml exec -T database psql -X -v ON_ERROR_STOP=1 -U teslamate -d teslamate >/dev/null 2>&1"'
 fleet exec --timeout 60 ubuntu -- 'sudo python3 /opt/volta/deploy/telemetry/ops/prepare-secrets.py --set-ingest-password'
 ```
 

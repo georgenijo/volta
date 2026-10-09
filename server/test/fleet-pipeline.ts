@@ -27,9 +27,9 @@ try {
   stage='auth-schema';
   await owner.unsafe(await Bun.file(new URL('../../deploy/auth-schema.sql',import.meta.url)).text()).simple();
   stage='api-view';
-  const migration=await Bun.file(new URL('../../deploy/telemetry/sql/002_api_series.sql',import.meta.url)).text();
+  const migration=(await Promise.all(['002_api_series.sql','003_service_odometer.sql'].map(file=>Bun.file(new URL(`../../deploy/telemetry/sql/${file}`,import.meta.url)).text()))).join('\n');
   // postgres.js requires its transaction helper with a pooled connection.
-  await owner.begin(async tx=>await tx.unsafe(migration.replace(/^BEGIN;$/m,'').replace(/^COMMIT;$/m,'')).simple());
+  await owner.begin(async tx=>await tx.unsafe(migration.replace(/^BEGIN;$/gm,'').replace(/^COMMIT;$/gm,'')).simple());
   stage='api-grants';
   await owner`GRANT SELECT ON ALL TABLES IN SCHEMA public TO volta_readonly`;
   await owner`UPDATE public.cars SET vin='5YJ3E1EA0XF000002' WHERE id=2`;

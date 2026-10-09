@@ -63,7 +63,7 @@ includes resolve:
 
 ```sh
 cd /opt/teslamate-host
-for file in bootstrap.sql auth-schema.sql history-schema.sql auth-grants.sql privilege-checks.sql; do
+for file in bootstrap.sql auth-schema.sql history-schema.sql service-schema.sql auth-grants.sql privilege-checks.sql; do
   sudo docker compose --env-file ubuntu/.env -f ubuntu/compose.yml cp "/opt/volta/deploy/$file" "database:/tmp/$file"
 done
 ```

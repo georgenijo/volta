@@ -65,11 +65,11 @@ jobs:
           trap 'rm -rf "$sql_dir"' EXIT
           sed '/^\\password /d' ../deploy/bootstrap.sql > "$sql_dir/bootstrap.sql"
           docker cp "$sql_dir/bootstrap.sql" "$POSTGRES_CONTAINER:/tmp/bootstrap.sql"
-          for file in auth-schema.sql history-schema.sql auth-grants.sql privilege-checks.sql; do
+          for file in auth-schema.sql history-schema.sql service-schema.sql auth-grants.sql privilege-checks.sql; do
             docker cp "../deploy/$file" "$POSTGRES_CONTAINER:/tmp/$file"
           done
           docker exec "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 -f /tmp/bootstrap.sql
-          for file in 001_volta_telemetry.sql 002_api_series.sql; do
+          for file in 001_volta_telemetry.sql 002_api_series.sql 003_service_odometer.sql; do
             docker exec -i "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 < "../deploy/telemetry/sql/$file"
           done
           docker exec -i "$POSTGRES_CONTAINER" psql -U volta -d volta_test -v ON_ERROR_STOP=1 <<'SQL'

@@ -1,3 +1,4 @@
+import { ServiceLog } from './service';
 import { createApp } from './app';
 import { Auth } from './auth';
 import { connect, requiredEnv } from './db';
@@ -16,7 +17,7 @@ const tesla = process.env.COMMANDER_URL ? new TeslaLink(commanderURL(process.env
 const fleetEnabled = process.env.FLEET_TELEMETRY_ENABLED === 'true';
 const log = (entry: object) => console.log(JSON.stringify(entry));
 if (process.env.FLEET_TELEMETRY_ENABLED && !['true','false'].includes(process.env.FLEET_TELEMETRY_ENABLED)) throw new Error('FLEET_TELEMETRY_ENABLED must be true or false');
-const app = createApp(new Auth(authDb), new Telemetry(telemetryDb, currency, undefined, fleetEnabled, log), log, tesla, new ChargingHistory(authDb, telemetryDb, tesla));
+const app = createApp(new Auth(authDb), new Telemetry(telemetryDb, currency, undefined, fleetEnabled, log), log, tesla, new ChargingHistory(authDb, telemetryDb, tesla), new ServiceLog(authDb));
 const server = Bun.serve({ hostname: process.env.HOST || '127.0.0.1', port: integer(process.env.PORT, 'PORT', 8080, 65535), fetch: app.fetch });
 for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, async () => { server.stop(); await Promise.all([telemetryDb.end(), authDb.end()]); process.exit(0); });
 console.log(JSON.stringify({ event: 'started', port: server.port, version: '0.1.0' }));
