@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
-import { endpointEnergy, driveStyleScore } from './drive-parity';
+import { combineScore, efficiencyScore, endpointEnergy, driveStyleScore } from './drive-parity';
 import { coverageGap, lossGap, lostBetween, realGaps } from './fleet-gaps';
 
 const idBase = 2097152;
@@ -222,7 +222,7 @@ export class FleetDrives {
   }
   /** Mileage needs totals, not GPS/chart arrays. Aggregate dense route and
    * power observations in PostgreSQL; transfer only slow odometer/energy rows. */
-  private async totals(vehicle: number,w: Window,gaps: Gap[]) {
+  private async totals(vehicle: number,w: Window,gaps: Gap[],rated: number | null): Promise<Row> {
     const parts=this.sql.json(w.parts ?? [{start:w.start,end:w.end}]),lost=this.sql.json(realGaps(gaps).filter(g=>lossGap(g) && +g.start<=+w.end && +g.end>=+w.start));
     const [payloads,route,power,held]=await Promise.all([
       this.sql`SELECT * FROM volta_telemetry.payload_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end}
@@ -257,17 +257,23 @@ export class FleetDrives {
         AND source_ts<${w.start} AND source_ts>=${w.start}::timestamptz-interval '30 minutes'
         AND (energy_remaining_kwh IS NOT NULL OR 'EnergyRemaining'=ANY(invalid_fields)) ORDER BY source_ts DESC LIMIT 1`
     ]);
-    const row=deriveDrive(w,[],payloads,power[0]?.samples ?? [],null,gaps,held[0]),r=route[0];
+    const row=deriveDrive(w,[],payloads,power[0]?.samples ?? [],rated,gaps,held[0]),r=route[0];
     const interrupted=lostBetween(realGaps(gaps),w.start,w.end);
     if (row.distanceKm === null && w.parts && w.parts.length>1) {
       const partials=[];
-      for (const part of w.parts) partials.push(await this.totals(vehicle,{...w,...part,parts:undefined},gaps.filter(g=>+g.start<=+part.end && +g.end>=+part.start)));
+      for (const part of w.parts) partials.push(await this.totals(vehicle,{...w,...part,parts:undefined},gaps.filter(g=>+g.start<=+part.end && +g.end>=+part.start),rated));
       if (partials.every(p=>p.distanceKm !== null)) row.distanceKm=partials.reduce((sum,p)=>sum+p.distanceKm,0);
     }
     if (row.distanceKm === null && !interrupted && r && Number(r.count)>1
       && ((w.startReason==='gear' && w.endReason==='gear' && w.membership !== 'partial')
         || (r?.supported && +new Date(r.start)-+w.start<=120000 && +w.end-+new Date(r.finish)<=120000))) row.distanceKm=r.distance;
     if (row.energyUsedKwh === null && !interrupted && power[0]?.valid && power[0]?.energy>0) {row.energyUsedKwh=power[0].energy;row.energySource='fleet_pack_power';}
+    // Distance/energy fallbacks above: re-derive everything that depends on
+    // them. Totals never load the dense motion series, so style components are
+    // unknown here (the energy-only rows would misjudge them), not guessed.
+    row.efficiencyWhPerKm=row.energyUsedKwh !== null && row.distanceKm !== null && row.distanceKm>0 ? row.energyUsedKwh*1000/row.distanceKm : null;
+    row.avgSpeedKph=row.distanceKm !== null && row.durationMin>0 ? row.distanceKm*60/row.durationMin : null;
+    row.scoreBreakdown={efficiency:efficiencyScore(row.efficiencyWhPerKm,rated),smoothness:null,speed:null,acceleration:null};row.driveScore=combineScore(row.scoreBreakdown);
     return row;
   }
   async rows(vehicle: number, windows: Window[], rated: number | null, gaps: Gap[], labels = true, totalsOnly = false): Promise<Row[]> {
@@ -275,7 +281,7 @@ export class FleetDrives {
     // Seek only requested session windows, not the car's entire GPS history.
     for (const w of windows) {
       let row: Row;
-      if (totalsOnly) row=await this.totals(vehicle,w,gaps);
+      if (totalsOnly) row=await this.totals(vehicle,w,gaps,rated);
       else {
       const [locations,payloads,samples,held]=await Promise.all([
         this.sql`SELECT * FROM volta_telemetry.drive_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,

@@ -72,3 +72,41 @@ test('covered TeslaMate charge hides only without data loss; unmeasurable teleme
   await owner`UPDATE volta_telemetry.vehicle_bindings SET vin_digest=repeat('0',64)`;
   expect((await get('/v1/vehicles/1/charges')).items.map((r:any)=>r.id)).toEqual([12,13]);
 });
+const list=async(path='/v1/vehicles/1/charges')=>(await get(path)).items;
+async function invalidSample(s:number,field:string){await owner`INSERT INTO volta_telemetry.samples(vehicle_id,field,source_ts,received_at,value_num,invalid,quality,payload_id)
+  VALUES (1,${field},${at(s)},${at(s)},NULL,true,'invalid',${'i'+s+field})`;}
+test('real loss or unknown power inside telemetry keeps the overlapping TeslaMate charge and drops the partial telemetry',async()=>{
+  await tm(14,100,1750,4);
+  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason) VALUES (1,${at(700)},${at(1400)},'disconnected')`;
+  const rows=await list();expect(rows.map((r:any)=>r.id)).toEqual([14]);expect(rows[0].energyAddedKwh).toBe(27.5);
+  const summary=await get('/v1/vehicles/1/summary?range=today&tz=UTC');expect(summary.chargeCount).toBe(1);expect(summary.energyAddedKwh).toBe(27.5);expect(summary.chargeCost).toBe(4);
+  // Without a TeslaMate record the partial telemetry is all there is.
+  await owner`DELETE FROM charging_processes`;expect((await list()).map((r:any)=>r.source)).toEqual(['fleet_telemetry']);
+  await owner`DELETE FROM volta_telemetry.gaps`;await tm(14,100,1750,4);
+  expect((await list()).map((r:any)=>r.source)).toEqual(['fleet_telemetry']);
+  // Unknown DC power after the last positive reading: the stop is uncertain.
+  await invalidSample(1600,'DCChargingPower');expect((await list()).map((r:any)=>r.id)).toEqual([14]);
+});
+test('each TeslaMate receipt counts once across telemetry fragments and several receipts sum onto one session',async()=>{
+  // Split the session where power paused: two fragments, no lost data between.
+  await owner`DELETE FROM volta_telemetry.sessions WHERE kind='charge'`;
+  await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES
+    (1,'charge',${at(0)},${at(900)},'charge_state','charge_state','complete',50),(1,'charge',${at(900)},${at(1700)},'charge_state','charge_state','complete',50)`;
+  await tm(15,100,1750,12);
+  const rows=await list();expect(rows.map((r:any)=>r.source)).toEqual(['fleet_telemetry','fleet_telemetry']);
+  expect(rows.map((r:any)=>r.cost)).toEqual([null,12]);expect(rows.reduce((s:number,r:any)=>s+(r.cost ?? 0),0)).toBe(12);
+  expect((await get(`/v1/charges/${rows[1].id}`)).cost).toBe(12);expect((await get(`/v1/charges/${rows[0].id}`)).cost).toBeNull();
+  expect((await get('/v1/vehicles/1/summary?range=today&tz=UTC')).chargeCost).toBe(12);
+  // One session spanning two priced processes carries both receipts.
+  await owner`DELETE FROM volta_telemetry.sessions WHERE kind='charge'`;await owner`DELETE FROM charging_processes`;
+  await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES (1,'charge',${at(0)},${at(1700)},'charge_state','charge_state','complete',100)`;
+  await tm(16,100,800,5);await tm(17,900,1600,7);
+  const one=await list();expect(one).toHaveLength(1);expect(one[0].cost).toBe(12);
+  expect((await get(`/v1/charges/${one[0].id}`)).cost).toBe(12);expect((await get('/v1/vehicles/1/summary?range=today&tz=UTC')).chargeCost).toBe(12);
+});
+test('a telemetry cursor stays valid when the TeslaMate fallback takes over',async()=>{
+  await tm(11,-7200,-3600);
+  const first=await get('/v1/vehicles/1/charges?limit=1');expect(first.items[0].id).toBeLessThan(0);
+  await owner`UPDATE volta_telemetry.vehicle_bindings SET vin_digest=repeat('0',64)`;
+  expect((await get(`/v1/vehicles/1/charges?limit=1&cursor=${first.nextCursor}`)).items.map((r:any)=>r.id)).toEqual([11]);
+});

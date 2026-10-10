@@ -42,8 +42,31 @@ test('no reported power means no charge; AC sessions are slow; invalid DC is unk
   // A negative energy delta (pack recalibration) falls back to held power.
   const recal=deriveCharge({start:at(0),end:at(3600)},[{t:at(0),ac_power_kw:11,energy_remaining_kwh:30},{t:at(3600),ac_power_kw:0,energy_remaining_kwh:29}])!;
   expect(recal.energyAddedKwh).toBeCloseTo(11);
+  // Unknown power is not a stop: no invented endpoint, no energy, flagged uncertain.
   const invalid=deriveCharge({start:at(0),end:at(600)},[{t:at(0),dc_power_kw:100},{t:at(300),invalid_fields:['DCChargingPower']}])!;
-  expect(invalid.end).toEqual(at(300));
+  expect(invalid.end).toEqual(at(600));expect(invalid.energyAddedKwh).toBeNull();expect(invalid._uncertain).toBe(true);
+});
+test('invalid power between the last positive and an explicit zero keeps the session open and uncertain',()=>{
+  const c=deriveCharge({start:at(0),end:at(1800)},[{t:at(0),dc_power_kw:100,ac_power_kw:0},{t:at(300),invalid_fields:['DCChargingPower']},{t:at(900),dc_power_kw:0}])!;
+  expect(c.end).toEqual(at(900));expect(c.energyAddedKwh).toBeNull();expect(c._uncertain).toBe(true);
+  // AC still reading 0 does not stand in for unknown DC power.
+  expect(c.durationMin).toBe(15);
+  const clean=deriveCharge({start:at(0),end:at(1800)},[{t:at(0),dc_power_kw:100,ac_power_kw:0},{t:at(900),dc_power_kw:0}])!;
+  expect(clean.end).toEqual(at(900));expect(clean.energyAddedKwh).toBeCloseTo(25);expect(clean._uncertain).toBe(false);
+});
+test('edge SoC and EnergyRemaining never hold across an invalid observation or real loss',()=>{
+  const session=[{t:at(0),dc_power_kw:100},{t:at(600),dc_power_kw:0},{t:at(610),battery_level:50,energy_remaining_kwh:30}];
+  const held=deriveCharge({start:at(0),end:at(900)},[{t:at(-60),battery_level:40,energy_remaining_kwh:20},...session])!;
+  expect(held.startBatteryLevel).toBe(40);expect(held.energyAddedKwh).toBeCloseTo(10);
+  const invalid=deriveCharge({start:at(0),end:at(900)},[{t:at(-60),battery_level:40,energy_remaining_kwh:20},
+    {t:at(-30),invalid_fields:['BatteryLevel','EnergyRemaining']},...session])!;
+  expect(invalid.startBatteryLevel).toBeNull();expect(invalid.energyAddedKwh).toBeCloseTo(100*600/3600);
+  const lost=deriveCharge({start:at(0),end:at(900)},[{t:at(-250),battery_level:40,energy_remaining_kwh:20},...session],[{start:at(-200),end:at(-50),reason:'disconnected'}])!;
+  expect(lost.startBatteryLevel).toBeNull();expect(lost.energyAddedKwh).toBeCloseTo(100*600/3600);
+  // Held within the session: an invalid end reading is not carried to the end.
+  const end=deriveCharge({start:at(0),end:at(900)},[{t:at(-60),battery_level:40,energy_remaining_kwh:20},{t:at(0),dc_power_kw:100},{t:at(300),battery_level:45,energy_remaining_kwh:25},
+    {t:at(500),invalid_fields:['BatteryLevel','EnergyRemaining']},{t:at(600),dc_power_kw:0}])!;
+  expect(end.endBatteryLevel).toBeNull();expect(end.energyAddedKwh).toBeCloseTo(100*600/3600);
 });
 test('charge identity is stable and a covered TeslaMate process is replaced only without lost data',()=>{
   const id=telemetryChargeId(2,at(0));expect(id).toBeLessThan(0);expect(telemetryChargeVehicle(id)).toBe(2);

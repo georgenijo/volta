@@ -114,5 +114,7 @@ test('change-only EnergyRemaining held from before a parked start; real loss or 
   expect(deriveDrive(w,points,points,late,200,[],before).energyUsedKwh).toBeCloseTo(2.5);
   expect(deriveDrive(w,points,points,late,200,[{start:at(-300),end:at(-100),reason:'silence'}],before).energyUsedKwh).toBeNull();
   expect(deriveDrive(w,points,points,late,200,[],{...before,source_ts:at(-1801)}).energyUsedKwh).toBeNull();
+  // The latest pre-start observation is an invalid EnergyRemaining: nothing to hold.
+  expect(deriveDrive(w,points,points,late,200,[],{source_ts:at(-300),energy_remaining_kwh:null,invalid_fields:['EnergyRemaining']}).energyUsedKwh).toBeNull();
   expect(deriveDrive(w,points,points,samples,200,[],before).energyUsedKwh).toBe(2);
 });

@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { connect } from '../src/db';
 import { Telemetry } from '../src/telemetry';
+import { FleetDrives } from '../src/fleet-drives';
 import { Auth } from '../src/auth';
 import { createApp } from '../src/app';
 const url=process.env.TEST_DATABASE_URL;
@@ -108,4 +109,15 @@ test('a hidden joined telemetry window cannot suppress the second TeslaMate trip
   expect(first.items[0].id).toBe(2);expect(second.items[0].id).toBe(1);expect(second.nextCursor).toBeNull();
   const summary=await get('/v1/vehicles/1/summary?range=today');expect(summary.driveCount).toBe(2);expect(summary.distanceKm).toBe(10);
   const mileage=await get('/v1/vehicles/1/mileage?bucket=day');expect(mileage[0].driveCount).toBe(2);expect(mileage[0].distanceKm).toBe(10);
+});
+test('totals-only rows recompute efficiency and its score component after the route distance fallback',async()=>{
+  await trip(0,600);await owner`DELETE FROM volta_telemetry.samples WHERE field='Odometer'`;
+  const fleet=new FleetDrives(reader),catalog=(await fleet.catalog(1))!;
+  const full=(await fleet.rows(1,catalog.windows,150,catalog.gaps,false))[0]!;
+  const row=(await fleet.rows(1,catalog.windows,150,catalog.gaps,false,true))[0]!;
+  expect(row.distanceKm).toBeGreaterThan(0);expect(row.energyUsedKwh).toBeCloseTo(.6);
+  expect(row.efficiencyWhPerKm).toBeCloseTo(row.energyUsedKwh*1000/row.distanceKm);expect(row.efficiencyWhPerKm).toBeCloseTo(full.efficiencyWhPerKm);
+  expect(row.avgSpeedKph).toBeCloseTo(row.distanceKm*6);
+  expect(row.scoreBreakdown).toEqual({efficiency:full.scoreBreakdown.efficiency,smoothness:null,speed:null,acceleration:null});
+  expect(row.scoreBreakdown.efficiency).not.toBeNull();expect(row.driveScore).toBe(row.scoreBreakdown.efficiency);
 });
