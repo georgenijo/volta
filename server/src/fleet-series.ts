@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
 import { endpointEnergy } from './drive-parity';
+import { lossGap, realGaps } from './fleet-gaps';
 
 const sampleLimit = 2000, gapLimit = 2000;
 
@@ -28,17 +29,17 @@ export class FleetSeries {
         ON p.vehicle_id=d.car_id AND p.source_ts>=d.start AT TIME ZONE 'UTC'
           AND p.source_ts<=d.finish AT TIME ZONE 'UTC'
         ORDER BY d.id,p.source_ts`,
-      this.sql`SELECT d.id FROM jsonb_to_recordset(${windows}::jsonb)
-        AS d(id integer,car_id integer,start timestamp,finish timestamp) WHERE EXISTS (
-        SELECT 1 FROM volta_telemetry.gaps g WHERE g.vehicle_id=d.car_id
-          AND g.start_ts<=d.finish AT TIME ZONE 'UTC' AND g.end_ts>=d.start AT TIME ZONE 'UTC')`
+      this.sql`SELECT d.id,g.start_ts AS start,g.end_ts AS end,g.reason FROM jsonb_to_recordset(${windows}::jsonb)
+        AS d(id integer,car_id integer,start timestamp,finish timestamp) JOIN volta_telemetry.gaps g ON g.vehicle_id=d.car_id
+          AND g.start_ts<=d.finish AT TIME ZONE 'UTC' AND g.end_ts>=d.start AT TIME ZONE 'UTC' AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '60 seconds')`
     ]);
     const pointsById = new Map<number, Row[]>();
     for (const p of samples) {
       if (!pointsById.has(p.id)) pointsById.set(p.id,[]);
       pointsById.get(p.id)!.push(p);
     }
-    const gapIds = new Set(gaps.map(g => g.id));
+    // Only real data loss fences an endpoint delta; cadence jitter does not.
+    const gapIds = new Set(gaps.filter(g => realGaps([g]).some(lossGap)).map(g => g.id));
     for (const d of bound) {
       if (gapIds.has(d.id)) continue;
       const points = pointsById.get(d.id) ?? [];
@@ -67,6 +68,11 @@ export class FleetSeries {
     if (!binding?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(binding.vin)) return null;
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(binding.vin,'utf8').digest('hex');
     if (binding.vin_digest !== digest) return null;
+    // Real gaps only (shared rule), clipped to the session; JS so seams coalesce.
+    const from = new Date(session.start), to = new Date(session.finish);
+    const realSpans = realGaps(await s`SELECT start_ts AS start,end_ts AS end,reason FROM volta_telemetry.gaps WHERE vehicle_id=${session.car_id}
+      AND start_ts<=${session.finish}::timestamp AT TIME ZONE 'UTC' AND end_ts>=${session.start}::timestamp AT TIME ZONE 'UTC' AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '60 seconds')`)
+      .map(g => ({start:+g.start<+from ? from : g.start,end:+g.end>+to ? to : g.end,reason:g.reason}));
 
     const power = kind === 'drive' ? s`CASE
       WHEN 'PackCurrent'=ANY(COALESCE(p.invalid_fields,ARRAY[]::text[]))
@@ -241,12 +247,7 @@ export class FleetSeries {
       ), ordered_metrics AS (
         SELECT mv.*,lag(t) OVER(PARTITION BY key ORDER BY t,rn) AS prior FROM metric_values mv
       ), session_gaps AS MATERIALIZED (
-        SELECT greatest(start_ts,${session.start}::timestamp AT TIME ZONE 'UTC') AS start,
-          least(end_ts,${session.finish}::timestamp AT TIME ZONE 'UTC') AS "end",reason
-        FROM volta_telemetry.gaps WHERE vehicle_id=${session.car_id}
-          AND start_ts<=${session.finish}::timestamp AT TIME ZONE 'UTC'
-          AND end_ts>=${session.start}::timestamp AT TIME ZONE 'UTC'
-        ORDER BY start_ts,end_ts,reason
+        SELECT * FROM jsonb_to_recordset(${s.json(realSpans)}::jsonb) AS g(start timestamptz,"end" timestamptz,reason text)
       ), returned_gaps AS MATERIALIZED (
         SELECT * FROM session_gaps ORDER BY start,"end",reason LIMIT ${gapLimit}
       ), metric_stats AS (

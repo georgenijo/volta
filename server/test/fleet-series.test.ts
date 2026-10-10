@@ -75,16 +75,19 @@ test('conflicting values are unknown, and electricity never pairs across separat
   expect(p.invalidFields).toContain('VehicleSpeed');expect(p.invalidFields).toContain('EnergyRemaining');
 });
 
-test('short known disconnect breaks dense GPS; distant SRTM coordinates stay unknown',async()=>{
+test('real data loss breaks GPS, cadence jitter does not; distant SRTM coordinates stay unknown',async()=>{
   await datum('Location',null,start,'a',1,{latitude:40,longitude:-74});
-  await datum('Location',null,at(2),'b',1,{latitude:42,longitude:-72});
-  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason) VALUES(1,${at(.5)},${at(1.5)},'disconnected')`;
+  await datum('Location',null,at(100),'b',1,{latitude:42,longitude:-72});
+  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason)
+    SELECT 1,${start}::timestamptz+n*interval '0.5 second',${start}::timestamptz+(n+1)*interval '0.5 second','disconnected' FROM generate_series(0,19) n`;
+  expect((await get('/v1/drives/1')).telemetry.samples[1].routeBreakBefore).toBe(false);
+  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason) VALUES(1,${at(20)},${at(80)},'disconnected')`;
   const telemetry=(await get('/v1/drives/1')).telemetry;
   expect(telemetry.samples[0].routeBreakBefore).toBe(false);expect(telemetry.samples[1].routeBreakBefore).toBe(true);
   expect(telemetry.samples[1].elevationM).toBeNull();expect(telemetry.gaps).toHaveLength(1);
   expect(telemetry.coverage.metrics.latitude).toMatchObject({sourceSampleCount:2,returnedSampleCount:2,gapCount:1,downsampled:false,truncated:false});
   expect(telemetry.coverage.metrics.latitude.densityPerMinute).toBeCloseTo(2/60);
-  expect(telemetry.coverage.metrics.latitude.maxIntervalSeconds).toBe(2);
+  expect(telemetry.coverage.metrics.latitude.maxIntervalSeconds).toBe(100);
 });
 
 test('conflicting electrical inputs cannot become known power even when their products coincide',async()=>{
@@ -213,10 +216,11 @@ test('an invalid-break set larger than the response budget fails closed for that
 });
 
 test('gap truncation is disclosed globally and for each intersected metric',async()=>{
-  await datum('VehicleSpeed',10,start,'first');await datum('VehicleSpeed',20,at(2),'last');
+  await owner`UPDATE drives SET end_date=start_date+interval '2 days' WHERE id=1`;
+  await datum('VehicleSpeed',10,start,'first');await datum('VehicleSpeed',20,at(130000),'last');
   await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason)
-    SELECT 1,${start}::timestamptz+n*interval '0.0005 second',
-      ${start}::timestamptz+n*interval '0.0005 second'+interval '0.0001 second','disconnected'
+    SELECT 1,${start}::timestamptz+n*interval '62 seconds',
+      ${start}::timestamptz+n*interval '62 seconds'+interval '60 seconds','disconnected'
     FROM generate_series(1,2001) n`;
   const telemetry=(await get('/v1/drives/1')).telemetry;
   expect(telemetry.gaps).toHaveLength(2000);expect(telemetry.truncated).toBe(true);
@@ -380,6 +384,8 @@ test('drive energy falls back to exact-bound endpoints, with lifetime precedence
   await datum('LifetimeEnergyUsed',90,at(60),'reset');
   expect((await get('/v1/drives/1')).energySource).toBe('fleet_energy_remaining');
   await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason) VALUES(1,${at(60)},${at(70)},'disconnected')`;
+  expect((await get('/v1/drives/1')).energySource).toBe('fleet_energy_remaining');
+  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason) VALUES(1,${at(70)},${at(130)},'disconnected')`;
   expect((await get('/v1/drives/1')).energyUsedKwh).toBeNull();
   await owner`DELETE FROM volta_telemetry.gaps`;
   await owner`UPDATE volta_telemetry.vehicle_bindings SET vin_digest=repeat('a',64)`;
@@ -399,7 +405,8 @@ test('page energy batches disjoint and overlapping windows into three queries',a
   await datum('LifetimeEnergyUsed',90,new Date(+second!.start_date+60000),'reset');
   const [third]=await owner`SELECT start_date FROM drives WHERE id=3`;
   await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason)
-    VALUES(1,${third!.start_date},${third!.start_date},'disconnected')`;
+    VALUES(1,${third!.start_date},${third!.start_date},'disconnected'),
+      (1,${third!.start_date},${new Date(+third!.start_date+60000)},'silence')`;
   let queries=0;
   const counted=new Proxy(reader,{apply(target,thisArg,args){queries++;return Reflect.apply(target,thisArg,args);}});
   const energy=await new FleetSeries(counted).driveEnergy([1,2,3,4]);
