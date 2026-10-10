@@ -83,7 +83,7 @@ struct ChargerLocationSessionsView: View {
                         NavigationLink { ChargingDetailView(charge: session) } label: {
                             Card {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(session.start.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 16, weight: .semibold))
+                                    Text(VoltaFormat.dateTime(session.start)).font(.system(size: 16, weight: .semibold))
                                     Text(session.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Energy not recorded")
                                     Text(ChargerPresentation.cost(session.cost, currency: session.currency)).font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                                     if session.end == nil { Text("Session in progress").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.blue) }

@@ -81,6 +81,25 @@ type Gap struct {
 	Reason string    `json:"reason"`
 }
 
+// MinPersistedLoss is the shortest disconnected/silence gap worth storing.
+// Each such gap spans exactly two consecutive payloads, so a shorter one is
+// stream cadence while connectivity reads disconnected, not lost data. Those
+// rows flooded the table (thousands per day) and read as interruptions.
+const MinPersistedLoss = 5 * time.Second
+
+// PersistedGaps drops loss gaps shorter than min. Invalid-state gaps are kept:
+// their length says nothing about connectivity.
+func PersistedGaps(gs []Gap, min time.Duration) []Gap {
+	out := make([]Gap, 0, len(gs))
+	for _, g := range gs {
+		if (g.Reason == GapDisconnected || g.Reason == GapSilence) && g.End.Sub(g.Start) < min {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
 // Session is a derived drive or charge.
 type Session struct {
 	Kind        string    `json:"kind"`

@@ -25,11 +25,13 @@ struct HistoryPreviewFailingSource: VoltaDataSource {
 extension MockDataSource {
     /// A representative fixture for detail-screen previews.
     static func previewCharge(fast: Bool = false) -> ChargeSummary {
-        ChargeSummary(id: fast ? 5 : 1, start: .now.addingTimeInterval(-6 * 3600), end: .now.addingTimeInterval(-5 * 3600),
+        ChargeSummary(id: fast ? 10 : 1, start: .now.addingTimeInterval(-6 * 3600), end: .now.addingTimeInterval(-5 * 3600),
                       address: fast ? "Mountain View, CA" : "Palo Alto, CA", placeName: fast ? "Mountain View Supercharger" : "Home",
                       energyAddedKwh: fast ? 43.2 : 22.6, energyUsedKwh: fast ? 46.9 : 24.6,
                       startBatteryLevel: fast ? 22 : 49, endBatteryLevel: 80, durationMin: fast ? 27 : 190,
                       maxPowerKw: fast ? 176 : 7.7, fastCharger: fast, cost: fast ? 17.71 : 5.20,
-                      currency: "USD", outsideTempAvgC: 16)
+                      currency: "USD", outsideTempAvgC: 16, source: "teslamate", avgPowerKw: fast ? 96 : 7.1,
+                      city: fast ? "Mountain View" : "Palo Alto", street: fast ? "250 Sample Blvd" : "100 Example Ave",
+                      energyFromGridKwh: fast ? nil : 25.1)
     }
 }

@@ -299,7 +299,7 @@ struct DriveDetailView: View {
     private func mapPlaceholder(_ message: String?, loading: Bool = false, retry: Bool = false) -> some View {
         ZStack {
             HistoryTheme.card.opacity(0.6)
-            RouteWatermark(points: summary.route ?? [], opacity: 0.35)
+            RouteWatermark(points: summary.drawableRoute, opacity: 0.35)
                 .padding(.horizontal, 60).padding(.top, 110).padding(.bottom, 120)
             VStack(spacing: 10) {
                 if loading { ProgressView().tint(HistoryTheme.secondary) }

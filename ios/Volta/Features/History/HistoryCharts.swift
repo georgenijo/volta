@@ -135,7 +135,7 @@ struct HistoryLineChart: View {
         .chartXSelection(value: $selected)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                AxisValueLabel(format: .dateTime.hour().minute())
+                AxisValueLabel(format: .voltaClock)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(HistoryTheme.tertiary)
             }

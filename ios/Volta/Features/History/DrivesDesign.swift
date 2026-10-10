@@ -86,31 +86,34 @@ struct RouteWatermark: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let runs = DriveRouteSegments.normalized(points, in: geometry.size, inset: 16)
+            // Lines only: single-point runs would read as scattered dots.
+            let runs = DriveRouteSegments.normalized(points, in: geometry.size, inset: 16).filter { $0.count > 1 }
             let path = Path { path in
-                for run in runs where run.count > 1 {
+                for run in runs {
                     path.move(to: run[0]); run.dropFirst().forEach { path.addLine(to: $0) }
                 }
             }
-            ZStack {
-                // The route draws itself on arrival; the trim is a shape animation, no per-frame body.
-                VoltaArrivalReader(animation: VoltaMotion.routeDraw) { p in
-                    ZStack {
-                        path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                            .blur(radius: 7).opacity(0.45)
-                        path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            if !runs.isEmpty {
+                ZStack {
+                    // The route draws itself on arrival; the trim is a shape animation, no per-frame body.
+                    VoltaArrivalReader(animation: VoltaMotion.routeDraw) { p in
+                        ZStack {
+                            path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                                .blur(radius: 7).opacity(0.45)
+                            path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                        }
+                    }
+                    if let start = runs.first?.first {
+                        Circle().fill(HistoryTheme.mint).frame(width: 5, height: 5).position(start)
+                    }
+                    if let end = runs.last?.last {
+                        Circle().fill(HistoryTheme.blue).frame(width: 5, height: 5).position(end)
+                            .shadow(color: HistoryTheme.blue, radius: 4)
+                        if comet { CometPath(path: path, isActive: true) }
                     }
                 }
-                if let start = runs.first?.first {
-                    Circle().fill(HistoryTheme.mint).frame(width: 5, height: 5).position(start)
-                }
-                if let end = runs.last?.last, runs.flatMap({ $0 }).count > 1 {
-                    Circle().fill(HistoryTheme.blue).frame(width: 5, height: 5).position(end)
-                        .shadow(color: HistoryTheme.blue, radius: 4)
-                    if comet { CometPath(path: path, isActive: true) }
-                }
+                .opacity(opacity)
             }
-            .opacity(opacity)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -123,6 +126,8 @@ struct DrivesHero: View {
     var scope: String
     var totals: DriveTotals
     var durationMin: Double
+    /// Estimated cost (`DrivePricing.total`): display string and coverage note.
+    var cost: (display: String, note: String?) = ("—", nil)
     var partial: Bool
     /// One entry per day of `dailyLabel`'s window; empty when no window fits.
     var daily: [DailyDistance]
@@ -156,9 +161,11 @@ struct DrivesHero: View {
                     stat(totals.energyUsedKwh.value.map { VoltaFormat.number($0) } ?? "—", "kWh", index: 2)
                     divider
                     stat(totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit, index: 3)
+                    divider
+                    stat(cost.display, "Cost", index: 4)
                 }
                 // Coverage disclosures hold whether or not more pages remain.
-                HistoryHeroNotes(notes: totals.notes)
+                HistoryHeroNotes(notes: totals.notes + [cost.note].compactMap { $0 })
             }
             if daily.count >= 2, daily.contains(where: { $0.km > 0 }) { DailyRhythm(days: daily, label: dailyLabel) }
         }
@@ -314,7 +321,7 @@ struct DriveCard: View {
         }
         .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 14)
         .background {
-            RouteWatermark(points: drive.route ?? [], opacity: 0.42, comet: isNewest)
+            RouteWatermark(points: drive.drawableRoute, opacity: 0.42, comet: isNewest)
                 .padding(.leading, 130).padding(.trailing, 90).padding(.top, 4).padding(.bottom, 44)
                 .mask(RadialGradient(colors: [.black, .black.opacity(0.6), .clear], center: .center, startRadius: 10, endRadius: 120))
         }
@@ -344,7 +351,7 @@ struct DriveCard: View {
         HStack(spacing: 8) {
             metric("clock", VoltaFormat.duration(drive.durationMin))
             dot
-            metric("leaf", drive.efficiencyWhPerKm.map { compact ? VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) : units.formatEfficiency($0) } ?? "—")
+            metric("leaf", drive.displayEfficiencyWhPerKm.map { compact ? VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) : units.formatEfficiency($0) } ?? "—")
             if let cost { dot; metric("creditcard", cost) }
         }
     }

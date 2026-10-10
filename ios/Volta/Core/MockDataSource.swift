@@ -89,19 +89,52 @@ struct MockDataSource: VoltaDataSource {
             let stride = max(1, Int(ceil(Double(points.count) / 60)))
             return points.enumerated().filter { $0.offset % stride == 0 || $0.offset == points.count - 1 }
                 .map { DriveRoutePoint(t: $0.element.t, latitude: $0.element.latitude, longitude: $0.element.longitude, routeBreakBefore: $0.element.routeBreakBefore) }
-        } ?? (0...24).map { i in
-            let fraction = Double(i) / 24
-            return DriveRoutePoint(t: drive.start.addingTimeInterval(drive.durationMin * 60 * fraction), latitude: 37.4419 + fraction * 0.16, longitude: -122.1430 + fraction * 0.135)
-        }
+        } ?? Self.syntheticRoute(drive).map { DriveRoutePoint(t: $0.t, latitude: $0.latitude, longitude: $0.longitude) }
         return drive
     }
+    /// Continuous synthetic polyline between two public town centres: street
+    /// legs, a curving arterial, street legs. Waypoints shift with the drive id
+    /// so cards differ. Generated, not a recorded route.
+    static func syntheticRoute(_ drive: DriveSummary, count: Int = 48) -> [(t: Date, latitude: Double, longitude: Double)] {
+        let v = Double(drive.id % 4)
+        let waypoints: [(lat: Double, lon: Double)] = [
+            (37.4419, -122.1430),
+            (37.4372 - 0.003 * v, -122.1372),
+            (37.4290 - 0.004 * v, -122.1170 - 0.006 * (v - 1.5)),
+            (37.4068 + 0.004 * v, -122.1120 + 0.002 * v),
+            (37.3950, -122.0950 - 0.004 * v),
+            (37.3861, -122.0839),
+        ]
+        let legs = zip(waypoints, waypoints.dropFirst()).map { hypot($1.lat - $0.lat, $1.lon - $0.lon) }
+        let total = legs.reduce(0, +)
+        return (0..<count).map { i in
+            let f = Double(i) / Double(count - 1)
+            var along = f * total, leg = 0
+            while leg < legs.count - 1 && along > legs[leg] { along -= legs[leg]; leg += 1 }
+            let a = waypoints[leg], b = waypoints[leg + 1], u = min(along / max(legs[leg], 1e-12), 1)
+            // A gentle bend that vanishes at both ends keeps the endpoints exact.
+            let bend = 0.003 * sin(f * .pi * (5 + v)) * sin(f * .pi)
+            return (drive.start.addingTimeInterval(drive.durationMin * 60 * f), a.lat + (b.lat - a.lat) * u + bend, a.lon + (b.lon - a.lon) * u - bend)
+        }
+    }
+    /// Synthetic Bay Area sessions. The newest fast charge is a Fleet Telemetry
+    /// session (negative id, 196 kW peak, no recorded price) so the detail shows
+    /// an estimated cost, an auto-scaled power axis and 1 Hz-derived curves.
     private var allCharges: [ChargeSummary] {
         guard !empty else { return [] }
         return (0..<15).map { i in
             let fast = i % 5 == 4; let energy = fast ? 43.2 : 22.6
             let start = ago(Double(i) * 48 + 15)
             let duration = fast ? 27.0 : 190.0
-            return ChargeSummary(id: i + 1, start: start, end: start.addingTimeInterval(duration * 60), address: fast ? "Mountain View, CA" : home, placeName: fast ? "Mountain View Supercharger" : "Home", energyAddedKwh: energy, energyUsedKwh: energy / 0.92, startBatteryLevel: fast ? 22 : 49, endBatteryLevel: 80, durationMin: duration, maxPowerKw: fast ? 176 : 7.7, fastCharger: fast, cost: energy * (fast ? 0.41 : 0.23), currency: "USD", outsideTempAvgC: 16)
+            let telemetry = i == 4
+            var charge = ChargeSummary(id: telemetry ? -(i + 1) : i + 1, start: start, end: start.addingTimeInterval(duration * 60), address: fast ? "Mountain View, CA" : home, placeName: fast ? "Mountain View Supercharger" : "Home", energyAddedKwh: energy, energyUsedKwh: energy / 0.92, startBatteryLevel: fast ? 22 : 49, endBatteryLevel: 80, durationMin: duration, maxPowerKw: telemetry ? 196 : fast ? 176 : 7.7, fastCharger: fast, cost: telemetry ? nil : energy * (fast ? 0.41 : 0.23), currency: "USD", outsideTempAvgC: 16)
+            charge.source = telemetry || i < 3 ? "fleet_telemetry" : "teslamate"
+            charge.city = fast ? "Mountain View" : "Palo Alto"
+            charge.street = fast ? "250 Sample Blvd" : "100 Example Ave"
+            charge.avgPowerKw = fast ? energy / (duration / 60) : 7.1
+            // Home sessions on even days have a metered grid reading.
+            if !fast, i.isMultiple(of: 2) { charge.energyFromGridKwh = energy / 0.9 }
+            return charge
         }
     }
     private func page<T: Codable & Hashable & Sendable>(_ items: [T], cursor: String?) throws -> Page<T> {
@@ -124,15 +157,17 @@ struct MockDataSource: VoltaDataSource {
     func drive(id: Int) async throws -> DriveDetail {
         guard let drive = allDrives.first(where: { $0.id == id }) else { throw VoltaError.notFound }
         if let fixture = TripFixtures.detail(drive) { return fixture }
-        let path = (0...24).map { i in
-            let fraction = Double(i) / 24
-            return DrivePoint(t: drive.start.addingTimeInterval(drive.durationMin * 60 * fraction), latitude: 37.4419 + fraction * 0.16, longitude: -122.1430 + fraction * 0.135, speedKph: i == 0 || i == 24 ? 0 : 72, powerKw: 12.5, elevationM: 35 + sin(fraction * .pi) * 28, batteryLevel: 80 - Int(fraction * 8))
+        let route = Self.syntheticRoute(drive)
+        let path = route.enumerated().map { i, p in
+            let fraction = Double(i) / Double(route.count - 1)
+            return DrivePoint(t: p.t, latitude: p.latitude, longitude: p.longitude, speedKph: i == 0 || i == route.count - 1 ? 0 : 72, powerKw: 12.5, elevationM: 35 + sin(fraction * .pi) * 28, batteryLevel: 80 - Int(fraction * 8))
         }
         return DriveDetail(summary: drive, path: path, elevationGainM: 86)
     }
     func charges(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<ChargeSummary> { try check(vehicleID); return try page(allCharges.filter { within($0.start, range) }, cursor: cursor) }
     func charge(id: Int) async throws -> ChargeDetail {
         guard let charge = allCharges.first(where: { $0.id == id }) else { throw VoltaError.notFound }
+        if charge.source == "fleet_telemetry", charge.fastCharger { return Self.telemetryFastCharge(charge) }
         let samples = (0...20).map { i in
             let f = Double(i) / 20; let power = (charge.maxPowerKw ?? 7.7) * (charge.fastCharger ? 1 - f * 0.75 : 1)
             return ChargeSample(t: charge.start.addingTimeInterval(charge.durationMin * 60 * f), batteryLevel: Int(Double(charge.startBatteryLevel ?? 49) + f * Double(80 - (charge.startBatteryLevel ?? 49))), powerKw: power, voltage: charge.fastCharger ? 375 : 240, currentA: power * 1000 / (charge.fastCharger ? 375 : 240), ratedRangeKm: 250 + f * 143)
@@ -155,6 +190,42 @@ struct MockDataSource: VoltaDataSource {
         return ChargeDetail(summary: charge, samples: samples, efficiency: 0.92,
                             telemetry: FleetTelemetrySeries(source: "fleet_telemetry", samples: telemetrySamples,
                                                             gaps: [], truncated: false))
+    }
+
+    /// A DC session as the telemetry pipeline reports it: 15 s samples that
+    /// start a few minutes before the session (pre-conditioning) and are
+    /// clipped by the app, a fast ramp to ~196 kW then a taper, and stepped
+    /// module temperatures. No charger voltage/current, as for many DC stalls.
+    private static func telemetryFastCharge(_ charge: ChargeSummary) -> ChargeDetail {
+        let duration = charge.durationMin * 60
+        let from = Double(charge.startBatteryLevel ?? 22), to = Double(charge.endBatteryLevel ?? 80)
+        func power(_ f: Double) -> Double {
+            guard f >= 0, f <= 1 else { return 0 }
+            if f < 0.06 { return 196 * f / 0.06 }
+            if f < 0.22 { return 196 - (f - 0.06) * 40 }
+            return max(38, 189.6 * pow(1 - (f - 0.22) / 0.78, 1.15) + 30 * (f - 0.22))
+        }
+        let rows = stride(from: -300.0, through: duration, by: 15).map { offset -> FleetTelemetrySample in
+            let f = offset / duration
+            let level = f < 0 ? from : from + (to - from) * (1 - pow(1 - f, 1.6))
+            let tempMax = (31 + 8 * max(0, f)).rounded(.down), tempMin = (26 + 6 * max(0, f)).rounded(.down)
+            return FleetTelemetrySample(
+                t: charge.start.addingTimeInterval(offset), latitude: nil, longitude: nil, speedKph: nil,
+                powerKw: power(f), elevationM: nil, batteryLevel: level, energyRemainingKwh: level * 0.75,
+                batteryTempMinC: tempMin, batteryTempMaxC: tempMax, insideTempC: 21, outsideTempC: charge.outsideTempAvgC,
+                voltage: nil, currentA: nil, ratedRangeKm: 120 + level * 4.1, routeBreakBefore: false
+            )
+        }
+        // Downsampled 1 Hz-derived samples, as newer servers send them.
+        let samples = stride(from: 0.0, through: duration, by: 60).map { offset in
+            let f = offset / duration
+            return ChargeSample(t: charge.start.addingTimeInterval(offset),
+                                batteryLevel: Int((from + (to - from) * (1 - pow(1 - f, 1.6))).rounded()),
+                                powerKw: power(f), voltage: nil, currentA: nil,
+                                ratedRangeKm: 120 + (from + (to - from) * (1 - pow(1 - f, 1.6))) * 4.1)
+        }
+        return ChargeDetail(summary: charge, samples: samples, efficiency: nil,
+                            telemetry: FleetTelemetrySeries(source: "fleet_telemetry", samples: rows, gaps: [], truncated: false))
     }
     func idles(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<IdleSummary> {
         try check(vehicleID)

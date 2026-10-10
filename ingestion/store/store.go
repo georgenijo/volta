@@ -339,7 +339,7 @@ func (s *Store) recompute(ctx context.Context, tx pgx.Tx, vehicleID int, minTS t
 			return err
 		}
 	}
-	for _, g := range res.Gaps {
+	for _, g := range session.PersistedGaps(res.Gaps, session.MinPersistedLoss) {
 		if _, err := tx.Exec(ctx, `INSERT INTO volta_telemetry.gaps (vehicle_id, start_ts, end_ts, reason)
 			VALUES ($1, $2, $3, $4) ON CONFLICT (vehicle_id, start_ts, reason) DO UPDATE SET end_ts = EXCLUDED.end_ts`,
 			vehicleID, g.Start, g.End, g.Reason); err != nil {

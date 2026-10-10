@@ -306,6 +306,7 @@ describe('metric telemetry contract', () => {
     const ch = await json('/v1/charges/1'); expect(ch.energyAddedKwh).toBe(21); expect(ch.energyUsedKwh).toBe(24); expect(ch.cost).toBe(4.8);
     expect(ch.currency).toBe('USD'); expect(ch.maxPowerKw).toBe(11); expect(ch.fastCharger).toBe(false); expect(ch.efficiency).toBeCloseTo(0.875);
     expect(ch.samples).toHaveLength(2); expect(ch.samples[0].powerKw).toBe(11); expect(ch.samples[0].ratedRangeKm).toBe(325);
+    expect(ch.source).toBe('teslamate'); expect(ch.avgPowerKw).toBe(11); expect(ch.energyFromGridKwh).toBeNull(); expect(ch.street).toBeNull(); expect(ch.city).toBeNull();
   });
   test('cursor pagination is deterministic for equal timestamps and scoped to filters', async () => {
     const seen: number[] = []; let cursor: string | null = null;

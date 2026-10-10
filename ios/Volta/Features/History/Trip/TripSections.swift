@@ -119,7 +119,7 @@ struct TripHero: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
-                Text(time.map { $0.formatted(.dateTime.hour().minute()) } ?? "Now")
+                Text(time.map(\.historyTime) ?? "Now")
                     .font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.white.opacity(0.9))
                 HStack(spacing: 5) {
                     if let level {

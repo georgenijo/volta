@@ -110,7 +110,7 @@ struct TiresView: View {
             }
             Group {
                 if let date = reading?.updatedAt {
-                    Text("As of \(date.formatted(date: .abbreviated, time: .shortened))")
+                    Text("As of \(VoltaFormat.dateTime(date))")
                 } else { Text("Not recorded") }
             }
             .font(.system(size: 10, weight: .medium))

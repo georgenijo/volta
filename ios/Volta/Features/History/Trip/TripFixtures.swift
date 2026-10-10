@@ -172,8 +172,10 @@ enum TripFixtures {
         summary.distanceKm = 33.2
         summary.startBatteryLevel = 64
         summary.endBatteryLevel = 58
-        summary.energyUsedKwh = nil
-        summary.efficiencyWhPerKm = nil
+        // Samples are sparse, but the summary still carries the rated-range
+        // estimate: 6% of a 75 kWh pack.
+        summary.energyUsedKwh = 4.5
+        summary.efficiencyWhPerKm = 4.5 * 1000 / 33.2
         summary.maxSpeedKph = 64
         summary.avgSpeedKph = 33.2 / (56.0 / 60)
         summary.startAddress = "Union City, CA"

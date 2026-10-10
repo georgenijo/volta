@@ -41,6 +41,15 @@ extension DriveSummary {
         default: "Energy source not supplied by this server"
         }
     }
+    /// The summary route with collector break jitter tolerated; what every
+    /// route drawing of this drive uses.
+    var drawableRoute: [DriveRoutePoint] { DriveRouteSegments.tolerant(route ?? []) }
+    /// Server efficiency, else derived from recorded energy over distance.
+    var displayEfficiencyWhPerKm: Double? {
+        if let efficiencyWhPerKm, efficiencyWhPerKm.isFinite { return efficiencyWhPerKm }
+        guard let kwh = costableEnergyKwh, distanceKm.isFinite, distanceKm >= 0.1 else { return nil }
+        return kwh * 1000 / distanceKm
+    }
     var startPlace: String { startCity ?? startAddress ?? "Start not recorded" }
     var endPlace: String { endCity ?? endAddress ?? "End not recorded" }
     /// Server score combines efficiency, smoothness and speed. Missing is unknown.

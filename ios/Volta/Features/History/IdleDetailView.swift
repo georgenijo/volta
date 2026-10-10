@@ -160,7 +160,7 @@ struct IdleDetailView: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(HistoryTheme.secondary)
             Spacer()
-            Text(date.map { $0.formatted(.dateTime.month(.abbreviated).day().hour().minute()) } ?? "Still parked")
+            Text(date.map { VoltaFormat.dayTime($0) } ?? "Still parked")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
             Text(battery.map { "\($0)%" } ?? "—")

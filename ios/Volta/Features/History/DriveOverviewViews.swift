@@ -27,6 +27,25 @@ struct DriveScoreRing: View {
 }
 
 enum DriveRouteSegments {
+    /// Share of flagged points above which break flags are read as jitter.
+    static let noisyBreakShare = 0.5
+
+    /// Break flags on most of a route are collector gap jitter, not recording
+    /// gaps: honoring them shatters the line into isolated points. Above
+    /// `noisyBreakShare` the flags are dropped so the route draws continuously;
+    /// invalid positions still break it in `runs`. Short routes keep their flags.
+    static func tolerant(_ points: [DriveRoutePoint]) -> [DriveRoutePoint] {
+        let candidates = points.dropFirst()
+        guard candidates.count >= 3 else { return points }
+        let flagged = candidates.reduce(0) { $0 + ($1.routeBreakBefore == true ? 1 : 0) }
+        guard Double(flagged) / Double(candidates.count) > noisyBreakShare else { return points }
+        return points.map { point in
+            var point = point
+            point.routeBreakBefore = nil
+            return point
+        }
+    }
+
     static func runs(_ points: [DriveRoutePoint]) -> [[DriveRoutePoint]] {
         var runs: [[DriveRoutePoint]] = []
         var breakPending = true
@@ -86,7 +105,7 @@ struct DrivesRouteMap: View {
     private var runs: [Run] {
         drives.flatMap { drive in
             let color = tint?(drive)
-            return DriveRouteSegments.runs(drive.route ?? []).filter { !$0.isEmpty }.map { run in
+            return DriveRouteSegments.runs(drive.drawableRoute).filter { !$0.isEmpty }.map { run in
                 Run(coordinates: run.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }, color: color)
             }
         }
@@ -231,7 +250,7 @@ private extension Roadtrip {
     /// Legs joined into one path; each leg starts a new run so gaps never bridge.
     var routePoints: [DriveRoutePoint] {
         drives.flatMap { drive in
-            (drive.route ?? []).enumerated().map { index, point in
+            drive.drawableRoute.enumerated().map { index, point in
                 var point = point
                 if index == 0 { point.routeBreakBefore = true }
                 return point
@@ -320,7 +339,7 @@ private struct RoadtripCard: View {
                     .foregroundStyle(.white)
                     Text(first.start.formatted(.dateTime.month(.abbreviated).day().year()))
                         .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
-                    Text(first.start.formatted(date: .omitted, time: .shortened))
+                    Text(first.start.historyTime)
                         .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
                 }
             }
