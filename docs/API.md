@@ -33,7 +33,12 @@ FleetMetricCoverage {start,end,sourceSampleCount,returnedSampleCount,
 Measurements are nullable metric numbers with no carry-forward. Signal-only rows
 need no GPS. `invalidFields` names Tesla fields explicitly invalid/malformed or
 conflicting, distinct from absent observations; `Power` marks unusable electrical
-power. Known gaps forbid interpolation. At most 2,000 samples cover the complete
+power. Known gaps forbid interpolation. A receiver gap is real data loss: a
+disconnected/silence span of at least 90s (shorter cadence rows are ignored,
+seams <=1s coalesced); invalid gear/charge spans pass through. Drive
+`interrupted`, route breaks (>120s or real loss) and energy nulling use only
+real loss. Telemetry drives join across a Park stop <180s, or a <60s seam with
+speed >5 km/h within 15s on both sides, never across real loss. At most 2,000 samples cover the complete
 session: each metric's first, last, minimum and maximum valid observations are
 retained. Explicit invalid observations and the neighboring metric observations
 that delimit their unknown spans take priority. Time buckets retain one row per
@@ -129,7 +134,8 @@ DrivePoint     { t, latitude, longitude, speedKph, powerKw, elevationM, batteryL
 ChargeSummary  { id, start, end, address, placeName, energyAddedKwh, energyUsedKwh,
                  startBatteryLevel, endBatteryLevel, durationMin, maxPowerKw,
                  fastCharger, cost, currency, outsideTempAvgC,
-                 latitude?, longitude? }
+                 latitude?, longitude?, source?, avgPowerKw?, city?, street?,
+                 energyFromGridKwh? }
 ChargeDetail   ChargeSummary + { samples: [ChargeSample], efficiency }
 ChargeSample   { t, batteryLevel, powerKw, voltage, currentA, ratedRangeKm }
 IdleSummary    { id, start, end, address, placeName, durationMin, startBatteryLevel,
@@ -142,6 +148,24 @@ MileageBucket  { start, distanceKm, driveCount, energyUsedKwh }
 FirmwareUpdate { version, installedAt, previousVersion }
 Place          { id, name, latitude, longitude, radiusM, costPerKwh }
 ```
+
+With Fleet Telemetry enabled and bound, charge lists merge derived telemetry
+charge sessions (`source:"fleet_telemetry"`, negative `id`, accepted by
+`/v1/charges/{id}` and cursors) with TeslaMate processes (`source:"teslamate"`).
+A measured telemetry charge hides overlapping TeslaMate processes; TeslaMate
+remains where telemetry has no coverage, lost data (gap >=90s) or no reported
+charge power. Telemetry `start`/`end` are trimmed to reported AC/DC power >0
+and never reach the next drive; order, `from/to` and cursors use the untrimmed
+session start. Battery levels are rounded BatteryLevel at the edges;
+`energyAddedKwh` is the EnergyRemaining delta, else held-power integration
+(null across lost data); `maxPowerKw` and energy-weighted `avgPowerKw` use the
+charge power rule below. `address/placeName/city/street` come from TeslaMate's
+nearest address (<=150m) and containing geofence, never an external geocoder.
+`cost` comes from an overlapping priced TeslaMate process, else null;
+`energyUsedKwh`, `efficiency` and `energyFromGridKwh` are null (no measured grid
+energy is exposed). Detail `samples` hold at most 2,000 thinned points.
+Summary charge totals use the merged list; charger locations and timeline remain
+TeslaMate-only. `street` is house number plus road, else null.
 
 `ChargeSummary.latitude/longitude` and `IdleSummary.latitude/longitude` are
 additive optional fields, returned as numbers or null. Charge list/detail use

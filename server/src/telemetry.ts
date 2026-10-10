@@ -5,14 +5,15 @@ import { timestamp, type ListInput } from './validation';
 import { summaryPeriod } from './period';
 import { FleetDrives, replacedDrive, overlappingWindows, resolveDriveSources, telemetryDriveVehicle, type Catalog, type Window } from './fleet-drives';
 import { FleetSeries } from './fleet-series';
+import { FleetCharges, coveredCharge, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
 import { FleetLive, liveValues } from './fleet-live';
 import { applyDriveEnergy, scoreFromStats, aggregateDriveScore } from './drive-parity';
 
 export class Telemetry {
   constructor(private sql: DB, private currency: string | null = null, private clock: () => Date = () => new Date(), private fleetEnabled = false,
     private log: (entry: object) => void = () => {}) {}
-  private async fleetSession(kind: 'drive' | 'charge', id: number) {
-    try { return await new FleetSeries(this.sql).session(kind,id); }
+  private async fleetSession(kind: 'drive' | 'charge', id: number, window?: {car_id: number; start: Date; finish: Date}) {
+    try { return await new FleetSeries(this.sql).session(kind,id,window); }
     catch {
       // Database errors may contain query text and values. Emit only a stable,
       // non-sensitive code while preserving the TeslaMate detail response.
@@ -419,12 +420,58 @@ export class Telemetry {
       cp.charge_energy_added AS "energyAddedKwh", cp.charge_energy_used AS "energyUsedKwh", cp.start_battery_level AS "startBatteryLevel", cp.end_battery_level AS "endBatteryLevel",
       COALESCE(p.latitude, a.latitude) AS latitude, COALESCE(p.longitude, a.longitude) AS longitude,
       COALESCE(cp.duration_min, extract(epoch FROM (COALESCE(cp.end_date, now() AT TIME ZONE 'UTC') - cp.start_date))/60) AS "durationMin",
-      stats.max_power AS "maxPowerKw", COALESCE(stats.fast, false) AS "fastCharger", cp.cost, ${this.currency}::text AS currency, cp.outside_temp_avg AS "outsideTempAvgC"
+      stats.max_power AS "maxPowerKw", COALESCE(stats.fast, false) AS "fastCharger", cp.cost, ${this.currency}::text AS currency, cp.outside_temp_avg AS "outsideTempAvgC",
+      'teslamate'::text AS source, pw.avg_power AS "avgPowerKw", COALESCE(NULLIF(a.city,''), NULLIF(a.neighbourhood,''), NULLIF(a.name,'')) AS city,
+      CASE WHEN NULLIF(a.road,'') IS NULL THEN NULL ELSE concat_ws(' ', NULLIF(a.house_number,''), a.road) END AS street, NULL::double precision AS "energyFromGridKwh"
       FROM public.charging_processes cp LEFT JOIN public.addresses a ON a.id = cp.address_id LEFT JOIN public.geofences g ON g.id = cp.geofence_id
       LEFT JOIN public.positions p ON p.id = cp.position_id
-      LEFT JOIN LATERAL (SELECT max(charger_power) AS max_power, bool_or(fast_charger_present) AS fast FROM public.charges WHERE charging_process_id = cp.id) stats ON true`;
+      LEFT JOIN LATERAL (SELECT max(charger_power) AS max_power, bool_or(fast_charger_present) AS fast FROM public.charges WHERE charging_process_id = cp.id) stats ON true
+      -- Energy-weighted mean of held charger power (sum P^2 dt / sum P dt).
+      LEFT JOIN LATERAL (SELECT sum(power*power*dt)/NULLIF(sum(power*dt),0) AS avg_power FROM (SELECT charger_power AS power,
+        extract(epoch FROM lead(date) OVER (ORDER BY date, id)-date) AS dt FROM public.charges WHERE charging_process_id = cp.id) held WHERE power>0 AND dt>0) pw ON true`;
+  }
+  private async chargeCatalog(id: number) {
+    if (!this.fleetEnabled) return null;
+    try { return await new FleetCharges(this.sql).catalog(id); }
+    catch { this.log({event:'fleet_charges_failed',code:'telemetry_query_failed'}); return null; }
+  }
+  /** TeslaMate identities plus cost/position for telemetry cost and location fallback. */
+  private legacyCharges(id: number) {
+    return this.sql`SELECT cp.id,cp.start_date AS start,cp.end_date AS end,cp.cost,COALESCE(p.latitude,a.latitude) AS latitude,COALESCE(p.longitude,a.longitude) AS longitude,
+      to_char(cp.start_date,'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart" FROM public.charging_processes cp
+      LEFT JOIN public.positions p ON p.id=cp.position_id LEFT JOIN public.addresses a ON a.id=cp.address_id WHERE cp.car_id=${id}`;
+  }
+  /** Mirrors mergedDrives: one merged, cursor-ordered list. A measured
+   * telemetry charge hides overlapping TeslaMate processes; TeslaMate stays
+   * wherever telemetry lacks coverage or could not measure power. */
+  private async mergedCharges(id: number, q: ListInput, catalog: ChargeCatalog) {
+    const legacy=await this.legacyCharges(id),fleet=new FleetCharges(this.sql),cache=new Map<number,Promise<Row | null>>();
+    // A failed telemetry charge degrades to TeslaMate, like a missing catalog.
+    const hydrate=(w: ChargeWindow)=>{if (!cache.has(w.id)) cache.set(w.id,fleet.row(id,w,catalog.gaps,legacy,this.currency)
+      .catch(()=>{this.log({event:'fleet_charge_failed',code:'telemetry_query_failed'});return null;}));return cache.get(w.id)!;};
+    const overlaps=(r: Row)=>catalog.windows.filter(w=>+w.start<(r.end ? +new Date(r.end) : Infinity) && +w.end>+new Date(r.start));
+    const matches=(r:Row)=>(!q.from || r._cursorStart>=q.from) && (!q.to || r._cursorStart<q.to)
+      && (!q.before || r._cursorStart<q.before || (r._cursorStart===q.before && r.id<q.beforeId!));
+    const candidates: Row[]=[...legacy.filter(matches),...catalog.windows.filter(matches)];
+    candidates.sort((a,b)=>b._cursorStart.localeCompare(a._cursorStart) || b.id-a.id);
+    const rows: Row[]=[];
+    for (let i=0;i<candidates.length && rows.length<=q.limit;i++) {
+      // Prefetch the rest of the page concurrently; the loop consumes in order.
+      for (const c of candidates.slice(i,i+q.limit+1-rows.length)) for (const w of c.id<0 ? [c as ChargeWindow] : overlaps(c)) void hydrate(w);
+      const c=candidates[i]!;
+      if (c.id<0) { const row=await hydrate(c as ChargeWindow); if (row) rows.push(row); continue; }
+      const covering=overlaps(c);
+      if ((await Promise.all(covering.map(hydrate))).some(Boolean) || (!covering.length && coveredCharge(c,catalog))) continue;
+      rows.push(c);
+    }
+    const ids=rows.filter(r=>r.id>0).map(r=>r.id);
+    const tm=ids.length ? await this.sql`${this.chargeSelect()} WHERE cp.id=ANY(${ids}::integer[])` : [];
+    const byId=new Map(tm.map(r=>[r.id,r]));
+    return rows.map(r=>r.id>0 ? byId.get(r.id)! : r).filter(Boolean);
   }
   async charges(id: number, q: ListInput) {
+    const catalog=await this.chargeCatalog(id);
+    if (catalog?.windows.length) return this.mergedCharges(id,q,catalog);
     return this.sql`${this.chargeSelect()} WHERE cp.car_id = ${id}
       AND (${q.from}::timestamp IS NULL OR cp.start_date >= ${q.from}::timestamp)
       AND (${q.to}::timestamp IS NULL OR cp.start_date < ${q.to}::timestamp)
@@ -432,6 +479,14 @@ export class Telemetry {
       ORDER BY cp.start_date DESC, cp.id DESC LIMIT ${q.limit + 1}`;
   }
   async charge(id: number) {
+    if (id<0) {
+      const vehicle=telemetryChargeVehicle(id),catalog=await this.chargeCatalog(vehicle),window=catalog?.windows.find(w=>w.id===id);
+      if (!window || !catalog) throw missing();
+      const row=await new FleetCharges(this.sql).row(vehicle,window,catalog.gaps,await this.legacyCharges(vehicle),this.currency,true);
+      if (!row) throw missing();
+      const {_cursorStart,...fields}=row;
+      return {...fields,efficiency:null,telemetry:await this.fleetSession('charge',id,{car_id:vehicle,start:row.start,finish:row.end})} as Row;
+    }
     const [summary] = await this.sql`${this.chargeSelect()} WHERE cp.id = ${id}`;
     if (!summary) throw missing();
     const samples = await this.sql`SELECT date AS t, battery_level AS "batteryLevel", charger_power AS "powerKw", charger_voltage AS voltage, charger_actual_current AS "currentA", rated_battery_range_km AS "ratedRangeKm" FROM public.charges WHERE charging_process_id = ${id} ORDER BY date, id`;
@@ -576,6 +631,12 @@ export class Telemetry {
       const rows=await this.sql`${this.driveSelect()} WHERE d.car_id=${id} AND d.start_date>=${period.periodStart}::timestamp AND d.start_date<${period.periodEnd}::timestamp AND ${this.measurableDrive()}`;
       await this.enrichDrives(rows,false);
       fields.driveScore=aggregateDriveScore(rows);
+    }
+    const charges=await this.chargeCatalog(id);
+    if (charges?.windows.length) {
+      const rows=await this.mergedCharges(id,{from:timestamp(period.periodStart),to:timestamp(period.periodEnd),before:null,beforeId:null,limit:Number.MAX_SAFE_INTEGER,minMinutes:10},charges);
+      const total=(key: string)=>rows.length && rows.every(r=>r[key] !== null && r[key] !== undefined) ? rows.reduce((sum,r)=>sum+Number(r[key]),0) : null;
+      fields.chargeCount=rows.length; fields.energyAddedKwh=total('energyAddedKwh'); fields.chargeCost=total('cost');
     }
     return fields;
   }
