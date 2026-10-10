@@ -362,7 +362,7 @@ enum ChargeTimeAxis {
     @AxisContentBuilder
     static func marks(start: Date, end: Date) -> some AxisContent {
         AxisMarks(values: ticks(start: start, end: end)) { value in
-            AxisValueLabel(format: .dateTime.hour().minute(),
+            AxisValueLabel(format: .voltaClock,
                            anchor: value.index == 0 ? .topLeading : value.index == value.count - 1 ? .topTrailing : .top)
                 .font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
         }
