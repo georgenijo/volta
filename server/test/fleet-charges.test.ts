@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { coveredCharge, deriveCharge, telemetryChargeId, telemetryChargeVehicle } from '../src/fleet-charges';
+import { coveredCharge, deriveCharge, failedCharge, resolveCharges, telemetryChargeId, telemetryChargeVehicle } from '../src/fleet-charges';
 
 const at=(s:number)=>new Date(Date.UTC(2026,0,3)+s*1000);
 // Change-only DC session: power/SoC/energy reported only when they change.
@@ -77,4 +77,35 @@ test('charge identity is stable and a covered TeslaMate process is replaced only
   expect(coveredCharge({start:at(4900),end:null},catalog)).toBe(false);
   expect(coveredCharge({start:at(1000),end:at(1100)},{...catalog,gaps:[{start:at(900),end:at(1200),reason:'charge_invalid'}]})).toBe(false);
   expect(coveredCharge({start:at(1000),end:at(1100)},{...catalog,gaps:[{start:at(900),end:at(1200),reason:'gear_invalid'}]})).toBe(true);
+});
+test('a charge without positive evidence of a stop is uncertain',()=>{
+  const heartbeat=[{t:at(0),dc_power_kw:100},{t:at(600),outside_temp_c:10}];
+  expect(deriveCharge({start:at(0),end:at(600)},heartbeat)!._uncertain).toBe(true);
+  // Evidence: the session closed on a charge-state transition, or a drive began.
+  expect(deriveCharge({start:at(0),end:at(600),endReason:'charge_state'},heartbeat)!._uncertain).toBe(false);
+  expect(deriveCharge({start:at(0),end:at(900),nextDrive:at(600)},heartbeat)!._uncertain).toBe(false);
+  // Still running (or split by an unknown span): never settled, even after a zero.
+  expect(deriveCharge({start:at(0),end:at(600),endReason:'gap'},heartbeat)!._uncertain).toBe(true);
+  expect(deriveCharge({start:at(0),end:at(900),endReason:'open'},[...heartbeat,{t:at(700),dc_power_kw:0}])!._uncertain).toBe(true);
+  expect(deriveCharge({start:at(0),end:at(900),endReason:'gap'},[...heartbeat,{t:at(700),dc_power_kw:0}])!._uncertain).toBe(false);
+});
+const win=(s:number,e:number)=>({id:telemetryChargeId(2,at(s)),start:at(s),end:at(e),_cursorStart:at(s).toISOString(),nextDrive:null,endReason:'charge_state'});
+const fragment=(w:any,kwh=10)=>({window:w,row:{id:w.id,start:w.start,end:w.end,energyAddedKwh:kwh,_uncertain:false}});
+test('fragments replace a process only when its whole covered span, seams included, is loss-free',()=>{
+  const a=win(0,600),b=win(900,1500),p={id:1,start:at(100),end:at(1550),cost:12};
+  const lost=resolveCharges([fragment(a),fragment(b)],[p],[{start:at(650),end:at(850),reason:'disconnected'}]);
+  expect([...lost.replaced]).toEqual([]);expect([...lost.shown.keys()]).toEqual([]);
+  // An uncovered seam longer than the loss threshold is plausibly lost charging.
+  expect([...resolveCharges([fragment(a),fragment(b)],[p],[]).replaced]).toEqual([]);
+  const c=win(0,600),d=win(660,1500),ok=resolveCharges([fragment(c),fragment(d)],[p],[]);
+  expect([...ok.replaced]).toEqual([1]);expect([...ok.shown.values()].map(r=>r.cost)).toEqual([null,12]);
+});
+test('a failed member query keeps the whole group on TeslaMate',()=>{
+  const a=win(0,600),b=win(620,1500),p={id:1,start:at(100),end:at(1550),cost:12};
+  const r=resolveCharges([fragment(a),{window:b,row:failedCharge}],[p],[]);
+  expect([...r.replaced]).toEqual([]);expect([...r.shown.keys()]).toEqual([]);
+  // Nothing to fall back to: the measured member is still listed.
+  expect([...resolveCharges([fragment(a),{window:b,row:failedCharge}],[],[]).shown.keys()]).toEqual([a.id]);
+  // An unresolved open TeslaMate process is never replaced.
+  expect([...resolveCharges([fragment(a)],[{...p,_open:true}],[]).replaced]).toEqual([]);
 });

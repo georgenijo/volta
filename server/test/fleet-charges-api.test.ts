@@ -1,7 +1,8 @@
-import { afterAll, beforeEach, expect, test } from 'bun:test';
+import { afterAll, beforeEach, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { connect } from '../src/db';
 import { Telemetry } from '../src/telemetry';
+import { FleetCharges } from '../src/fleet-charges';
 import { Auth } from '../src/auth';
 import { createApp } from '../src/app';
 const url=process.env.TEST_DATABASE_URL;
@@ -109,4 +110,35 @@ test('a telemetry cursor stays valid when the TeslaMate fallback takes over',asy
   const first=await get('/v1/vehicles/1/charges?limit=1');expect(first.items[0].id).toBeLessThan(0);
   await owner`UPDATE volta_telemetry.vehicle_bindings SET vin_digest=repeat('0',64)`;
   expect((await get(`/v1/vehicles/1/charges?limit=1&cursor=${first.nextCursor}`)).items.map((r:any)=>r.id)).toEqual([11]);
+});
+test('an open telemetry session without an observed stop cannot replace TeslaMate',async()=>{
+  await tm(22,100,1750,3);
+  await owner`UPDATE volta_telemetry.sessions SET end_reason='open' WHERE kind='charge'`;
+  await owner`DELETE FROM volta_telemetry.samples WHERE field='DCChargingPower' AND source_ts=${at(1680)}`;
+  expect((await list()).map((r:any)=>r.id)).toEqual([22]);
+});
+test('a failed sibling hydration keeps the shared TeslaMate process',async()=>{
+  await owner`DELETE FROM volta_telemetry.sessions WHERE kind='charge'`;
+  await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES
+    (1,'charge',${at(0)},${at(900)},'charge_state','charge_state','complete',50),(1,'charge',${at(900)},${at(1700)},'charge_state','charge_state','complete',50)`;
+  await tm(15,100,1750,12);
+  const real=FleetCharges.prototype.row,spy=spyOn(FleetCharges.prototype,'row').mockImplementation(function(this:any,v:number,w:any,...rest:any[]){
+    if (+w.start===+at(900)) return Promise.reject(new Error('timeout'));return (real as any).call(this,v,w,...rest);});
+  try { expect((await list()).map((r:any)=>r.id)).toEqual([15]); } finally { spy.mockRestore(); }
+});
+test('an old open TeslaMate process neither joins every later charge nor gets hidden',async()=>{
+  await owner`INSERT INTO charging_processes(id,car_id,position_id,address_id,start_date,charge_energy_added) VALUES (20,1,6,1,${at(-100000)},5)`;
+  await owner`INSERT INTO charges(id,date,charge_energy_added,charger_power,ideal_battery_range_km,charging_process_id) VALUES (900,${at(-99000)},5,11,300,20)`;
+  for (let k=1;k<=5;k++) {
+    const s=-90000+k*10000;
+    await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES (1,'charge',${at(s)},${at(s+600)},'charge_state','charge_state','complete',10)`;
+    for (const [t,v] of [[s,11],[s+600,0]] as const) await owner`INSERT INTO volta_telemetry.samples(vehicle_id,field,source_ts,received_at,value_num,invalid,quality,payload_id)
+      VALUES (1,'ACChargingPower',${at(t)},${at(t)},${v},false,'ok',${'o'+t})`;
+  }
+  const spy=spyOn(FleetCharges.prototype,'row');
+  try {
+    const page=await get('/v1/vehicles/1/charges?limit=1');expect(page.items[0].id).toBeLessThan(0);
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
+  } finally { spy.mockRestore(); }
+  expect((await list()).map((r:any)=>r.id)).toContain(20);
 });

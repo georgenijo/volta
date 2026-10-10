@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
-import { coverageGap, lossGap, lostBetween, realGaps, type Span } from './fleet-gaps';
+import { coverageGap, lossGap, lossMs, lostBetween, realGaps, type Span } from './fleet-gaps';
 import { telemetryDriveId, telemetryDriveVehicle } from './fleet-drives';
 
 /** Same collision-free encoding as drives; charge and drive IDs are separate
@@ -8,7 +8,8 @@ import { telemetryDriveId, telemetryDriveVehicle } from './fleet-drives';
  * cursor stay stable while the displayed start is trimmed to power. */
 export const telemetryChargeId = telemetryDriveId;
 export const telemetryChargeVehicle = telemetryDriveVehicle;
-export type ChargeWindow = { id: number; start: Date; end: Date; _cursorStart: string; nextDrive: Date | null };
+/** endReason: ingestion's close reason ('charge_state' observed stop, 'gap', 'open' still running). */
+export type ChargeWindow = { id: number; start: Date; end: Date; _cursorStart: string; nextDrive: Date | null; endReason?: string };
 export type ChargeCatalog = { windows: ChargeWindow[]; gaps: Span[]; start: Date | null; end: Date | null };
 
 const margin = 300000, finite = (n: any): n is number => typeof n === 'number' && Number.isFinite(n);
@@ -29,9 +30,10 @@ export function chargePowers(samples: Row[]) {
  * Start: first reported power>0 in the session. End: first explicitly
  * non-positive power of the charging source (DC or AC) after the last reported
  * positive power, else the session end; never past the next drive. Unknown
- * power is never a stop: it leaves `_uncertain` set and no integrated energy.
+ * power is never a stop: it leaves `_uncertain` set and no integrated energy,
+ * as does a stop without positive evidence (open or gap-split session).
  * Null when power never rose (nothing measurable charged). */
-export function deriveCharge(w: { start: Date; end: Date; nextDrive?: Date | null }, rows: Row[], gaps: Span[] = []): Row | null {
+export function deriveCharge(w: { start: Date; end: Date; nextDrive?: Date | null; endReason?: string }, rows: Row[], gaps: Span[] = []): Row | null {
   const samples = [...rows].sort((a,b) => +new Date(a.t)-+new Date(b.t)), powers = chargePowers(samples), lost = realGaps(gaps);
   const limit = Math.min(+w.end, w.nextDrive ? +w.nextDrive : Infinity), first = powers.findIndex(p => p.reported && p.p !== null && p.p > 0 && +p.t >= +w.start && +p.t <= limit);
   if (first < 0) return null;
@@ -41,7 +43,10 @@ export function deriveCharge(w: { start: Date; end: Date; nextDrive?: Date | nul
   const source = powers[last]!.dc ? 'dc' : 'ac', power = (p: typeof powers[number]) => p.p !== null && p.p > 0 ? p.p : p.held[source] === null ? null : 0;
   const stop = powers.findIndex((p,i) => i > last && +p.t <= limit && power(p) === 0);
   const start = powers[first]!.t, end = new Date(stop >= 0 ? +powers[stop]!.t : limit);
-  const uncertain = powers.some((p,i) => i > last && +p.t <= +end && (stop < 0 || i < stop) && power(p) === null);
+  // Settled only on positive evidence of a stop: explicit zero power, a
+  // charge-state close, or the next drive. Still running is never settled.
+  const evidenced = stop >= 0 ? w.endReason !== 'open' : w.endReason === 'charge_state' || (!!w.nextDrive && +w.nextDrive <= +w.end);
+  const uncertain = !evidenced || powers.some((p,i) => i > last && +p.t <= +end && (stop < 0 || i < stop) && power(p) === null);
   // Slow change-only signals hold until the next observation, but never across
   // an invalid observation of that field or real loss. At the end prefer the
   // first report within 5 min after (SoC lags the stop), at the start the held value.
@@ -89,22 +94,31 @@ export function coveredCharge(row: Row, catalog: ChargeCatalog) {
 }
 const bounds = (r: Row) => [+new Date(r.start), r.end ? +new Date(r.end) : Infinity] as const;
 const hits = (w: { start: Date; end: Date }, r: Row) => +w.start < bounds(r)[1] && +w.end > bounds(r)[0];
+/** Hydration failed: distinct from null (looked, found no charge). */
+export const failedCharge = Symbol('failedCharge');
 /** One overlap group (raw telemetry windows and TeslaMate processes linked by
  * overlap). Telemetry replaces the group's TeslaMate processes only when every
- * measured row has measurable energy, a certain stop and no real loss, and no
- * real loss falls inside any process's telemetry-covered span; otherwise the
+ * member hydrated (a failed query is not "no charge"), no process is open,
+ * every measured row has measurable energy, an evidenced stop and no real
+ * loss, and no loss falls inside any process's telemetry-covered span; otherwise the
  * overlapping partial telemetry is dropped and TeslaMate stays. Each replaced
  * receipt counts once: on the shown row with the largest measured overlap
  * (then more energy, then earlier). Row cost = its receipts' sum, null when it
  * has none or any is unpriced; `_priced` = every receipt overlapping it is
  * priced (a sibling may carry them), so totals stay exact. */
-export function resolveCharges(group: { window: ChargeWindow; row: Row | null }[], legacy: Row[], gaps: Span[]) {
-  const measured = group.filter((g): g is { window: ChargeWindow; row: Row } => g.row !== null);
-  const trusted = measured.every(({row}) => row.energyAddedKwh !== null && !row._uncertain && !lostBetween(gaps,new Date(row.start),new Date(row.end)))
+export function resolveCharges(group: { window: ChargeWindow; row: Row | null | typeof failedCharge }[], legacy: Row[], gaps: Span[]) {
+  const measured = group.filter((g): g is { window: ChargeWindow; row: Row } => g.row !== null && g.row !== failedCharge);
+  const trusted = !group.some(g => g.row === failedCharge) && !legacy.some(p => p._open)
+    && measured.every(({row}) => row.energyAddedKwh !== null && !row._uncertain && !lostBetween(gaps,new Date(row.start),new Date(row.end)))
     && legacy.every(p => {
-      const ws = group.filter(g => hits(g.window,p)).map(g => g.window);
+      // The process-clipped covered span, earliest window start to latest
+      // end: real loss anywhere in it, or an uncovered seam of loss length
+      // between fragments, may hide charging telemetry never saw.
+      const ws = group.filter(g => hits(g.window,p)).map(g => g.window).sort((a,b) => +a.start-+b.start);
       if (!ws.length) return true;
-      const from = Math.max(bounds(p)[0],...ws.map(w => +w.start)), to = Math.min(bounds(p)[1],...ws.map(w => +w.end));
+      const from = Math.max(bounds(p)[0],+ws[0]!.start), to = Math.min(bounds(p)[1],Math.max(...ws.map(w => +w.end)));
+      let reach = +ws[0]!.end;
+      for (const w of ws.slice(1)) { if (Math.min(+w.start,to)-Math.max(reach,from) >= lossMs) return false; reach = Math.max(reach,+w.end); }
       return !lostBetween(gaps,new Date(from),new Date(to));
     });
   const replaced = new Set(trusted ? legacy.filter(p => measured.some(g => hits(g.window,p))).map(p => p.id as number) : []);
@@ -124,8 +138,10 @@ export function resolveCharges(group: { window: ChargeWindow; row: Row | null }[
   return {shown,replaced};
 }
 /** Resolve the complete overlap group of any seed (window or process) once;
- * groups never depend on the requested page or date range. */
-export function chargeGroups(catalog: ChargeCatalog, legacy: Row[], hydrate: (w: ChargeWindow) => Promise<Row | null>) {
+ * groups never depend on the requested page or date range. Open TeslaMate
+ * processes arrive capped at their last recorded sample (legacyCharges), so
+ * groups follow finite, evidenced coverage. */
+export function chargeGroups(catalog: ChargeCatalog, legacy: Row[], hydrate: (w: ChargeWindow) => Promise<Row | null | typeof failedCharge>) {
   const done = new Map<number,Promise<ReturnType<typeof resolveCharges>>>();
   return (seed: Row) => {
     if (done.has(seed.id)) return done.get(seed.id)!;
@@ -141,13 +157,22 @@ export function chargeGroups(catalog: ChargeCatalog, legacy: Row[], hydrate: (w:
     return result;
   };
 }
+/** At most `n` concurrent calls; the rest queue in order. */
+export function limited<A extends unknown[],T>(n: number, f: (...a: A) => Promise<T>) {
+  let active = 0; const queue: (() => void)[] = [];
+  return async (...a: A) => {
+    if (active >= n) await new Promise<void>(go => queue.push(go)); else active++;
+    // A finishing call hands its slot straight to the next queued one.
+    try { return await f(...a); } finally { const next = queue.shift(); if (next) next(); else active--; }
+  };
+}
 export class FleetCharges {
   constructor(private sql: DB) {}
   async catalog(id: number): Promise<ChargeCatalog | null> {
     const [binding]=await this.sql`SELECT b.vin_digest,c.vin FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!binding?.vin || binding.vin_digest!==createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(binding.vin).digest('hex')) return null;
     const [sessions,gaps,bounds]=await Promise.all([
-      this.sql`SELECT c.start_ts AS start,c.end_ts AS end,to_char(c.start_ts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart",
+      this.sql`SELECT c.start_ts AS start,c.end_ts AS end,c.end_reason AS "endReason",to_char(c.start_ts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart",
         (SELECT d.start_ts FROM volta_telemetry.sessions d WHERE d.vehicle_id=c.vehicle_id AND d.kind='drive' AND d.start_ts>=c.start_ts ORDER BY d.start_ts LIMIT 1) AS "nextDrive"
         FROM volta_telemetry.sessions c WHERE c.vehicle_id=${id} AND c.kind='charge' ORDER BY c.start_ts`,
       this.sql`SELECT start_ts AS start,end_ts AS end,reason FROM volta_telemetry.gaps WHERE vehicle_id=${id} AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '90 seconds') ORDER BY start_ts`,
@@ -158,7 +183,7 @@ export class FleetCharges {
     ]);
     const starts=[bounds[0]?.first,bounds[0]?.connected].filter(Boolean).map(t=>new Date(t));
     const ends=[bounds[0]?.last,bounds[0]?.latest].filter(Boolean).map(t=>new Date(t));
-    return {windows:sessions.map(s=>({id:telemetryChargeId(id,new Date(s.start)),start:new Date(s.start),end:new Date(s.end),_cursorStart:s._cursorStart,nextDrive:s.nextDrive ? new Date(s.nextDrive) : null})),
+    return {windows:sessions.map(s=>({id:telemetryChargeId(id,new Date(s.start)),start:new Date(s.start),end:new Date(s.end),_cursorStart:s._cursorStart,nextDrive:s.nextDrive ? new Date(s.nextDrive) : null,endReason:s.endReason})),
       gaps:realGaps(gaps),start:starts.length ? starts.reduce((a,b)=>+a<+b?a:b) : null,end:ends.length ? ends.reduce((a,b)=>+a>+b?a:b) : null};
   }
   private samples(vehicle: number, w: ChargeWindow) {

@@ -154,10 +154,15 @@ charge sessions (`source:"fleet_telemetry"`, negative `id`, accepted by
 `/v1/charges/{id}` and cursors) with TeslaMate processes (`source:"teslamate"`).
 Telemetry windows and TeslaMate processes linked by overlap resolve as one
 group. Telemetry replaces the group's TeslaMate processes only when every
-measured telemetry charge has a measurable `energyAddedKwh`, an explicit stop
-and no lost data (gap >=90s), and no lost data falls inside any process's
-telemetry-covered span; otherwise TeslaMate stays and the overlapping partial
-telemetry is dropped from lists and totals. TeslaMate also remains where
+member was read (a failed query keeps the group on TeslaMate), no process is
+still open, every measured telemetry charge has a measurable `energyAddedKwh`,
+a stop with positive evidence (explicit zero power, a charge-state close or the
+next drive; an open or gap-split session without one is unsettled) and no lost
+data (gap >=90s), and no lost data or uncovered seam >=90s between fragments
+falls inside any process's covered span (earliest overlapping window start to
+latest end); otherwise TeslaMate stays and the overlapping partial telemetry is
+dropped from lists and totals. An open TeslaMate process groups only up to its
+last recorded sample and is never hidden. TeslaMate also remains where
 telemetry has no coverage or no reported charge power. Telemetry `start`/`end`
 are trimmed to reported AC/DC power >0 and never reach the next drive; the end
 is the charging source's first explicit non-positive power, never an invalid or

@@ -5,7 +5,7 @@ import { timestamp, type ListInput } from './validation';
 import { summaryPeriod } from './period';
 import { FleetDrives, replacedDrive, overlappingWindows, resolveDriveSources, telemetryDriveVehicle, type Catalog, type Window } from './fleet-drives';
 import { FleetSeries } from './fleet-series';
-import { FleetCharges, chargeGroups, coveredCharge, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
+import { FleetCharges, chargeGroups, coveredCharge, failedCharge, limited, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
 import { FleetLive, liveValues } from './fleet-live';
 import { applyDriveEnergy, scoreFromStats, aggregateDriveScore } from './drive-parity';
 
@@ -435,9 +435,12 @@ export class Telemetry {
     try { return await new FleetCharges(this.sql).catalog(id); }
     catch { this.log({event:'fleet_charges_failed',code:'telemetry_query_failed'}); return null; }
   }
-  /** TeslaMate identities plus cost/position for telemetry cost and location fallback. */
+  /** TeslaMate identities plus cost/position for telemetry cost and location
+   * fallback. An open process (no end_date) is capped at its last recorded
+   * sample for grouping and flagged `_open`: never replaced or hidden. */
   private legacyCharges(id: number) {
-    return this.sql`SELECT cp.id,cp.start_date AS start,cp.end_date AS end,cp.cost,COALESCE(p.latitude,a.latitude) AS latitude,COALESCE(p.longitude,a.longitude) AS longitude,
+    return this.sql`SELECT cp.id,cp.start_date AS start,
+      COALESCE(cp.end_date,(SELECT max(date) FROM public.charges WHERE charging_process_id=cp.id),cp.start_date) AS end,cp.end_date IS NULL AS "_open",cp.cost,COALESCE(p.latitude,a.latitude) AS latitude,COALESCE(p.longitude,a.longitude) AS longitude,
       to_char(cp.start_date,'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart" FROM public.charging_processes cp
       LEFT JOIN public.positions p ON p.id=cp.position_id LEFT JOIN public.addresses a ON a.id=cp.address_id WHERE cp.car_id=${id}`;
   }
@@ -446,10 +449,12 @@ export class Telemetry {
    * TeslaMate stays wherever telemetry lacks coverage, lost data, could not
    * measure energy, or saw no power. Rows keep `_cursorStart` and `_priced`. */
   private async mergedCharges(id: number, q: ListInput, catalog: ChargeCatalog) {
-    const legacy=await this.legacyCharges(id),fleet=new FleetCharges(this.sql),cache=new Map<number,Promise<Row | null>>();
-    // A failed telemetry charge degrades to TeslaMate, like a missing catalog.
-    const hydrate=(w: ChargeWindow)=>{if (!cache.has(w.id)) cache.set(w.id,fleet.row(id,w,catalog.gaps,legacy,this.currency)
-      .catch(()=>{this.log({event:'fleet_charge_failed',code:'telemetry_query_failed'});return null;}));return cache.get(w.id)!;};
+    const legacy=await this.legacyCharges(id),fleet=new FleetCharges(this.sql);
+    // A failed telemetry charge keeps its whole group on TeslaMate.
+    const row=limited(4,(w: ChargeWindow)=>fleet.row(id,w,catalog.gaps,legacy,this.currency));
+    const cache=new Map<number,Promise<Row | null | typeof failedCharge>>();
+    const hydrate=(w: ChargeWindow)=>{if (!cache.has(w.id)) cache.set(w.id,row(w)
+      .catch(()=>{this.log({event:'fleet_charge_failed',code:'telemetry_query_failed'});return failedCharge;}));return cache.get(w.id)!;};
     const resolve=chargeGroups(catalog,legacy,hydrate);
     const lone=(r: Row)=>r.id>0 && !catalog.windows.some(w=>+w.start<(r.end ? +new Date(r.end) : Infinity) && +w.end>+new Date(r.start));
     const matches=(r:Row)=>(!q.from || r._cursorStart>=q.from) && (!q.to || r._cursorStart<q.to)
@@ -461,7 +466,7 @@ export class Telemetry {
       // Prefetch the rest of the page concurrently; the loop consumes in order.
       for (const c of candidates.slice(i,i+q.limit+1-rows.length)) if (!lone(c)) void resolve(c);
       const c=candidates[i]!;
-      if (lone(c)) { if (!coveredCharge(c,catalog)) rows.push(c); continue; }
+      if (lone(c)) { if (c._open || !coveredCharge(c,catalog)) rows.push(c); continue; }
       const {shown,replaced}=await resolve(c);
       if (c.id<0) { const row=shown.get(c.id); if (row) rows.push(row); }
       else if (!replaced.has(c.id)) rows.push(c);
@@ -487,7 +492,7 @@ export class Telemetry {
       const fleet=new FleetCharges(this.sql),legacy=await this.legacyCharges(vehicle);
       const target=fleet.row(vehicle,window,catalog.gaps,legacy,this.currency,true);
       // Same group resolution as the list, for the reconciled cost.
-      const {shown}=await chargeGroups(catalog,legacy,w=>w.id===id ? target : fleet.row(vehicle,w,catalog.gaps,legacy,this.currency))(window);
+      const {shown}=await chargeGroups(catalog,legacy,w=>w.id===id ? target : fleet.row(vehicle,w,catalog.gaps,legacy,this.currency).catch(()=>failedCharge))(window);
       const row=await target;
       if (!row) throw missing();
       const {_cursorStart,_uncertain,_priced,...fields}=row;
