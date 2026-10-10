@@ -82,13 +82,24 @@ private struct PillButtonSurface: View {
     }
 }
 
-/// Subtle press feedback (dim + slight scale) used by Volta buttons.
+/// Press feedback for Volta buttons, cards and tiles: a soft spring to 0.97 with a
+/// slight dim. With Reduce Motion (or motion disabled) only the dim remains.
 struct VoltaPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+        PressBody(label: configuration.label, isPressed: configuration.isPressed)
+    }
+
+    private struct PressBody: View {
+        var label: Configuration.Label
+        var isPressed: Bool
+        @VoltaMotionAllowed private var motionAllowed
+
+        var body: some View {
+            label
+                .opacity(isPressed ? 0.78 : 1)
+                .scaleEffect(isPressed && motionAllowed ? 0.97 : 1)
+                .animation(motionAllowed ? VoltaMotion.press : .easeOut(duration: 0.12), value: isPressed)
+        }
     }
 }
 

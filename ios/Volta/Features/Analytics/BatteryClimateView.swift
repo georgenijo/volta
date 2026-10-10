@@ -52,6 +52,7 @@ struct BatteryClimateView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.battery-climate")
+        .voltaArrivalScope(isReady: state.isSettled)
         .screenKitPage("Battery Climate")
         .task(id: vehicleID) { await load() }
     }

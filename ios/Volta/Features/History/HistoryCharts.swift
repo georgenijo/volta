@@ -300,7 +300,7 @@ struct HistoryHeroNumeral: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(value)
+            CountUpNumber(text: value)
                 .font(.system(size: size, weight: .bold)).fontWidth(.expanded).tracking(size > 60 ? -2 : -1)
                 .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
                 .monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
@@ -341,6 +341,7 @@ struct HistoryStatStrip: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, index == 0 ? 0 : 12)
                 .accessibilityElement(children: .combine)
+                .voltaArrival(delay: VoltaMotion.statDelay(index))
             }
         }
     }
@@ -405,6 +406,8 @@ struct HistoryRhythmStrip: View {
                               : AnyShapeStyle(LinearGradient(colors: [color.opacity(0.62), color.opacity(0.16)], startPoint: .top, endPoint: .bottom)))
                         .frame(width: day.value == 0 ? 4 : 7, height: day.value == 0 ? 4 : max(7, 34 * day.value / peak))
                         .shadow(color: isToday && day.value > 0 ? (lit.first ?? tint).opacity(0.55) : .clear, radius: 5)
+                        .voltaBreathingGlow(color: lit.first ?? tint, isActive: isToday && day.value > 0)
+                        .voltaGrow(index: index)
                 }
             }
             .frame(height: 34, alignment: .bottom)
@@ -477,19 +480,23 @@ struct SocDial: View {
             if let from, let to {
                 let lo = clamp(min(from, to)), hi = clamp(max(from, to))
                 let tip = colors.last ?? HistoryTheme.blue
-                Circle().trim(from: 0, to: 0.75 * lo)
-                    .stroke(.white.opacity(0.16), style: StrokeStyle(lineWidth: line, lineCap: .round))
-                    .rotationEffect(.degrees(135))
-                Circle().trim(from: 0.75 * lo, to: 0.75 * max(hi, lo + 0.01))
-                    .stroke(AngularGradient(colors: to >= from ? colors : colors.reversed(), center: .center,
-                                            startAngle: .degrees(270 * lo), endAngle: .degrees(270 * hi)),
-                            style: StrokeStyle(lineWidth: line, lineCap: .round))
-                    .rotationEffect(.degrees(135))
-                    .shadow(color: tip.opacity(size > 60 ? 0.5 : 0.3), radius: size > 60 ? 8 : 3)
+                SweepIn { p in
+                    // The faint base fills first, then the luminous session arc sweeps out from it.
+                    let end = lo + (max(hi, lo + 0.01) - lo) * p
+                    Circle().trim(from: 0, to: 0.75 * lo * min(p * 1.6, 1))
+                        .stroke(.white.opacity(0.16), style: StrokeStyle(lineWidth: line, lineCap: .round))
+                        .rotationEffect(.degrees(135))
+                    Circle().trim(from: 0.75 * lo, to: 0.75 * min(end, 1.01))
+                        .stroke(AngularGradient(colors: to >= from ? colors : colors.reversed(), center: .center,
+                                                startAngle: .degrees(270 * lo), endAngle: .degrees(270 * hi)),
+                                style: StrokeStyle(lineWidth: line, lineCap: .round))
+                        .rotationEffect(.degrees(135))
+                        .shadow(color: tip.opacity((size > 60 ? 0.5 : 0.3) + 0.3 * VoltaMotion.bloom(p)), radius: (size > 60 ? 8 : 3) + 6 * VoltaMotion.bloom(p))
+                }
             }
             VStack(spacing: size * 0.02) {
                 HStack(alignment: .firstTextBaseline, spacing: 1) {
-                    Text(to.map(String.init) ?? "–")
+                    CountUpNumber(to.map(Double.init), placeholder: "–", alignment: .center) { String(Int($0.rounded())) }
                         .font(.system(size: size * (caption == nil ? 0.34 : 0.32), weight: .semibold, design: .rounded))
                     if to != nil, size >= 60 {
                         Text("%").font(.system(size: size * 0.15, weight: .semibold, design: .rounded)).foregroundStyle(HistoryTheme.secondary)
@@ -535,17 +542,23 @@ struct SegmentDial: View {
                 .stroke(.white.opacity(0.07), style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if total > 0 {
-                ForEach(Array(arcs(live, total: total, gap: gap).enumerated()), id: \.offset) { _, arc in
-                    Circle().trim(from: arc.start, to: arc.end)
-                        .stroke(AngularGradient(colors: [arc.color.opacity(0.45), arc.color], center: .center,
-                                                startAngle: .degrees(360 * arc.start), endAngle: .degrees(360 * arc.end)),
-                                style: StrokeStyle(lineWidth: line, lineCap: .round))
-                        .rotationEffect(.degrees(135))
-                        .shadow(color: arc.color.opacity(0.45), radius: 7)
+                SweepIn { p in
+                    // Segments sweep in as one continuous arc, in order.
+                    let reach = 0.75 * p
+                    ForEach(Array(arcs(live, total: total, gap: gap).enumerated()), id: \.offset) { _, arc in
+                        if reach > arc.start {
+                            Circle().trim(from: arc.start, to: min(arc.end, reach))
+                                .stroke(AngularGradient(colors: [arc.color.opacity(0.45), arc.color], center: .center,
+                                                        startAngle: .degrees(360 * arc.start), endAngle: .degrees(360 * arc.end)),
+                                        style: StrokeStyle(lineWidth: line, lineCap: .round))
+                                .rotationEffect(.degrees(135))
+                                .shadow(color: arc.color.opacity(0.45 + 0.3 * VoltaMotion.bloom(p)), radius: 7 + 5 * VoltaMotion.bloom(p))
+                        }
+                    }
                 }
             }
             VStack(spacing: size * 0.02) {
-                Text(center).font(.system(size: size * 0.3, weight: .semibold, design: .rounded)).monospacedDigit()
+                CountUpNumber(text: center, alignment: .center).font(.system(size: size * 0.3, weight: .semibold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
                 Text(caption).font(.system(size: max(8, size * 0.1), weight: .semibold)).tracking(1.2)
                     .textCase(.uppercase).foregroundStyle(HistoryTheme.secondary).lineLimit(1)

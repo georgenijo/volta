@@ -13,9 +13,14 @@ struct DriveScoreRing: View {
         ZStack {
             Circle().trim(from: 0.12, to: 0.88).stroke(HistoryTheme.track, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
             if let value {
-                Circle().trim(from: 0.12, to: 0.12 + 0.76 * Double(value) / 100).stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
+                SweepIn { p in
+                    Circle().trim(from: 0.12, to: 0.12 + min(0.76 * Double(value) / 100 * p, 0.776))
+                        .stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
+                        .shadow(color: tint.opacity(0.6 * VoltaMotion.bloom(p)), radius: 4)
+                }
             }
-            Text(value.map(String.init) ?? "–").font(.system(size: size * 0.30, weight: .bold, design: .rounded)).foregroundStyle(.white)
+            CountUpNumber(value.map(Double.init), placeholder: "–", alignment: .center) { String(Int($0.rounded())) }
+                .font(.system(size: size * 0.30, weight: .bold, design: .rounded)).foregroundStyle(.white)
         }.frame(width: size, height: size)
             .accessibilityLabel(value.map { "Drive score \($0) of 100" } ?? "Drive score unavailable")
     }
@@ -263,6 +268,7 @@ struct RoadtripsView: View {
                         ForEach(trips) { trip in
                             NavigationLink { RoadtripDetailView(trip: trip, partial: partial) } label: { RoadtripCard(trip: trip) }
                                 .buttonStyle(VoltaPressStyle())
+                                .voltaCascade()
                         }
                     }
                 }
@@ -273,6 +279,7 @@ struct RoadtripsView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.roadtrips")
+        .voltaArrivalScope()
         .screenKitPage("Roadtrips")
     }
 
@@ -402,6 +409,7 @@ struct RoadtripDetailView: View {
                     ForEach(trip.drives) { drive in
                         NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive, showsDate: true) }
                             .buttonStyle(VoltaPressStyle())
+                            .voltaCascade()
                     }
                 }
             }
@@ -410,6 +418,7 @@ struct RoadtripDetailView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.roadtrip")
+        .voltaArrivalScope()
         .screenKitPage("Roadtrip")
     }
 }
@@ -462,6 +471,7 @@ struct DrivesHeatmapView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.heatmap")
+        .voltaArrivalScope()
         .screenKitPage("Heatmap")
     }
 
@@ -586,6 +596,7 @@ private struct HeatmapDayView: View {
                         ForEach(drives) { drive in
                             NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive) }
                                 .buttonStyle(VoltaPressStyle())
+                                .voltaCascade()
                         }
                     }
                 }

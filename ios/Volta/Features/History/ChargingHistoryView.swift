@@ -171,6 +171,7 @@ struct ChargingHistoryView: View {
                                 NavigationLink(value: charge) { ChargeRow(charge: charge) }
                                     .buttonStyle(VoltaPressStyle())
                                     .accessibilityIdentifier("row.charge.\(charge.id)")
+                                    .voltaCascade()
                             }
                         }
                         .padding(.bottom, 10)
@@ -185,6 +186,7 @@ struct ChargingHistoryView: View {
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .refreshable { await reload() }
+        .voltaArrivalScope()
     }
 
     private var totals: some View {

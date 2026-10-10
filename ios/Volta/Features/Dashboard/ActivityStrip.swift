@@ -110,13 +110,15 @@ struct ActivityStrip: View {
         return HStack(alignment: .bottom, spacing: 0) {
             ForEach(Array(bars.enumerated()), id: \.offset) { index, hour in
                 if index > 0 { Spacer(minLength: 1) }
-                bar(hour)
+                // Grow from the bottom on arrival; the current hour breathes while lit.
+                bar(hour, isNow: index == bars.count - 1)
+                    .voltaGrow(index: index / 3)
             }
         }
     }
 
     @ViewBuilder
-    private func bar(_ hour: Hour) -> some View {
+    private func bar(_ hour: Hour, isNow: Bool) -> some View {
         if let kind = hour.kind, let color = Self.color(for: kind) {
             let peak = Self.peak(for: kind)
             let height = max(6, peak * (0.45 + 0.55 * hour.coverage))
@@ -126,6 +128,7 @@ struct ActivityStrip: View {
                           : AnyShapeStyle(color))
                 .frame(width: 4, height: height)
                 .shadow(color: lit ? color.opacity(0.55) : .clear, radius: 4)
+                .voltaBreathingGlow(color: color, radius: 6, isActive: isNow && lit)
         } else {
             Circle().fill(Color.white.opacity(0.1)).frame(width: 3, height: 3)
                 .frame(width: 4)

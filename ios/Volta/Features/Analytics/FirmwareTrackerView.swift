@@ -23,6 +23,7 @@ struct FirmwareTrackerView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.firmware")
+        .voltaArrivalScope(isReady: state.isSettled)
         .screenKitPage("Firmware Tracker")
         .task(id: vehicleID) { await load() }
     }

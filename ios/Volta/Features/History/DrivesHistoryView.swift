@@ -187,14 +187,17 @@ struct DrivesHistoryView: View {
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.drives")
         .refreshable { await reload() }
+        .voltaArrivalScope()
     }
 
     private func rows(_ items: [DriveSummary]) -> some View {
-        VStack(spacing: 12) {
+        let newest = visible.first?.id
+        return VStack(spacing: 12) {
             ForEach(items) { drive in
-                NavigationLink(value: drive) { DriveCard(drive: drive, showsDate: sort != .newest) }
+                NavigationLink(value: drive) { DriveCard(drive: drive, showsDate: sort != .newest, isNewest: drive.id == newest) }
                     .buttonStyle(VoltaPressStyle())
                     .accessibilityIdentifier("row.drive.\(drive.id)")
+                    .voltaCascade()
             }
         }
     }

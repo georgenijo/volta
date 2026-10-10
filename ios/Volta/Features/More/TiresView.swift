@@ -73,6 +73,7 @@ struct TiresView: View {
             .padding(.bottom, ScreenKit.bottomBarClearance)
         }
         .screenKitPage("Tires")
+        .voltaArrivalScope(isReady: state.isSettled)
         .task(id: vehicleID) { state = .loading; await load() }
         .refreshable { await load() }
     }
@@ -98,7 +99,7 @@ struct TiresView: View {
                 .font(.system(size: 10, weight: .semibold)).tracking(1.3)
                 .foregroundStyle(Color.voltaTextTertiary)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value)
+                CountUpNumber(text: value)
                     .font(.system(size: 34, weight: .bold)).fontWidth(.expanded).tracking(-1)
                     .monospacedDigit()
                     .foregroundStyle(value == "—" ? AnyShapeStyle(Color.voltaTextTertiary)

@@ -19,14 +19,16 @@ struct IdleDetailView: View {
                                         systemImage: "parkingsign", tint: HistoryTheme.blue) {
                         Task { await places.retry(dataSource: dataSource, vehicleID: vehicleID) }
                     }
-                    breakdownCard
-                    timesCard
+                    .voltaCascade(index: 0)
+                    breakdownCard.voltaCascade(index: 1)
+                    timesCard.voltaCascade(index: 2)
                 }
                 .padding(.horizontal, HistoryTheme.gutter)
                 .padding(.top, 8)
             }
             .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
             .scrollIndicators(.hidden)
+            .voltaArrivalScope()
         }
         .historyGlow(HistoryTheme.blue, HistoryTheme.purple, strength: 0.15)
         .historyScreenBackground()

@@ -69,6 +69,7 @@ struct SpecsWarrantyView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.specs")
+        .voltaArrivalScope(isReady: state.isSettled)
         .screenKitPage("Specs & Warranty")
         .task(id: vehicleID) { await load() }
         .task(id: storageKey) {

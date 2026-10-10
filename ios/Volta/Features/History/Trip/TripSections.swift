@@ -59,7 +59,7 @@ struct TripHero: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(eyebrow).voltaLabelStyle(color: HistoryTheme.tertiary).lineLimit(1).minimumScaleFactor(0.8)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(VoltaFormat.number(units.distanceValue(km: summary.distanceKm)))
+                        CountUpNumber(text: VoltaFormat.number(units.distanceValue(km: summary.distanceKm)))
                             .font(.system(size: 84, weight: .bold)).fontWidth(.expanded).tracking(-2)
                             .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
                             .monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
@@ -171,12 +171,16 @@ struct TripStatsRow: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 0) {
                 stat(VoltaFormat.duration(summary.durationMin), "Driving", first: true)
+                    .voltaArrival(delay: VoltaMotion.statDelay(0))
                 divider
                 stat(summary.energyUsedKwh.map { VoltaFormat.number($0) } ?? "—", "kWh")
+                    .voltaArrival(delay: VoltaMotion.statDelay(1))
                 divider
                 stat(summary.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit)
+                    .voltaArrival(delay: VoltaMotion.statDelay(2))
                 divider
                 stat(summary.avgSpeedKph.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", "\(speedUnit) avg")
+                    .voltaArrival(delay: VoltaMotion.statDelay(3))
             }
             HStack(spacing: 8) {
                 metric("arrow.triangle.2.circlepath", "Regen " + regenLine)
@@ -544,6 +548,7 @@ struct TripScoreCard: View {
                     Text("On-device smoothness · Volta v1").tripCaption()
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(s.score)").font(.system(size: 24, weight: .bold)).fontWidth(.expanded).monospacedDigit().foregroundStyle(.white)
+                            .voltaRollingNumber(Double(s.score))
                         Text(s.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(DriveScoreBand.tint(s.score))
                     }
                 }

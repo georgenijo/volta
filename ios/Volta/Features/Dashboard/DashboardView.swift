@@ -216,6 +216,7 @@ struct DashboardView: View {
         .scrollIndicators(.hidden)
         .scrollPosition($scrollPosition)
         .accessibilityIdentifier("scroll.dashboard")
+        .voltaArrivalScope(isReady: model.status != nil)
         .onScrollGeometryChange(for: CGFloat.self) { geo in
             geo.contentOffset.y + geo.contentInsets.top
         } action: { _, new in
@@ -284,7 +285,7 @@ struct DashboardView: View {
             Spacer(minLength: 8)
             HStack(spacing: 7) {
                 LiveStatusDot(color: DashboardRhythm.stateColor(status.state),
-                              live: status.state == .driving || status.state == .charging)
+                              live: status.state == .driving || status.state == .charging || status.chargingState == .charging)
                 Text(stateLine(status))
                     .font(.system(size: 13, weight: .medium))
                     .monospacedDigit()
@@ -330,11 +331,11 @@ struct DashboardView: View {
         let charging = status.chargingState == .charging
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("\(status.batteryLevel)")
+                // Counts up on arrival; live SoC changes roll (numericText).
+                CountUpNumber(text: "\(status.batteryLevel)")
                     .font(.system(size: 92, weight: .bold)).fontWidth(.expanded).tracking(-2.5)
                     .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
                     .monospacedDigit()
-                    .contentTransition(.numericText())
                     .lineLimit(1).minimumScaleFactor(0.5)
                 Text("%").font(.system(size: 22, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
                 Spacer(minLength: 0)
@@ -344,16 +345,21 @@ struct DashboardView: View {
             HStack(spacing: 0) {
                 DashboardStat(value: range.km.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
                               unit: range.km == nil ? nil : units.distanceUnit, caption: range.label, leading: true)
+                    .voltaArrival(delay: VoltaMotion.statDelay(0))
                 DashboardRhythm.verticalHairline
                 DashboardStat(value: status.chargeLimit.map { "\($0)" } ?? "—",
                               unit: status.chargeLimit == nil ? nil : "%", caption: "Limit")
+                    .voltaArrival(delay: VoltaMotion.statDelay(1))
                 DashboardRhythm.verticalHairline
-                if charging, let kw = status.chargerPowerKw {
-                    DashboardStat(value: VoltaFormat.number(kw, digits: 0), unit: "kW", caption: "Charging")
-                } else {
-                    DashboardStat(value: status.energyRemainingKwh.map { VoltaFormat.number($0) } ?? "—",
-                                  unit: status.energyRemainingKwh == nil ? nil : "kWh", caption: "Remaining")
+                Group {
+                    if charging, let kw = status.chargerPowerKw {
+                        DashboardStat(value: VoltaFormat.number(kw, digits: 0), unit: "kW", caption: "Charging")
+                    } else {
+                        DashboardStat(value: status.energyRemainingKwh.map { VoltaFormat.number($0) } ?? "—",
+                                      unit: status.energyRemainingKwh == nil ? nil : "kWh", caption: "Remaining")
+                    }
                 }
+                .voltaArrival(delay: VoltaMotion.statDelay(2))
             }
             .padding(.top, 22)
             if let freshness = status.telemetryFreshness {
@@ -374,10 +380,10 @@ struct DashboardView: View {
         let columns = [GridItem(.flexible(), spacing: DashboardRhythm.cardGap),
                        GridItem(.flexible(), spacing: DashboardRhythm.cardGap)]
         return LazyVGrid(columns: columns, spacing: DashboardRhythm.cardGap) {
-            packTempCard(status)
-            efficiencyCard
-            climateCard(status)
-            weatherCard(status)
+            packTempCard(status).voltaCascade(index: 0)
+            efficiencyCard.voltaCascade(index: 1)
+            climateCard(status).voltaCascade(index: 2)
+            weatherCard(status).voltaCascade(index: 3)
         }
     }
 
@@ -514,26 +520,15 @@ struct LiveStatusDot: View {
     var color: Color
     var live: Bool
     var size: CGFloat = 7
-    @State private var pulse = false
 
     var body: some View {
-        ZStack {
-            if live {
-                Circle().fill(color.opacity(0.45))
-                    .frame(width: size, height: size)
-                    .scaleEffect(pulse ? 2.6 : 1)
-                    .opacity(pulse ? 0 : 0.9)
-            }
-            Circle().fill(color).frame(width: size, height: size)
-                .shadow(color: color.opacity(0.7), radius: 4)
-        }
-        .frame(width: size * 2.6, height: size * 2.6)
-        .padding(-size * 0.8)
-        .onAppear {
-            guard live else { return }
-            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { pulse = true }
-        }
-        .accessibilityHidden(true)
+        // Ripple only while driving or charging; parked, asleep and offline stay static.
+        Circle().fill(color).frame(width: size, height: size)
+            .shadow(color: color.opacity(0.7), radius: 4)
+            .voltaLivePulse(color: color.opacity(0.5), isLive: live)
+            .frame(width: size * 2.6, height: size * 2.6)
+            .padding(-size * 0.8)
+            .accessibilityHidden(true)
     }
 }
 
@@ -558,18 +553,24 @@ struct RangeBar: View {
             let gradient = LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.07)).frame(height: 6)
-                // Glow underlay.
-                Capsule().fill(gradient).frame(width: fill, height: 6)
-                    .blur(radius: 8).opacity(0.7)
-                Capsule().fill(gradient).frame(width: fill, height: 6)
-                    .phaseAnimator(charging ? [0.55, 1] : [1]) { view, phase in
-                        view.opacity(phase)
-                    } animation: { _ in .easeInOut(duration: 1.2) }
-                // Bright tip.
-                Circle().fill(Color.white)
-                    .frame(width: 10, height: 10)
-                    .shadow(color: (colors.last ?? .voltaBlue).opacity(0.9), radius: 6)
-                    .offset(x: fill - 5)
+                SweepIn { p in
+                    let swept = max(fill * min(p, 1.02), 6)
+                    ZStack(alignment: .leading) {
+                        // Glow underlay, blooming as the fill sweeps in.
+                        Capsule().fill(gradient).frame(width: swept, height: 6)
+                            .blur(radius: 8).opacity(0.7 + 0.3 * VoltaMotion.bloom(p))
+                        Capsule().fill(gradient).frame(width: swept, height: 6)
+                        // Energy flow: light pulses travel toward the charge level while charging.
+                        EnergyFlow(shape: FlowLine(), fraction: 1, lineWidth: 2.5, spacing: 30, isActive: charging)
+                            .frame(width: swept, height: 6)
+                            .clipShape(Capsule())
+                        // Bright tip.
+                        Circle().fill(Color.white)
+                            .frame(width: 10, height: 10)
+                            .shadow(color: (colors.last ?? .voltaBlue).opacity(0.9), radius: 6)
+                            .offset(x: swept - 5)
+                    }
+                }
                 if let limit, limit < 100 {
                     Capsule()
                         .fill(Color.white.opacity(0.55))
@@ -602,20 +603,24 @@ extension ThinGauge: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.07)).frame(height: 3)
                 if let value {
-                    let x = max(w * clamp(value), 3)
-                    ZStack(alignment: .leading) {
-                        gradient.frame(height: 3).blur(radius: 5).opacity(0.6)
-                        gradient.frame(height: 3).clipShape(Capsule())
-                    }
-                    .mask(alignment: .leading) { Rectangle().frame(width: x) }
                     if let secondaryValue {
                         Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5)
                             .frame(width: 8, height: 8)
                             .offset(x: w * clamp(secondaryValue) - 4)
                     }
-                    Circle().fill(Color.white).frame(width: 7, height: 7)
-                        .shadow(color: .white.opacity(0.6), radius: 4)
-                        .offset(x: x - 3.5)
+                    SweepIn(delay: 0.15) { p in
+                        let x = max(w * clamp(value) * min(p, 1.02), 3)
+                        ZStack(alignment: .leading) {
+                            ZStack(alignment: .leading) {
+                                gradient.frame(height: 3).blur(radius: 5).opacity(0.6 + 0.4 * VoltaMotion.bloom(p))
+                                gradient.frame(height: 3).clipShape(Capsule())
+                            }
+                            .mask(alignment: .leading) { Rectangle().frame(width: x) }
+                            Circle().fill(Color.white).frame(width: 7, height: 7)
+                                .shadow(color: .white.opacity(0.6), radius: 4)
+                                .offset(x: x - 3.5)
+                        }
+                    }
                 }
             }
             .frame(maxHeight: .infinity)

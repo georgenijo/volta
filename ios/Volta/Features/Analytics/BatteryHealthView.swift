@@ -24,6 +24,7 @@ struct BatteryHealthView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.battery-health")
+        .voltaArrivalScope(isReady: state.isSettled)
         .screenKitPage("Battery Health")
         .task(id: vehicleID) { await load() }
     }

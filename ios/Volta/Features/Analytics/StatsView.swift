@@ -58,6 +58,7 @@ struct StatsView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.stats")
+        .voltaArrivalScope(isReady: state.isSettled)
         .screenKitPage("Stats")
         .task(id: TaskKey(vehicleID: vehicleID, period: period)) { await load() }
     }
@@ -96,10 +97,12 @@ struct StatsView: View {
             }
             .padding(.top, AnalyticsStyle.sectionGap)
             energyCard(buckets, totals: totals, sessions: s.charges.count)
+                .voltaCascade(index: 1)
 
             if let single {
                 AnalyticsSectionHeader("Charging cost").padding(.top, AnalyticsStyle.sectionGap)
                 costCard(buckets, single: single, totals: totals)
+                    .voltaCascade(index: 2)
             } else if totals.costs.count > 1 {
                 AnalyticsSectionHeader("Charging cost", trailing: "\(totals.costs.count) currencies").padding(.top, AnalyticsStyle.sectionGap)
                 AnalyticsGroup {
@@ -134,6 +137,8 @@ struct StatsView: View {
                 .chartYScale(domain: 0...top)
                 .chartStyled(ghost: ghost, showsYAxis: false)
             }
+            // Bars grow from the baseline on arrival.
+            .voltaGrow(index: 0)
             HStack {
                 Text("Per \(period.bucketNoun)")
                 Spacer()
@@ -302,7 +307,7 @@ struct AnalyticsNumeral: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(value)
+            CountUpNumber(text: value)
                 .font(.system(size: size, weight: .bold)).fontWidth(.expanded).tracking(-size / 42)
                 .foregroundStyle(AnalyticsStyle.heroFill)
                 .monospacedDigit().lineLimit(1).minimumScaleFactor(0.4)
@@ -372,6 +377,7 @@ struct AnalyticsStatStrip: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, index == 0 ? 0 : 12)
                 .accessibilityElement(children: .combine)
+                .voltaArrival(delay: VoltaMotion.statDelay(index))
             }
         }
     }
@@ -532,10 +538,12 @@ struct AnalyticsBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.07))
                 if let fraction {
-                    let width = max(height, proxy.size.width * min(1, max(0, fraction)))
-                    Capsule().fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
-                        .frame(width: width)
-                        .shadow(color: (colors.last ?? .white).opacity(0.55), radius: 5)
+                    SweepIn(delay: 0.1) { p in
+                        let width = max(height, proxy.size.width * min(1, max(0, fraction)) * min(p, 1.02))
+                        Capsule().fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
+                            .frame(width: width)
+                            .shadow(color: (colors.last ?? .white).opacity(0.55 + 0.35 * VoltaMotion.bloom(p)), radius: 5)
+                    }
                 }
             }
         }
@@ -563,15 +571,17 @@ struct AnalyticsDial: View {
                 .stroke(.white.opacity(0.07), style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if let clamped, clamped > 0 {
-                Circle().trim(from: 0, to: 0.75 * clamped)
-                    .stroke(AngularGradient(colors: colors, center: .center, startAngle: .degrees(0), endAngle: .degrees(270 * clamped)),
-                            style: StrokeStyle(lineWidth: line, lineCap: .round))
-                    .rotationEffect(.degrees(135))
-                    .shadow(color: tip.opacity(size > 60 ? 0.5 : 0.25), radius: size > 60 ? size * 0.05 : 3)
+                SweepIn { p in
+                    Circle().trim(from: 0, to: min(0.75 * clamped * p, 0.765))
+                        .stroke(AngularGradient(colors: colors, center: .center, startAngle: .degrees(0), endAngle: .degrees(270 * clamped)),
+                                style: StrokeStyle(lineWidth: line, lineCap: .round))
+                        .rotationEffect(.degrees(135))
+                        .shadow(color: tip.opacity((size > 60 ? 0.5 : 0.25) * (1 + VoltaMotion.bloom(p))), radius: size > 60 ? size * 0.05 : 3)
+                }
             }
             VStack(spacing: size * 0.025) {
                 HStack(alignment: .firstTextBaseline, spacing: size * 0.012) {
-                    Text(value)
+                    CountUpNumber(text: value, alignment: .center)
                         .font(.system(size: size * 0.26, weight: .bold)).fontWidth(.expanded).tracking(-size * 0.006)
                         .monospacedDigit().foregroundStyle(AnalyticsStyle.heroFill)
                         .lineLimit(1).minimumScaleFactor(0.5)

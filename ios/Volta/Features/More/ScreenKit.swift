@@ -368,6 +368,8 @@ enum Loadable<Value: Sendable>: Sendable {
     case failed(String)
 
     var value: Value? { if case .loaded(let v) = self { v } else { nil } }
+    /// Finished loading (content or error); arrival motion waits for this.
+    var isSettled: Bool { if case .loading = self { false } else { true } }
 }
 
 /// Renders a `Loadable` with consistent loading and error chrome.

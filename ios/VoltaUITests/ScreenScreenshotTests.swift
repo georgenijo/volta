@@ -9,7 +9,7 @@ final class ScreenScreenshotTests: XCTestCase {
     // main actor inside each test, including cleanup when navigation throws.
     private func launchDemo() throws {
         continueAfterFailure = false
-        app.launchArguments = ["-demo-mode", "YES"]
+        app.launchArguments = ["-demo-mode", "YES", "-VoltaDisableMotion"]
         app.launch()
         try waitForScreen("dashboard")
     }
@@ -112,7 +112,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testTeslaSignInNoVehicle() throws {
         defer { app.terminate() }
         continueAfterFailure = false
-        app.launchArguments = ["-demo-mode", "YES", "-demoNoVehicles", "YES"]
+        app.launchArguments = ["-demo-mode", "YES", "-demoNoVehicles", "YES", "-VoltaDisableMotion"]
         app.launch()
         try waitForElement("button.teslaSignIn")
         capture("tesla-no-vehicle")

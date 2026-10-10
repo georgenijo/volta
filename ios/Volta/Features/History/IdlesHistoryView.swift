@@ -196,6 +196,7 @@ struct IdlesHistoryView: View {
                                 NavigationLink(value: idle) { IdleRow(idle: idle) }
                                     .buttonStyle(VoltaPressStyle())
                                     .accessibilityIdentifier("row.idle.\(idle.id)")
+                                    .voltaCascade()
                             }
                         }
                         .padding(.bottom, 10)
@@ -211,6 +212,7 @@ struct IdlesHistoryView: View {
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .refreshable { await reload() }
+        .voltaArrivalScope()
     }
 
     private func drainLabel(_ items: [IdleSummary]) -> String {

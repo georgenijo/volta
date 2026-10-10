@@ -213,6 +213,7 @@ struct ControlsView: View {
             }
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("scroll.controls")
+            .voltaArrivalScope(isReady: model.status != nil)
             .safeAreaInset(edge: .top, spacing: 0) { header }
             .overlay(alignment: .bottom) { toastView }
             .background(alignment: .top) { ScreenKit.TopGlow() }
@@ -263,12 +264,19 @@ struct ControlsView: View {
 
     // MARK: Hero
 
+    private var isLive: Bool {
+        guard let status = model.status else { return false }
+        return status.state == .driving || status.state == .charging || status.chargingState == .charging
+    }
+
     private var hero: some View {
         VStack(alignment: .leading, spacing: 24) {
             HStack(spacing: 8) {
                 Circle().fill(model.status?.state.color ?? Color.voltaTextTertiary)
                     .frame(width: 6, height: 6)
                     .shadow(color: (model.status?.state.color ?? .clear).opacity(0.8), radius: 3)
+                    // Ripple only while driving or charging.
+                    .voltaLivePulse(color: (model.status?.state.color ?? .clear).opacity(0.5), isLive: isLive)
                 Text(vehicleName ?? "Vehicle")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.voltaTextPrimary)
@@ -860,18 +868,22 @@ private struct LockDial: View {
                 .stroke(Color.white.opacity(0.06), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if locked != nil {
-                Circle()
-                    .trim(from: 0, to: 0.75)
-                    .stroke(tint.opacity(0.55), style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                    .blur(radius: 6)
+                SweepIn { p in
+                    let reach = min(0.75 * p, 0.765)
+                    ZStack {
+                        Circle()
+                            .trim(from: 0, to: reach)
+                            .stroke(tint.opacity(0.55 + 0.35 * VoltaMotion.bloom(p)), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                            .blur(radius: 6)
+                        Circle()
+                            .trim(from: 0, to: reach)
+                            .stroke(
+                                AngularGradient(colors: [tint.opacity(0.35), tint, tint], center: .center,
+                                                startAngle: .degrees(0), endAngle: .degrees(270)),
+                                style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    }
                     .rotationEffect(.degrees(135))
-                Circle()
-                    .trim(from: 0, to: 0.75)
-                    .stroke(
-                        AngularGradient(colors: [tint.opacity(0.35), tint, tint], center: .center,
-                                        startAngle: .degrees(0), endAngle: .degrees(270)),
-                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(135))
+                }
             } else {
                 Circle()
                     .trim(from: 0, to: 0.75)

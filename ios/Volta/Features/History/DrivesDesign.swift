@@ -50,14 +50,17 @@ struct ScoreDial: View {
                 .stroke(.white.opacity(0.07), style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if let value {
-                Circle().trim(from: 0, to: 0.75 * Double(value) / 100)
-                    .stroke(AngularGradient(colors: [tint.opacity(0.35), tint], center: .center, startAngle: .degrees(0), endAngle: .degrees(270 * Double(value) / 100)),
-                            style: StrokeStyle(lineWidth: line, lineCap: .round))
-                    .rotationEffect(.degrees(135))
-                    .shadow(color: tint.opacity(size > 60 ? 0.45 : 0.25), radius: size > 60 ? 8 : 3)
+                SweepIn { p in
+                    let fraction = min(Double(value) / 100 * p, 1.02)
+                    Circle().trim(from: 0, to: 0.75 * fraction)
+                        .stroke(AngularGradient(colors: [tint.opacity(0.35), tint], center: .center, startAngle: .degrees(0), endAngle: .degrees(max(1, 270 * fraction))),
+                                style: StrokeStyle(lineWidth: line, lineCap: .round))
+                        .rotationEffect(.degrees(135))
+                        .shadow(color: tint.opacity((size > 60 ? 0.45 : 0.25) + 0.3 * VoltaMotion.bloom(p)), radius: (size > 60 ? 8 : 3) + 6 * VoltaMotion.bloom(p))
+                }
             }
             VStack(spacing: size * 0.02) {
-                Text(value.map(String.init) ?? "–")
+                CountUpNumber(value.map(Double.init), placeholder: "–", alignment: .center) { String(Int($0.rounded())) }
                     .font(.system(size: size * (caption == nil ? 0.36 : 0.34), weight: .semibold, design: .rounded))
                     .monospacedDigit().foregroundStyle(.white)
                 if let caption {
@@ -78,6 +81,8 @@ struct ScoreDial: View {
 struct RouteWatermark: View {
     var points: [DriveRoutePoint]
     var opacity: Double = 0.5
+    /// A soft comet glides along the route (newest drive card only).
+    var comet = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -88,15 +93,21 @@ struct RouteWatermark: View {
                 }
             }
             ZStack {
-                path.stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                    .blur(radius: 7).opacity(0.45)
-                path.stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                // The route draws itself on arrival; the trim is a shape animation, no per-frame body.
+                VoltaArrivalReader(animation: VoltaMotion.routeDraw) { p in
+                    ZStack {
+                        path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                            .blur(radius: 7).opacity(0.45)
+                        path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                    }
+                }
                 if let start = runs.first?.first {
                     Circle().fill(HistoryTheme.mint).frame(width: 5, height: 5).position(start)
                 }
                 if let end = runs.last?.last, runs.flatMap({ $0 }).count > 1 {
                     Circle().fill(HistoryTheme.blue).frame(width: 5, height: 5).position(end)
                         .shadow(color: HistoryTheme.blue, radius: 4)
+                    if comet { CometPath(path: path, isActive: true) }
                 }
             }
             .opacity(opacity)
@@ -122,7 +133,7 @@ struct DrivesHero: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(scope).voltaLabelStyle(color: HistoryTheme.tertiary)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0))
+                        CountUpNumber(text: VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0))
                             .font(.system(size: 84, weight: .bold)).fontWidth(.expanded).tracking(-2)
                             .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
                             .monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
@@ -135,13 +146,13 @@ struct DrivesHero: View {
             .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader).accessibilityIdentifier("screen.drives")
 
             HStack(spacing: 0) {
-                stat(VoltaFormat.duration(durationMin), "Driving")
+                stat(VoltaFormat.duration(durationMin), "Driving", index: 0)
                 divider
-                stat("\(totals.drives)\(partial ? "+" : "")", totals.drives == 1 && !partial ? "Drive" : "Drives")
+                stat("\(totals.drives)\(partial ? "+" : "")", totals.drives == 1 && !partial ? "Drive" : "Drives", index: 1)
                 divider
-                stat(totals.energyUsedKwh.value.map { VoltaFormat.number($0) } ?? "—", "kWh")
+                stat(totals.energyUsedKwh.value.map { VoltaFormat.number($0) } ?? "—", "kWh", index: 2)
                 divider
-                stat(totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit)
+                stat(totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit, index: 3)
             }
             if daily.contains(where: { $0.km > 0 }) { DailyRhythm(days: daily) }
         }
@@ -149,7 +160,7 @@ struct DrivesHero: View {
 
     private var divider: some View { Rectangle().fill(HistoryTheme.hairline).frame(width: 1, height: 28) }
 
-    private func stat(_ value: String, _ caption: String) -> some View {
+    private func stat(_ value: String, _ caption: String, index: Int) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(value).font(.system(size: 17, weight: .semibold)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
             Text(caption).font(.system(size: 10, weight: .semibold)).tracking(1).textCase(.uppercase).foregroundStyle(HistoryTheme.tertiary)
@@ -157,6 +168,7 @@ struct DrivesHero: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, caption == "Driving" ? 0 : 12)
         .accessibilityElement(children: .combine)
+        .voltaArrival(delay: VoltaMotion.statDelay(index))
     }
 }
 
@@ -193,6 +205,8 @@ struct DailyRhythm: View {
                               : AnyShapeStyle(LinearGradient(colors: [.white.opacity(0.42), .white.opacity(0.16)], startPoint: .top, endPoint: .bottom)))
                         .frame(width: day.km == 0 ? 4 : 7, height: day.km == 0 ? 4 : max(7, 34 * day.km / peak))
                         .shadow(color: isToday && day.km > 0 ? HistoryTheme.mint.opacity(0.5) : .clear, radius: 5)
+                        .voltaBreathingGlow(color: HistoryTheme.mint, isActive: isToday && day.km > 0)
+                        .voltaGrow(index: index)
                 }
             }
             .frame(height: 34, alignment: .bottom)
@@ -245,6 +259,8 @@ struct DriveDayHeader: View {
 struct DriveCard: View {
     var drive: DriveSummary
     var showsDate = false
+    /// The newest card carries the route comet.
+    var isNewest = false
     @Environment(\.units) private var units
     @Environment(AppModel.self) private var model: AppModel?
 
@@ -290,7 +306,7 @@ struct DriveCard: View {
         }
         .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 14)
         .background {
-            RouteWatermark(points: drive.route ?? [], opacity: 0.42)
+            RouteWatermark(points: drive.route ?? [], opacity: 0.42, comet: isNewest)
                 .padding(.leading, 130).padding(.trailing, 90).padding(.top, 4).padding(.bottom, 44)
                 .mask(RadialGradient(colors: [.black, .black.opacity(0.6), .clear], center: .center, startRadius: 10, endRadius: 120))
         }

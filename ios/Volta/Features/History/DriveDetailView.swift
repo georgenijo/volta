@@ -77,6 +77,7 @@ struct DriveDetailView: View {
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.drive-detail")
+        .voltaArrivalScope()
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrollY = y }
         .ignoresSafeArea(edges: .top)
         .overlay(alignment: .top) { header }

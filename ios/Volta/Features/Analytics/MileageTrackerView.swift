@@ -30,6 +30,7 @@ struct MileageTrackerView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.mileage")
+        .voltaArrivalScope(isReady: state.isSettled)
         .screenKitPage("Mileage Tracker")
         .task(id: TaskKey(vehicleID: vehicleID, bucket: bucket)) { await load() }
     }

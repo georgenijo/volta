@@ -28,7 +28,27 @@ struct MockDataSource: VoltaDataSource {
         #endif
     }
     static let noDataVehicle = Vehicle(id: 2, name: "Tesla", vinSuffix: "DEMO02", hasData: false)
+    /// Motion aid (DEBUG): `-demoCharging YES` shows the car charging at home
+    /// (live status dot, energy flow on the battery gauge).
+    static var showsCharging: Bool {
+        #if DEBUG
+        UserDefaults.standard.bool(forKey: "demoCharging")
+        #else
+        false
+        #endif
+    }
     func status(vehicleID: Int) async throws -> VehicleStatus {
+        var status = try parkedStatus(vehicleID: vehicleID)
+        if Self.showsCharging {
+            status.state = .charging
+            status.chargingState = .charging
+            status.chargerPowerKw = 11
+            status.minutesToFull = 48
+            status.chargePortDoorOpen = true
+        }
+        return status
+    }
+    private func parkedStatus(vehicleID: Int) throws -> VehicleStatus {
         if Self.listsNoDataVehicle && vehicleID == Self.noDataVehicle.id {
             throw VoltaError.server(code: "data_unavailable", message: "TeslaMate has not recorded a battery observation for this vehicle")
         }

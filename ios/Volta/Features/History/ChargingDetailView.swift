@@ -57,16 +57,18 @@ struct ChargingDetailView: View {
                                         systemImage: charge.kindIcon, tint: charge.kindTint) {
                         Task { await places.retry(dataSource: dataSource, vehicleID: vehicleID) }
                     }
-                    curveCard
-                    socCard
-                    telemetryCards
-                    costCard
+                    .voltaCascade(index: 0)
+                    curveCard.voltaCascade(index: 1)
+                    socCard.voltaCascade(index: 2)
+                    telemetryCards.voltaCascade(index: 3)
+                    costCard.voltaCascade(index: 4)
                 }
                 .padding(.horizontal, HistoryTheme.gutter)
                 .padding(.top, 8)
             }
             .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
             .scrollIndicators(.hidden)
+            .voltaArrivalScope()
         }
         .historyGlow(charge.fastCharger ? HistoryTheme.blue : HistoryTheme.mint, charge.fastCharger ? HistoryTheme.mint : HistoryTheme.blue, strength: 0.14)
         .historyScreenBackground()

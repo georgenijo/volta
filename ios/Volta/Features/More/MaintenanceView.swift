@@ -63,8 +63,14 @@ struct MaintenanceView: View {
                                         let tint = progress >= 1 ? ScreenKit.amber : ScreenKit.mint
                                         ZStack {
                                             Circle().stroke(Color.white.opacity(0.06), lineWidth: 3)
-                                            Circle().trim(from: 0, to: min(1, progress)).stroke(tint.opacity(0.5), style: StrokeStyle(lineWidth: 5, lineCap: .round)).blur(radius: 4).rotationEffect(.degrees(-90))
-                                            Circle().trim(from: 0, to: min(1, progress)).stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round)).rotationEffect(.degrees(-90))
+                                            SweepIn { p in
+                                                let reach = min(min(1, progress) * p, 1)
+                                                ZStack {
+                                                    Circle().trim(from: 0, to: reach).stroke(tint.opacity(0.5 + 0.4 * VoltaMotion.bloom(p)), style: StrokeStyle(lineWidth: 5, lineCap: .round)).blur(radius: 4)
+                                                    Circle().trim(from: 0, to: reach).stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                                                }
+                                                .rotationEffect(.degrees(-90))
+                                            }
                                             Text("\(Int(progress * 100))%").font(.system(size: 10, weight: .semibold)).monospacedDigit()
                                         }.frame(width: 44, height: 44)
                                     }
@@ -114,6 +120,7 @@ struct MaintenanceView: View {
             }.padding(.horizontal, ScreenKit.horizontalPadding).padding(.bottom, ScreenKit.bottomBarClearance)
         }
         .screenKitPage("Maintenance")
+        .voltaArrivalScope(isReady: state.isSettled)
         .task(id: vehicleID) { await load() }
         .refreshable { await load() }
         .onChange(of: vehicleID) { _, _ in adding = false; completing = nil; editingItem = nil; editingEvent = nil; deletingItem = nil; deletingEvent = nil }
