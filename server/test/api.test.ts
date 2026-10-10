@@ -341,8 +341,10 @@ describe('metric telemetry contract', () => {
     expect(d.startBatteryLevel).toBe(80); expect(d.endBatteryLevel).toBe(78); expect(d.energyUsedKwh).toBeCloseTo(1.5);
     expect((await json('/v1/vehicles/1/status')).state).toBe('driving');
     expect((await json('/v1/vehicles/1/drives')).items[0].id).toBe(20);
-    expect((await json('/v1/vehicles/1/summary?range=today')).distanceKm).toBe(10);
-    expect((await json('/v1/vehicles/1/mileage?bucket=day'))[0].distanceKm).toBe(10);
+    // The ten-minute fixture may cross UTC midnight; verify its contribution
+    // alongside the 105 km seeded history without assuming a calendar bucket.
+    expect((await json('/v1/vehicles/1/summary?range=7d')).distanceKm).toBe(115);
+    expect((await json('/v1/vehicles/1/mileage?bucket=day')).reduce((sum:number, row:any) => sum + row.distanceKm, 0)).toBe(115);
   });
   test('mixed streamed/polled positions keep range energy and status fields stable', async () => {
     await owner`INSERT INTO drives(id,car_id,start_date) VALUES(20,1,now() AT TIME ZONE 'UTC'-interval '10 minutes')`;
@@ -356,9 +358,11 @@ describe('metric telemetry contract', () => {
     const status = await json('/v1/vehicles/1/status'); expect(status.batteryLevel).toBe(77); expect(status.odometerKm).toBe(10110);
     expect(status.ratedRangeKm).toBe(390); expect(status.usableBatteryLevel).toBe(78); expect(status.insideTempC).toBe(22); expect(status.climateOn).toBe(true);
     expect(status.location.latitude).toBe(40.02);
-    expect((await json('/v1/vehicles/1/summary?range=today')).energyUsedKwh).toBeCloseTo(1.5);
-    expect((await json('/v1/vehicles/1/mileage?bucket=day'))[0].energyUsedKwh).toBeCloseTo(1.5);
-    expect((await json('/v1/vehicles/1/mileage?bucket=month'))[0].energyUsedKwh).toBeCloseTo(17.25);
+    // Preserve the 1.5 kWh open-drive contribution even at day/month boundaries.
+    expect((await json('/v1/vehicles/1/summary?range=7d')).energyUsedKwh).toBeCloseTo(17.25);
+    for (const bucket of ['day', 'month']) {
+      expect((await json(`/v1/vehicles/1/mileage?bucket=${bucket}`)).reduce((sum:number, row:any) => sum + row.energyUsedKwh, 0)).toBeCloseTo(17.25);
+    }
     const idle = (await json('/v1/vehicles/1/idles')).items.find((r:any)=>r.id===6); expect(idle.endBatteryLevel).toBe(80);
     await owner`INSERT INTO positions(id,car_id,drive_id,date,latitude,longitude,odometer,battery_level) VALUES(24,1,20,now() AT TIME ZONE 'UTC',40.03,-74.03,10111,76)`;
     expect((await json('/v1/drives/20')).energyUsedKwh).toBeCloseTo(1.5);
