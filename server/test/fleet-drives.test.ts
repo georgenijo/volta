@@ -12,23 +12,23 @@ test('Park under three minutes joins manoeuvres; exactly three minutes, gaps and
   expect(merged).toHaveLength(1);expect(merged[0]!.start).toEqual(at(0));expect(merged[0]!.end).toEqual(at(640));
   expect(mergeSessions(2,[session(0,60),session(240,600)],[])).toHaveLength(2);
   expect(mergeSessions(2,[session(0,60),session(100,600,'first_observed')],[])).toHaveLength(2);
-  expect(mergeSessions(2,[session(0,60),session(150,600)], [{start:at(61),end:at(149),reason:'disconnected'}])).toHaveLength(2);
+  expect(mergeSessions(2,[session(0,60),session(160,600)], [{start:at(61),end:at(159),reason:'disconnected'}])).toHaveLength(2);
   expect(mergeSessions(2,[session(0,60),session(100,600)], [{start:at(70),end:at(71),reason:'gear_invalid'}])).toHaveLength(2);
 });
 test('cadence jitter is not data loss: rows below a minute vanish, real seams coalesce',()=>{
   const jitter=Array.from({length:600},(_,i)=>({start:at(i),end:at(i+1),reason:'disconnected'}));
   expect(realGaps(jitter)).toEqual([]);
   expect(realGaps([{start:at(0),end:at(30),reason:'silence'},{start:at(30),end:at(59.9),reason:'silence'}])).toEqual([]);
-  const real=realGaps([{start:at(0),end:at(70),reason:'disconnected'},{start:at(70.5),end:at(140),reason:'silence'},
-    {start:at(300),end:at(301),reason:'gear_invalid'},{start:at(400),end:at(461),reason:'disconnected'}]);
-  expect(real).toEqual([{start:at(0),end:at(140),reason:'disconnected'},{start:at(300),end:at(301),reason:'gear_invalid'},{start:at(400),end:at(461),reason:'disconnected'}]);
+  const real=realGaps([{start:at(0),end:at(95),reason:'disconnected'},{start:at(95.5),end:at(190),reason:'silence'},
+    {start:at(300),end:at(301),reason:'gear_invalid'},{start:at(400),end:at(491),reason:'disconnected'},{start:at(500),end:at(561),reason:'disconnected'}]);
+  expect(real).toEqual([{start:at(0),end:at(190),reason:'disconnected'},{start:at(300),end:at(301),reason:'gear_invalid'},{start:at(400),end:at(491),reason:'disconnected'}]);
   expect(realGaps(real)).toEqual(real);
   // A flood of sub-second rows inside a drive keeps energy, score and the route intact.
   const flood=Array.from({length:1200},(_,i)=>({start:at(i/2),end:at(i/2+.5),reason:'disconnected'}));
   const row=deriveDrive({...window,startReason:'gear',membership:'complete'},points,points,samples,200,flood);
   expect(row.energyUsedKwh).toBe(2);expect(row.driveScore).not.toBeNull();expect(row.efficiencyWhPerKm).toBe(200);
   expect(row.route.some((p:any)=>p.routeBreakBefore)).toBe(false);expect(row.telemetry.gaps).toEqual([]);
-  expect(deriveDrive(window,points,points,samples,200,[{start:at(250),end:at(320),reason:'disconnected'}]).energyUsedKwh).toBeNull();
+  expect(deriveDrive(window,points,points,samples,200,[{start:at(250),end:at(345),reason:'disconnected'}]).energyUsedKwh).toBeNull();
 });
 test('a short seam while rolling joins whatever the reasons; Park stops still join; real loss never does',()=>{
   const moving=(end:Date,start:Date)=>+end===+at(2237) && +start===+at(2240);
@@ -41,8 +41,9 @@ test('a short seam while rolling joins whatever the reasons; Park stops still jo
   expect(mergeSessions(2,split,Array.from({length:6},(_,i)=>({start:at(2237+i*.5),end:at(2237.5+i*.5),reason:'disconnected'})),moving)).toHaveLength(1);
   // Park stop under three minutes still joins without speed evidence.
   expect(mergeSessions(2,[session(0,60),session(100,600)],[])).toHaveLength(1);
-  // A real 60-second loss never joins, rolling or parked.
-  const lost=[session(0,2237),session(2297,2760)],gap=[{start:at(2237),end:at(2297),reason:'disconnected'}];
+  // Real loss across the seam never joins, rolling or parked; a 60s heartbeat row is not loss.
+  const lost=[session(0,2237),session(2297,2760)],gap=[{start:at(2200),end:at(2297),reason:'disconnected'}];
+  expect(mergeSessions(2,lost,[{start:at(2237),end:at(2297),reason:'disconnected'}])).toHaveLength(1);
   expect(mergeSessions(2,lost,gap,()=>true)).toHaveLength(2);
   expect(mergeSessions(2,[session(0,2237),session(2240,2760,'first_observed')],[{start:at(2237),end:at(2240),reason:'disconnected'}],()=>true)).toHaveLength(1);
   expect(mergeSessions(2,[session(0,2237,'gear','open'),session(2296,2760,'first_observed')],[],()=>true)).toHaveLength(1);
@@ -103,4 +104,15 @@ test('observed closed sessions retain change-only measurements during stationary
   const delayed=points.map(p=>({...p,source_ts:new Date(+p.source_ts+200000)}));
   expect(deriveDrive(w,delayed,delayed,[],200,[]).distanceKm).toBe(10);
   expect(deriveDrive(w,delayed,delayed,[],200,[{start:at(0),end:at(199),reason:'disconnected'}]).distanceKm).toBeNull();
+});
+
+test('change-only EnergyRemaining held from before a parked start; real loss or stale values do not hold',()=>{
+  const w={...window,startReason:'first_observed',membership:'partial'};
+  const late=samples.map(p=>+p.source_ts<+at(200) ? {...p,energy_remaining_kwh:null} : p);
+  expect(deriveDrive(w,points,points,late,200,[]).energyUsedKwh).toBeNull();
+  const before={source_ts:at(-600),energy_remaining_kwh:50.5};
+  expect(deriveDrive(w,points,points,late,200,[],before).energyUsedKwh).toBeCloseTo(2.5);
+  expect(deriveDrive(w,points,points,late,200,[{start:at(-300),end:at(-100),reason:'silence'}],before).energyUsedKwh).toBeNull();
+  expect(deriveDrive(w,points,points,late,200,[],{...before,source_ts:at(-1801)}).energyUsedKwh).toBeNull();
+  expect(deriveDrive(w,points,points,samples,200,[],before).energyUsedKwh).toBe(2);
 });

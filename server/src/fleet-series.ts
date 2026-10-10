@@ -31,7 +31,7 @@ export class FleetSeries {
         ORDER BY d.id,p.source_ts`,
       this.sql`SELECT d.id,g.start_ts AS start,g.end_ts AS end,g.reason FROM jsonb_to_recordset(${windows}::jsonb)
         AS d(id integer,car_id integer,start timestamp,finish timestamp) JOIN volta_telemetry.gaps g ON g.vehicle_id=d.car_id
-          AND g.start_ts<=d.finish AT TIME ZONE 'UTC' AND g.end_ts>=d.start AT TIME ZONE 'UTC' AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '60 seconds')`
+          AND g.start_ts<=d.finish AT TIME ZONE 'UTC' AND g.end_ts>=d.start AT TIME ZONE 'UTC' AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '90 seconds')`
     ]);
     const pointsById = new Map<number, Row[]>();
     for (const p of samples) {
@@ -71,7 +71,7 @@ export class FleetSeries {
     // Real gaps only (shared rule), clipped to the session; JS so seams coalesce.
     const from = new Date(session.start), to = new Date(session.finish);
     const realSpans = realGaps(await s`SELECT start_ts AS start,end_ts AS end,reason FROM volta_telemetry.gaps WHERE vehicle_id=${session.car_id}
-      AND start_ts<=${session.finish}::timestamp AT TIME ZONE 'UTC' AND end_ts>=${session.start}::timestamp AT TIME ZONE 'UTC' AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '60 seconds')`)
+      AND start_ts<=${session.finish}::timestamp AT TIME ZONE 'UTC' AND end_ts>=${session.start}::timestamp AT TIME ZONE 'UTC' AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '90 seconds')`)
       .map(g => ({start:+g.start<+from ? from : g.start,end:+g.end>+to ? to : g.end,reason:g.reason}));
 
     const power = kind === 'drive' ? s`CASE
