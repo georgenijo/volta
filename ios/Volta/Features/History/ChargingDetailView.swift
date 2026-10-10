@@ -435,8 +435,9 @@ struct ChargingDetailView: View {
                        sampleValue: (ChargeSample) -> Double?) -> Curve {
         let series = TelemetryMetricSeries(telemetry, field: field, value: telemetryValue).clipped(start: sessionStart, end: sessionEnd)
         let fromTelemetry = ChargeCurve.points(series, start: sessionStart, end: sessionEnd)
-        let fromSamples = ChargeCurve.points(samples.map { (t: $0.t, value: sampleValue($0)) }, start: sessionStart, end: sessionEnd)
-        let chosen = ChargeCurve.choose(telemetry: fromTelemetry, samples: fromSamples)
+        let fromSamples = ChargeCurve.points(samples.map { (t: $0.t, value: sampleValue($0)) }, start: sessionStart, end: sessionEnd,
+                                             breaks: ChargeCurve.boundaries(telemetry, field: field))
+        let chosen = ChargeCurve.choose(telemetry: fromTelemetry, samples: fromSamples, start: sessionStart, end: sessionEnd)
         return Curve(points: ChargeCurve.reduced(chosen.points), source: chosen.source, telemetry: series)
     }
 

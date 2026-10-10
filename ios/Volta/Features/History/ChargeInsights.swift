@@ -147,10 +147,11 @@ enum ChargeCurve {
     /// Builds plot points from ONE source: sorted by time, one value per
     /// instant (the last recorded), finite only, clipped to the session window,
     /// and split into segments wherever consecutive samples are further apart
-    /// than `gap`. Unsorted or concatenated sources would otherwise make an
-    /// area mark fold back in time and draw a stray wedge.
+    /// than `gap` or a declared boundary in `breaks` lies between them.
+    /// Unsorted or concatenated sources would otherwise make an area mark fold
+    /// back in time and draw a stray wedge.
     static func points(_ raw: [(t: Date, value: Double?)], start: Date, end: Date,
-                       gap: TimeInterval? = nil) -> [ChargeCurvePoint] {
+                       gap: TimeInterval? = nil, breaks: [ClosedRange<Date>] = []) -> [ChargeCurvePoint] {
         let window = start...max(end, start)
         var byInstant: [Date: Double] = [:]
         for (t, value) in raw {
@@ -162,7 +163,13 @@ enum ChargeCurve {
         var result: [ChargeCurvePoint] = []
         var segment = 0
         for (index, entry) in ordered.enumerated() {
-            if index > 0, entry.key.timeIntervalSince(ordered[index - 1].key) > threshold { segment += 1 }
+            if index > 0 {
+                let prior = ordered[index - 1].key
+                if entry.key.timeIntervalSince(prior) > threshold
+                    || breaks.contains(where: { $0.lowerBound <= entry.key && $0.upperBound >= prior }) {
+                    segment += 1
+                }
+            }
             result.append(ChargeCurvePoint(id: index, t: entry.key, value: entry.value, segment: segment))
         }
         return result
@@ -184,15 +191,37 @@ enum ChargeCurve {
 
     enum Source: Equatable { case telemetry, samples }
 
+    /// Receiver-declared outages, plus instants where the telemetry block
+    /// flagged `field` invalid. Recorded samples are split at these so a
+    /// fallback chart never draws a line across a known outage, however short.
+    static func boundaries(_ telemetry: FleetTelemetrySeries?, field: String) -> [ClosedRange<Date>] {
+        guard let telemetry, telemetry.isFleetTelemetry else { return [] }
+        let gaps = telemetry.gaps.filter { $0.end >= $0.start }.map { $0.start...$0.end }
+        let invalid = telemetry.samples.filter { $0.invalidFields.contains(field) }.map { $0.t...$0.t }
+        return gaps + invalid
+    }
+
+    /// Seconds actually recorded: the sum of each segment's own span, so time
+    /// across a gap does not count as coverage.
+    static func coveredSeconds(_ points: [ChargeCurvePoint]) -> TimeInterval {
+        zip(points, points.dropFirst()).reduce(0) { total, pair in
+            pair.0.segment == pair.1.segment ? total + max(0, pair.1.t.timeIntervalSince(pair.0.t)) : total
+        }
+    }
+
     /// Every chart plots exactly one source, never both merged. Fleet
-    /// Telemetry wins when it has a plottable series that spans most of what
-    /// the recorded samples span; samples are the fallback when telemetry is
-    /// absent or only covers part of the session.
-    static func choose(telemetry: [ChargeCurvePoint], samples: [ChargeCurvePoint]) -> (points: [ChargeCurvePoint], source: Source) {
+    /// Telemetry wins when the time its segments actually cover is at least
+    /// 90% of what is achievable: the session span, or less if the recorded
+    /// samples cover less. Samples are the fallback when telemetry is absent
+    /// or only covers part of the session (including sparse fragments at the
+    /// two ends with nothing in between).
+    static func choose(telemetry: [ChargeCurvePoint], samples: [ChargeCurvePoint],
+                       start: Date, end: Date) -> (points: [ChargeCurvePoint], source: Source) {
         guard telemetry.count >= 2 else { return (samples, .samples) }
         guard samples.count >= 2 else { return (telemetry, .telemetry) }
-        let span = { (p: [ChargeCurvePoint]) in (p.last?.t.timeIntervalSince(p[0].t)) ?? 0 }
-        return span(telemetry) >= span(samples) * 0.9 ? (telemetry, .telemetry) : (samples, .samples)
+        let session = max(0, end.timeIntervalSince(start))
+        let achievable = min(session, coveredSeconds(samples))
+        return coveredSeconds(telemetry) >= achievable * 0.9 ? (telemetry, .telemetry) : (samples, .samples)
     }
 
     /// A lapse longer than four typical intervals (at least two minutes) is a gap.

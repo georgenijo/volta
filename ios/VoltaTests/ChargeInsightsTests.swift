@@ -138,10 +138,64 @@ final class ChargeInsightsTests: XCTestCase {
             ChargeCurve.points(stride(from: from, through: to, by: 15).map { (t: t0.addingTimeInterval($0), value: Double?(1)) },
                                start: t0, end: t0.addingTimeInterval(1800))
         }
-        XCTAssertEqual(ChargeCurve.choose(telemetry: run(0, 1800), samples: run(0, 1800)).source, .telemetry)
-        XCTAssertEqual(ChargeCurve.choose(telemetry: run(0, 1800), samples: []).source, .telemetry)
-        XCTAssertEqual(ChargeCurve.choose(telemetry: [], samples: run(0, 1800)).source, .samples)
-        XCTAssertEqual(ChargeCurve.choose(telemetry: run(0, 900), samples: run(0, 1800)).source, .samples)
+        let end = t0.addingTimeInterval(1800)
+        XCTAssertEqual(ChargeCurve.choose(telemetry: run(0, 1800), samples: run(0, 1800), start: t0, end: end).source, .telemetry)
+        XCTAssertEqual(ChargeCurve.choose(telemetry: run(0, 1800), samples: [], start: t0, end: end).source, .telemetry)
+        XCTAssertEqual(ChargeCurve.choose(telemetry: [], samples: run(0, 1800), start: t0, end: end).source, .samples)
+        XCTAssertEqual(ChargeCurve.choose(telemetry: run(0, 900), samples: run(0, 1800), start: t0, end: end).source, .samples)
+        // When the samples are themselves partial, telemetry only has to match them.
+        XCTAssertEqual(ChargeCurve.choose(telemetry: run(0, 900), samples: run(0, 900), start: t0, end: end).source, .telemetry)
+    }
+
+    /// Two one-minute telemetry fragments at opposite ends of a 30-minute
+    /// session span the whole session end to end but cover two minutes; the
+    /// complete samples must win.
+    func testSelectionMeasuresCoveredTimeNotFirstToLast() {
+        let end = t0.addingTimeInterval(1800)
+        let fragments = stride(from: 0.0, through: 60, by: 15).map { $0 } + stride(from: 1740.0, through: 1800, by: 15).map { $0 }
+        let telemetry = ChargeCurve.points(fragments.map { (t: t0.addingTimeInterval($0), value: Double?(100)) }, start: t0, end: end)
+        XCTAssertEqual(Set(telemetry.map(\.segment)).count, 2)
+        XCTAssertEqual(ChargeCurve.coveredSeconds(telemetry), 120, accuracy: 1e-9)
+        let samples = ChargeCurve.points(stride(from: 0.0, through: 1800, by: 60).map { (t: t0.addingTimeInterval($0), value: Double?(100)) },
+                                         start: t0, end: end)
+        XCTAssertEqual(ChargeCurve.coveredSeconds(samples), 1800, accuracy: 1e-9)
+        XCTAssertEqual(ChargeCurve.choose(telemetry: telemetry, samples: samples, start: t0, end: end).source, .samples)
+    }
+
+    /// A declared 100-second outage is shorter than the heuristic gap
+    /// threshold (at least two minutes), so only the declared boundary can
+    /// split the fallback samples there. Invalid-field instants split too.
+    func testSampleFallbackHonoursDeclaredGapsAndInvalidFields() {
+        let end = t0.addingTimeInterval(600)
+        let raw = stride(from: 0.0, through: 600, by: 30).map { (t: t0.addingTimeInterval($0), value: Double?(50)) }
+        let gap = FleetTelemetryGap(start: t0.addingTimeInterval(200), end: t0.addingTimeInterval(300), reason: "offline")
+        func row(_ offset: Double, invalid: [String]) -> FleetTelemetrySample {
+            FleetTelemetrySample(t: t0.addingTimeInterval(offset), latitude: nil, longitude: nil, speedKph: nil, powerKw: nil,
+                                 elevationM: nil, batteryLevel: nil, energyRemainingKwh: nil, batteryTempMinC: nil,
+                                 batteryTempMaxC: nil, insideTempC: nil, outsideTempC: nil, voltage: nil, currentA: nil,
+                                 ratedRangeKm: nil, routeBreakBefore: false, invalidFields: invalid)
+        }
+        let block = FleetTelemetrySeries(source: "fleet_telemetry",
+                                         samples: [row(450, invalid: ["Power"]), row(500, invalid: ["BatteryLevel"])],
+                                         gaps: [gap], truncated: false)
+
+        XCTAssertEqual(Set(ChargeCurve.points(raw, start: t0, end: end).map(\.segment)), [0], "heuristic alone joins it")
+
+        let power = ChargeCurve.points(raw, start: t0, end: end, breaks: ChargeCurve.boundaries(block, field: "Power"))
+        let segmentAt = { (offset: Double) in power.first { $0.t == self.t0.addingTimeInterval(offset) }?.segment }
+        XCTAssertEqual(segmentAt(180), 0)
+        // 210...300 touch the gap, so each is cut from its neighbour.
+        XCTAssertNotEqual(segmentAt(180), segmentAt(330))
+        XCTAssertNotEqual(segmentAt(420), segmentAt(480), "invalid Power at 450 s splits the line")
+        XCTAssertEqual(segmentAt(510), segmentAt(600))
+        // Another field's invalid instant does not split Power.
+        XCTAssertEqual(segmentAt(480), segmentAt(510))
+
+        // Splitting also lowers covered time, which feeds source selection.
+        XCTAssertLessThan(ChargeCurve.coveredSeconds(power), 600)
+        XCTAssertTrue(ChargeCurve.boundaries(nil, field: "Power").isEmpty)
+        XCTAssertTrue(ChargeCurve.boundaries(FleetTelemetrySeries(source: "teslamate", samples: [], gaps: [gap], truncated: false),
+                                             field: "Power").isEmpty)
     }
 
     func testTelemetrySeriesIsClippedToTheSession() {
