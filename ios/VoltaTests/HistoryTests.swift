@@ -289,8 +289,8 @@ final class HistoryAggregateTests: XCTestCase {
 
     // Finding 7
     func testTotalsScopeIsPartialWhileACursorRemains() {
-        XCTAssertEqual(HistoryTotalsScope.title(period: "Last 30 days", hasMore: true, noun: "sessions"), "Loaded sessions — partial")
-        XCTAssertEqual(HistoryTotalsScope.title(period: "Last 30 days", hasMore: true, noun: "drives"), "Loaded drives — partial")
+        XCTAssertEqual(HistoryTotalsScope.title(period: "Last 30 days", hasMore: true, noun: "sessions"), "Loaded sessions · partial")
+        XCTAssertEqual(HistoryTotalsScope.title(period: "Last 30 days", hasMore: true, noun: "drives"), "Loaded drives · partial")
         XCTAssertEqual(HistoryTotalsScope.title(period: "Last 30 days", hasMore: false, noun: "sessions"), "Last 30 days")
     }
 
@@ -515,7 +515,7 @@ final class HistoryRound2Tests: XCTestCase {
             try await source.idles(vehicleID: 1, range: r, cursor: c)
         }, showSkeleton: true)
         XCTAssertTrue(feed.hasMore, "mock idles span several pages")
-        XCTAssertEqual(HistoryTotalsScope.title(period: "All time", hasMore: feed.hasMore, noun: "sessions"), "Loaded sessions — partial")
+        XCTAssertEqual(HistoryTotalsScope.title(period: "All time", hasMore: feed.hasMore, noun: "sessions"), "Loaded sessions · partial")
         var pages = 1
         while feed.canLoadMore && pages < 50 {
             let before = feed.items.count

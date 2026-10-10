@@ -258,7 +258,7 @@ struct ControlsView: View {
         .padding(.horizontal, VoltaSpacing.screen - 4)
         .padding(.top, VoltaSpacing.xl)
         .padding(.bottom, VoltaSpacing.md)
-        .background { ScreenKit.HeaderScrim() }
+        .voltaTopScrim()
     }
 
     // MARK: Hero

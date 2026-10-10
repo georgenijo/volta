@@ -9,6 +9,7 @@ struct DashboardView: View {
     @Environment(\.units) private var units
     @Environment(\.vehicleSurfaces) private var surfaces
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.isActiveTab) private var isActiveTab
     /// Owns the vehicle selection; absent in previews.
     @Environment(AppModel.self) private var app: AppModel?
 
@@ -29,7 +30,11 @@ struct DashboardView: View {
             Color.voltaBackground.ignoresSafeArea()
             mapLayer
             content
-            header
+            // MainShell keeps this tab mounted at opacity 0 behind the others.
+            // On iOS 27 the hidden header (likely the bell's popover anchor) still
+            // swallowed taps at the top of the visible tab, e.g. More's gear, so
+            // drop it while hidden. It holds no state of its own.
+            if isActiveTab { header }
         }
         .preferredColorScheme(.dark)
         .task(id: vehicleID) {
@@ -114,7 +119,7 @@ struct DashboardView: View {
     // MARK: Header
 
     private var header: some View {
-        let fade = min(max((scrollOffset - mapReveal * 0.6) / 80, 0), 1)
+        let fade = min(max((scrollOffset - mapReveal * 0.55) / 60, 0), 1)
         return ZStack {
             Image("Wordmark")
                 .renderingMode(.template)
@@ -147,16 +152,9 @@ struct DashboardView: View {
         }
         .padding(.horizontal, VoltaSpacing.screen - 4)
         .padding(.bottom, VoltaSpacing.md)
-        .background(alignment: .top) {
-            LinearGradient(stops: [.init(color: .voltaBackground, location: 0),
-                                   .init(color: .voltaBackground.opacity(0.95), location: 0.6),
-                                   .init(color: .clear, location: 1)],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: 190)
-                .ignoresSafeArea(edges: .top)
-                .opacity(fade)
-                .allowsHitTesting(false)
-        }
+        // Map shows through at rest; the shared scrim fades in once content
+        // scrolls up under the buttons.
+        .voltaTopScrim(opacity: fade, glow: false)
     }
 
     // MARK: Content

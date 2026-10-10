@@ -33,6 +33,8 @@ private struct TeslaSignInButton: View {
 /// Presented as a quiet lit hero: a glowing emblem, a short title, the
 /// luminous sign-in button, and the scope disclosure.
 struct TeslaSignInPanel: View {
+    /// One quiet secondary line about why there's no vehicle yet (e.g. the server's error).
+    var note: String? = nil
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -45,6 +47,7 @@ struct TeslaSignInPanel: View {
                 emblem(tint: .voltaTextTertiary, symbol: "car.side")
                 Text("Sign in with Tesla isn't set up on your server yet.")
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                noteLine
             case .connected:
                 emblem(tint: .voltaMint, symbol: "checkmark")
                 ProgressView().tint(Color.voltaMint)
@@ -55,6 +58,7 @@ struct TeslaSignInPanel: View {
                 }
             default:
                 emblem(tint: .voltaBlue, symbol: "car.side")
+                    .padding(.bottom, 6)
                 VStack(spacing: 6) {
                     Text("Tesla account")
                         .font(.system(size: 10, weight: .semibold)).tracking(1.5).textCase(.uppercase)
@@ -62,6 +66,8 @@ struct TeslaSignInPanel: View {
                     Text("Connect your Tesla")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(Color.voltaTextPrimary)
+                    noteLine
+                        .padding(.top, 2)
                 }
                 if let message = tesla.failureMessage {
                     InlineBanner(systemImage: "exclamationmark.triangle", message: message)
@@ -82,9 +88,17 @@ struct TeslaSignInPanel: View {
                            center: .init(x: 0.5, y: 0.12), startRadius: 0, endRadius: 240)
                 .allowsHitTesting(false)
         }
-        .voltaCardBackground(radius: 26)
+        .voltaCardBackground(radius: 22)
         .padding(.horizontal, VoltaSpacing.screen)
         .task { await model.refreshTesla() }
+    }
+
+    @ViewBuilder private var noteLine: some View {
+        if let note {
+            Text(note)
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func emblem(tint: Color, symbol: String) -> some View {

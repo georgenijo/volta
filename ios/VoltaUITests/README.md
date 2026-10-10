@@ -43,6 +43,8 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | History (B) | `row.drive.<id>`, `row.charge.<id>` | Entire tappable populated row; stable model ID suffix |
 | History (B) | `screen.drive-detail`, `screen.charge-detail` | Loaded detail heading |
 | More (C) | `screen.more`, `scroll.more` | Heading and main scroll view |
+| More (C) | `row.more.<slug>` | More rows: `stats`, `battery-health`, `battery-climate`, `tires`, `maintenance`, `firmware`, `mileage`, `specs`, `charger-map`, `switch-vehicle` |
+| History (B) | `button.drives.roadtrips`, `button.drives.heatmap` | Drives shortcut chips |
 | Settings (C) | `screen.settings`, `scroll.settings` | Heading and main scroll view |
 | Controls (A) | `screen.controls`, `scroll.controls` | Sheet heading and scroll view |
 | Settings (C) | `button.account` | Pushes Account from Settings |

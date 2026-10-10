@@ -158,7 +158,9 @@ struct DrivesHistoryView: View {
                 hero.padding(.top, 8).padding(.bottom, 26)
                 HStack(spacing: 10) {
                     NavigationLink { RoadtripsView(drives: visible, partial: feed.hasMore) } label: { DriveShortcut(title: "Roadtrips", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
+                        .accessibilityIdentifier("button.drives.roadtrips")
                     NavigationLink { DrivesHeatmapView(drives: visible, partial: feed.hasMore) } label: { DriveShortcut(title: "Heatmap", systemImage: "square.grid.3x3.fill") }
+                        .accessibilityIdentifier("button.drives.heatmap")
                 }.buttonStyle(VoltaPressStyle()).padding(.bottom, 18)
                 if visible.isEmpty && !feed.hasMore {
                     HistoryEmptyState(systemImage: "road.lanes", title: feed.items.isEmpty ? "No drives \(range.emptyPhrase ?? "yet")" : "No matching drives",

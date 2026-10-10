@@ -87,6 +87,7 @@ final class ScreenScreenshotTests: XCTestCase {
         try tapFirstRow(prefix: "row.drive.")
         try waitForScreen("drive-detail")
         capture("drive-detail")
+        try scroll("drive-detail", screenshot: "drive-detail-scrolled")
     }
 
     func testChargeDetail() throws {
@@ -133,7 +134,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testStats() throws {
         defer { app.terminate() }
         try launchDemo()
-        try openMoreRow("Stats", screen: "stats")
+        try openMoreRow("stats", screen: "stats")
         capture("stats-top")
         try scroll("stats", screenshot: "stats-scrolled")
     }
@@ -141,7 +142,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testBatteryHealth() throws {
         defer { app.terminate() }
         try launchDemo()
-        try openMoreRow("Battery Health", screen: "battery-health")
+        try openMoreRow("battery-health", screen: "battery-health")
         capture("battery-health-top")
         try scroll("battery-health", screenshot: "battery-health-scrolled")
     }
@@ -149,7 +150,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testBatteryClimate() throws {
         defer { app.terminate() }
         try launchDemo()
-        try openMoreRow("Battery Climate", screen: "battery-climate")
+        try openMoreRow("battery-climate", screen: "battery-climate")
         capture("battery-climate-top")
         try scroll("battery-climate", screenshot: "battery-climate-scrolled")
     }
@@ -157,7 +158,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testMileage() throws {
         defer { app.terminate() }
         try launchDemo()
-        try openMoreRow("Mileage Tracker", screen: "mileage")
+        try openMoreRow("mileage", screen: "mileage")
         capture("mileage-top")
         try scroll("mileage", screenshot: "mileage-scrolled")
     }
@@ -165,7 +166,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testFirmware() throws {
         defer { app.terminate() }
         try launchDemo()
-        try openMoreRow("Firmware Tracker", screen: "firmware")
+        try openMoreRow("firmware", screen: "firmware")
         capture("firmware-top")
         try scroll("firmware", screenshot: "firmware-scrolled")
     }
@@ -173,7 +174,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testSpecsWarranty() throws {
         defer { app.terminate() }
         try launchDemo()
-        try openMoreRow("Specs & Warranty", screen: "specs")
+        try openMoreRow("specs", screen: "specs")
         capture("specs-top")
         try scroll("specs", screenshot: "specs-scrolled")
     }
@@ -182,7 +183,7 @@ final class ScreenScreenshotTests: XCTestCase {
         defer { app.terminate() }
         try launchDemo()
         try navigate("tab.drives", to: "drives")
-        try tapButton(labeled: "Roadtrips")
+        try tap("button.drives.roadtrips")
         try waitForScreen("roadtrips")
         capture("roadtrips-top")
         try scroll("roadtrips", screenshot: "roadtrips-scrolled")
@@ -197,7 +198,7 @@ final class ScreenScreenshotTests: XCTestCase {
         defer { app.terminate() }
         try launchDemo()
         try navigate("tab.drives", to: "drives")
-        try tapButton(labeled: "Heatmap")
+        try tap("button.drives.heatmap")
         try waitForScreen("heatmap")
         // Map tiles render asynchronously; give them a moment before capturing.
         _ = element("heatmap.never").waitForExistence(timeout: 3)
@@ -219,26 +220,14 @@ final class ScreenScreenshotTests: XCTestCase {
         target.tap()
     }
 
-    /// More rows carry no identifiers; they are NavigationLinks labelled by title.
-    private func openMoreRow(_ title: String, screen: String) throws {
+    /// Opens a More row by its `row.more.<slug>` identifier, scrolling it into view first.
+    private func openMoreRow(_ slug: String, screen: String) throws {
         try openMore()
-        let row = app.buttons[title].firstMatch
+        let row = element("row.more.\(slug)")
         let container = element("scroll.more")
         for _ in 0..<4 where !(row.exists && row.isHittable) { container.swipeUp() }
-        try tapButton(labeled: title)
+        try tap("row.more.\(slug)")
         try waitForScreen(screen)
-    }
-
-    private func tapButton(labeled label: String) throws {
-        let target = app.buttons[label].firstMatch
-        let ready = NSPredicate(format: "exists == true AND hittable == true")
-        let expectation = XCTNSPredicateExpectation(predicate: ready, object: target)
-        guard XCTWaiter.wait(for: [expectation], timeout: 15) == .completed else {
-            capture("failure-\(label)")
-            XCTFail("Missing or obscured button: \(label)")
-            throw NavigationFailure.missing(label)
-        }
-        target.tap()
     }
 
     private func waitForElement(_ identifier: String) throws {

@@ -301,7 +301,7 @@ struct HistoryPageFooter<Item: Codable & Hashable & Sendable & Identifiable>: Vi
 
 // MARK: - Totals
 
-/// Totals header: scope heading ("Last 30 days", or "Loaded drives — partial"
+/// Totals header: scope heading ("Last 30 days", or "Loaded drives · partial"
 /// when more pages exist), the totals row and any coverage notes.
 struct HistoryTotalsBlock: View {
     var title: String

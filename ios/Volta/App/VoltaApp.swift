@@ -33,14 +33,26 @@ private struct VoltaRootView: View {
             } else if !model.isPaired { PairingView() }
             else if model.vehicles.isEmpty {
                 VStack(spacing: 20) {
-                    if model.isLoadingVehicles || !model.hasLoadedVehicles { ProgressView("Loading vehicles…") }
-                    else {
-                        ContentUnavailableView("No vehicles available", systemImage: "car", description: Text(model.errorMessage ?? "Waiting for your server to record a vehicle."))
-                        TeslaSignInPanel()
-                        Button("Retry") { Task { await model.loadVehicles() } }
-                        Button(model.isLaunchDemo ? "Exit launch demo" : "Disconnect") { model.unpair() }
+                    if model.isLoadingVehicles || !model.hasLoadedVehicles {
+                        ProgressView("Loading vehicles…").tint(Color.voltaTextSecondary).foregroundStyle(Color.voltaTextSecondary)
+                    } else {
+                        TeslaSignInPanel(note: model.errorMessage ?? "No vehicles yet · waiting for your server to record one.")
+                        HStack(spacing: 18) {
+                            PillButton("Retry", systemImage: "arrow.clockwise") { Task { await model.loadVehicles() } }
+                            Button(model.isLaunchDemo ? "Exit launch demo" : "Disconnect") { model.unpair() }
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.voltaTextSecondary)
+                                .padding(.vertical, 9)
+                                .contentShape(.rect)
+                                .buttonStyle(VoltaPressStyle())
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(alignment: .top) {
+                    VoltaTopGlow.gradient.frame(height: VoltaTopGlow.height).ignoresSafeArea().allowsHitTesting(false)
+                }
+                .voltaScreenBackground()
                 .task(id: model.tesla.state == .connected) {
                     // Just connected: the collector needs a moment to discover the vehicle.
                     guard model.tesla.state == .connected else { return }

@@ -50,6 +50,16 @@ struct IdleStateSlice: Identifiable, Hashable {
         }
     }
 
+    /// Peak opacity of this state's light. Sentry is a muted red so it reads
+    /// as a state, not an alarm.
+    var intensity: Double {
+        switch kind {
+        case .sentry: 0.55
+        case .asleep: 0.7
+        default: 0.75
+        }
+    }
+
     var systemImage: String {
         switch kind {
         case .sentry: "shield.lefthalf.filled"
@@ -86,10 +96,10 @@ struct IdleBreakdownBar: View {
                 }
                 ForEach(slices) { slice in
                     Capsule()
-                        .fill(LinearGradient(colors: [slice.color.opacity(slice.kind == .asleep ? 0.7 : 0.75), slice.color.opacity(slice.kind == .asleep ? 0.4 : 0.4)],
+                        .fill(LinearGradient(colors: [slice.color.opacity(slice.intensity), slice.color.opacity(slice.intensity * 0.55)],
                                              startPoint: .leading, endPoint: .trailing))
                         .frame(width: max(height, (proxy.size.width - gaps) * slice.minutes / total))
-                        .shadow(color: slice.color.opacity(slice.kind == .unclassified ? 0 : 0.35), radius: min(6, height * 0.9))
+                        .shadow(color: slice.color.opacity(slice.kind == .unclassified ? 0 : slice.kind == .sentry ? 0.12 : 0.35), radius: min(6, height * 0.9))
                 }
             }
         }
@@ -358,7 +368,7 @@ struct IdleRow: View {
                 ForEach(Array(idle.breakdown.prefix(3).enumerated()), id: \.element.id) { index, slice in
                     if index > 0 { Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5) }
                     HStack(spacing: 5) {
-                        Image(systemName: slice.systemImage).font(.system(size: 11, weight: .medium)).foregroundStyle(slice.color.opacity(0.9))
+                        Image(systemName: slice.systemImage).font(.system(size: 11, weight: .medium)).foregroundStyle(slice.color.opacity(slice.kind == .sentry ? 0.6 : 0.9))
                         Text(VoltaFormat.duration(slice.minutes)).font(.system(size: 13, weight: .medium)).monospacedDigit()
                             .foregroundStyle(.white.opacity(0.78))
                     }
@@ -377,17 +387,25 @@ struct IdleRow: View {
 
     private var duration: some View {
         let hours = Int(idle.durationMin / 60), minutes = Int(idle.durationMin.truncatingRemainder(dividingBy: 60))
-        return HStack(alignment: .firstTextBaseline, spacing: 2) {
+        // Same numeral + small-caps unit pairing as DriveCard's distance. Digits
+        // stay proportional: a monospaced "1" in the expanded face leaves a gap
+        // wider than the space to its unit.
+        return HStack(alignment: .firstTextBaseline, spacing: 0) {
             if hours > 0 {
                 Text("\(hours)").font(.system(size: 30, weight: .bold)).fontWidth(.expanded).tracking(-0.8)
-                Text("H").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary).padding(.trailing, 2)
+                unit("H").padding(.trailing, 7)
             }
             Text("\(minutes)").font(.system(size: hours > 0 ? 22 : 30, weight: .bold)).fontWidth(.expanded).tracking(-0.6)
-            Text("M").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+            unit("M")
         }
-        .monospacedDigit().foregroundStyle(.white)
+        .foregroundStyle(.white)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(VoltaFormat.duration(idle.durationMin))
+    }
+
+    private func unit(_ text: String) -> some View {
+        Text(text).font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+            .padding(.leading, 3)
     }
 }
 

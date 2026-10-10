@@ -45,6 +45,58 @@ extension View {
     }
 }
 
+// MARK: - Top glow and header scrim
+
+/// Top-right radial glow (blue 16% + mint 4%) shared by every screen under a floating header.
+enum VoltaTopGlow {
+    static let height: CGFloat = 520
+    static let gradient = RadialGradient(colors: [Color.voltaBlue.opacity(0.16), Color.voltaMint.opacity(0.04), .clear],
+                                         center: .init(x: 0.85, y: 0), startRadius: 0, endRadius: 420)
+}
+
+/// Background-colored fade behind a floating header: solid from the top of the
+/// screen through the header, then a short `tail` that fades to clear, so
+/// scrolled content never shows through the title or the glass buttons.
+/// Carries the top glow (`glow: true`) so the glow stays continuous behind it.
+///
+///     VoltaHeader("Stats") { … }.voltaTopScrim()
+///     header.voltaTopScrim(opacity: scrolledPast)   // fades in over a hero map
+struct VoltaTopScrim: View {
+    var tail: CGFloat = 20
+    var glow: Bool = true
+
+    var body: some View {
+        Color.voltaBackground
+            .overlay(alignment: .top) {
+                if glow { VoltaTopGlow.gradient.frame(height: VoltaTopGlow.height) }
+            }
+            .clipped()
+            .mask {
+                VStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black.opacity(0.55), location: 0.45),
+                                           .init(color: .clear, location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: tail)
+                }
+            }
+            .padding(.bottom, -tail)
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// Puts a `VoltaTopScrim` behind this floating header (safe area + header + `tail`).
+    /// `opacity` lets screens with a hero map fade it in only once content scrolls under.
+    func voltaTopScrim(opacity: Double = 1, tail: CGFloat = 20, glow: Bool = true) -> some View {
+        background(alignment: .top) {
+            VoltaTopScrim(tail: tail, glow: glow).opacity(opacity)
+        }
+    }
+}
+
 // MARK: - SectionLabel
 
 /// Small-caps gray section label, optionally followed by a hairline rule and

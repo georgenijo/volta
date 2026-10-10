@@ -18,6 +18,8 @@ struct DriveDetailView: View {
     @State private var replayMinute: Double?
     @State private var replayTask: Task<Void, Never>?
     @State private var shareImage: Image?
+    /// Scroll offset; fades the header scrim in once content rises past the map.
+    @State private var scrollY: CGFloat = 0
 
     /// Identity of what's on screen. A change drops the old state and any in-flight result.
     struct LoadKey: Hashable {
@@ -74,6 +76,8 @@ struct DriveDetailView: View {
         }
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
+        .accessibilityIdentifier("scroll.drive-detail")
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrollY = y }
         .ignoresSafeArea(edges: .top)
         .overlay(alignment: .top) { header }
         .background(alignment: .top) {
@@ -231,6 +235,10 @@ struct DriveDetailView: View {
                 }
             }
             .padding(.horizontal, HistoryTheme.gutter)
+            .padding(.bottom, 8)
+            // The map shows through at rest; the scrim fades in as the hero
+            // scrolls up toward the buttons.
+            .voltaTopScrim(opacity: min(max((scrollY - 120) / 70, 0), 1), glow: false)
         }
     }
 

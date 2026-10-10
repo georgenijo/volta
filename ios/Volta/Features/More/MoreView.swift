@@ -13,19 +13,19 @@ struct MoreView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     section("Areas", dot: ScreenKit.blue, identifier: "screen.more", rows: [
-                        .init(symbol: "chart.xyaxis.line", tint: ScreenKit.blue, title: "Stats", route: .stats),
+                        .init(symbol: "chart.xyaxis.line", tint: ScreenKit.blue, title: "Stats", slug: "stats", route: .stats),
                     ])
                     section("Vehicle", dot: ScreenKit.mint, rows: [
-                        .init(symbol: "battery.100percent.bolt", tint: ScreenKit.mint, title: "Battery Health", route: .batteryHealth),
-                        .init(symbol: "thermometer.medium", tint: ScreenKit.mint, title: "Battery Climate", route: .batteryClimate),
-                        .init(symbol: "circle.circle", tint: ScreenKit.mint, title: "Tires", route: .tires),
-                        .init(symbol: "wrench.and.screwdriver", tint: ScreenKit.mint, title: "Maintenance", route: .maintenance),
-                        .init(symbol: "cpu", tint: ScreenKit.mint, title: "Firmware Tracker", route: .firmware),
-                        .init(symbol: "gauge.with.needle", tint: ScreenKit.mint, title: "Mileage Tracker", route: .mileage),
-                        .init(symbol: "checkmark.shield", tint: ScreenKit.mint, title: "Specs & Warranty", route: .specs),
+                        .init(symbol: "battery.100percent.bolt", tint: ScreenKit.mint, title: "Battery Health", slug: "battery-health", route: .batteryHealth),
+                        .init(symbol: "thermometer.medium", tint: ScreenKit.mint, title: "Battery Climate", slug: "battery-climate", route: .batteryClimate),
+                        .init(symbol: "circle.circle", tint: ScreenKit.mint, title: "Tires", slug: "tires", route: .tires),
+                        .init(symbol: "wrench.and.screwdriver", tint: ScreenKit.mint, title: "Maintenance", slug: "maintenance", route: .maintenance),
+                        .init(symbol: "cpu", tint: ScreenKit.mint, title: "Firmware Tracker", slug: "firmware", route: .firmware),
+                        .init(symbol: "gauge.with.needle", tint: ScreenKit.mint, title: "Mileage Tracker", slug: "mileage", route: .mileage),
+                        .init(symbol: "checkmark.shield", tint: ScreenKit.mint, title: "Specs & Warranty", slug: "specs", route: .specs),
                     ])
                     section("Explore", dot: ScreenKit.blue, rows: [
-                        .init(symbol: "mappin.and.ellipse", tint: ScreenKit.blue, title: "Charger Map", route: .chargerMap),
+                        .init(symbol: "mappin.and.ellipse", tint: ScreenKit.blue, title: "Charger Map", slug: "charger-map", route: .chargerMap),
                     ])
 
                     ScreenKit.SectionHeader(title: "Garage")
@@ -43,7 +43,7 @@ struct MoreView: View {
                         .accessibilityIdentifier("button.settings")
                 }
                 .padding(.bottom, VoltaSpacing.sm)
-                .background { ScreenKit.HeaderScrim() }
+                .voltaTopScrim()
             }
             .background(alignment: .top) { ScreenKit.TopGlow() }
             .voltaScreenBackground()
@@ -60,6 +60,8 @@ struct MoreView: View {
         var symbol: String
         var tint: Color
         var title: String
+        /// Suffix of the row's `row.more.<slug>` accessibility identifier.
+        var slug: String
         var route: MoreRoute
     }
 
@@ -74,6 +76,7 @@ struct MoreView: View {
                                          showsDivider: index < rows.count - 1)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("row.more.\(item.slug)")
                 }
             }
         }
@@ -86,6 +89,7 @@ struct MoreView: View {
                                   subtitle: vehicleName ?? "—", showsDivider: false)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("row.more.switch-vehicle")
         }
     }
 

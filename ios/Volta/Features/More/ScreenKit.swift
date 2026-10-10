@@ -340,7 +340,7 @@ private struct ScreenKitPage<Trailing: View>: ViewModifier {
                     trailing
                 }
                 .padding(.bottom, VoltaSpacing.sm)
-                .background { ScreenKit.HeaderScrim() }
+                .voltaTopScrim()
             }
             .background(alignment: .top) { ScreenKit.TopGlow() }
             .voltaScreenBackground()
@@ -349,28 +349,11 @@ private struct ScreenKitPage<Trailing: View>: ViewModifier {
 }
 
 extension ScreenKit {
-    static let topGlowGradient = RadialGradient(colors: [Color.voltaBlue.opacity(0.16), Color.voltaMint.opacity(0.04), .clear],
-                                                center: .init(x: 0.85, y: 0), startRadius: 0, endRadius: 420)
-
-    /// Background for a floating header: the page background *with* the top glow,
-    /// fading out at the bottom so the glow stays continuous behind the header.
-    struct HeaderScrim: View {
-        var body: some View {
-            Color.voltaBackground
-                .overlay(alignment: .top) { ScreenKit.topGlowGradient.frame(height: 520) }
-                .clipped()
-                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.72),
-                                             .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
-        }
-    }
-
     /// Top-right radial glow (blue 16% + mint 4%) shared with the Drives screen.
     struct TopGlow: View {
         var body: some View {
-            ScreenKit.topGlowGradient
-                .frame(height: 520)
+            VoltaTopGlow.gradient
+                .frame(height: VoltaTopGlow.height)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

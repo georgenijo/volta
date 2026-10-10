@@ -158,7 +158,7 @@ enum HistoryTotalsScope {
     /// Heading for a totals block. Totals cover only loaded pages, so when a
     /// cursor remains the whole block is labeled partial.
     static func title(period: String, hasMore: Bool, noun: String) -> String {
-        hasMore ? "Loaded \(noun) — partial" : period
+        hasMore ? "Loaded \(noun) · partial" : period
     }
 }
 
