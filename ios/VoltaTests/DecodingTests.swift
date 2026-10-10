@@ -58,6 +58,48 @@ final class DecodingTests: XCTestCase {
         var positive = current; positive.id = 10
         XCTAssertEqual(Set([current, positive]).count, 2)
     }
+    func testDriveScoreBreakdownDecodesWithAndWithoutComponents() throws {
+        var row = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.fixture("drive")) as? [String: Any])
+        func decode() throws -> DriveSummary {
+            try APIDataSource.makeDecoder().decode(DriveSummary.self, from: JSONSerialization.data(withJSONObject: row))
+        }
+        row["driveScore"] = 82
+        row["scoreBreakdown"] = ["efficiency": 90, "acceleration": 75, "speed": NSNull(), "smoothness": 70]
+        let scored = try decode()
+        XCTAssertEqual(scored.efficiencyScore, 82)
+        XCTAssertEqual(scored.scoreBreakdown, DriveScoreBreakdown(efficiency: 90, acceleration: 75, speed: nil, smoothness: 70))
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        XCTAssertEqual(try APIDataSource.makeDecoder().decode(DriveSummary.self, from: encoder.encode(scored)).scoreBreakdown, scored.scoreBreakdown)
+
+        // Out-of-range and non-integer components read as unknown without failing the drive.
+        row["scoreBreakdown"] = ["efficiency": 101, "acceleration": -1, "speed": "fast", "smoothness": 100]
+        XCTAssertEqual(try decode().scoreBreakdown, DriveScoreBreakdown(smoothness: 100))
+        row["scoreBreakdown"] = "unexpected"
+        XCTAssertEqual(try decode().scoreBreakdown?.isEmpty, true)
+
+        // Absent or null: no breakdown; the old efficiencyScore key still supplies the overall score.
+        row["scoreBreakdown"] = NSNull()
+        XCTAssertNil(try decode().scoreBreakdown)
+        row.removeValue(forKey: "scoreBreakdown")
+        row.removeValue(forKey: "driveScore")
+        row["efficiencyScore"] = 64
+        let legacy = try decode()
+        XCTAssertNil(legacy.scoreBreakdown)
+        XCTAssertEqual(legacy.efficiencyScore, 64)
+
+        // Detail payloads flatten the summary, so the breakdown rides along.
+        var detail = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.fixture("driveDetail")) as? [String: Any])
+        detail["scoreBreakdown"] = ["efficiency": 88, "acceleration": NSNull(), "speed": 97, "smoothness": NSNull()]
+        let parsed = try APIDataSource.makeDecoder().decode(DriveDetail.self, from: JSONSerialization.data(withJSONObject: detail))
+        XCTAssertEqual(parsed.summary.scoreBreakdown, DriveScoreBreakdown(efficiency: 88, speed: 97))
+    }
+    func testScoreBreakdownPrefersServerAndFillsOnlyMissingComponents() {
+        let server = DriveScoreBreakdown(efficiency: 88, acceleration: 60, speed: nil, smoothness: nil)
+        let local = DriveScoreBreakdown(efficiency: 10, acceleration: 99, speed: 70, smoothness: 95)
+        XCTAssertEqual(server.filling(from: local), DriveScoreBreakdown(efficiency: 88, acceleration: 60, speed: 70, smoothness: 95))
+        XCTAssertEqual(DriveScoreBreakdown.resolved(server: nil, local: nil), DriveScoreBreakdown())
+        XCTAssertEqual(DriveScoreBreakdown.resolved(server: server, local: nil), server)
+    }
     func testZonedSummaryPeriod() throws {
         let json = #"{"range":"today","distanceKm":12,"driveCount":1,"chargeCount":0,"energyUsedKwh":null,"efficiencyWhPerKm":null,"energyAddedKwh":null,"chargeCost":null,"currency":"USD","periodStart":"2026-07-01T04:00:00.000Z","periodEnd":"2026-07-01T16:30:00.123Z","timeZone":"America/New_York"}"#
         let summary = try APIDataSource.makeDecoder().decode(ActivitySummary.self, from: Data(json.utf8))

@@ -124,42 +124,46 @@ struct AddressPill: View {
     }
 
     private var statusColor: Color {
-        sentry ? .voltaRed : (state?.color ?? .voltaTextSecondary)
+        sentry ? .voltaRed : (state.map(DashboardRhythm.stateColor) ?? .voltaTextSecondary)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 4) {
+            VStack(spacing: 5) {
                 Text(Self.title(for: location))
-                    .font(.system(.headline, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.voltaTextPrimary)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    StatusDot(color: statusColor, size: 6)
+                    Circle().fill(statusColor).frame(width: 5, height: 5)
+                        .shadow(color: statusColor.opacity(0.8), radius: 3)
                     Text(statusText)
                         .foregroundStyle(statusColor)
                     if let locality {
-                        Text("·").foregroundStyle(Color.voltaTextTertiary)
+                        Circle().fill(Color.voltaTextTertiary).frame(width: 2.5, height: 2.5)
                         Text(locality).foregroundStyle(Color.voltaTextSecondary)
                     }
                 }
-                .font(.system(.caption2, weight: .semibold))
-                .tracking(1.6)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.3)
                 .textCase(.uppercase)
                 .lineLimit(1)
             }
-            .padding(.horizontal, VoltaSpacing.lg + 2)
-            .padding(.vertical, VoltaSpacing.md)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
             .background {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.black.opacity(0.72))
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(LinearGradient(colors: [Color.voltaCardTop.opacity(0.92), Color.black.opacity(0.82)],
+                                         startPoint: .top, endPoint: .bottom))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(LinearGradient(colors: [.white.opacity(0.14), .white.opacity(0.04)],
+                                                         startPoint: .top, endPoint: .bottom), lineWidth: 1)
                     }
+                    .shadow(color: .black.opacity(0.45), radius: 14, y: 6)
             }
             Rectangle()
-                .fill(Color.white.opacity(0.35))
+                .fill(LinearGradient(colors: [.white.opacity(0.4), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom))
                 .frame(width: 1, height: 26)
         }
         .fixedSize()

@@ -11,35 +11,46 @@ struct SettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 NavigationLink { AccountSettingsView() } label: { accountHeader }
                     .buttonStyle(VoltaPressStyle())
                     .accessibilityIdentifier("button.account")
 
                 Text("Volta reads your car's history from TeslaMate on your own server. Nothing is stored in anyone else's cloud.")
-                    .font(.system(size: 14))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ScreenKit.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, ScreenKit.horizontalPadding)
-                    .padding(.top, 14).padding(.bottom, 26)
+                    .padding(.horizontal, ScreenKit.horizontalPadding + 4)
+                    .padding(.top, 14)
                     .accessibilityIdentifier("screen.settings")
 
-                HairlineDivider()
-                row("car.fill", "Vehicle", vehicle.map { [$0.name, $0.model].compactMap { $0 }.joined(separator: " · ") } ?? "Manage your Tesla",
-                    trailing: vehicle == nil ? nil : "Active", trailingTint: ScreenKit.green) { VehicleSettingsView() }
-                row("bolt.fill", "Charging", "Session pricing") { ChargingSettingsView() }
-                Button { editingElectricityRate = true } label: {
-                    ScreenKit.CapsRow(symbol: "dollarsign.circle", title: "Electricity rate, $/kWh",
-                        subtitle: "Fallback for estimated drive costs; default $0.20/kWh",
-                        trailing: String(format: "$%.3f", model.settings.electricityRate))
-                }.buttonStyle(.plain)
+                ScreenKit.SectionHeader(title: "Vehicle", dot: ScreenKit.mint)
+                ScreenKit.ListCard {
+                    row("car.fill", ScreenKit.mint, "Vehicle", vehicle.map { [$0.name, $0.model].compactMap { $0 }.joined(separator: " · ") } ?? "Manage your Tesla",
+                        trailing: vehicle == nil ? nil : "Active", trailingTint: ScreenKit.mint) { VehicleSettingsView() }
+                    row("bolt.fill", ScreenKit.mint, "Charging", "Session pricing") { ChargingSettingsView() }
+                    Button { editingElectricityRate = true } label: {
+                        ScreenKit.CapsRow(symbol: "dollarsign.circle", tint: ScreenKit.mint, title: "Electricity rate, $/kWh",
+                            subtitle: "Fallback for estimated drive costs; default $0.20/kWh",
+                            trailing: String(format: "$%.3f", model.settings.electricityRate), showsDivider: false)
+                    }.buttonStyle(.plain)
+                }
 
-                row("slider.horizontal.3", "General", "Units, currency & language",
-                    trailing: model.units.distance == .miles ? "Miles" : "Km") { GeneralSettingsView() }
-                row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places") { PlacesView() }
-                row("lock.fill", "Security", "App Lock & privacy", trailing: model.appLockEnabled ? "On" : nil, trailingTint: ScreenKit.green) { SecuritySettingsView() }
-                row("arrow.up.arrow.down", "Data Management", "Export drives & charges") { DataManagementView() }
-                row("questionmark.bubble.fill", "Support", "About Volta & help") { AboutView() }
+                ScreenKit.SectionHeader(title: "Preferences", dot: ScreenKit.blue)
+                ScreenKit.ListCard {
+                    row("slider.horizontal.3", ScreenKit.blue, "General", "Units, currency & language",
+                        trailing: model.units.distance == .miles ? "Miles" : "Km") { GeneralSettingsView() }
+                    row("mappin.and.ellipse", ScreenKit.blue, "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places") { PlacesView() }
+                    row("lock.fill", ScreenKit.blue, "Security", "App Lock & privacy", trailing: model.appLockEnabled ? "On" : nil, trailingTint: ScreenKit.mint,
+                        showsDivider: false) { SecuritySettingsView() }
+                }
+
+                ScreenKit.SectionHeader(title: "Data & help", dot: ScreenKit.secondary)
+                ScreenKit.ListCard {
+                    row("arrow.up.arrow.down", ScreenKit.secondary, "Data Management", "Export drives & charges") { DataManagementView() }
+                    row("questionmark.bubble.fill", ScreenKit.secondary, "Support", "About Volta & help", showsDivider: false) { AboutView() }
+                }
 
                 footer
             }
@@ -69,63 +80,68 @@ struct SettingsView: View {
     }
 
     private var accountHeader: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 14) {
             ZStack {
-                Circle().fill(Color.voltaCard)
-                Circle().strokeBorder(Color.voltaHairline, lineWidth: 1)
-                Image(systemName: "iphone").font(.system(size: 22, weight: .medium)).foregroundStyle(.white.opacity(0.85))
+                Circle().fill(pillTint.opacity(0.22)).blur(radius: 12).frame(width: 64, height: 64)
+                Circle().fill(LinearGradient(colors: [Color.voltaCardTop, Color.voltaCard], startPoint: .top, endPoint: .bottom))
+                Circle().strokeBorder(LinearGradient(colors: [pillTint.opacity(0.6), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                Image(systemName: "iphone").font(.system(size: 20, weight: .medium)).foregroundStyle(.white.opacity(0.9))
             }
-            .frame(width: 58, height: 58)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Account").font(.system(size: 22, weight: .bold)).foregroundStyle(.white)
-                Text(serverHost).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary).lineLimit(1).truncationMode(.middle)
+            .frame(width: 52, height: 52)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Account").font(.system(size: 19, weight: .semibold)).foregroundStyle(.white)
+                Text(serverHost).font(.system(size: 13, weight: .medium)).foregroundStyle(ScreenKit.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)
             HStack(spacing: 6) {
-                Image(systemName: model.isDemoMode ? "sparkles" : "checkmark.seal.fill")
+                Circle().fill(pillTint).frame(width: 5, height: 5).shadow(color: pillTint.opacity(0.9), radius: 3)
                 Text(model.isDemoMode ? "Demo" : "Paired")
-                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
             }
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(pillTint)
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(pillTint.opacity(0.12), in: .rect(cornerRadius: 12))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(pillTint.opacity(0.08), in: .capsule)
+            .overlay(Capsule().strokeBorder(pillTint.opacity(0.25), lineWidth: 1))
+            ScreenKit.Chevron()
         }
+        .padding(16)
+        .voltaCardBackground(radius: 22)
         .padding(.horizontal, ScreenKit.horizontalPadding)
-        .padding(.top, 12)
+        .padding(.top, 8)
         .contentShape(Rectangle())
     }
 
-    private var pillTint: Color { model.isDemoMode ? ScreenKit.blue : ScreenKit.green }
+    private var pillTint: Color { model.isDemoMode ? ScreenKit.blue : ScreenKit.mint }
 
-    private func row<Destination: View>(_ symbol: String, _ title: String, _ subtitle: String,
-                                        trailing: String? = nil, trailingTint: Color = .white,
+    private func row<Destination: View>(_ symbol: String, _ tint: Color, _ title: String, _ subtitle: String,
+                                        trailing: String? = nil, trailingTint: Color = .white, showsDivider: Bool = true,
                                         @ViewBuilder destination: () -> Destination) -> some View {
         NavigationLink(destination: destination) {
-            ScreenKit.CapsRow(symbol: symbol, title: title, subtitle: subtitle, trailing: trailing, trailingTint: trailingTint)
+            ScreenKit.CapsRow(symbol: symbol, tint: tint, title: title, subtitle: subtitle, trailing: trailing,
+                              trailingTint: trailingTint, showsDivider: showsDivider)
         }
         .buttonStyle(.plain)
     }
 
     private var footer: some View {
         VStack(spacing: 14) {
-            Image("Wordmark").resizable().scaledToFit().frame(height: 20)
-                .opacity(0.55)
+            Image("Wordmark").resizable().scaledToFit().frame(height: 18)
+                .opacity(0.4)
                 .accessibilityLabel("Volta")
                 .padding(.bottom, 4)
             Text("Your data stays on your server")
-                .font(.system(size: 11, weight: .semibold)).tracking(2).textCase(.uppercase)
-                .foregroundStyle(ScreenKit.secondary)
+                .font(.system(size: 10, weight: .semibold)).tracking(1.5).textCase(.uppercase)
+                .foregroundStyle(ScreenKit.tertiary)
             Text("v\(AppInfo.version) (\(AppInfo.build))")
-                .font(.system(size: 13, weight: .medium, design: .monospaced)).tracking(1.5)
-                .foregroundStyle(ScreenKit.secondary)
+                .font(.system(size: 12, weight: .medium)).monospacedDigit().tracking(1)
+                .foregroundStyle(ScreenKit.tertiary)
             Text("Volta is not affiliated with, endorsed by, or sponsored by Tesla, Inc. Tesla is a registered trademark of Tesla, Inc.")
-                .font(.system(size: 12)).foregroundStyle(ScreenKit.tertiary)
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(ScreenKit.tertiary.opacity(0.8))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
+                .padding(.horizontal, 44)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 64)
+        .padding(.top, 48)
     }
 }
 

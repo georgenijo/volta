@@ -14,25 +14,25 @@ struct AccountSettingsView: View {
                 if model.isDemoMode {
                     ScreenKit.GroupCard(title: "Mode", footer: "Synthetic history generated on this iPhone. Nothing is sent anywhere.") {
                         ScreenKit.ValueRow(title: "Data", showsDivider: false) {
-                            Text("Demo").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                            Text("Demo").font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                 } else {
                     ScreenKit.GroupCard(title: "Server", footer: "Reached privately over Tailscale. The API is never exposed to the public internet.") {
                         ScreenKit.ValueRow(title: "Server URL", subtitle: model.settings.serverURL.isEmpty ? "—" : model.settings.serverURL, showsDivider: true) {
-                            StatusDot(color: ScreenKit.green)
+                            StatusDot(color: ScreenKit.mint)
                         }
                         ScreenKit.ValueRow(title: "Connection", showsDivider: false) {
-                            Text("Tailnet · HTTPS").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                            Text("Tailnet · HTTPS").font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                     ScreenKit.GroupCard(title: "This device", footer: "This iPhone holds only a Volta device token in the Keychain — never your Tesla credentials.") {
                         ScreenKit.ValueRow(title: "Name") {
-                            Text(device?.name ?? UIDevice.current.name).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                            Text(device?.name ?? UIDevice.current.name).font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                         }
                         ScreenKit.ValueRow(title: "Paired", showsDivider: false) {
                             Text(device.map { $0.createdAt.formatted(date: .abbreviated, time: .omitted) } ?? "—")
-                                .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                                .font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                 }
@@ -45,11 +45,15 @@ struct AccountSettingsView: View {
                         if isUnpairing { ProgressView().tint(ScreenKit.red) } else { Image(systemName: "xmark.circle") }
                         Text(unpairTitle)
                     }
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(ScreenKit.red)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .voltaCardBackground(radius: VoltaRadius.wideButton)
+                    .padding(.vertical, 15)
+                    .background(ScreenKit.red.opacity(0.06), in: .rect(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(ScreenKit.red.opacity(0.22), lineWidth: 1)
+                    }
                 }
                 .buttonStyle(VoltaPressStyle())
                 .disabled(isUnpairing)
@@ -110,7 +114,7 @@ struct VehicleSettingsView: View {
                             ScreenKit.ValueRow(title: "Model") { secondary([vehicle.model, vehicle.trim].compactMap { $0 }.joined(separator: " ")) }
                             ScreenKit.ValueRow(title: "Status") {
                                 HStack(spacing: 6) {
-                                    StatusDot(color: status?.state == .offline ? ScreenKit.red : status?.state == .asleep ? ScreenKit.secondary : ScreenKit.green)
+                                    StatusDot(color: status?.state == .offline ? ScreenKit.red : status?.state == .asleep ? ScreenKit.secondary : ScreenKit.mint)
                                     secondary(status?.state.rawValue.capitalized ?? "—")
                                 }
                             }
@@ -137,7 +141,7 @@ struct VehicleSettingsView: View {
     }
 
     private func secondary(_ text: String) -> some View {
-        Text(text.isEmpty ? "—" : text).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+        Text(text.isEmpty ? "—" : text).font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
     }
 
     private func load() async {
@@ -173,7 +177,7 @@ struct ChargingSettingsView: View {
                             ForEach(Array(priced.enumerated()), id: \.element.id) { index, place in
                                 ScreenKit.ValueRow(title: place.name, showsDivider: index < priced.count - 1) {
                                     Text("\(VoltaFormat.money(place.costPerKwh, currency: units.currency))/kWh")
-                                        .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
+                                        .font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
                                 }
                             }
                         }
@@ -182,7 +186,7 @@ struct ChargingSettingsView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             SectionLabel("Coming later")
                             Text("A home-rate fallback for sessions TeslaMate couldn't price.")
-                                .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                                .font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                 }

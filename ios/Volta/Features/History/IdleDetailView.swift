@@ -13,13 +13,12 @@ struct IdleDetailView: View {
         VStack(spacing: 0) {
             HistoryDetailHeader(title: "Parked")
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    hero
+                VStack(alignment: .leading, spacing: 12) {
+                    hero.padding(.bottom, 16)
                     HistoryLocationCard(location: idle.location(places.state), address: idle.address,
                                         systemImage: "parkingsign", tint: HistoryTheme.blue) {
                         Task { await places.retry(dataSource: dataSource, vehicleID: vehicleID) }
                     }
-                    stats
                     breakdownCard
                     timesCard
                 }
@@ -29,39 +28,48 @@ struct IdleDetailView: View {
             .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
             .scrollIndicators(.hidden)
         }
+        .historyGlow(HistoryTheme.blue, HistoryTheme.purple, strength: 0.15)
         .historyScreenBackground()
         .toolbar(.hidden, for: .navigationBar)
         .task { if idle.needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) } }
     }
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 12) {
-                HistoryIconTile(systemImage: "parkingsign", tint: HistoryTheme.blue)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(idle.title)
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .accessibilityAddTraits(.isHeader)
-                        .accessibilityIdentifier("screen.idle-detail")
-                    Text(subtitle)
-                        .font(.system(size: 13))
-                        .foregroundStyle(HistoryTheme.secondary)
-                        .lineLimit(1)
-                }
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(subtitle).voltaLabelStyle(color: HistoryTheme.tertiary).lineLimit(1).minimumScaleFactor(0.8)
+                Text(idle.title)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("screen.idle-detail")
             }
-            HStack(alignment: .lastTextBaseline) {
-                BigNumber(idle.drain.map { $0 > 0 ? "−\($0)" : "\($0)" } ?? "—", unit: "%", size: 56)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Parked").voltaLabelStyle()
-                    BigNumber(VoltaFormat.duration(idle.durationMin), size: 26)
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
+                    let hours = idle.durationMin / 60
+                    HistoryHeroNumeral(value: hours >= 1 ? VoltaFormat.number(hours, digits: hours >= 10 ? 0 : 1) : VoltaFormat.number(idle.durationMin, digits: 0),
+                                       unit: hours >= 1 ? "h parked" : "min parked")
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Circle().fill(drainTint).frame(width: 5, height: 5).shadow(color: drainTint, radius: 3)
+                            .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
+                        Text(idle.drain.map { $0 > 0 ? "−\($0)%" : "\($0)%" } ?? "—")
+                            .font(.system(size: 17, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                        Text("· \(VoltaFormat.duration(idle.durationMin)) · \(timeRange)")
+                            .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
+                Spacer(minLength: 0)
+                SocDial(from: idle.startBatteryLevel, to: idle.endBatteryLevel, size: 96,
+                        caption: idle.startBatteryLevel.map { "from \($0)%" } ?? "Battery",
+                        colors: (idle.drainPerDay ?? 0) > 3 ? [HistoryTheme.amber, HistoryTheme.red] : [HistoryTheme.blue, HistoryTheme.purple])
+                    .padding(.trailing, 4)
             }
-            BatteryRangeView(from: idle.batteryEndpoints.from, to: idle.batteryEndpoints.to, tint: drainTint)
+            stats
         }
-        .padding(.vertical, 6)
+        .padding(.top, 6)
     }
 
     private var drainTint: Color { (idle.drainPerDay ?? 0) > 3 ? HistoryTheme.amber : HistoryTheme.blue }
@@ -72,32 +80,38 @@ struct IdleDetailView: View {
         return day + place
     }
 
+    private var timeRange: String { idle.start.historyTime + " – " + (idle.end?.historyTime ?? "now") }
+
     private var stats: some View {
-        HistoryStatGrid(items: [
-            .init(label: "Range lost", value: idle.rangeLostKm.map { VoltaFormat.number(units.distanceValue(km: $0)) } ?? "—", unit: units.distanceUnit, systemImage: "road.lanes"),
-            .init(label: "Energy", value: idle.energyLostKwh.map { VoltaFormat.number($0, digits: 2) } ?? "—", unit: "kWh", systemImage: "bolt"),
-            .init(label: "Per day", value: idle.drainPerDay.map { VoltaFormat.number($0, digits: 1) } ?? "—", unit: "%", systemImage: "calendar"),
+        HistoryStatStrip(items: [
+            .init(value: idle.rangeLostKm.map { VoltaFormat.number(units.distanceValue(km: $0)) } ?? "—", caption: "\(units.distanceUnit) lost"),
+            .init(value: idle.energyLostKwh.map { VoltaFormat.number($0, digits: 2) } ?? "—", caption: "kWh"),
+            .init(value: idle.drainPerDay.map { VoltaFormat.number($0, digits: 1) + "%" } ?? "—", caption: "Per day",
+                  accent: (idle.drainPerDay ?? 0) > 3 ? HistoryTheme.amber : nil),
+            .init(value: idle.breakdown.first(where: { $0.kind == .asleep }).map { VoltaFormat.duration($0.minutes) } ?? "—", caption: "Asleep"),
         ])
     }
 
     private var breakdownCard: some View {
         let slices = idle.breakdown
         let total = max(1, slices.reduce(0) { $0 + $1.minutes })
-        return HistoryCard {
+        return VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 16) {
-                HistorySectionLabel(title: "Where the time went", systemImage: "chart.bar.xaxis")
+                Text("Where the time went").voltaLabelStyle(color: HistoryTheme.tertiary)
                 if slices.isEmpty {
                     Text("State breakdown wasn't recorded for this session.")
                         .font(.system(size: 14))
                         .foregroundStyle(HistoryTheme.secondary)
                 } else {
-                    IdleBreakdownBar(slices: slices, height: 12)
+                    IdleBreakdownBar(slices: slices, height: 6)
                     VStack(spacing: 0) {
                         ForEach(Array(slices.enumerated()), id: \.element.id) { index, slice in
-                            if index > 0 { HairlineDivider(leadingInset: 46) }
+                            if index > 0 { HairlineDivider(leadingInset: 30) }
                             HStack(spacing: 12) {
-                                HistoryIconTile(systemImage: slice.systemImage, tint: slice.color)
-                                    .scaleEffect(0.85)
+                                Image(systemName: slice.systemImage)
+                                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(slice.color)
+                                    .shadow(color: slice.color.opacity(0.6), radius: 4)
+                                    .frame(width: 18)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(slice.kind.rawValue)
                                         .font(.system(size: 15, weight: .semibold))
@@ -124,22 +138,24 @@ struct IdleDetailView: View {
                 }
             }
         }
+        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 8)
+        .driveSurface()
     }
 
     private var timesCard: some View {
-        HistoryCard {
-            VStack(spacing: 0) {
-                timeRow("Parked", idle.start, battery: idle.startBatteryLevel)
-                HairlineDivider()
-                timeRow("Left", idle.end, battery: idle.endBatteryLevel)
-            }
+        VStack(spacing: 0) {
+            timeRow("Parked", idle.start, battery: idle.startBatteryLevel)
+            HairlineDivider()
+            timeRow("Left", idle.end, battery: idle.endBatteryLevel)
         }
+        .padding(.horizontal, 18).padding(.vertical, 4)
+        .driveSurface()
     }
 
     private func timeRow(_ label: String, _ date: Date?, battery: Int?) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 15))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(HistoryTheme.secondary)
             Spacer()
             Text(date.map { $0.formatted(.dateTime.month(.abbreviated).day().hour().minute()) } ?? "Still parked")

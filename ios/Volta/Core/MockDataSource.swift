@@ -55,7 +55,14 @@ struct MockDataSource: VoltaDataSource {
         drive.startCity = "Palo Alto"
         drive.endCity = "Mountain View"
         drive.ratedWhPerKm = 164
-        drive.driveScore = [87, 71, 64, 92, 78][(drive.id - 1) % 5]
+        let variant = (drive.id - 1) % 5
+        drive.driveScore = [87, 71, 64, 92, 78][variant]
+        // Components consistent with the v2 weights (efficiency 40, smoothness 25, acceleration 20, speed 15).
+        drive.scoreBreakdown = [DriveScoreBreakdown(efficiency: 90, acceleration: 84, speed: 95, smoothness: 78),
+                                DriveScoreBreakdown(efficiency: 68, acceleration: 70, speed: 80, smoothness: 72),
+                                DriveScoreBreakdown(efficiency: 58, acceleration: 62, speed: 80, smoothness: 66),
+                                DriveScoreBreakdown(efficiency: 94, acceleration: 88, speed: 96, smoothness: 90),
+                                DriveScoreBreakdown(efficiency: 76, acceleration: 74, speed: 86, smoothness: 80)][variant]
         drive.energySource = "teslamate_rated_range"
         let path = TripFixtures.detail(base)?.path
         drive.route = path.map { points in

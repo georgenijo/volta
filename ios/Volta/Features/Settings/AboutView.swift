@@ -7,7 +7,7 @@ struct AboutView: View {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(spacing: 10) {
                     SettingsWordmark(height: 30)
-                    Text("Your Tesla, your server.").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                    Text("Your Tesla, your server.").font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
@@ -17,10 +17,10 @@ struct AboutView: View {
                         Text("\(AppInfo.version) (\(AppInfo.build))").font(.system(size: 15, design: .monospaced)).foregroundStyle(ScreenKit.secondary)
                     }
                     ScreenKit.ValueRow(title: "Data", subtitle: "Collected by TeslaMate, served by volta-api") {
-                        Image(systemName: "server.rack").foregroundStyle(ScreenKit.green)
+                        Image(systemName: "server.rack").foregroundStyle(ScreenKit.mint)
                     }
                     ScreenKit.ValueRow(title: "Privacy", subtitle: "Your data stays on your server. No analytics, no third parties.", showsDivider: false) {
-                        Image(systemName: "hand.raised.fill").foregroundStyle(ScreenKit.green)
+                        Image(systemName: "hand.raised.fill").foregroundStyle(ScreenKit.mint)
                     }
                 }
                 ScreenKit.GroupCard(title: "Help", footer: "Volta is not affiliated with, endorsed by, or sponsored by Tesla, Inc.") {

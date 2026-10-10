@@ -11,7 +11,7 @@ struct ChargerMapView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 LoadableContent(state: state, retry: load) { locations in
-                    Text("Your recorded charging places · TeslaMate history").font(.caption).foregroundStyle(ScreenKit.secondary)
+                    Text("Your recorded charging places · TeslaMate history").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                     if locations.isEmpty {
                         EmptyState(systemImage: "mappin.and.ellipse", title: "No charging places yet", message: "Locations appear after TeslaMate records a charging session. This map shows your own history.")
                     } else {
@@ -34,12 +34,12 @@ struct ChargerMapView: View {
                             Button { selected = location } label: {
                                 Card {
                                     VStack(alignment: .leading, spacing: 12) {
-                                        HStack { Text(location.name).font(.headline); Spacer(); Image(systemName: "chevron.right") }
-                                        Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary)
+                                        HStack { Text(location.name).font(.system(size: 16, weight: .semibold)); Spacer(); ScreenKit.Chevron() }
+                                        Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                                         Text(location.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Total energy unknown — some sessions lack readings")
-                                        Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                        Text(ChargerPresentation.cost(location.cost, currency: location.currency)).font(.caption)
-                                        if !location.hasCoordinate { Text("Coordinates not recorded").font(.caption).foregroundStyle(ScreenKit.secondary) }
+                                        Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                        Text(ChargerPresentation.cost(location.cost, currency: location.currency)).font(.system(size: 12, weight: .medium))
+                                        if !location.hasCoordinate { Text("Coordinates not recorded").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary) }
                                     }.frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }.buttonStyle(.plain)
@@ -83,10 +83,10 @@ struct ChargerLocationSessionsView: View {
                         NavigationLink { ChargingDetailView(charge: session) } label: {
                             Card {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(session.start.formatted(date: .abbreviated, time: .shortened)).font(.headline)
+                                    Text(session.start.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 16, weight: .semibold))
                                     Text(session.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Energy not recorded")
-                                    Text(ChargerPresentation.cost(session.cost, currency: session.currency)).font(.caption).foregroundStyle(ScreenKit.secondary)
-                                    if session.end == nil { Text("Session in progress").font(.caption).foregroundStyle(ScreenKit.blue) }
+                                    Text(ChargerPresentation.cost(session.cost, currency: session.currency)).font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                    if session.end == nil { Text("Session in progress").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.blue) }
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }.buttonStyle(.plain)

@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// "LAST 48H" strip: hourly ticks with drives (red), charging (green) and
-/// online/idle (blue) segments, plus a -48H … NOW axis.
+/// "LAST 48H" rhythm: one thin capsule per hour, tallest for drives, then
+/// charging, then online time; quiet hours are dots. Same idiom as the Drives
+/// tab's DailyRhythm.
 struct ActivityStrip: View {
     var segments: [TimelineSegment]
     var hours: Int = 48
@@ -11,37 +12,84 @@ struct ActivityStrip: View {
     var failed = false
 
     private var unavailable: Bool { failed && segments.isEmpty }
+    private static let height: CGFloat = 40
 
     static func color(for kind: TimelineKind) -> Color? {
         switch kind {
-        case .drive: .voltaRed
-        case .charge: .voltaGreen
-        case .idle: .voltaBlue
+        case .drive: .voltaBlue
+        case .charge: .voltaMint
+        case .idle: Color.white.opacity(0.32)
         case .asleep, .offline: nil
         }
     }
 
+    /// Visual priority when several kinds share an hour.
+    private static func rank(_ kind: TimelineKind) -> Int {
+        switch kind {
+        case .drive: 3
+        case .charge: 2
+        case .idle: 1
+        case .asleep, .offline: 0
+        }
+    }
+
+    private static func peak(for kind: TimelineKind) -> CGFloat {
+        switch kind {
+        case .drive: height
+        case .charge: height * 0.72
+        default: height * 0.34
+        }
+    }
+
+    struct Hour: Hashable {
+        var kind: TimelineKind?
+        /// Share of the hour covered by `kind`, 0...1.
+        var coverage: Double
+    }
+
+    /// One entry per hour, oldest first: the highest-priority kind seen in it.
+    static func hourly(_ segments: [TimelineSegment], hours: Int, now: Date) -> [Hour] {
+        let start = now.addingTimeInterval(-Double(hours) * 3600)
+        return (0..<hours).map { i in
+            let h0 = start.addingTimeInterval(Double(i) * 3600), h1 = h0.addingTimeInterval(3600)
+            var best: Hour = .init(kind: nil, coverage: 0)
+            for segment in segments where color(for: segment.kind) != nil {
+                let overlap = min(segment.end, h1).timeIntervalSince(max(segment.start, h0))
+                guard overlap > 0 else { continue }
+                let coverage = min(overlap / 3600, 1)
+                let current = best.kind.map(rank) ?? 0
+                if rank(segment.kind) > current {
+                    best = .init(kind: segment.kind, coverage: coverage)
+                } else if segment.kind == best.kind {
+                    best.coverage = min(best.coverage + coverage, 1)
+                }
+            }
+            return best
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: VoltaSpacing.md) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Last \(hours)h").voltaLabelStyle()
+                Text("Last \(hours)h").dashboardCaption(size: 11)
                 Spacer()
-                HStack(spacing: VoltaSpacing.md) {
-                    legend("Drives", .voltaRed)
-                    legend("Charging", .voltaGreen)
-                    legend("Online", .voltaBlue)
+                HStack(spacing: 12) {
+                    legend("Drives", .voltaBlue)
+                    legend("Charging", .voltaMint)
+                    legend("Online", .white.opacity(0.4))
                 }
             }
             strip
-                .frame(height: 34)
+                .frame(height: Self.height, alignment: .bottom)
                 .overlay {
                     if unavailable {
                         Label("Timeline unavailable", systemImage: "exclamationmark.triangle")
-                            .font(.caption.weight(.medium))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.voltaTextSecondary)
                             .padding(.horizontal, VoltaSpacing.md)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.voltaBackground.opacity(0.85)))
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.voltaBackground.opacity(0.9)))
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
                     }
                 }
             axis
@@ -52,67 +100,47 @@ struct ActivityStrip: View {
 
     private func legend(_ title: String, _ color: Color) -> some View {
         HStack(spacing: 5) {
-            StatusDot(color: color, size: 6)
-            Text(title)
-                .font(.caption2)
-                .tracking(0.8)
-                .foregroundStyle(Color.voltaTextSecondary)
+            Capsule().fill(color).frame(width: 3, height: 9)
+            Text(title).dashboardCaption()
         }
     }
 
     private var strip: some View {
-        Canvas { context, size in
-            let start = now.addingTimeInterval(-Double(hours) * 3600)
-            let total = now.timeIntervalSince(start)
-            let rect = CGRect(origin: .zero, size: size)
-            let clip = Path(roundedRect: rect, cornerRadius: 7, style: .continuous)
-            context.clip(to: clip)
-            context.fill(clip, with: .color(Color.white.opacity(0.035)))
-
-            // Hour cells.
-            let gap: CGFloat = 2
-            let cell = (size.width - gap * CGFloat(hours - 1)) / CGFloat(hours)
-            var cells = Path()
-            for i in 0..<hours {
-                cells.addRect(CGRect(x: CGFloat(i) * (cell + gap), y: 0, width: cell, height: size.height))
+        let bars = Self.hourly(segments, hours: hours, now: now)
+        return HStack(alignment: .bottom, spacing: 0) {
+            ForEach(Array(bars.enumerated()), id: \.offset) { index, hour in
+                if index > 0 { Spacer(minLength: 1) }
+                bar(hour)
             }
-            context.fill(cells, with: .color(Color.white.opacity(0.06)))
+        }
+    }
 
-            // Segments, drawn as continuous bars, then masked to the cells.
-            context.drawLayer { layer in
-                layer.clip(to: cells)
-                for segment in segments {
-                    guard let color = Self.color(for: segment.kind) else { continue }
-                    let s = max(segment.start, start), e = min(segment.end, now)
-                    guard e > s else { continue }
-                    let x0 = CGFloat(s.timeIntervalSince(start) / total) * size.width
-                    let x1 = CGFloat(e.timeIntervalSince(start) / total) * size.width
-                    let r = CGRect(x: x0, y: 0, width: max(x1 - x0, cell), height: size.height)
-                    layer.fill(Path(r), with: .color(color.opacity(segment.kind == .idle ? 0.7 : 0.9)))
-                }
-            }
+    @ViewBuilder
+    private func bar(_ hour: Hour) -> some View {
+        if let kind = hour.kind, let color = Self.color(for: kind) {
+            let peak = Self.peak(for: kind)
+            let height = max(6, peak * (0.45 + 0.55 * hour.coverage))
+            let lit = kind == .drive || kind == .charge
+            Capsule()
+                .fill(lit ? AnyShapeStyle(LinearGradient(colors: [color, color.opacity(0.45)], startPoint: .top, endPoint: .bottom))
+                          : AnyShapeStyle(color))
+                .frame(width: 4, height: height)
+                .shadow(color: lit ? color.opacity(0.55) : .clear, radius: 4)
+        } else {
+            Circle().fill(Color.white.opacity(0.1)).frame(width: 3, height: 3)
+                .frame(width: 4)
         }
     }
 
     private var axis: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            ZStack(alignment: .topLeading) {
-                axisLabel("-\(hours)H").position(x: 0, y: 8).offset(x: 18)
-                axisLabel("-\(hours / 2)H").position(x: w * 0.5, y: 8)
-                axisLabel("-\(hours / 4)H").position(x: w * 0.75, y: 8)
-                axisLabel("NOW").position(x: w, y: 8).offset(x: -16)
-            }
+        HStack {
+            Text("-\(hours)h")
+            Spacer()
+            Text("-\(hours / 2)h")
+            Spacer()
+            Text("Now")
         }
-        .frame(height: 16)
-    }
-
-    private func axisLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.caption2.weight(.medium))
-            .tracking(1.2)
-            .foregroundStyle(Color.voltaTextSecondary)
-            .fixedSize()
+        .dashboardCaption()
     }
 
     private var accessibilitySummary: String {

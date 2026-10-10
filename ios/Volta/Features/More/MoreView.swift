@@ -28,29 +28,24 @@ struct MoreView: View {
                         .init(symbol: "mappin.and.ellipse", tint: ScreenKit.blue, title: "Charger Map", route: .chargerMap),
                     ])
 
-                    switchVehicle.padding(.top, 36)
+                    ScreenKit.SectionHeader(title: "Garage")
+                    switchVehicle
                     footer
                 }
-                .padding(.top, 8)
+                .padding(.top, 0)
                 .padding(.bottom, ScreenKit.bottomBarClearance)
             }
             .accessibilityIdentifier("scroll.more")
             .scrollContentBackground(.hidden)
             .safeAreaInset(edge: .top, spacing: 0) {
-                HStack {
-                    Spacer()
+                VoltaHeader("More") {
                     GlassCircleButton(systemImage: "gearshape", accessibilityLabel: "Settings") { path.append(.settings) }
                         .accessibilityIdentifier("button.settings")
                 }
-                .padding(.horizontal, VoltaSpacing.screen - 4)
-                .frame(minHeight: 56)
                 .padding(.bottom, VoltaSpacing.sm)
-                .background {
-                    LinearGradient(colors: [Color.voltaBackground, Color.voltaBackground.opacity(0.85), Color.voltaBackground.opacity(0)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .ignoresSafeArea(edges: .top)
-                }
+                .background { ScreenKit.HeaderScrim() }
             }
+            .background(alignment: .top) { ScreenKit.TopGlow() }
             .voltaScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .moreDestinations()
@@ -70,23 +65,25 @@ struct MoreView: View {
 
     private func section(_ title: String, dot: Color, identifier: String? = nil, rows: [Item]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScreenKit.SectionHeader(title: title, dot: dot, identifier: identifier)
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, item in
-                NavigationLink(value: item.route) {
-                    ScreenKit.NavRow(symbol: item.symbol, tint: item.tint, title: item.title,
-                                     showsDivider: index < rows.count - 1)
+            ScreenKit.SectionHeader(title: title, dot: dot, identifier: identifier,
+                                    trailing: rows.count > 1 ? "\(rows.count)" : nil)
+            ScreenKit.ListCard {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, item in
+                    NavigationLink(value: item.route) {
+                        ScreenKit.NavRow(symbol: item.symbol, tint: item.tint, title: item.title,
+                                         showsDivider: index < rows.count - 1)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
 
     private var switchVehicle: some View {
-        VStack(spacing: 0) {
-            Rectangle().fill(ScreenKit.hairline).frame(height: 1)
+        ScreenKit.ListCard {
             NavigationLink(value: MoreRoute.switchVehicle) {
                 ScreenKit.CapsRow(symbol: "car.2.fill", tint: ScreenKit.mint, title: "Switch Vehicle",
-                                  subtitle: vehicleName ?? "—")
+                                  subtitle: vehicleName ?? "—", showsDivider: false)
             }
             .buttonStyle(.plain)
         }
@@ -94,10 +91,10 @@ struct MoreView: View {
 
     private var footer: some View {
         Text("Volta · v\(AppInfo.version) · private")
-            .font(.system(size: 12, weight: .medium)).tracking(1)
-            .foregroundStyle(ScreenKit.secondary.opacity(0.5))
+            .font(.system(size: 11, weight: .semibold)).tracking(1.3).textCase(.uppercase)
+            .foregroundStyle(ScreenKit.tertiary.opacity(0.8))
             .frame(maxWidth: .infinity)
-            .padding(.top, 40)
+            .padding(.top, 36)
     }
 }
 

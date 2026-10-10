@@ -21,6 +21,8 @@ struct FirmwareTrackerView: View {
             .padding(.top, 8)
             .padding(.bottom, ScreenKit.bottomBarClearance)
         }
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("scroll.firmware")
         .screenKitPage("Firmware Tracker")
         .task(id: vehicleID) { await load() }
     }
@@ -31,73 +33,83 @@ struct FirmwareTrackerView: View {
         let gaps = zip(updates, updates.dropFirst()).map { $0.installedAt.timeIntervalSince($1.installedAt) / 86_400 }
         let avgGap = gaps.isEmpty ? nil : gaps.reduce(0, +) / Double(gaps.count)
         let lastYear = updates.filter { $0.installedAt > Date.now.addingTimeInterval(-365 * 86_400) }.count
+        let daysOn = updates.indices.map { index in
+            (index > 0 ? updates[index - 1].installedAt : Date.now).timeIntervalSince(updates[index].installedAt) / 86_400
+        }
+        let longest = max(daysOn.max() ?? 1, 1)
 
-        VStack(alignment: .leading, spacing: 18) {
-            Card(padding: 20, tint: ScreenKit.mint) {
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionLabel("Current software", trailing: VoltaFormat.relativeDate(current.installedAt))
-                    ScreenKit.Numeral(value: current.version, size: 40)
-                    Text("Installed \(current.installedAt.formatted(date: .long, time: .omitted))")
-                        .font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
-                }
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            AnalyticsHero(eyebrow: "Current software · \(VoltaFormat.relativeDate(current.installedAt))",
+                          value: current.version, size: 50, identifier: "screen.firmware")
+            Text("Installed \(current.installedAt.formatted(date: .long, time: .omitted))")
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(AnalyticsStyle.secondary)
+                .padding(.top, 6)
+            AnalyticsStatStrip(items: [
+                ("\(lastYear)", lastYear == 1 ? "Update · 1y" : "Updates · 1y"),
+                (avgGap.map { VoltaFormat.number($0, digits: 0) } ?? "—", "Day cadence"),
+                ("\(Int((daysOn.first ?? 0).rounded()))", "Days on"),
+                ("\(updates.count)", updates.count == 1 ? "Version" : "Versions"),
+            ])
+            .padding(.top, 24)
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ScreenKit.Metric(label: "Past year", value: "\(lastYear)", unit: lastYear == 1 ? "update" : "updates", symbol: "arrow.down.circle")
-                ScreenKit.Metric(label: "Cadence", value: avgGap.map { VoltaFormat.number($0, digits: 0) } ?? "—", unit: "days",
-                                 caption: "Average between updates", symbol: "calendar")
-            }
-
-            SectionLabel("Timeline").padding(.top, 10).padding(.horizontal, 4)
+            AnalyticsSectionHeader("Timeline", trailing: avgGap.map { "Every ~\(VoltaFormat.number($0, digits: 0)) days" })
+                .padding(.top, AnalyticsStyle.sectionGap)
             VStack(spacing: 0) {
                 ForEach(Array(updates.enumerated()), id: \.element.version) { index, update in
-                    let next = index > 0 ? updates[index - 1].installedAt : Date.now
-                    timelineRow(update, daysOn: next.timeIntervalSince(update.installedAt) / 86_400,
+                    timelineRow(update, daysOn: daysOn[index], longest: longest,
                                 isCurrent: index == 0, isLast: index == updates.count - 1)
                 }
             }
+            .padding(.horizontal, 18).padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .voltaCardBackground()
         }
     }
 
-    private func timelineRow(_ update: FirmwareUpdate, daysOn: Double, isCurrent: Bool, isLast: Bool) -> some View {
-        HStack(alignment: .top, spacing: 16) {
+    private func timelineRow(_ update: FirmwareUpdate, daysOn: Double, longest: Double, isCurrent: Bool, isLast: Bool) -> some View {
+        HStack(alignment: .top, spacing: 14) {
             VStack(spacing: 0) {
-                ZStack {
-                    Circle().fill(isCurrent ? ScreenKit.mint : Color.voltaRaised).frame(width: 14, height: 14)
-                    if isCurrent { Circle().stroke(ScreenKit.mint.opacity(0.3), lineWidth: 6).frame(width: 14, height: 14) }
-                }
-                .padding(.top, 4)
+                Circle()
+                    .fill(isCurrent ? AnalyticsStyle.mint : Color.voltaBackground)
+                    .overlay(Circle().strokeBorder(isCurrent ? AnalyticsStyle.mint : .white.opacity(0.22), lineWidth: 1.5))
+                    .frame(width: 9, height: 9)
+                    .shadow(color: isCurrent ? AnalyticsStyle.mint.opacity(0.8) : .clear, radius: 5)
+                    .padding(.top, 6)
                 if !isLast {
-                    Rectangle().fill(Color.voltaHairline).frame(width: 2).frame(maxHeight: .infinity)
+                    Rectangle()
+                        .fill(LinearGradient(colors: isCurrent ? [AnalyticsStyle.mint.opacity(0.6), .white.opacity(0.1)] : [.white.opacity(0.12), .white.opacity(0.08)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .frame(width: 1.5).frame(maxHeight: .infinity).padding(.vertical, 4)
                 }
             }
-            .frame(width: 20)
+            .frame(width: 12)
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(update.version).font(.system(size: 18, weight: .bold)).foregroundStyle(.white).monospacedDigit()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(update.version).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).monospacedDigit()
                     if isCurrent {
-                        Text("CURRENT").font(.system(size: 10, weight: .bold)).tracking(1.2)
-                            .foregroundStyle(ScreenKit.mint)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(ScreenKit.mint.opacity(0.14), in: .capsule)
+                        Text("Current").font(.system(size: 10, weight: .semibold)).tracking(1.2).textCase(.uppercase)
+                            .foregroundStyle(AnalyticsStyle.mint)
                     }
-                    Spacer()
+                    Spacer(minLength: 8)
                     Text(update.installedAt.formatted(.dateTime.month(.abbreviated).day().year()))
-                        .font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
+                        .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(AnalyticsStyle.secondary)
                 }
                 HStack(spacing: 6) {
                     if let previous = update.previousVersion {
                         Text("from \(previous)")
-                        Text("·")
+                        Circle().fill(AnalyticsStyle.tertiary).frame(width: 2.5, height: 2.5)
                     }
                     Text(isCurrent ? "\(Int(daysOn.rounded())) days so far" : "\(Int(daysOn.rounded())) days on this version")
                 }
-                .font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
+                .font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(AnalyticsStyle.tertiary)
+                AnalyticsBar(fraction: daysOn / longest,
+                             colors: isCurrent ? [AnalyticsStyle.mint, AnalyticsStyle.blue] : [.white.opacity(0.16), .white.opacity(0.3)],
+                             height: 3)
+                    .padding(.top, 2)
             }
-            .padding(.bottom, isLast ? 0 : 26)
+            .padding(.bottom, isLast ? 0 : 22)
         }
-        .padding(.horizontal, 4)
         .accessibilityElement(children: .combine)
     }
 

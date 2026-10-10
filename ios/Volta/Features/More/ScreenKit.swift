@@ -13,39 +13,76 @@ enum ScreenKit {
     static let green = Color.voltaGreen
     static let amber = Color.voltaAmber
     static let red = Color.voltaRed
-    /// Softer green used for VEHICLE-section icons, as in the references.
-    static let mint = Color(red: 0x4A / 255, green: 0xC2 / 255, blue: 0x86 / 255)
+    /// Soft mint for vehicle-section glyphs and positive accents.
+    static let mint = Color.voltaMint
     static let horizontalPadding = VoltaSpacing.screen
     static let bottomBarClearance = VoltaSpacing.tabBarClearance
+    /// Inset inside lit list cards.
+    static let rowInset: CGFloat = 16
+    /// Divider inset that starts at the row text, past the glyph tile.
+    static let glyphDividerInset: CGFloat = 16 + 32 + 14 // rowInset + Glyph.size + 14
 
-    // MARK: Section header — "• AREAS" with a hairline underneath.
+    // MARK: Section header — "• AREAS" caption above a lit card.
 
     struct SectionHeader: View {
         var title: String
         var dot: Color? = nil
         /// Optional accessibility identifier placed on the title text (a leaf).
         var identifier: String? = nil
+        var trailing: String? = nil
         var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    if let dot { Circle().fill(dot).frame(width: 6, height: 6) }
-                    Text(title.uppercased())
-                        .font(.system(size: 12, weight: .semibold))
-                        .tracking(2)
-                        .foregroundStyle(ScreenKit.secondary)
-                        .accessibilityIdentifier(identifier ?? "")
+            HStack(spacing: 8) {
+                if let dot {
+                    Circle().fill(dot).frame(width: 5, height: 5)
+                        .shadow(color: dot.opacity(0.9), radius: 3)
                 }
-                Rectangle().fill(ScreenKit.hairline).frame(height: 1)
+                Text(title.uppercased())
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(1.5)
+                    .foregroundStyle(ScreenKit.tertiary)
+                    .accessibilityIdentifier(identifier ?? "")
+                Spacer(minLength: 8)
+                if let trailing {
+                    Text(trailing)
+                        .font(.system(size: 12, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(ScreenKit.tertiary)
+                }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
+            .padding(.horizontal, ScreenKit.horizontalPadding + 4)
             .padding(.top, 28)
+            .padding(.bottom, 10)
             .accessibilityAddTraits(.isHeader)
+        }
+    }
+
+    // MARK: Glyph
+
+    /// Small tinted glyph on a faint tinted tile with a lit edge.
+    struct Glyph: View {
+        nonisolated static let size: CGFloat = 32
+        var symbol: String
+        var tint: Color
+        var body: some View {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: Self.size, height: Self.size)
+                .background {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(LinearGradient(colors: [tint.opacity(0.18), tint.opacity(0.07)], startPoint: .top, endPoint: .bottom))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(LinearGradient(colors: [tint.opacity(0.35), tint.opacity(0.08)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                        }
+                }
+                .accessibilityHidden(true)
         }
     }
 
     // MARK: Rows
 
-    /// More-style row: icon, title, optional trailing value, chevron, divider.
+    /// More-style row for lit list cards: glyph tile, title, optional trailing value, chevron, divider.
     struct NavRow: View {
         var symbol: String
         var tint: Color
@@ -54,27 +91,27 @@ enum ScreenKit {
         var showsDivider = true
         var body: some View {
             VStack(spacing: 0) {
-                HStack(spacing: 18) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundStyle(tint)
-                        .frame(width: 30)
-                    Text(title).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                HStack(spacing: 14) {
+                    Glyph(symbol: symbol, tint: tint)
+                    Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                     Spacer(minLength: 8)
                     if let trailing {
-                        Text(trailing).font(.system(size: 13, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                        Text(trailing).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(ScreenKit.secondary)
                     }
                     Chevron()
                 }
-                .padding(.vertical, 20)
+                .padding(.vertical, 12)
+                .padding(.horizontal, ScreenKit.rowInset)
                 .contentShape(Rectangle())
-                if showsDivider { Rectangle().fill(ScreenKit.hairline).frame(height: 1) }
+                if showsDivider {
+                    Rectangle().fill(ScreenKit.hairline).frame(height: 1).padding(.leading, ScreenKit.glyphDividerInset)
+                }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
         }
     }
 
-    /// Settings-style row: icon, SMALL-CAPS title, gray subtitle, trailing badge, chevron.
+    /// Settings-style row for lit list cards: glyph tile, title, gray subtitle,
+    /// trailing value (tinted, with a lit dot when not white), chevron.
     struct CapsRow: View {
         var symbol: String
         var tint: Color = ScreenKit.blue
@@ -83,34 +120,44 @@ enum ScreenKit {
         var trailing: String? = nil
         var trailingTint: Color = .white
         var showsChevron = true
+        var showsDivider = true
         var body: some View {
             VStack(spacing: 0) {
-                HStack(spacing: 18) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 21, weight: .medium))
-                        .foregroundStyle(tint)
-                        .frame(width: 32)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(title.uppercased())
-                            .font(.system(size: 14, weight: .semibold)).tracking(2)
+                HStack(spacing: 14) {
+                    Glyph(symbol: symbol, tint: tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                         Text(subtitle)
-                            .font(.system(size: 14))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(ScreenKit.secondary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
                     if let trailing {
-                        Text(trailing.uppercased())
-                            .font(.system(size: 14, weight: .semibold)).tracking(1.2)
-                            .foregroundStyle(trailingTint)
+                        HStack(spacing: 6) {
+                            if trailingTint != .white {
+                                Circle().fill(trailingTint).frame(width: 5, height: 5)
+                                    .shadow(color: trailingTint.opacity(0.9), radius: 3)
+                            }
+                            Text(trailing)
+                                .font(.system(size: 13, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(trailingTint == .white ? ScreenKit.secondary : trailingTint)
+                        }
+                        .fixedSize()
                     }
                     if showsChevron { Chevron() }
                 }
-                .padding(.vertical, 22)
-                .padding(.horizontal, ScreenKit.horizontalPadding)
+                .padding(.vertical, 13)
+                .padding(.horizontal, ScreenKit.rowInset)
                 .contentShape(Rectangle())
-                Rectangle().fill(ScreenKit.hairline).frame(height: 1)
+                if showsDivider {
+                    Rectangle().fill(ScreenKit.hairline).frame(height: 1).padding(.leading, ScreenKit.glyphDividerInset)
+                }
             }
         }
     }
@@ -118,8 +165,20 @@ enum ScreenKit {
     struct Chevron: View {
         var body: some View {
             Image(systemName: "chevron.right")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(ScreenKit.secondary)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ScreenKit.tertiary)
+        }
+    }
+
+    /// Lit card holding a run of `NavRow`/`CapsRow`s, inset to the screen gutter.
+    struct ListCard<Content: View>: View {
+        @ViewBuilder var content: Content
+        var body: some View {
+            VStack(spacing: 0) { content }
+                .padding(.vertical, 4)
+                .voltaCardBackground(radius: 22)
+                .clipShape(.rect(cornerRadius: 22, style: .continuous))
+                .padding(.horizontal, ScreenKit.horizontalPadding)
         }
     }
 
@@ -133,18 +192,18 @@ enum ScreenKit {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
+                        Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                         if let subtitle {
-                            Text(subtitle).font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
+                            Text(subtitle).font(.system(size: 13, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                     Spacer(minLength: 8)
                     trailing
                 }
-                .padding(.vertical, 14)
-                .padding(.horizontal, 16)
+                .padding(.vertical, 15)
+                .padding(.horizontal, ScreenKit.rowInset)
                 .contentShape(Rectangle())
-                if showsDivider { Rectangle().fill(ScreenKit.hairline).frame(height: 1).padding(.leading, 16) }
+                if showsDivider { Rectangle().fill(ScreenKit.hairline).frame(height: 1).padding(.leading, ScreenKit.rowInset) }
             }
         }
     }
@@ -158,11 +217,21 @@ enum ScreenKit {
         @ViewBuilder var content: Content
         var body: some View {
             VStack(alignment: .leading, spacing: 10) {
-                if let title { SectionLabel(title).padding(.horizontal, 4) }
+                if let title {
+                    Text(title.uppercased())
+                        .font(.system(size: 11, weight: .semibold)).tracking(1.5)
+                        .foregroundStyle(ScreenKit.tertiary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 4)
+                        .accessibilityAddTraits(.isHeader)
+                }
                 VStack(spacing: 0) { content }
-                    .voltaCardBackground()
+                    .padding(.vertical, 2)
+                    .voltaCardBackground(radius: 22)
+                    .clipShape(.rect(cornerRadius: 22, style: .continuous))
                 if let footer {
-                    Text(footer).font(.system(size: 12)).foregroundStyle(ScreenKit.secondary)
+                    Text(footer).font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 4)
                 }
             }
@@ -193,9 +262,9 @@ enum ScreenKit {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(4)
-            .background(Color.voltaCard, in: .capsule)
-            .overlay(Capsule().strokeBorder(Color.voltaHairline, lineWidth: 1))
+            .padding(3)
+            .background(Color.white.opacity(0.035), in: .capsule)
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
         }
     }
 
@@ -211,13 +280,15 @@ enum ScreenKit {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 6) {
                         if let symbol {
-                            Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundStyle(ScreenKit.secondary)
+                            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(ScreenKit.secondary)
                         }
-                        Text(label).voltaLabelStyle()
+                        Text(label)
+                            .font(.system(size: 10, weight: .semibold)).tracking(1.3).textCase(.uppercase)
+                            .foregroundStyle(ScreenKit.tertiary).lineLimit(1)
                     }
-                    Numeral(value: value, unit: unit, size: 28)
+                    Numeral(value: value, unit: unit, size: 26)
                     if let caption {
-                        Text(caption).font(.system(size: 12)).foregroundStyle(ScreenKit.secondary).lineLimit(1)
+                        Text(caption).font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary).lineLimit(1)
                     }
                 }
             }
@@ -231,11 +302,12 @@ enum ScreenKit {
         var height: CGFloat = 6
         var body: some View {
             GeometryReader { proxy in
+                let width = max(height, proxy.size.width * min(1, max(0, fraction)))
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08))
-                    Capsule().fill(tint)
-                        .frame(width: max(height, proxy.size.width * min(1, max(0, fraction))))
-                        .shadow(color: tint.opacity(0.5), radius: 6)
+                    Capsule().fill(Color.white.opacity(0.07))
+                    Capsule().fill(tint).frame(width: width).blur(radius: 4).opacity(0.5)
+                    Capsule().fill(LinearGradient(colors: [tint.opacity(0.65), tint], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: width)
                 }
             }
             .frame(height: height)
@@ -268,14 +340,41 @@ private struct ScreenKitPage<Trailing: View>: ViewModifier {
                     trailing
                 }
                 .padding(.bottom, VoltaSpacing.sm)
-                .background {
-                    LinearGradient(colors: [Color.voltaBackground, Color.voltaBackground.opacity(0.92), Color.voltaBackground.opacity(0)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .ignoresSafeArea(edges: .top)
-                }
+                .background { ScreenKit.HeaderScrim() }
             }
+            .background(alignment: .top) { ScreenKit.TopGlow() }
             .voltaScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
+    }
+}
+
+extension ScreenKit {
+    static let topGlowGradient = RadialGradient(colors: [Color.voltaBlue.opacity(0.16), Color.voltaMint.opacity(0.04), .clear],
+                                                center: .init(x: 0.85, y: 0), startRadius: 0, endRadius: 420)
+
+    /// Background for a floating header: the page background *with* the top glow,
+    /// fading out at the bottom so the glow stays continuous behind the header.
+    struct HeaderScrim: View {
+        var body: some View {
+            Color.voltaBackground
+                .overlay(alignment: .top) { ScreenKit.topGlowGradient.frame(height: 520) }
+                .clipped()
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.72),
+                                             .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// Top-right radial glow (blue 16% + mint 4%) shared with the Drives screen.
+    struct TopGlow: View {
+        var body: some View {
+            ScreenKit.topGlowGradient
+                .frame(height: 520)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 

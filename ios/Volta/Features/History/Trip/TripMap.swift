@@ -207,8 +207,9 @@ struct TripRoute: Equatable {
         let side = max(rect.size.width, rect.size.height, minSide)
         rect = rect.insetBy(dx: -(side * 0.15 + max(0, minSide - rect.size.width) / 2),
                             dy: -(side * 0.15 + max(0, minSide - rect.size.height) / 2))
-        // Map points grow southward: room above for the header, below for the fade.
-        return MKMapRect(x: rect.minX, y: rect.minY - side * 0.55, width: rect.width, height: rect.height + side * 0.75)
+        // Map points grow southward: room above for the header, and below for
+        // the fade and the hero that rises into it.
+        return MKMapRect(x: rect.minX, y: rect.minY - side * 0.5, width: rect.width, height: rect.height + side * 1.05)
     }
 
     /// Where `coordinate` falls in a view of `size` showing `visible`. Exact for
@@ -332,17 +333,20 @@ private struct TripRouteCanvas: View {
             let colored = buckets.keys.sorted().map { key in
                 (buckets[key]!, TripPalette.color(Double(key) / Double(Self.colorSteps), stops: stops))
             }
-            ctx.stroke(neutral, with: .color(.white.opacity(0.15)), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+            // Glow: a wide, blurred copy of the route beneath the line.
+            var glow = ctx
+            glow.addFilter(.blur(radius: 7))
+            glow.stroke(neutral, with: .color(.white.opacity(0.12)), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
             for (path, color) in colored {
-                ctx.stroke(path, with: .color(color.opacity(0.28)), style: StrokeStyle(lineWidth: 12, lineCap: .butt, lineJoin: .round))
+                glow.stroke(path, with: .color(color.opacity(0.4)), style: StrokeStyle(lineWidth: 12, lineCap: .butt, lineJoin: .round))
             }
-            ctx.stroke(neutral, with: .color(.white.opacity(0.6)), style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+            ctx.stroke(neutral, with: .color(.white.opacity(0.5)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
             for (path, color) in colored {
-                ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 4.5, lineCap: .butt, lineJoin: .round))
+                ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 3, lineCap: .butt, lineJoin: .round))
             }
             for q in p.isolated { ctx.fill(Self.circle(q, 3.5), with: .color(.white.opacity(0.85))) }
-            if let start = p.start { Self.endpoint(&ctx, start, HistoryTheme.green) }
-            if let end = p.end { Self.endpoint(&ctx, end, HistoryTheme.red) }
+            if let start = p.start { Self.endpoint(&ctx, start, HistoryTheme.mint) }
+            if let end = p.end { Self.endpoint(&ctx, end, HistoryTheme.blue) }
             if let h = p.highlight {
                 ctx.fill(Self.circle(h, 15), with: .color(.white.opacity(0.22)))
                 var shadowed = ctx
@@ -357,8 +361,10 @@ private struct TripRouteCanvas: View {
     }
 
     private static func endpoint(_ ctx: inout GraphicsContext, _ c: CGPoint, _ color: Color) {
-        ctx.fill(circle(c, 11), with: .color(color.opacity(0.3)))
-        ctx.fill(circle(c, 5.5), with: .color(color))
-        ctx.stroke(circle(c, 4.75), with: .color(.white.opacity(0.9)), lineWidth: 1.5)
+        var glow = ctx
+        glow.addFilter(.blur(radius: 6))
+        glow.fill(circle(c, 10), with: .color(color.opacity(0.7)))
+        ctx.fill(circle(c, 5), with: .color(color))
+        ctx.stroke(circle(c, 4.5), with: .color(.white.opacity(0.85)), lineWidth: 1.2)
     }
 }

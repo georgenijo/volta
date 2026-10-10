@@ -128,6 +128,119 @@ final class ScreenScreenshotTests: XCTestCase {
         capture("settings-account")
     }
 
+    // MARK: Analytics (More tab rows) and drive overviews (Drives tab chips)
+
+    func testStats() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try openMoreRow("Stats", screen: "stats")
+        capture("stats-top")
+        try scroll("stats", screenshot: "stats-scrolled")
+    }
+
+    func testBatteryHealth() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try openMoreRow("Battery Health", screen: "battery-health")
+        capture("battery-health-top")
+        try scroll("battery-health", screenshot: "battery-health-scrolled")
+    }
+
+    func testBatteryClimate() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try openMoreRow("Battery Climate", screen: "battery-climate")
+        capture("battery-climate-top")
+        try scroll("battery-climate", screenshot: "battery-climate-scrolled")
+    }
+
+    func testMileage() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try openMoreRow("Mileage Tracker", screen: "mileage")
+        capture("mileage-top")
+        try scroll("mileage", screenshot: "mileage-scrolled")
+    }
+
+    func testFirmware() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try openMoreRow("Firmware Tracker", screen: "firmware")
+        capture("firmware-top")
+        try scroll("firmware", screenshot: "firmware-scrolled")
+    }
+
+    func testSpecsWarranty() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try openMoreRow("Specs & Warranty", screen: "specs")
+        capture("specs-top")
+        try scroll("specs", screenshot: "specs-scrolled")
+    }
+
+    func testRoadtrips() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try navigate("tab.drives", to: "drives")
+        try tapButton(labeled: "Roadtrips")
+        try waitForScreen("roadtrips")
+        capture("roadtrips-top")
+        try scroll("roadtrips", screenshot: "roadtrips-scrolled")
+        // Trip cards combine into one button whose label carries the stop count.
+        try tapFirstHittable(in: "roadtrips", where: NSPredicate(format: "label CONTAINS 'STOP'"))
+        try waitForScreen("roadtrip")
+        _ = element("roadtrip.never").waitForExistence(timeout: 3)
+        capture("roadtrip-detail")
+    }
+
+    func testHeatmap() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try navigate("tab.drives", to: "drives")
+        try tapButton(labeled: "Heatmap")
+        try waitForScreen("heatmap")
+        // Map tiles render asynchronously; give them a moment before capturing.
+        _ = element("heatmap.never").waitForExistence(timeout: 3)
+        capture("heatmap-top")
+        try scroll("heatmap", screenshot: "heatmap-scrolled")
+        // Calendar cells are labelled "<date>, <distance>"; open a driven day.
+        try tapFirstHittable(in: "heatmap", where: NSPredicate(format: "label ENDSWITH ' mi' OR label ENDSWITH ' km'"))
+        try waitForScreen("heatmap-day")
+        capture("heatmap-day")
+    }
+
+    private func tapFirstHittable(in screen: String, where predicate: NSPredicate) throws {
+        let candidates = element("scroll.\(screen)").buttons.matching(predicate)
+        guard candidates.firstMatch.waitForExistence(timeout: 10),
+              let target = candidates.allElementsBoundByIndex.first(where: { $0.isHittable }) else {
+            XCTFail("No hittable button in scroll.\(screen) matching \(predicate)")
+            throw NavigationFailure.missing("button in scroll.\(screen)")
+        }
+        target.tap()
+    }
+
+    /// More rows carry no identifiers; they are NavigationLinks labelled by title.
+    private func openMoreRow(_ title: String, screen: String) throws {
+        try openMore()
+        let row = app.buttons[title].firstMatch
+        let container = element("scroll.more")
+        for _ in 0..<4 where !(row.exists && row.isHittable) { container.swipeUp() }
+        try tapButton(labeled: title)
+        try waitForScreen(screen)
+    }
+
+    private func tapButton(labeled label: String) throws {
+        let target = app.buttons[label].firstMatch
+        let ready = NSPredicate(format: "exists == true AND hittable == true")
+        let expectation = XCTNSPredicateExpectation(predicate: ready, object: target)
+        guard XCTWaiter.wait(for: [expectation], timeout: 15) == .completed else {
+            capture("failure-\(label)")
+            XCTFail("Missing or obscured button: \(label)")
+            throw NavigationFailure.missing(label)
+        }
+        target.tap()
+    }
+
     private func waitForElement(_ identifier: String) throws {
         guard element(identifier).waitForExistence(timeout: 20) else {
             capture("failure-\(identifier)")

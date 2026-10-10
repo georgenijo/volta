@@ -54,7 +54,8 @@ extension EnvironmentValues {
 }
 
 /// The floating bar: a glass capsule with four tabs (selected tab sits in a
-/// darker inner capsule, icon in blue) and a detached glass "…" circle.
+/// darker inner capsule with a hairline edge, its icon lit blue with a soft
+/// glow) and a detached glass "…" circle.
 struct ShellTabBar: View {
     @Binding var selection: MainShell.Tab
     @Namespace private var ns
@@ -81,8 +82,9 @@ struct ShellTabBar: View {
                     select(.more)
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(selection == .more ? Color.voltaBlue : Color.voltaTextPrimary)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(selection == .more ? ShellTabBar.selectedTint : Color.voltaTextPrimary.opacity(0.82))
+                        .shadow(color: selection == .more ? Color.voltaBlue.opacity(0.7) : .clear, radius: 8)
                         .frame(width: 66, height: 66)
                         .contentShape(Circle())
                 }
@@ -104,14 +106,22 @@ struct ShellTabBar: View {
             select(tab)
         } label: {
             Image(systemName: symbol)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(selected ? Color.voltaBlue : Color.voltaTextPrimary)
+                .font(.system(size: 20, weight: selected ? .semibold : .medium))
+                .foregroundStyle(selected ? ShellTabBar.selectedTint : Color.voltaTextPrimary.opacity(0.78))
+                .shadow(color: selected ? Color.voltaBlue.opacity(0.75) : .clear, radius: 8)
                 .frame(maxWidth: .infinity)
                 .frame(height: 56)
                 .background {
                     if selected {
                         Capsule()
-                            .fill(Color.black.opacity(0.35))
+                            .fill(LinearGradient(colors: [Color.black.opacity(0.42), Color.black.opacity(0.28)],
+                                                 startPoint: .top, endPoint: .bottom))
+                            .overlay {
+                                Capsule().strokeBorder(
+                                    LinearGradient(colors: [Color.white.opacity(0.1), Color.white.opacity(0.02)],
+                                                   startPoint: .top, endPoint: .bottom),
+                                    lineWidth: 1)
+                            }
                             .matchedGeometryEffect(id: "selected", in: ns)
                     }
                 }
@@ -122,6 +132,9 @@ struct ShellTabBar: View {
         .accessibilityIdentifier("tab.\(tab.rawValue)")
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
     }
+
+    /// Selected icon: a light blue that reads as lit rather than filled.
+    static let selectedTint = Color(red: 0.58, green: 0.77, blue: 0.99)
 
     private func select(_ tab: MainShell.Tab) {
         withAnimation(.snappy(duration: 0.3)) { selection = tab }

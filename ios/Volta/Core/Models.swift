@@ -167,6 +167,8 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
     /// Compatibility with servers that sent the score under the earlier key.
     var legacyDriveScore: Int? = nil
     var route: [DriveRoutePoint]? = nil
+    /// The server's per-component drive score; nil when not sent or all unknown.
+    var scoreBreakdown: DriveScoreBreakdown? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, start, end, startAddress, endAddress, distanceKm, durationMin
@@ -174,6 +176,50 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
         case maxSpeedKph, avgSpeedKph, outsideTempAvgC, startCity, endCity, ratedWhPerKm
         case electricityRatePerKwh, rateCurrency, energySource, driveScore, route
         case legacyDriveScore = "efficiencyScore"
+        case scoreBreakdown
+    }
+}
+
+/// The four drive score components (`scoreBreakdown`: efficiency, acceleration,
+/// speed, smoothness; each 0–100 or null). Out-of-range or malformed values are
+/// treated as unknown rather than failing the whole drive.
+struct DriveScoreBreakdown: Codable, Hashable, Sendable {
+    var efficiency: Int?
+    var acceleration: Int?
+    var speed: Int?
+    var smoothness: Int?
+
+    init(efficiency: Int? = nil, acceleration: Int? = nil, speed: Int? = nil, smoothness: Int? = nil) {
+        func valid(_ v: Int?) -> Int? { v.flatMap { (0...100).contains($0) ? $0 : nil } }
+        self.efficiency = valid(efficiency)
+        self.acceleration = valid(acceleration)
+        self.speed = valid(speed)
+        self.smoothness = valid(smoothness)
+    }
+
+    private enum CodingKeys: String, CodingKey { case efficiency, acceleration, speed, smoothness }
+
+    init(from decoder: Decoder) throws {
+        // Supplemental: a non-object or a non-integer component reads as unknown.
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self) else { self.init(); return }
+        func read(_ key: CodingKeys) -> Int? { (try? c.decodeIfPresent(Int.self, forKey: key)) ?? nil }
+        self.init(efficiency: read(.efficiency), acceleration: read(.acceleration), speed: read(.speed), smoothness: read(.smoothness))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(efficiency, forKey: .efficiency)
+        try c.encode(acceleration, forKey: .acceleration)
+        try c.encode(speed, forKey: .speed)
+        try c.encode(smoothness, forKey: .smoothness)
+    }
+
+    var isEmpty: Bool { efficiency == nil && acceleration == nil && speed == nil && smoothness == nil }
+
+    /// Keeps every known component and fills only the unknown ones from `fallback`.
+    func filling(from fallback: DriveScoreBreakdown) -> DriveScoreBreakdown {
+        DriveScoreBreakdown(efficiency: efficiency ?? fallback.efficiency, acceleration: acceleration ?? fallback.acceleration,
+                            speed: speed ?? fallback.speed, smoothness: smoothness ?? fallback.smoothness)
     }
 }
 

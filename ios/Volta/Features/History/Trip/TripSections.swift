@@ -1,87 +1,138 @@
 import SwiftUI
 
+// MARK: - Trip chrome
+
+/// Section title for the trip screen: same voice as the drives list's day headers.
+struct TripSectionHeader: View {
+    var title: String
+    var trailing: String? = nil
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title).font(.system(size: 19, weight: .semibold)).foregroundStyle(.white)
+            Spacer(minLength: 8)
+            if let trailing {
+                Text(trailing).font(.system(size: 13, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+extension View {
+    /// Grouped trip data on the lit drive surface.
+    func tripPanel(padding: CGFloat = 18) -> some View {
+        self.padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .driveSurface()
+    }
+
+    /// 10–11 pt uppercase caption in the tertiary tone.
+    func tripCaption(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 10) -> some View {
+        self.font(.system(size: size, weight: .semibold)).tracking(1.1).textCase(.uppercase).foregroundStyle(color)
+    }
+}
+
+/// Small glowing dot used as a light accent beside titles and endpoints.
+struct TripGlowDot: View {
+    var color: Color
+    var size: CGFloat = 8
+    var body: some View {
+        Circle().fill(color).frame(width: size, height: size)
+            .shadow(color: color.opacity(0.7), radius: size * 0.6)
+    }
+}
+
 // MARK: - Hero
 
-/// Distance + efficiency, start/end places with battery, date and times.
+/// Open hero: eyebrow, expanded distance numeral, the drive's score dial, and
+/// the start → end itinerary with times and battery.
 struct TripHero: View {
     var summary: DriveSummary
     var units: UnitPreferences
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top) {
-                BigNumber(VoltaFormat.number(units.distanceValue(km: summary.distanceKm)), unit: units.distanceUnit, size: 52)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityIdentifier("screen.drive-detail")
-                Spacer(minLength: 12)
-                VStack(alignment: .trailing, spacing: 6) {
-                    DriveScoreRing(score: summary.efficiencyScore, size: 72)
-                    if let eff = summary.efficiencyWhPerKm {
-                        BigNumber(VoltaFormat.number(units.efficiencyValue(whPerKm: eff), digits: 0), unit: units.efficiencyUnit, size: 20)
-                        GradientGauge(value: TripHero.efficiencyFraction(eff), colors: TripHero.efficiencyColors, knob: .ring, height: 4)
-                            .frame(width: 128)
-                    } else {
-                        BigNumber("—", unit: units.efficiencyUnit, size: 26, color: HistoryTheme.secondary)
-                        Text("Energy not recorded").font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary)
+        VStack(alignment: .leading, spacing: 26) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(eyebrow).voltaLabelStyle(color: HistoryTheme.tertiary).lineLimit(1).minimumScaleFactor(0.8)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(VoltaFormat.number(units.distanceValue(km: summary.distanceKm)))
+                            .font(.system(size: 84, weight: .bold)).fontWidth(.expanded).tracking(-2)
+                            .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+                            .monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
+                        Text(units.distanceUnit).font(.system(size: 20, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                     }
                 }
-                .padding(.top, 6)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("screen.drive-detail")
+                Spacer(minLength: 0)
+                ScoreDial(score: summary.efficiencyScore, size: 86, caption: "Score").padding(.trailing, 4)
             }
-            VStack(alignment: .leading, spacing: 12) {
-                endpoint(summary.startCity ?? summary.startAddress, level: summary.startBatteryLevel, color: HistoryTheme.green)
-                endpoint(summary.endCity ?? summary.endAddress, level: summary.endBatteryLevel, color: HistoryTheme.red)
-            }
-            Text(dateLine)
-                .voltaLabelStyle()
-                .tracking(1.2)
-                .accessibilityLabel(dateLine.lowercased())
+            itinerary
         }
     }
 
-    /// Fixed reference band so the knob means the same on every trip.
-    static func efficiencyFraction(_ whPerKm: Double) -> Double {
-        let band = TripPalette.efficiencyBand
-        return (whPerKm - band.lowerBound) / (band.upperBound - band.lowerBound)
+    private var eyebrow: String {
+        summary.start.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
     }
 
-    static let efficiencyColors: [Color] = [HistoryTheme.green, HistoryTheme.green, HistoryTheme.amber, HistoryTheme.red]
-
-    private var dateLine: String {
-        let day = summary.start.formatted(.dateTime.weekday(.wide).month(.wide).day()).uppercased()
-        let end = summary.end.map { " — " + $0.formatted(.dateTime.hour().minute()) } ?? ""
-        return "\(day) · \(summary.start.formatted(.dateTime.hour().minute()))\(end)"
+    private var itinerary: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(spacing: 0) {
+                    TripGlowDot(color: HistoryTheme.mint).padding(.top, 7)
+                    Rectangle()
+                        .fill(LinearGradient(colors: [HistoryTheme.mint.opacity(0.6), HistoryTheme.blue.opacity(0.35)], startPoint: .top, endPoint: .bottom))
+                        .frame(width: 1.5).frame(maxHeight: .infinity).padding(.top, 5)
+                }
+                .frame(width: 8)
+                stop(summary.startCity ?? summary.startAddress, time: summary.start, level: summary.startBatteryLevel)
+                    .padding(.bottom, 20)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 14) {
+                VStack(spacing: 0) {
+                    Rectangle().fill(HistoryTheme.blue.opacity(0.35)).frame(width: 1.5, height: 2)
+                    TripGlowDot(color: HistoryTheme.blue).padding(.top, 5)
+                }
+                .frame(width: 8)
+                stop(summary.endCity ?? summary.endAddress, time: summary.end, level: summary.endBatteryLevel)
+            }
+        }
     }
 
-    private func endpoint(_ address: String?, level: Int?, color: Color) -> some View {
+    private func stop(_ address: String?, time: Date?, level: Int?) -> some View {
         let place = TripPlace(address)
-        return HStack(spacing: 10) {
-            Circle().fill(color).frame(width: 9, height: 9)
-            Text(place.primary)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(address == nil ? HistoryTheme.secondary : .white)
-                .lineLimit(1)
-            if let secondary = place.secondary {
-                Text(secondary)
-                    .font(.system(size: 13))
-                    .foregroundStyle(HistoryTheme.tertiary)
-                    .lineLimit(1)
-                    .layoutPriority(-1)
+        return HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(place.primary)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(address == nil ? HistoryTheme.secondary : .white)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                if let secondary = place.secondary {
+                    Text(secondary).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary).lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
-            if let level {
-                HStack(spacing: 6) {
-                    Text("\(level)%")
-                        .font(.system(size: 16, weight: .semibold))
-                        .monospacedDigit()
-                    Image(systemName: TripPlace.batterySymbol(level))
-                        .font(.system(size: 15))
-                        .foregroundStyle(HistoryTheme.secondary)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(time.map { $0.formatted(.dateTime.hour().minute()) } ?? "Now")
+                    .font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.white.opacity(0.9))
+                HStack(spacing: 5) {
+                    if let level {
+                        Image(systemName: TripPlace.batterySymbol(level)).font(.system(size: 11, weight: .medium))
+                        Text("\(level)%")
+                    } else {
+                        Text("—")
+                    }
                 }
-                .foregroundStyle(.white)
-            } else {
-                Text("—").foregroundStyle(HistoryTheme.secondary)
+                .font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
             }
         }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -117,16 +168,52 @@ struct TripStatsRow: View {
 
     var body: some View {
         let speedUnit = units.distance == .miles ? "mph" : "km/h"
-        HStack(alignment: .top, spacing: 0) {
-            column("DURATION", value: VoltaFormat.duration(summary.durationMin), unit: nil, sub: nil)
-            divider
-            column("ENERGY", value: summary.energyUsedKwh.map { VoltaFormat.number($0) } ?? "—", unit: "kWh",
-                   sub: "REGEN " + Self.regenText(regen), valueColor: summary.energyUsedKwh == nil ? HistoryTheme.secondary : HistoryTheme.green)
-            divider
-            column("AVG SPEED", value: summary.avgSpeedKph.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
-                   unit: speedUnit, sub: "MAX " + maxText)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 0) {
+                stat(VoltaFormat.duration(summary.durationMin), "Driving", first: true)
+                divider
+                stat(summary.energyUsedKwh.map { VoltaFormat.number($0) } ?? "—", "kWh")
+                divider
+                stat(summary.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit)
+                divider
+                stat(summary.avgSpeedKph.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", "\(speedUnit) avg")
+            }
+            HStack(spacing: 8) {
+                metric("arrow.triangle.2.circlepath", "Regen " + regenLine)
+                dot
+                metric("gauge.with.dots.needle.67percent", "Max " + maxText + (maxText == "—" ? "" : " \(speedUnit)"))
+                Spacer(minLength: 0)
+            }
         }
-        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var regenLine: String {
+        guard case .estimate(let v, let coverage) = regen else { return "—" }
+        return "≈\(VoltaFormat.number(v)) kWh" + (regen?.isComplete == true ? "" : " · " + TripAnalysis.percent(coverage) + " sampled")
+    }
+
+    private var divider: some View { Rectangle().fill(HistoryTheme.hairline).frame(width: 1, height: 28) }
+
+    private var dot: some View { Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5) }
+
+    private func stat(_ value: String, _ caption: String, first: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value).font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(value == "—" ? HistoryTheme.secondary : .white).lineLimit(1).minimumScaleFactor(0.7)
+            Text(caption).tripCaption().lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, first ? 0 : 12)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func metric(_ icon: String, _ text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+            Text(text).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.78))
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
 
     /// Regen is a sample-derived estimate (see `TripAnalysis.regen`): always
@@ -160,20 +247,6 @@ struct TripStatsRow: View {
         }
     }
 
-    private var divider: some View {
-        Rectangle().fill(HistoryTheme.hairline).frame(width: 1).padding(.horizontal, 12)
-    }
-
-    private func column(_ label: String, value: String, unit: String?, sub: String?, valueColor: Color = .white) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label).voltaLabelStyle().tracking(1.1).lineLimit(1).minimumScaleFactor(0.8)
-            HistoryValue(value: value, unit: unit, size: 22, color: valueColor)
-            if let sub {
-                Text(sub).voltaLabelStyle().tracking(0.8).lineLimit(1).minimumScaleFactor(0.8)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 }
 
 // MARK: - Sampling disclosure
@@ -184,22 +257,23 @@ struct TripSamplingNote: View {
     var timeline: TripTimeline
 
     var body: some View {
-        HistoryCard {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: timeline.quality == .partial ? "waveform.path.ecg" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(HistoryTheme.amber)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(TripSamplingNote.title(timeline))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text(TripSamplingNote.detail(timeline))
-                        .font(.system(size: 13))
-                        .foregroundStyle(HistoryTheme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: timeline.quality == .partial ? "waveform.path.ecg" : "exclamationmark.triangle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(HistoryTheme.amber)
+                .shadow(color: HistoryTheme.amber.opacity(0.5), radius: 4)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(TripSamplingNote.title(timeline))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text(TripSamplingNote.detail(timeline))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(HistoryTheme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .tripPanel(padding: 16)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("trip.sampling")
     }
@@ -239,43 +313,56 @@ struct TripCostCard: View {
     /// Outcome of the previous-charge lookup; nil while it runs.
     var lookup: TripRateLookup?
     var editable: Bool
+    /// Where the energy figure came from, shown under the cost source.
+    var note: String? = nil
     var onEdit: () -> Void
 
     var body: some View {
-        HistoryCard {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    HistorySectionLabel(title: "Trip cost", systemImage: "dollarsign.circle")
-                    Spacer()
-                    if let rate {
-                        Text("\(TripCostCard.rateText(rate))/kWh")
-                            .font(.system(size: 13, weight: .semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Trip cost").tripCaption()
+                    if let rate, let cost = rate.cost(energyKwh: energyKwh) {
+                        Text(VoltaFormat.money(cost, currency: rate.currency))
+                            .font(.system(size: 30, weight: .bold)).fontWidth(.expanded).tracking(-0.8).monospacedDigit()
+                            .foregroundStyle(.white)
+                            .accessibilityIdentifier("trip.cost")
+                    } else {
+                        Text("Cost unknown")
+                            .font(.system(size: 19, weight: .semibold))
                             .foregroundStyle(HistoryTheme.secondary)
-                            .monospacedDigit()
+                            .accessibilityIdentifier("trip.cost")
                     }
                 }
-                if let rate, let cost = rate.cost(energyKwh: energyKwh) {
-                    HistoryValue(value: VoltaFormat.money(cost, currency: rate.currency), unit: nil, size: 30)
-                        .accessibilityIdentifier("trip.cost")
-                    Text(sourceText(rate)).font(.system(size: 12)).foregroundStyle(HistoryTheme.tertiary)
-                } else {
-                    Text("Cost unknown")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(HistoryTheme.secondary)
-                        .accessibilityIdentifier("trip.cost")
-                    Text(TripCostCard.unknownReason(energyKwh: energyKwh, rate: rate, lookup: lookup))
-                        .font(.system(size: 12)).foregroundStyle(HistoryTheme.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("trip.cost.reason")
-                }
-                if editable {
-                    Button(rate?.source == .manual ? "Edit rate" : "Set your rate", action: onEdit)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(HistoryTheme.blue)
-                        .accessibilityIdentifier("trip.rate.edit")
+                Spacer(minLength: 8)
+                if let rate {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(TripCostCard.rateText(rate))
+                            .font(.system(size: 17, weight: .semibold)).monospacedDigit().foregroundStyle(.white.opacity(0.9))
+                        Text("per kWh").tripCaption()
+                    }
                 }
             }
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
+            VStack(alignment: .leading, spacing: 4) {
+                if let rate, rate.cost(energyKwh: energyKwh) != nil {
+                    Text(sourceText(rate))
+                } else {
+                    Text(TripCostCard.unknownReason(energyKwh: energyKwh, rate: rate, lookup: lookup))
+                        .accessibilityIdentifier("trip.cost.reason")
+                }
+                if let note { Text(note) }
+            }
+            .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            if editable {
+                Button(rate?.source == .manual ? "Edit rate" : "Set your rate", action: onEdit)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(HistoryTheme.blue)
+                    .accessibilityIdentifier("trip.rate.edit")
+            }
         }
+        .tripPanel()
     }
 
     /// Why there's no cost. Never claims "no priced charge" unless the whole
@@ -362,69 +449,135 @@ struct TripRateEditor: View {
     }
 }
 
-// MARK: - Smoothness
+// MARK: - Score
 
+/// Drive detail shows the server's `scoreBreakdown` first; components it does
+/// not know are filled from on-device analysis, and the rest are drawn as "—".
+extension DriveScoreBreakdown {
+    static func resolved(server: DriveScoreBreakdown?, local result: SmoothnessScore.Result?) -> DriveScoreBreakdown {
+        (server ?? DriveScoreBreakdown()).filling(from: DriveScoreBreakdown(local: result))
+    }
+
+    /// What today's on-device Volta v1 smoothness analysis can supply.
+    init(local result: SmoothnessScore.Result?) {
+        guard case .score(let s) = result else { self.init(); return }
+        let acceleration = s.parts.first { $0.name == "Acceleration" }.map { Int($0.score.rounded()) }
+        self.init(acceleration: acceleration, smoothness: s.score)
+    }
+
+    var components: [(title: String, value: Int?)] {
+        [("Efficiency", efficiency), ("Acceleration", acceleration), ("Speed", speed), ("Smoothness", smoothness)]
+    }
+}
+
+/// One component: name and value over a thin lit bar.
+struct ScoreBreakdownRow: View {
+    var title: String
+    var value: Int?
+
+    var body: some View {
+        let tint = DriveScoreBand.tint(value)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                Spacer(minLength: 6)
+                Text(value.map(String.init) ?? "—")
+                    .font(.system(size: 15, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(value == nil ? HistoryTheme.tertiary : .white)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.07))
+                    if let value, value > 0 {
+                        Capsule()
+                            .fill(LinearGradient(colors: [tint.opacity(0.35), tint], startPoint: .leading, endPoint: .trailing))
+                            .frame(width: max(3, geo.size.width * Double(value) / 100))
+                            .shadow(color: tint.opacity(0.55), radius: 3)
+                    }
+                }
+            }
+            .frame(height: 3)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) \(value.map { "\($0) of 100" } ?? "not reported")")
+    }
+}
+
+/// Drive score: the large dial, the four-part breakdown, then Volta's own
+/// smoothness measure with its formula.
 struct TripScoreCard: View {
-    var result: SmoothnessScore.Result
+    var score: Int?
+    var breakdown: DriveScoreBreakdown
+    /// Volta v1 smoothness; nil while the drive loads.
+    var result: SmoothnessScore.Result?
     @State private var showsFormula = false
 
     var body: some View {
-        HistoryCard {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    HistorySectionLabel(title: "Smoothness", systemImage: "gauge.with.needle")
-                    Spacer()
-                    Text("VOLTA V1").voltaLabelStyle().tracking(1)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 22) {
+                ScoreDial(score: score, size: 112, caption: "of 100")
+                VStack(spacing: 13) {
+                    ForEach(breakdown.components, id: \.title) { ScoreBreakdownRow(title: $0.title, value: $0.value) }
                 }
-                switch result {
-                case .score(let s):
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        BigNumber("\(s.score)", size: 44)
-                        Text(s.label.uppercased())
-                            .font(.system(size: 13, weight: .bold)).tracking(1.4)
-                            .foregroundStyle(HistoryTheme.green)
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("\(s.hardEvents) HARD").voltaLabelStyle()
-                            Text("\(VoltaFormat.number(s.maxG, digits: 2))g MAX").voltaLabelStyle()
-                        }
-                    }
-                    .accessibilityIdentifier("trip.score")
-                    ForEach(s.parts) { part in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text(part.name).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
-                                Spacer()
-                                Text("\(Int(part.score.rounded()))").font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                            }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(HistoryTheme.track)
-                                    Capsule().fill(HistoryTheme.green).frame(width: geo.size.width * part.score / 100)
-                                }
-                            }
-                            .frame(height: 5)
-                        }
-                    }
-                case .unavailable(let reason):
-                    Text("Unavailable")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(HistoryTheme.secondary)
-                        .accessibilityIdentifier("trip.score")
-                    Text(reason).font(.system(size: 12)).foregroundStyle(HistoryTheme.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                DisclosureGroup(isExpanded: $showsFormula) {
-                    Text(TripScoreCard.formula)
-                        .font(.system(size: 12))
-                        .foregroundStyle(HistoryTheme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 6)
-                } label: {
-                    Text("How it's calculated").font(.system(size: 13, weight: .semibold)).foregroundStyle(HistoryTheme.blue)
-                }
-                .tint(HistoryTheme.blue)
             }
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
+            smoothness
+            DisclosureGroup(isExpanded: $showsFormula) {
+                Text(TripScoreCard.formula)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(HistoryTheme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            } label: {
+                Text("How smoothness is calculated").font(.system(size: 13, weight: .semibold)).foregroundStyle(HistoryTheme.blue)
+            }
+            .tint(HistoryTheme.blue)
+        }
+        .tripPanel()
+    }
+
+    @ViewBuilder private var smoothness: some View {
+        switch result {
+        case .score(let s):
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("On-device smoothness · Volta v1").tripCaption()
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(s.score)").font(.system(size: 24, weight: .bold)).fontWidth(.expanded).monospacedDigit().foregroundStyle(.white)
+                        Text(s.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(DriveScoreBand.tint(s.score))
+                    }
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 0) {
+                    smallStat("\(s.hardEvents)", "Hard")
+                    Rectangle().fill(HistoryTheme.hairline).frame(width: 1, height: 26).padding(.horizontal, 12)
+                    smallStat("\(VoltaFormat.number(s.maxG, digits: 2))g", "Max")
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("trip.score")
+        case .unavailable(let reason):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("On-device smoothness · Volta v1").tripCaption()
+                Text("Unavailable")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(HistoryTheme.secondary)
+                    .accessibilityIdentifier("trip.score")
+                Text(reason).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case nil:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("On-device smoothness · Volta v1").tripCaption()
+                Text("—").font(.system(size: 17, weight: .semibold)).foregroundStyle(HistoryTheme.secondary)
+            }
+        }
+    }
+
+    private func smallStat(_ value: String, _ caption: String) -> some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            Text(value).font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+            Text(caption).tripCaption()
         }
     }
 
@@ -445,22 +598,24 @@ struct TripUnrecordedCard: View {
     var outsideAvg: String?
 
     var body: some View {
-        HistoryCard {
-            VStack(alignment: .leading, spacing: 12) {
-                HistorySectionLabel(title: "Not recorded yet", systemImage: "tray")
-                row("Temperatures", "Cabin and outside traces need per-sample temperatures." + (outsideAvg.map { " Trip outside average: \($0)." } ?? ""))
-                row("Energy remaining", "Needs per-sample energy remaining or usable battery level.")
-                row("Range efficiency", "Needs rated range at the start and end of the trip.")
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Not recorded yet").tripCaption()
+            row("Temperatures", "Cabin and outside traces need per-sample temperatures." + (outsideAvg.map { " Trip outside average: \($0)." } ?? ""))
+            row("Energy remaining", "Needs per-sample energy remaining or usable battery level.")
+            row("Range efficiency", "Needs rated range at the start and end of the trip.")
         }
+        .tripPanel()
         .accessibilityIdentifier("trip.unrecorded")
     }
 
     private func row(_ title: String, _ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-            Text(text).font(.system(size: 12)).foregroundStyle(HistoryTheme.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 12) {
+            Circle().fill(.white.opacity(0.18)).frame(width: 5, height: 5).padding(.top, 6)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                Text(text).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -471,23 +626,21 @@ struct TripDetailsList: View {
     var rows: [(String, String)]
 
     var body: some View {
-        HistoryCard(padding: 0) {
-            VStack(spacing: 0) {
-                HistorySectionLabel(title: "Details", systemImage: "list.bullet")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.vertical, 14)
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    HairlineDivider()
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(row.0).font(.system(size: 14)).foregroundStyle(HistoryTheme.secondary)
-                        Spacer(minLength: 12)
-                        Text(row.1).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                            .multilineTextAlignment(.trailing)
-                            .monospacedDigit()
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 12)
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                if index > 0 { Rectangle().fill(HistoryTheme.hairline).frame(height: 1) }
+                HStack(alignment: .firstTextBaseline) {
+                    Text(row.0).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    Spacer(minLength: 12)
+                    Text(row.1).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.9))
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
                 }
+                .padding(.vertical, 13)
             }
         }
+        .padding(.horizontal, 18).padding(.vertical, 4)
+        .frame(maxWidth: .infinity)
+        .driveSurface()
     }
 }

@@ -54,6 +54,7 @@ struct HistoryHeader<Filter: View, Trailing: View>: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease")
                         .foregroundStyle(filterActive ? HistoryTheme.blue : .white)
+                        .shadow(color: filterActive ? HistoryTheme.blue.opacity(0.7) : .clear, radius: 6)
                         .frame(height: 48)
                         .contentShape(.rect)
                 }
@@ -74,6 +75,7 @@ struct HistoryHeaderButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .foregroundStyle(isOn ? HistoryTheme.blue : .white)
+                .shadow(color: isOn ? HistoryTheme.blue.opacity(0.7) : .clear, radius: 6)
                 .frame(minWidth: 28, minHeight: 48)
                 .contentShape(.rect)
                 .contentTransition(.symbolEffect(.replace))
@@ -125,7 +127,8 @@ struct HistorySearchField: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(HistoryTheme.secondary)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(HistoryTheme.tertiary)
             TextField(prompt, text: $text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -139,15 +142,18 @@ struct HistorySearchField: View {
                 .buttonStyle(.plain)
             }
             Button("Cancel") { text = ""; onClose() }
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(HistoryTheme.blue)
                 .buttonStyle(.plain)
         }
-        .font(.system(size: 16))
-        .padding(.horizontal, 14)
+        .font(.system(size: 15, weight: .medium))
+        .padding(.horizontal, 16)
         .frame(height: 44)
-        .background(HistoryTheme.card, in: .capsule)
-        .overlay { Capsule().strokeBorder(HistoryTheme.hairline) }
+        .background(LinearGradient(colors: [Color.voltaCardTop, Color.voltaCard], startPoint: .top, endPoint: .bottom), in: .capsule)
+        .overlay {
+            Capsule().strokeBorder(LinearGradient(colors: [.white.opacity(0.12), .white.opacity(0.04)], startPoint: .top, endPoint: .bottom),
+                                   lineWidth: 1)
+        }
         .padding(.horizontal, HistoryTheme.gutter)
         .padding(.bottom, 8)
         .onAppear { focused = true }
@@ -215,7 +221,7 @@ struct HistorySkeletonList: View {
                     HistoryCard {
                         VStack(alignment: .leading, spacing: 14) {
                             HStack(spacing: 12) {
-                                Circle().fill(HistoryTheme.track).frame(width: 38, height: 38)
+                                RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.white.opacity(0.06)).frame(width: 38, height: 38)
                                 VStack(alignment: .leading, spacing: 7) {
                                     bar(width: 150, height: 13)
                                     bar(width: 100, height: 10)
@@ -236,7 +242,7 @@ struct HistorySkeletonList: View {
             .padding(.horizontal, HistoryTheme.gutter)
         }
         .scrollDisabled(true)
-        .opacity(pulse ? 0.45 : 1)
+        .opacity(pulse ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
         .onAppear { pulse = true }
         .accessibilityLabel("Loading")
@@ -244,7 +250,7 @@ struct HistorySkeletonList: View {
 
     private func bar(width: CGFloat?, height: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: height / 2)
-            .fill(HistoryTheme.track)
+            .fill(Color.white.opacity(0.06))
             .frame(width: width, height: height)
             .frame(maxWidth: width == nil ? .infinity : nil)
     }
@@ -264,7 +270,7 @@ struct HistoryPageFooter<Item: Codable & Hashable & Sendable & Identifiable>: Vi
         VStack(spacing: 10) {
             if let error = feed.footerError {
                 Text(error)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(HistoryTheme.secondary)
                     .multilineTextAlignment(.center)
                 Button("Retry") {
@@ -313,7 +319,7 @@ struct HistoryTotalsBlock: View {
                         Text(note)
                     }
                 }
-                .font(.system(size: 12))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(HistoryTheme.tertiary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)

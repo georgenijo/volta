@@ -52,7 +52,7 @@ struct SpecsWarrantyView: View {
     var body: some View {
         ScrollView {
             LoadableContent(state: state, retry: load) { snapshot in
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: AnalyticsStyle.sectionGap) {
                     if let vehicle = snapshot.vehicle {
                         hero(vehicle, odometer: snapshot.odometerKm)
                         specs(vehicle)
@@ -67,6 +67,8 @@ struct SpecsWarrantyView: View {
             .padding(.top, 8)
             .padding(.bottom, ScreenKit.bottomBarClearance)
         }
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("scroll.specs")
         .screenKitPage("Specs & Warranty")
         .task(id: vehicleID) { await load() }
         .task(id: storageKey) {
@@ -77,12 +79,19 @@ struct SpecsWarrantyView: View {
     }
 
     private func hero(_ v: Vehicle, odometer: Double?) -> some View {
-        Card(padding: 20, tint: ScreenKit.mint) {
-            VStack(alignment: .leading, spacing: 12) {
-                SectionLabel(v.name, trailing: v.model)
-                ScreenKit.Numeral(value: odometer.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", unit: units.distanceUnit, size: 52)
-                Text("Odometer").font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
-            }
+        let remaining = Self.coverages.map { c in odometer.map { max(0, c.miles * 1.609344 - $0) } }
+        let yearsOwned = purchaseDate.map { Date.now.timeIntervalSince($0) / (365.25 * 86_400) }
+        return VStack(alignment: .leading, spacing: 0) {
+            AnalyticsHero(eyebrow: [v.name, v.model].compactMap { $0 }.joined(separator: " · ") + " · Odometer",
+                          value: odometer.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
+                          unit: units.distanceUnit, identifier: "screen.specs")
+            AnalyticsStatStrip(items: [
+                (remaining[0].map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", "Basic left"),
+                (remaining[1].map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", "Battery left"),
+                (yearsOwned.map { "\(VoltaFormat.number($0, digits: 1)) yr" } ?? "—", "Owned"),
+                (odometer.map { "\(Int((min($0 / (Self.coverages[0].miles * 1.609344), 1) * 100).rounded()))%" } ?? "—", "Basic used"),
+            ])
+            .padding(.top, 22)
         }
     }
 
@@ -91,11 +100,11 @@ struct SpecsWarrantyView: View {
             ("Model", v.model), ("Trim", v.trim), ("Color", v.exteriorColor),
             ("VIN", v.vinSuffix.map { "••••\($0)" }), ("Software", v.firmware),
         ]
-        return ScreenKit.GroupCard(title: "Specs") {
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                ScreenKit.ValueRow(title: row.0, showsDivider: index < rows.count - 1) {
-                    Text(row.1 ?? "—").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
-                        .multilineTextAlignment(.trailing)
+        return VStack(alignment: .leading, spacing: 0) {
+            AnalyticsSectionHeader("Specs")
+            AnalyticsGroup {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    AnalyticsRow(title: row.0, value: row.1 ?? "—", valueColor: AnalyticsStyle.secondary, showsDivider: index < rows.count - 1)
                 }
             }
         }
@@ -103,24 +112,35 @@ struct SpecsWarrantyView: View {
 
     @ViewBuilder
     private func warranty(odometerKm: Double?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel("Warranty").padding(.horizontal, 4)
+        VStack(alignment: .leading, spacing: 0) {
+            AnalyticsSectionHeader("Warranty", trailing: "Whichever comes first")
             Button { editingDate = true } label: {
-                ScreenKit.ValueRow(title: "Purchase date", subtitle: model.isLaunchDemo ? "Not saved in launch demo" : "Stored on this device only", showsDivider: false) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Purchase date").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                        Text(model.isLaunchDemo ? "Not saved in launch demo" : "Stored on this device only")
+                            .font(.system(size: 12, weight: .medium)).foregroundStyle(AnalyticsStyle.tertiary)
+                    }
+                    Spacer(minLength: 8)
                     Text(purchaseDate?.formatted(date: .abbreviated, time: .omitted) ?? "Set")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(purchaseDate == nil ? ScreenKit.blue : ScreenKit.secondary)
-                    ScreenKit.Chevron()
+                        .font(.system(size: 15, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(purchaseDate == nil ? AnalyticsStyle.blue : AnalyticsStyle.secondary)
+                    Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(AnalyticsStyle.tertiary)
                 }
+                .padding(.horizontal, 18).padding(.vertical, 15)
+                .contentShape(Rectangle())
                 .voltaCardBackground()
             }
             .buttonStyle(VoltaPressStyle())
 
-            ForEach(Self.coverages) { coverage in
-                coverageCard(coverage, odometerKm: odometerKm)
+            VStack(spacing: AnalyticsStyle.cardGap) {
+                ForEach(Self.coverages) { coverage in
+                    coverageCard(coverage, odometerKm: odometerKm)
+                }
             }
-            Text("Tesla's standard US limited warranty terms. Coverage ends at whichever limit comes first.")
-                .font(.system(size: 12)).foregroundStyle(ScreenKit.secondary).padding(.horizontal, 4)
+            .padding(.top, AnalyticsStyle.cardGap)
+            AnalyticsFootnote("Tesla's standard US limited warranty terms. Coverage ends at whichever limit comes first.")
+                .padding(.top, 12)
         }
     }
 
@@ -131,37 +151,45 @@ struct SpecsWarrantyView: View {
         let yearFraction = yearsUsed.map { $0 / c.years }
         let limitDistanceKm = c.miles * 1.609344
         let status = AnalyticsMath.coverageStatus(purchaseDate: purchaseDate, odometerKm: odometerKm, years: c.years, limitKm: limitDistanceKm)
+        let statusTint = status == .expired ? AnalyticsStyle.red : status == .active ? AnalyticsStyle.mint : AnalyticsStyle.tertiary
 
-        return Card(padding: 18) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    Image(systemName: c.symbol).foregroundStyle(ScreenKit.mint)
-                    Text(c.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                    Spacer()
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: c.symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(AnalyticsStyle.mint)
+                Text(c.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle().fill(statusTint).frame(width: 6, height: 6).shadow(color: statusTint.opacity(0.8), radius: 4)
                     Text(status == .expired ? "EXPIRED" : status == .active ? "ACTIVE" : "UNKNOWN")
-                        .font(.system(size: 11, weight: .bold)).tracking(1.2)
-                        .foregroundStyle(status == .expired ? ScreenKit.red : status == .active ? ScreenKit.green : ScreenKit.secondary)
+                        .font(.system(size: 10, weight: .semibold)).tracking(1.2)
+                        .foregroundStyle(status == .unknown ? AnalyticsStyle.tertiary : statusTint)
                 }
-                progress(label: "Distance",
-                         detail: "\(units.formatDistance(odometerKm, fractionDigits: 0)) of \(units.formatDistance(limitDistanceKm, fractionDigits: 0))",
-                         fraction: mileFraction)
-                progress(label: "Time",
-                         detail: yearsUsed.map { "\(VoltaFormat.number(min($0, c.years), digits: 1)) of \(Int(c.years)) years" } ?? "Set purchase date",
-                         fraction: yearFraction)
             }
+            Rectangle().fill(AnalyticsStyle.hairline).frame(height: 1)
+            progress(label: "Distance",
+                     detail: "\(units.formatDistance(odometerKm, fractionDigits: 0)) of \(units.formatDistance(limitDistanceKm, fractionDigits: 0))",
+                     fraction: mileFraction)
+            progress(label: "Time",
+                     detail: yearsUsed.map { "\(VoltaFormat.number(min($0, c.years), digits: 1)) of \(Int(c.years)) years" } ?? "Set purchase date",
+                     fraction: yearFraction)
         }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .voltaCardBackground()
     }
 
     private func progress(label: String, detail: String, fraction: Double?) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Text(label.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(ScreenKit.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label).font(.system(size: 10, weight: .semibold)).tracking(1.2).textCase(.uppercase).foregroundStyle(AnalyticsStyle.tertiary)
                 Spacer()
-                Text(detail).font(.system(size: 13)).foregroundStyle(fraction == nil ? ScreenKit.tertiary : .white).monospacedDigit()
+                Text(detail).font(.system(size: 13, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(fraction == nil ? AnalyticsStyle.tertiary : .white.opacity(0.85))
             }
-            ScreenKit.ProgressBar(fraction: fraction ?? 0,
-                                  tint: (fraction ?? 0) >= 0.9 ? ScreenKit.amber : ScreenKit.blue)
+            AnalyticsBar(fraction: fraction,
+                         colors: (fraction ?? 0) >= 0.9 ? [AnalyticsStyle.amber.opacity(0.6), AnalyticsStyle.amber] : [AnalyticsStyle.mint, AnalyticsStyle.blue])
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var purchaseSheet: some View {

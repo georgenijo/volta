@@ -1,8 +1,8 @@
 import SwiftUI
 import WidgetKit
 
-/// Dashboard tab: 3D map backdrop, battery + range, quick controls, metric
-/// cards, 48h activity strip, and Today/7D/30D summary.
+/// Dashboard tab: 3D map backdrop fading into an open battery hero, quick
+/// controls, metric cards, 48h activity rhythm, and Today/7D/30D summary.
 struct DashboardView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
@@ -20,9 +20,9 @@ struct DashboardView: View {
     @State private var scrollPosition = ScrollPosition(edge: .top)
 
     /// Visible map height below the safe area before content starts.
-    private let mapReveal: CGFloat = 300
+    private let mapReveal: CGFloat = 280
     /// Total map height (extends under the content top, where it fades out).
-    private let mapHeight: CGFloat = 520
+    private let mapHeight: CGFloat = 500
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -87,10 +87,21 @@ struct DashboardView: View {
                             sentry: model.status?.sentryMode ?? false,
                             state: model.status?.state)
             .frame(height: mapHeight)
-            .overlay(alignment: .bottom) {
-                LinearGradient(colors: [.clear, .voltaBackground.opacity(0.85), .voltaBackground],
+            // Long, eased fade so the map dissolves into the background rather
+            // than ending at an edge.
+            .mask {
+                LinearGradient(stops: [.init(color: .black, location: 0),
+                                       .init(color: .black, location: 0.5),
+                                       .init(color: .black.opacity(0.55), location: 0.59),
+                                       .init(color: .black.opacity(0.15), location: 0.7),
+                                       .init(color: .black.opacity(0.04), location: 0.8),
+                                       .init(color: .clear, location: 0.9)],
                                startPoint: .top, endPoint: .bottom)
-                    .frame(height: 200)
+            }
+            .overlay(alignment: .top) {
+                // Quiets the street labels under the header controls.
+                LinearGradient(colors: [.voltaBackground.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 150)
             }
             .overlay(Color.voltaBackground.opacity(progress * 0.6))
             .offset(y: -max(scrollOffset, 0) * 0.45 + max(-scrollOffset, 0) * 0.5)
@@ -109,7 +120,7 @@ struct DashboardView: View {
                 .renderingMode(.template)
                 .resizable()
                 .scaledToFit()
-                .frame(height: 20)
+                .frame(height: 18)
                 .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
                 .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
                 .accessibilityLabel("Volta")
@@ -182,27 +193,21 @@ struct DashboardView: View {
                             .padding(.bottom, VoltaSpacing.lg)
                     }
                     identityRow(status)
-                    if let freshness = status.telemetryFreshness {
-                        Text(freshness.label)
-                            .font(.caption).foregroundStyle(Color.voltaTextSecondary)
-                            .padding(.top, VoltaSpacing.sm)
-                    }
                     batteryBlock(status)
-                        .padding(.top, VoltaSpacing.xl)
-                    HairlineDivider().padding(.top, VoltaSpacing.xl)
+                        .padding(.top, 2)
+                        .background(alignment: .topTrailing) { heroGlow }
                     QuickControlsRow(status: status) { showControls = true }
-                    HairlineDivider()
+                        .padding(.top, DashboardRhythm.section)
                     metricGrid(status)
-                        .padding(.top, VoltaSpacing.xl)
+                        .padding(.top, DashboardRhythm.section)
                     ActivityStrip(segments: model.timeline, failed: model.timelineFailed)
-                        .padding(.top, VoltaSpacing.xxl + 4)
-                    HairlineDivider().padding(.top, VoltaSpacing.xl)
+                        .padding(.top, DashboardRhythm.section + 4)
                     // Re-render when today's reporting day ends so its totals drop.
                     TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
                         ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
                                                failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)))
                     }
-                    .padding(.top, VoltaSpacing.xl)
+                    .padding(.top, DashboardRhythm.section)
                 }
                 .padding(.horizontal, VoltaSpacing.screen)
                 .redacted(reason: isPlaceholder ? .placeholder : [])
@@ -219,6 +224,16 @@ struct DashboardView: View {
             scrollOffset = new
         }
         .refreshable { await load() }
+    }
+
+    /// Faint light behind the hero's open side, as on the Drives tab.
+    private var heroGlow: some View {
+        RadialGradient(colors: [Color.voltaBlue.opacity(0.16), Color.voltaMint.opacity(0.04), .clear],
+                       center: .center, startRadius: 0, endRadius: 210)
+            .frame(width: 420, height: 420)
+            .offset(x: 150, y: -150)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private func failure(_ message: String) -> some View {
@@ -262,24 +277,21 @@ struct DashboardView: View {
 
     // MARK: Sections
 
+    /// Eyebrow: vehicle name on the left, live state on the right.
     private func identityRow(_ status: VehicleStatus) -> some View {
-        HStack(spacing: VoltaSpacing.lg) {
-            Image(systemName: "person.fill")
-                .font(.system(size: 15))
-                .foregroundStyle(Color.voltaTextSecondary)
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(Color.voltaRaised))
+        HStack(alignment: .center, spacing: VoltaSpacing.md) {
             Text(model.vehicle?.name ?? "Vehicle")
-                .font(.system(.subheadline, weight: .medium))
-                .tracking(2.5)
-                .textCase(.uppercase)
-                .foregroundStyle(Color.white.opacity(0.9))
-            Spacer()
-            HStack(spacing: 6) {
-                StatusDot(color: status.state.color, size: 6)
+                .dashboardCaption(size: 11, color: .voltaTextSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            HStack(spacing: 7) {
+                LiveStatusDot(color: DashboardRhythm.stateColor(status.state),
+                              live: status.state == .driving || status.state == .charging)
                 Text(stateLine(status))
-                    .font(.caption)
-                    .foregroundStyle(Color.voltaTextSecondary)
+                    .font(.system(size: 13, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .lineLimit(1)
             }
         }
         .accessibilityElement(children: .combine)
@@ -313,39 +325,73 @@ struct DashboardView: View {
         return ("Range", nil)
     }
 
+    /// Open hero: expanded battery numeral, glowing gauge, then a hairline
+    /// stat strip that leads with range.
     private func batteryBlock(_ status: VehicleStatus) -> some View {
         let range = Self.rangeDisplay(status)
-        return VStack(spacing: VoltaSpacing.xl) {
-            HStack(alignment: .bottom) {
-                BigNumber("\(status.batteryLevel)", unit: "%", size: 66)
-                    .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
-                Spacer()
-                VStack(alignment: .trailing, spacing: VoltaSpacing.sm) {
-                    Text(range.label).voltaLabelStyle()
-                    BigNumber(range.km.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
-                              unit: units.distanceUnit, size: 24, weight: .semibold)
-                }
-                .padding(.bottom, 10)
+        let charging = status.chargingState == .charging
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(status.batteryLevel)")
+                    .font(.system(size: 92, weight: .bold)).fontWidth(.expanded).tracking(-2.5)
+                    .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .lineLimit(1).minimumScaleFactor(0.5)
+                Text("%").font(.system(size: 22, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                Spacer(minLength: 0)
             }
-            RangeBar(level: status.batteryLevel, limit: status.chargeLimit,
-                     charging: status.chargingState == .charging)
+            RangeBar(level: status.batteryLevel, limit: status.chargeLimit, charging: charging)
+                .padding(.top, 10)
+            HStack(spacing: 0) {
+                DashboardStat(value: range.km.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
+                              unit: range.km == nil ? nil : units.distanceUnit, caption: range.label, leading: true)
+                DashboardRhythm.verticalHairline
+                DashboardStat(value: status.chargeLimit.map { "\($0)" } ?? "—",
+                              unit: status.chargeLimit == nil ? nil : "%", caption: "Limit")
+                DashboardRhythm.verticalHairline
+                if charging, let kw = status.chargerPowerKw {
+                    DashboardStat(value: VoltaFormat.number(kw, digits: 0), unit: "kW", caption: "Charging")
+                } else {
+                    DashboardStat(value: status.energyRemainingKwh.map { VoltaFormat.number($0) } ?? "—",
+                                  unit: status.energyRemainingKwh == nil ? nil : "kWh", caption: "Remaining")
+                }
+            }
+            .padding(.top, 22)
+            if let freshness = status.telemetryFreshness {
+                HStack(spacing: 6) {
+                    Image(systemName: freshness.connected ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(freshness.label)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.voltaTextTertiary)
+                .padding(.top, 16)
+            }
         }
         .accessibilityElement(children: .combine)
     }
 
     private func metricGrid(_ status: VehicleStatus) -> some View {
-        let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
-        return LazyVGrid(columns: columns, spacing: 14) {
-            MetricCard(systemImage: "minus.plus.batteryblock", title: "Pack Temp",
-                       value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
-                       gauge: GradientGauge(value: status.packTempMaxC.map(Self.tempFraction))) {
-                Text(status.packTempMaxC == nil ? "Streams when awake" : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "No minimum recorded")
-                    .font(.caption).foregroundStyle(Color.voltaTextSecondary)
-            }
+        let columns = [GridItem(.flexible(), spacing: DashboardRhythm.cardGap),
+                       GridItem(.flexible(), spacing: DashboardRhythm.cardGap)]
+        return LazyVGrid(columns: columns, spacing: DashboardRhythm.cardGap) {
+            packTempCard(status)
             efficiencyCard
             climateCard(status)
             weatherCard(status)
         }
+    }
+
+    private func packTempCard(_ status: VehicleStatus) -> some View {
+        let warm = (status.packTempMaxC ?? 0) >= 40
+        return DashboardMetricCard(
+            systemImage: "minus.plus.batteryblock", title: "Pack temp",
+            value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
+            detail: status.packTempMaxC == nil ? "Streams when awake" : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "No minimum recorded",
+            gauge: ThinGauge(value: status.packTempMaxC.map(Self.tempFraction),
+                             colors: [.voltaBlue, .voltaMint, .voltaMint, .voltaAmber, .voltaRed]),
+            trailing: warm ? .init(text: "Warm", color: .voltaAmber) : nil)
     }
 
     private var efficiencyCard: some View {
@@ -353,33 +399,23 @@ struct DashboardView: View {
         let value = eff.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—"
         // 100 Wh/km (great) … 250 Wh/km (heavy).
         let fraction = eff.map { ($0 - 100) / 150 }
-        return MetricCard(systemImage: "leaf", title: "30D Eff", value: value, unit: units.efficiencyUnit,
-                          gauge: GradientGauge(value: fraction,
-                                               colors: [.voltaGreen, .voltaGreen, .voltaAmber, .voltaRed],
-                                               knob: .filled(.voltaGreen)),
-                          tint: nil)
+        return DashboardMetricCard(
+            systemImage: "leaf", title: "30D Eff", value: value, unit: units.efficiencyUnit,
+            detail: eff == nil ? "No drives in 30 days" : "30-day average",
+            gauge: ThinGauge(value: fraction, colors: [.voltaMint, .voltaMint, .voltaAmber, .voltaRed]))
     }
 
     private func climateCard(_ status: VehicleStatus) -> some View {
         let on = status.climateOn ?? false
-        return MetricCard(systemImage: "fan", title: "Climate",
-                          value: temperatureNumber(status.insideTempC), unit: units.temperatureUnit,
-                          badge: .init(text: status.climateOn == nil ? "—" : (on ? "On" : "Off"),
-                                       color: on ? .voltaGreen : .voltaTextSecondary, inHeader: true),
-                          gauge: GradientGauge(value: status.insideTempC.map(Self.tempFraction), knob: .ring,
-                                               secondaryValue: status.outsideTempC.map(Self.tempFraction)),
-                          tint: on ? .voltaGreen : .voltaTeal) {
-            if let outside = status.outsideTempC {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("OUT").font(.caption2.weight(.medium)).tracking(1.2)
-                        .foregroundStyle(Color.voltaTextSecondary)
-                    Text("\(VoltaFormat.number(units.temperatureValue(celsius: outside), digits: 0))°")
-                        .font(.system(.title3, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                }
-                .fixedSize()
-            }
-        }
+        return DashboardMetricCard(
+            systemImage: "fan", title: "Climate",
+            value: temperatureNumber(status.insideTempC), unit: units.temperatureUnit,
+            detail: status.outsideTempC.map { "Out \(VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0))°" } ?? "Cabin",
+            gauge: ThinGauge(value: status.insideTempC.map(Self.tempFraction),
+                             colors: [.voltaBlue, .voltaMint, .voltaMint, .voltaAmber, .voltaRed],
+                             secondaryValue: status.outsideTempC.map(Self.tempFraction)),
+            trailing: .init(text: status.climateOn == nil ? "—" : (on ? "On" : "Off"),
+                            color: on ? .voltaMint : .voltaTextTertiary, live: on))
     }
 
     private func weatherCard(_ status: VehicleStatus) -> some View {
@@ -393,20 +429,18 @@ struct DashboardView: View {
             return night ? "moon.stars.fill" : (t >= 24 ? "sun.max.fill" : "cloud.sun.fill")
         }()
         let dayFraction = (Double(hour) + Double(Calendar.current.component(.minute, from: .now)) / 60) / 24
-        return MetricCard(systemImage: "cloud.sun", title: "Weather",
-                          value: temperatureNumber(t), unit: units.temperatureUnit,
-                          headerAccessory: extreme
-                            ? AnyView(Image(systemName: "exclamationmark.triangle.fill")
-                                .symbolRenderingMode(.multicolor)
-                                .foregroundStyle(Color.voltaAmber)
-                                .accessibilityLabel(t.map { $0 <= 0 ? "Freezing" : "Very hot" } ?? ""))
-                            : nil,
-                          gauge: GradientGauge(value: dayFraction, colors: GradientGauge.daylight, knob: .ring),
-                          tint: .voltaBlue) {
+        let detail = t.map { extreme ? ($0 <= 0 ? "Freezing" : "Very hot") : (night ? "Night" : "Daytime") } ?? "No reading"
+        return DashboardMetricCard(
+            systemImage: "cloud.sun", title: "Weather",
+            value: temperatureNumber(t), unit: units.temperatureUnit,
+            detail: detail,
+            gauge: ThinGauge(value: dayFraction, colors: [Color(hex: 0x334155), .voltaAmber, .voltaAmber, Color(hex: 0xA78BFA), Color(hex: 0x334155)]),
+            trailing: extreme ? .init(text: "Alert", color: .voltaAmber, systemImage: "exclamationmark.triangle.fill") : nil) {
             Image(systemName: symbol)
                 .symbolRenderingMode(.hierarchical)
-                .font(.system(size: 30))
-                .foregroundStyle(Color.white.opacity(0.9))
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .accessibilityHidden(true)
         }
     }
 
@@ -418,47 +452,274 @@ struct DashboardView: View {
     static func tempFraction(_ celsius: Double) -> Double { (celsius + 5) / 50 }
 }
 
-extension Color {
-    fileprivate static let voltaTeal = Color(hex: 0x14B8A6)
+// MARK: - Rhythm
+
+/// Dashboard-local spacing and styling, aligned with the Drives tab.
+enum DashboardRhythm {
+    /// Between major sections.
+    static let section: CGFloat = 30
+    /// Between cards in a group.
+    static let cardGap: CGFloat = 12
+    static let energyGradient = [Color.voltaMint, Color.voltaBlue]
+
+    static var verticalHairline: some View { Rectangle().fill(Color.voltaHairline).frame(width: 1, height: 28) }
+
+    /// State dot color: mint for healthy/positive, blue for motion.
+    static func stateColor(_ state: VehicleState) -> Color {
+        switch state {
+        case .online, .charging: .voltaMint
+        case .driving, .updating: .voltaBlue
+        case .asleep: .voltaTextSecondary
+        case .offline: .voltaTextTertiary
+        }
+    }
 }
 
-// MARK: - Range bar
+extension View {
+    /// Small-caps caption: uppercase, semibold, tracked, tertiary.
+    func dashboardCaption(size: CGFloat = 10, color: Color = .voltaTextTertiary) -> some View {
+        font(.system(size: size, weight: .semibold)).tracking(size >= 11 ? 1.5 : 1.1)
+            .textCase(.uppercase).foregroundStyle(color)
+    }
+}
 
-/// Thin blue bar with glow; a faint tick marks the charge limit.
+/// Value over caption, for hairline-separated stat strips.
+struct DashboardStat: View {
+    var value: String
+    var unit: String? = nil
+    var caption: String
+    var leading = false
+    var size: CGFloat = 17
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value)
+                    .font(.system(size: size, weight: size >= 22 ? .bold : .semibold))
+                    .fontWidth(size >= 22 ? .expanded : .standard).tracking(size >= 22 ? -0.6 : 0)
+                    .monospacedDigit().foregroundStyle(.white)
+                if let unit {
+                    Text(unit).font(.system(size: size * 0.7, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                }
+            }
+            .lineLimit(1).minimumScaleFactor(0.7)
+            Text(caption).dashboardCaption().lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leading ? 0 : 14)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Status dot; live states breathe a soft halo.
+struct LiveStatusDot: View {
+    var color: Color
+    var live: Bool
+    var size: CGFloat = 7
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            if live {
+                Circle().fill(color.opacity(0.45))
+                    .frame(width: size, height: size)
+                    .scaleEffect(pulse ? 2.6 : 1)
+                    .opacity(pulse ? 0 : 0.9)
+            }
+            Circle().fill(color).frame(width: size, height: size)
+                .shadow(color: color.opacity(0.7), radius: 4)
+        }
+        .frame(width: size * 2.6, height: size * 2.6)
+        .padding(-size * 0.8)
+        .onAppear {
+            guard live else { return }
+            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { pulse = true }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Battery gauge
+
+/// Thin mint→blue gauge drawn as light: glow underlay, bright tip, and a tick
+/// at the charge limit. Low charge shifts the light to amber.
 struct RangeBar: View {
     var level: Int
     var limit: Int?
     var charging: Bool
 
+    private var fraction: CGFloat { CGFloat(min(max(level, 0), 100)) / 100 }
+    private var colors: [Color] {
+        level <= 20 ? [Color.voltaRed, .voltaAmber] : DashboardRhythm.energyGradient
+    }
+
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
+            let fill = max(w * fraction, 6)
+            let gradient = LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.1))
-                Capsule()
-                    .fill(LinearGradient(colors: [Color(hex: 0x2563EB), .voltaBlue, Color(hex: 0x60A5FA)],
-                                         startPoint: .leading, endPoint: .trailing))
-                    .frame(width: w * CGFloat(min(max(level, 0), 100)) / 100)
-                    .shadow(color: .voltaBlue.opacity(0.7), radius: 6)
-                    .phaseAnimator(charging ? [0.6, 1] : [1]) { view, phase in
+                Capsule().fill(Color.white.opacity(0.07)).frame(height: 6)
+                // Glow underlay.
+                Capsule().fill(gradient).frame(width: fill, height: 6)
+                    .blur(radius: 8).opacity(0.7)
+                Capsule().fill(gradient).frame(width: fill, height: 6)
+                    .phaseAnimator(charging ? [0.55, 1] : [1]) { view, phase in
                         view.opacity(phase)
                     } animation: { _ in .easeInOut(duration: 1.2) }
+                // Bright tip.
+                Circle().fill(Color.white)
+                    .frame(width: 10, height: 10)
+                    .shadow(color: (colors.last ?? .voltaBlue).opacity(0.9), radius: 6)
+                    .offset(x: fill - 5)
                 if let limit, limit < 100 {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.35))
-                        .frame(width: 2, height: 10)
+                    Capsule()
+                        .fill(Color.white.opacity(0.55))
+                        .frame(width: 2, height: 16)
                         .offset(x: w * CGFloat(limit) / 100 - 1)
                 }
             }
+            .frame(maxHeight: .infinity)
         }
-        .frame(height: 6)
+        .frame(height: 18)
         .accessibilityLabel("Battery \(level) percent\(limit.map { ", limit \($0) percent" } ?? "")")
+    }
+}
+
+// MARK: - Metric card
+
+/// Thin gauge line: faint track, gradient fill to `value` (colors are placed
+/// on the full width, so position reads as temperature), glow and a lit tip.
+struct ThinGauge {
+    var value: Double?
+    var colors: [Color]
+    var secondaryValue: Double? = nil
+}
+
+extension ThinGauge: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let gradient = LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.07)).frame(height: 3)
+                if let value {
+                    let x = max(w * clamp(value), 3)
+                    ZStack(alignment: .leading) {
+                        gradient.frame(height: 3).blur(radius: 5).opacity(0.6)
+                        gradient.frame(height: 3).clipShape(Capsule())
+                    }
+                    .mask(alignment: .leading) { Rectangle().frame(width: x) }
+                    if let secondaryValue {
+                        Circle().strokeBorder(Color.white.opacity(0.55), lineWidth: 1.5)
+                            .frame(width: 8, height: 8)
+                            .offset(x: w * clamp(secondaryValue) - 4)
+                    }
+                    Circle().fill(Color.white).frame(width: 7, height: 7)
+                        .shadow(color: .white.opacity(0.6), radius: 4)
+                        .offset(x: x - 3.5)
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .frame(height: 10)
+        .accessibilityHidden(true)
+    }
+
+    private func clamp(_ v: Double) -> CGFloat { CGFloat(min(max(v, 0), 1)) }
+}
+
+/// Dashboard tile on the lit surface: caption, expanded numeral with a
+/// small-caps unit, one detail line, and a thin gauge.
+struct DashboardMetricCard<Accessory: View>: View {
+    struct Trailing {
+        var text: String
+        var color: Color
+        var systemImage: String? = nil
+        var live = false
+    }
+
+    var systemImage: String
+    var title: String
+    var value: String
+    var unit: String?
+    var detail: String
+    var gauge: ThinGauge
+    var trailing: Trailing?
+    var accessory: Accessory
+
+    init(systemImage: String, title: String, value: String, unit: String?, detail: String,
+         gauge: ThinGauge, trailing: Trailing? = nil, @ViewBuilder accessory: () -> Accessory) {
+        self.systemImage = systemImage
+        self.title = title
+        self.value = value
+        self.unit = unit
+        self.detail = detail
+        self.gauge = gauge
+        self.trailing = trailing
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage).font(.system(size: 11, weight: .semibold))
+                Text(title).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                if let trailing {
+                    HStack(spacing: 4) {
+                        if let image = trailing.systemImage {
+                            Image(systemName: image).font(.system(size: 9, weight: .bold))
+                        } else if trailing.live {
+                            Circle().fill(trailing.color).frame(width: 5, height: 5)
+                                .shadow(color: trailing.color, radius: 3)
+                        }
+                        Text(trailing.text)
+                    }
+                    .foregroundStyle(trailing.color)
+                }
+            }
+            .dashboardCaption()
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value)
+                    .font(.system(size: 32, weight: .bold)).fontWidth(.expanded).tracking(-1)
+                    .monospacedDigit().foregroundStyle(.white)
+                    .contentTransition(.numericText())
+                if let unit, value != "—" {
+                    Text(unit.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.8)
+                        .foregroundStyle(Color.voltaTextSecondary)
+                }
+                Spacer(minLength: 2)
+                accessory
+            }
+            .lineLimit(1).minimumScaleFactor(0.6)
+            .padding(.top, 18)
+            Text(detail)
+                .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                .foregroundStyle(Color.voltaTextSecondary)
+                .lineLimit(1).minimumScaleFactor(0.85)
+                .padding(.top, 2)
+            gauge.padding(.top, 14)
+        }
+        .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 16)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .driveSurface()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension DashboardMetricCard where Accessory == EmptyView {
+    init(systemImage: String, title: String, value: String, unit: String?, detail: String,
+         gauge: ThinGauge, trailing: Trailing? = nil) {
+        self.init(systemImage: systemImage, title: title, value: value, unit: unit, detail: detail,
+                  gauge: gauge, trailing: trailing) { EmptyView() }
     }
 }
 
 // MARK: - Quick controls
 
-/// Row of icon buttons reflecting status; any tap opens the Controls sheet.
+/// One hairline capsule of icon buttons reflecting status; any tap opens the
+/// Controls sheet.
 struct QuickControlsRow: View {
     var status: VehicleStatus
     var open: () -> Void
@@ -467,36 +728,41 @@ struct QuickControlsRow: View {
         HStack(spacing: 0) {
             let doors = StateDisplay.doors(status.locked)
             item(doors.symbol,
-                 color: doors.tone == .active ? .voltaRed.opacity(0.85) : neutral(doors),
+                 color: doors.tone == .active ? .voltaRed : neutral(doors),
+                 active: doors.tone == .active,
                  label: "Doors: \(doors.text)")
             let climate = StateDisplay.climate(status.climateOn)
-            item("fan", color: climate.tone == .active ? .voltaGreen : neutral(climate),
+            item("fan", color: climate.tone == .active ? .voltaMint : neutral(climate),
+                 active: climate.tone == .active,
                  label: "Climate: \(climate.text)")
-            item("car.side.front.open", color: .voltaTextPrimary.opacity(0.75), label: "Frunk")
-            item("car.side.rear.open", color: .voltaTextPrimary.opacity(0.75), label: "Trunk")
+            item("car.side.front.open", color: .white.opacity(0.7), label: "Frunk")
+            item("car.side.rear.open", color: .white.opacity(0.7), label: "Trunk")
             let sentry = StateDisplay.sentry(status.sentryMode)
             item(sentry.symbol,
-                 color: sentry.tone == .active ? .voltaRed.opacity(0.85) : neutral(sentry),
+                 color: sentry.tone == .active ? .voltaRed : neutral(sentry),
+                 active: sentry.tone == .active,
                  label: "Sentry: \(sentry.text)")
-            item("location.fill", color: .voltaTextPrimary.opacity(0.6), label: "Locate")
-            item("ellipsis", color: .voltaTextPrimary.opacity(0.85), label: "All controls")
+            item("location.fill", color: .white.opacity(0.55), label: "Locate")
+            item("ellipsis", color: .white.opacity(0.8), label: "All controls")
                 .accessibilityIdentifier("button.controls")
         }
-        .padding(.vertical, VoltaSpacing.lg + 2)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+        .background(.white.opacity(0.035), in: .capsule)
+        .overlay(Capsule().strokeBorder(LinearGradient(colors: [.white.opacity(0.11), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 
     private func neutral(_ display: StateDisplay) -> Color {
-        display.isKnown ? .voltaTextPrimary.opacity(0.75) : .voltaTextTertiary
+        display.isKnown ? .white.opacity(0.7) : .voltaTextTertiary
     }
 
-    private func item(_ symbol: String, color: Color, label: String) -> some View {
+    private func item(_ symbol: String, color: Color, active: Bool = false, label: String) -> some View {
         Button(action: open) {
             Image(systemName: symbol)
-                .resizable()
-                .scaledToFit()
-                .fontWeight(.regular)
-                .frame(width: 28, height: 24)
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 26, height: 22)
                 .foregroundStyle(color)
+                .shadow(color: active ? color.opacity(0.55) : .clear, radius: 6)
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
         }
@@ -517,27 +783,31 @@ struct ActivitySummarySection: View {
 
     var body: some View {
         let summary = summaries[range]
-        VStack(alignment: .leading, spacing: VoltaSpacing.xl) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text("Activity").voltaLabelStyle()
-                    .font(.system(.footnote, weight: .semibold))
+                Text("Activity").dashboardCaption(size: 11)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 SegmentedRangePicker(selection: $range)
             }
-            HStack {
-                StatColumn(value: summary.map { VoltaFormat.number(units.distanceValue(km: $0.distanceKm), digits: 0) } ?? "—",
-                           caption: units.distanceUnit.uppercased())
-                StatColumn(value: summary.map { "\($0.chargeCount)" } ?? "—", caption: "CHARGES")
-                StatColumn(value: summary?.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—",
-                           caption: units.efficiencyUnit)
+            HStack(spacing: 0) {
+                DashboardStat(value: summary.map { VoltaFormat.number(units.distanceValue(km: $0.distanceKm), digits: 0) } ?? "—",
+                              caption: units.distanceUnit, leading: true, size: 24)
+                DashboardRhythm.verticalHairline
+                DashboardStat(value: summary.map { "\($0.chargeCount)" } ?? "—", caption: "Charges", size: 24)
+                DashboardRhythm.verticalHairline
+                DashboardStat(value: summary?.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—",
+                              caption: units.efficiencyUnit, size: 24)
             }
             if summary == nil, failedRanges.contains(range) {
                 Label("Couldn't load \(range.voltaLabel) activity", systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color.voltaTextSecondary)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 18)
+        .driveSurface()
     }
 }
 

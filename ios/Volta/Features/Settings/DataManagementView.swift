@@ -138,7 +138,7 @@ struct DataManagementView: View {
                 ScreenKit.GroupCard(title: "Where your data lives",
                                     footer: "Volta keeps no copy of your history on this iPhone beyond what's on screen.") {
                     ScreenKit.ValueRow(title: "History", subtitle: "TeslaMate Postgres on your server") {
-                        Image(systemName: "server.rack").foregroundStyle(ScreenKit.green)
+                        Image(systemName: "server.rack").foregroundStyle(ScreenKit.mint)
                     }
                     ScreenKit.ValueRow(title: "Settings", subtitle: "This iPhone", showsDivider: false) {
                         Image(systemName: "iphone").foregroundStyle(ScreenKit.secondary)

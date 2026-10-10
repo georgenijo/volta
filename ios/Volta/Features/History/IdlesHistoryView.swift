@@ -71,7 +71,7 @@ struct IdleStateSlice: Identifiable, Hashable {
     }
 }
 
-/// Segmented proportion bar: sentry / climate / awake / asleep.
+/// Segmented proportion bar: sentry / climate / awake / asleep, drawn as light.
 struct IdleBreakdownBar: View {
     var slices: [IdleStateSlice]
     var height: CGFloat = 8
@@ -79,15 +79,17 @@ struct IdleBreakdownBar: View {
     var body: some View {
         GeometryReader { proxy in
             let total = max(1, slices.reduce(0) { $0 + $1.minutes })
-            let gaps = CGFloat(max(0, slices.count - 1)) * 2
-            HStack(spacing: 2) {
+            let gaps = CGFloat(max(0, slices.count - 1)) * 3
+            HStack(spacing: 3) {
                 if slices.isEmpty {
                     Capsule().fill(HistoryTheme.track)
                 }
                 ForEach(slices) { slice in
                     Capsule()
-                        .fill(slice.color.opacity(slice.kind == .asleep ? 0.7 : 0.95))
+                        .fill(LinearGradient(colors: [slice.color.opacity(slice.kind == .asleep ? 0.7 : 0.75), slice.color.opacity(slice.kind == .asleep ? 0.4 : 0.4)],
+                                             startPoint: .leading, endPoint: .trailing))
                         .frame(width: max(height, (proxy.size.width - gaps) * slice.minutes / total))
+                        .shadow(color: slice.color.opacity(slice.kind == .unclassified ? 0 : 0.35), radius: min(6, height * 0.9))
                 }
             }
         }
@@ -138,6 +140,7 @@ struct IdlesHistoryView: View {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .historyGlow(HistoryTheme.blue, HistoryTheme.purple, strength: 0.15)
             .historyScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: IdleSummary.self) { IdleDetailView(idle: $0) }
@@ -174,18 +177,21 @@ struct IdlesHistoryView: View {
 
     private var list: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                totals.padding(.bottom, 20)
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                totals.padding(.top, 8).padding(.bottom, 22)
                 ForEach(DayGroup.group(visible, by: \.start)) { group in
-                    SectionLabel(group.title, trailing: drainLabel(group.items))
-                        .padding(.top, 14)
-                        .padding(.bottom, 12)
-                    VStack(spacing: 10) {
-                        ForEach(group.items) { idle in
-                            NavigationLink(value: idle) { IdleRow(idle: idle) }
-                                .buttonStyle(VoltaPressStyle())
-                                .accessibilityIdentifier("row.idle.\(idle.id)")
+                    Section {
+                        VStack(spacing: 12) {
+                            ForEach(group.items) { idle in
+                                NavigationLink(value: idle) { IdleRow(idle: idle) }
+                                    .buttonStyle(VoltaPressStyle())
+                                    .accessibilityIdentifier("row.idle.\(idle.id)")
+                            }
                         }
+                        .padding(.bottom, 10)
+                    } header: {
+                        SessionDayHeader(day: group.day, title: group.title,
+                                         trailing: "\(VoltaFormat.duration(group.items.reduce(0) { $0 + $1.durationMin })) · \(drainLabel(group.items))")
                     }
                 }
                 HistoryPageFooter(feed: feed) { await reload() }
@@ -203,21 +209,8 @@ struct IdlesHistoryView: View {
     }
 
     private var totals: some View {
-        let totals = IdleTotals(visible)
-        return HistoryTotalsBlock(
-            title: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
-            isPartial: feed.hasMore,
-            items: [
-                .init(label: "Parked", value: VoltaFormat.number(totals.parkedMinutes / 60, digits: 0), unit: "h"),
-                .init(label: "Range lost", value: totals.rangeLostKm.value.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
-                      unit: totals.rangeLostKm.value == nil ? nil : units.distanceUnit),
-                .init(label: "Drain / day", value: totals.drainPerDay.map { VoltaFormat.number($0, digits: 1) } ?? "—",
-                      unit: totals.drainPerDay == nil ? nil : "%"),
-            ],
-            notes: totals.notes)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityIdentifier("screen.idles")
+        IdlesHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
+                  idles: visible, partial: feed.hasMore)
     }
 
     private var mapView: some View {
@@ -260,62 +253,141 @@ struct IdlesHistoryView: View {
     }
 }
 
+// MARK: - Hero
+
+/// Open hero: total parked time, sleep-share dial, drain strip, drain per day.
+struct IdlesHero: View {
+    var scope: String
+    var idles: [IdleSummary]
+    var partial: Bool
+    @Environment(\.units) private var units
+
+    var body: some View {
+        let totals = IdleTotals(idles)
+        let energy = PartialSum(idles.map(\.energyLostKwh)).value
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(scope).voltaLabelStyle(color: HistoryTheme.tertiary)
+                    HistoryHeroNumeral(value: VoltaFormat.number(totals.parkedMinutes / 60, digits: 0), unit: "h parked")
+                }
+                Spacer(minLength: 0)
+                sleepDial.padding(.trailing, 4)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("screen.idles")
+
+            VStack(alignment: .leading, spacing: 10) {
+                HistoryStatStrip(items: [
+                    .init(value: totals.drainPerDay.map { VoltaFormat.number($0, digits: 1) + "%" } ?? "—", caption: "Per day",
+                          accent: (totals.drainPerDay ?? 0) > 3 ? HistoryTheme.amber : nil),
+                    .init(value: totals.rangeLostKm.value.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
+                          caption: "\(units.distanceUnit) lost"),
+                    .init(value: energy.map { VoltaFormat.number($0, digits: $0 >= 10 ? 0 : 1) } ?? "—", caption: "kWh"),
+                    .init(value: "\(idles.count)\(partial ? "+" : "")", caption: idles.count == 1 && !partial ? "Session" : "Sessions"),
+                ])
+                HistoryHeroNotes(notes: totals.notes)
+            }
+            let days = HistoryRhythmDay.series(idles, date: \.start, value: { Double($0.drain ?? 0) }, accent: { ($0.drainPerDay ?? 0) > 3 })
+            if days.contains(where: { $0.value > 0 }) {
+                let drained = days.filter { $0.value > 0 }
+                HistoryRhythmStrip(days: days, tint: .white, accent: HistoryTheme.amber,
+                                   lit: [HistoryTheme.blue, HistoryTheme.purple],
+                                   trailing: "\(VoltaFormat.number(drained.reduce(0) { $0 + $1.value }, digits: 0))% drained in 14 days",
+                                   accessibilityLabel: "Battery drained while parked per day, last 14 days")
+            }
+        }
+    }
+
+    /// Share of parked time spent asleep; more sleep means less vampire drain.
+    private var sleepDial: some View {
+        let recorded = idles.filter { $0.asleepMinutes != nil }
+        let minutes = recorded.reduce(0) { $0 + $1.durationMin }
+        let asleep = recorded.reduce(0) { $0 + ($1.asleepMinutes ?? 0) }
+        let share = minutes > 0 ? Int((min(asleep, minutes) / minutes * 100).rounded()) : nil
+        return SegmentDial(segments: [.init(label: "Asleep", value: share.map(Double.init) ?? 0, color: HistoryTheme.blue)],
+                           center: share.map { "\($0)%" } ?? "–", caption: "Asleep", scale: 100,
+                           accessibility: share.map { "Asleep \($0)% of parked time" } ?? "Sleep share unavailable")
+    }
+}
+
 // MARK: - Row
 
 struct IdleRow: View {
     var idle: IdleSummary
     @Environment(\.units) private var units
 
+    private var warm: Bool { (idle.drainPerDay ?? 0) > 3 }
+
     var body: some View {
-        HistoryCard {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    HistoryIconTile(systemImage: "parkingsign", tint: HistoryTheme.blue)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(idle.title)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                        Text(subtitle)
-                            .font(.system(size: 13))
-                            .foregroundStyle(HistoryTheme.secondary)
-                            .lineLimit(1)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(idle.title)
+                        .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                    HStack(spacing: 5) {
+                        Text(idle.start.historyTime)
+                        Image(systemName: "arrow.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(HistoryTheme.tertiary)
+                        Text(idle.end?.historyTime ?? "Now")
                     }
-                    Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 3) {
-                        HistoryValue(value: idle.drain.map { $0 > 0 ? "−\($0)" : "\($0)" } ?? "—", unit: "%", size: 20,
-                                     color: (idle.drainPerDay ?? 0) > 3 ? HistoryTheme.amber : .white)
+                    .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 8) {
+                    duration
+                    HStack(spacing: 4) {
+                        Text(idle.drain.map { $0 > 0 ? "−\($0)%" : "\($0)%" } ?? "—")
+                            .foregroundStyle(warm ? HistoryTheme.amber : .white.opacity(0.85))
+                        Text("·").foregroundStyle(HistoryTheme.tertiary)
                         Text(idle.rangeLostKm.map { "−" + units.formatDistance($0) } ?? "—")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(HistoryTheme.secondary)
-                            .monospacedDigit()
                     }
+                    .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                 }
-                IdleBreakdownBar(slices: idle.breakdown, height: 6)
-                HStack(spacing: 14) {
-                    ForEach(idle.breakdown.prefix(3)) { slice in
-                        HStack(spacing: 5) {
-                            StatusDot(color: slice.color, size: 6)
-                            Text("\(slice.kind.rawValue) \(VoltaFormat.duration(slice.minutes))")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(HistoryTheme.secondary)
-                                .monospacedDigit()
-                                .lineLimit(1)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(HistoryTheme.tertiary)
-                }
+                .fixedSize()
             }
+            .padding(.bottom, 16)
+            IdleBreakdownBar(slices: idle.breakdown, height: 3)
+                .padding(.bottom, 14)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
+            HStack(spacing: 8) {
+                if idle.breakdown.isEmpty {
+                    Text("States not recorded").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+                }
+                ForEach(Array(idle.breakdown.prefix(3).enumerated()), id: \.element.id) { index, slice in
+                    if index > 0 { Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5) }
+                    HStack(spacing: 5) {
+                        Image(systemName: slice.systemImage).font(.system(size: 11, weight: .medium)).foregroundStyle(slice.color.opacity(0.9))
+                        Text(VoltaFormat.duration(slice.minutes)).font(.system(size: 13, weight: .medium)).monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.78))
+                    }
+                    .lineLimit(1).fixedSize()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(slice.kind.rawValue) \(VoltaFormat.duration(slice.minutes))")
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 12)
         }
+        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 14)
+        .driveSurface()
         .accessibilityElement(children: .combine)
     }
 
-    private var subtitle: String {
-        let end = idle.end.map { "–" + $0.historyTime } ?? " · now"
-        return "\(idle.start.historyTime)\(end) · \(VoltaFormat.duration(idle.durationMin))"
+    private var duration: some View {
+        let hours = Int(idle.durationMin / 60), minutes = Int(idle.durationMin.truncatingRemainder(dividingBy: 60))
+        return HStack(alignment: .firstTextBaseline, spacing: 2) {
+            if hours > 0 {
+                Text("\(hours)").font(.system(size: 30, weight: .bold)).fontWidth(.expanded).tracking(-0.8)
+                Text("H").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary).padding(.trailing, 2)
+            }
+            Text("\(minutes)").font(.system(size: hours > 0 ? 22 : 30, weight: .bold)).fontWidth(.expanded).tracking(-0.6)
+            Text("M").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+        }
+        .monospacedDigit().foregroundStyle(.white)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(VoltaFormat.duration(idle.durationMin))
     }
 }
 

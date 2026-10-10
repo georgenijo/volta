@@ -26,7 +26,7 @@ struct SwitchVehicleView: View {
                                                        subtitle: VehicleInfoSheet.detail(vehicle),
                                                        showsDivider: index < vehicles.count - 1) {
                                         if vehicle.id == model.selectedVehicleID {
-                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(ScreenKit.green)
+                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(ScreenKit.mint)
                                         }
                                     }
                                 }

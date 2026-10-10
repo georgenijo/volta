@@ -2,8 +2,13 @@ import SwiftUI
 
 // MARK: - BigNumber
 
-/// Large heavy white numeral with a small gray unit suffix: "78 %", "276 mi".
+/// Large white numeral with a small gray unit suffix: "78 %", "276 mi".
 /// The size follows Dynamic Type (scaled from `size` relative to .largeTitle).
+///
+/// Bold and heavier weights render in the "Quiet instrument" hero style:
+/// bold, expanded width, negative tracking, and (at hero sizes) a soft
+/// white→white70% vertical gradient. Lighter weights stay regular width for
+/// secondary numerals.
 ///
 ///     BigNumber("78", unit: "%", size: 84)
 ///     BigNumber("—", unit: "Wh/mi", size: 48)
@@ -23,17 +28,28 @@ struct BigNumber: View {
         _scaledSize = ScaledMetric(wrappedValue: size, relativeTo: .largeTitle)
     }
 
+    /// Bold, heavy and black all map to the expanded hero treatment.
+    private var isHero: Bool { weight == .heavy || weight == .bold || weight == .black }
+
+    private var fill: AnyShapeStyle {
+        if isHero && color == .voltaTextPrimary && scaledSize >= 40 {
+            return AnyShapeStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+        }
+        return AnyShapeStyle(color)
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: max(2, scaledSize * 0.06)) {
             Text(value)
-                .font(.system(size: scaledSize, weight: weight))
-                .tracking(-scaledSize * 0.03)
-                .foregroundStyle(color)
+                .font(.system(size: scaledSize, weight: isHero ? .bold : weight))
+                .fontWidth(isHero ? .expanded : .standard)
+                .tracking(isHero ? -scaledSize * 0.028 : -scaledSize * 0.01)
+                .foregroundStyle(fill)
                 .monospacedDigit()
                 .contentTransition(.numericText())
             if let unit {
                 Text(unit)
-                    .font(.system(size: max(12, scaledSize * 0.36), weight: .regular))
+                    .font(.system(size: max(11, scaledSize * (isHero ? 0.26 : 0.36)), weight: .medium))
                     .foregroundStyle(Color.voltaTextSecondary)
             }
         }
@@ -45,10 +61,11 @@ struct BigNumber: View {
 
 // MARK: - GradientGauge
 
-/// Thin horizontal gauge track with a colored gradient and an optional knob.
+/// Thin luminous gauge: a faint full-width track, the filled portion drawn as
+/// light (gradient + soft glow) up to the value, and an optional knob.
 ///
 ///     GradientGauge(value: 0.68)                                       // default cold→ok→hot
-///     GradientGauge(value: 0.2, colors: [.voltaBlue, .voltaGreen], knob: .ring)
+///     GradientGauge(value: 0.2, colors: GradientGauge.energy, knob: .ring)
 ///     GradientGauge(value: nil)                                        // empty gray track ("no data")
 struct GradientGauge: View {
     enum Knob { case filled(Color), ring, none }
@@ -59,30 +76,46 @@ struct GradientGauge: View {
     var knob: Knob = .filled(.voltaAmber)
     /// Optional secondary marker (e.g. outside temp on the climate card).
     var secondaryValue: Double? = nil
-    var height: CGFloat = 4
+    var height: CGFloat = 3
 
-    static let temperature: [Color] = [.voltaBlue, .voltaBlue, .voltaGreen, .voltaGreen, .voltaRed, .voltaRed]
+    /// Cold (blue) → comfortable (mint) → hot (amber/red).
+    static let temperature: [Color] = [.voltaBlue, .voltaMint, .voltaMint, .voltaAmber, .voltaRed]
+    /// Energy / route data: mint → blue.
+    static let energy: [Color] = [.voltaMint, .voltaBlue]
     static let daylight: [Color] = [Color(hex: 0x334155), .voltaAmber, .voltaAmber, Color(hex: 0xA855F7), Color(hex: 0x334155)]
+
+    private let knobSize: CGFloat = 14
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
+            let line = min(height, 3.5)
+            let gradient = LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
             ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(value == nil ? AnyShapeStyle(Color.white.opacity(0.10))
-                                       : AnyShapeStyle(LinearGradient(colors: colors.map { $0.opacity(0.85) },
-                                                                      startPoint: .leading, endPoint: .trailing)))
-                    .frame(height: height)
+                if let value {
+                    // Whole scale, faint, so the lit part reads against context.
+                    Capsule().fill(gradient).opacity(0.18).frame(height: line)
+                    let lit = max(line, clamp(value) * w)
+                    Group {
+                        Capsule().fill(gradient).frame(width: w, height: line + 3)
+                            .blur(radius: 4).opacity(0.55)
+                        Capsule().fill(gradient).frame(width: w, height: line)
+                    }
+                    .frame(width: w, alignment: .leading)
+                    .mask(alignment: .leading) { Rectangle().frame(width: lit) }
+                } else {
+                    Capsule().fill(Color.white.opacity(0.08)).frame(height: line)
+                }
                 if let secondaryValue {
                     Circle()
-                        .strokeBorder(Color.white.opacity(0.8), lineWidth: 2)
+                        .strokeBorder(Color.white.opacity(0.7), lineWidth: 1.5)
                         .background(Circle().fill(Color.voltaCard))
-                        .frame(width: 12, height: 12)
-                        .offset(x: clamp(secondaryValue) * (w - 12))
+                        .frame(width: 10, height: 10)
+                        .offset(x: clamp(secondaryValue) * (w - 10))
                 }
                 if let value {
                     knobView
-                        .offset(x: clamp(value) * (w - 20))
+                        .offset(x: clamp(value) * (w - knobSize))
                 }
             }
             .frame(maxHeight: .infinity)
@@ -95,12 +128,14 @@ struct GradientGauge: View {
         switch knob {
         case .filled(let color):
             Circle().fill(color)
-                .frame(width: 20, height: 20)
-                .overlay(Circle().strokeBorder(Color.voltaCard, lineWidth: 3))
+                .frame(width: knobSize, height: knobSize)
+                .overlay(Circle().strokeBorder(Color.voltaCard, lineWidth: 2.5))
+                .shadow(color: color.opacity(0.7), radius: 5)
         case .ring:
             Circle().fill(Color.white)
-                .frame(width: 20, height: 20)
-                .overlay(Circle().strokeBorder(Color.voltaCard, lineWidth: 3))
+                .frame(width: knobSize, height: knobSize)
+                .overlay(Circle().strokeBorder(Color.voltaCard, lineWidth: 2.5))
+                .shadow(color: .white.opacity(0.35), radius: 4)
         case .none:
             EmptyView()
         }
@@ -160,31 +195,38 @@ struct MetricCard<Accessory: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: VoltaSpacing.sm) {
                 Image(systemName: systemImage)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Color.voltaTextSecondary)
-                    .frame(width: 20)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(tint ?? Color.voltaTextSecondary)
+                    .frame(width: 16)
                 Text(title)
-                    .font(.voltaCardTitle)
-                    .tracking(1.5)
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(1.3)
                     .textCase(.uppercase)
-                    .foregroundStyle(Color.white.opacity(0.85))
+                    .foregroundStyle(Color.voltaTextSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Spacer(minLength: 4)
                 if let badge, badge.inHeader {
-                    Text(badge.text).voltaLabelStyle(color: badge.color)
+                    Text(badge.text)
+                        .font(.system(size: 10, weight: .semibold)).tracking(1.2).textCase(.uppercase)
+                        .foregroundStyle(badge.color == .voltaTextSecondary ? Color.voltaTextTertiary : badge.color)
                 }
                 if let headerAccessory { headerAccessory }
             }
             Spacer(minLength: VoltaSpacing.lg)
             HStack(alignment: .firstTextBaseline) {
-                BigNumber(value, unit: unit, size: 36)
+                BigNumber(value, unit: unit, size: 32)
                 Spacer(minLength: 4)
                 if let badge, !badge.inHeader {
-                    Text(badge.text)
-                        .font(.footnote.weight(.semibold))
-                        .tracking(1)
-                        .foregroundStyle(badge.color)
+                    HStack(spacing: 5) {
+                        Circle().fill(badge.color).frame(width: 5, height: 5)
+                            .shadow(color: badge.color.opacity(0.8), radius: 3)
+                        Text(badge.text)
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(1.2)
+                            .textCase(.uppercase)
+                            .foregroundStyle(badge.color)
+                    }
                 }
                 accessory
             }
@@ -215,12 +257,13 @@ struct StatColumn: View {
     var value: String
     var caption: String
     var body: some View {
-        VStack(spacing: VoltaSpacing.sm) {
-            BigNumber(value, size: 34, weight: .bold)
+        VStack(spacing: 6) {
+            BigNumber(value, size: 30, weight: .bold)
             Text(caption)
-                .font(.caption)
-                .tracking(1.5)
-                .foregroundStyle(Color.voltaTextSecondary)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.3)
+                .textCase(.uppercase)
+                .foregroundStyle(Color.voltaTextTertiary)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)

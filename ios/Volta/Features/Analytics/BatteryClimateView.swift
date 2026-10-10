@@ -30,7 +30,7 @@ struct BatteryClimateView: View {
         ScrollView {
             LoadableContent(state: state, retry: load) { snapshot in
                 let usable = snapshot.drives.filter { $0.outsideTempAvgC != nil && ($0.energyUsedKwh ?? 0) > 0 && $0.distanceKm > 0.5 }
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 22) {
                     // Shown with or without content: an empty page can be incomplete too.
                     if !snapshot.isComplete {
                         InlineBanner(systemImage: "exclamationmark.triangle",
@@ -50,6 +50,8 @@ struct BatteryClimateView: View {
             .padding(.top, 8)
             .padding(.bottom, ScreenKit.bottomBarClearance)
         }
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("scroll.battery-climate")
         .screenKitPage("Battery Climate")
         .task(id: vehicleID) { await load() }
     }
@@ -59,79 +61,99 @@ struct BatteryClimateView: View {
         let bands = Self.bands(drives, units: units)
         let best = bands.filter { $0.drives >= 1 }.min { $0.whPerKm < $1.whPerKm }
         let worst = bands.filter { $0.drives >= 1 }.max { $0.whPerKm < $1.whPerKm }
+        let penalty: Double? = {
+            guard let best, let worst, worst.id != best.id, worst.whPerKm / best.whPerKm > 1.02 else { return nil }
+            return (worst.whPerKm / best.whPerKm - 1) * 100
+        }()
 
-        VStack(alignment: .leading, spacing: 18) {
-            Card(padding: 20, tint: ScreenKit.blue) {
-                VStack(alignment: .leading, spacing: 14) {
-                    SectionLabel("Sweet spot", trailing: "\(drives.count) drives")
-                    if let best {
-                        ScreenKit.Numeral(value: bandLabel(best, withUnit: false), unit: units.temperatureUnit, size: 48)
-                        Text("Most efficient at \(units.formatEfficiency(best.whPerKm)).")
-                            .font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
-                    }
-                    if let best, let worst, worst.id != best.id, worst.whPerKm / best.whPerKm > 1.02 {
-                        let penalty = (worst.whPerKm / best.whPerKm - 1) * 100
-                        HStack(spacing: 8) {
-                            Image(systemName: worst.mid < best.mid ? "snowflake" : "sun.max")
-                                .foregroundStyle(worst.mid < best.mid ? ScreenKit.blue : ScreenKit.amber)
-                            Text("Uses \(VoltaFormat.number(penalty, digits: 0))% more energy at \(bandLabel(worst, withUnit: true)).")
-                                .foregroundStyle(.white)
-                        }
-                        .font(.system(size: 14, weight: .medium))
-                    }
+        VStack(alignment: .leading, spacing: 0) {
+            AnalyticsHero(eyebrow: "Sweet spot · \(drives.count) drives", value: best.map { bandLabel($0, withUnit: false) } ?? "—",
+                          unit: units.temperatureUnit, size: 72, identifier: "screen.battery-climate")
+            if let best {
+                Text("Most efficient at \(units.formatEfficiency(best.whPerKm)).")
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(AnalyticsStyle.secondary)
+                    .padding(.top, 4)
+            }
+            AnalyticsStatStrip(items: [
+                (best.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0.whPerKm), digits: 0) } ?? "—", "Best"),
+                (worst.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0.whPerKm), digits: 0) } ?? "—", "Worst"),
+                (penalty.map { "+\(VoltaFormat.number($0, digits: 0))%" } ?? "—", "Penalty"),
+                ("\(bands.count)", bands.count == 1 ? "Band" : "Bands"),
+            ])
+            .padding(.top, 22)
+            if let best, let worst, let penalty {
+                HStack(spacing: 8) {
+                    Image(systemName: worst.mid < best.mid ? "snowflake" : "sun.max")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(worst.mid < best.mid ? AnalyticsStyle.blue : AnalyticsStyle.amber)
+                    Text("Uses \(VoltaFormat.number(penalty, digits: 0))% more energy at \(bandLabel(worst, withUnit: true)).")
+                        .foregroundStyle(.white.opacity(0.85))
                 }
+                .font(.system(size: 13, weight: .medium))
+                .padding(.top, 16)
             }
 
-            Card(padding: 20) {
-                VStack(alignment: .leading, spacing: 14) {
-                    SectionLabel("Efficiency by temperature", trailing: units.efficiencyUnit)
-                    Chart(bands) { band in
-                        BarMark(x: .value("Temp", bandLabel(band, withUnit: false)),
-                                y: .value("Efficiency", units.efficiencyValue(whPerKm: band.whPerKm)))
-                            .foregroundStyle(Self.tint(forC: celsius(band.mid)).gradient)
-                            .clipShape(.rect(cornerRadius: 4))
-                            .annotation(position: .top, spacing: 4) {
-                                Text(VoltaFormat.number(units.efficiencyValue(whPerKm: band.whPerKm), digits: 0))
-                                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(ScreenKit.secondary)
-                            }
-                    }
-                    .chartStyled()
-                    .frame(height: 190)
-                    Text("Outside temperature, \(units.temperatureUnit)")
-                        .font(.system(size: 11)).foregroundStyle(ScreenKit.tertiary)
-                        .frame(maxWidth: .infinity)
-                }
-            }
+            AnalyticsSectionHeader("Efficiency by temperature", trailing: units.efficiencyUnit).padding(.top, AnalyticsStyle.sectionGap)
+            bandChart(bands, best: best)
 
-            Card(padding: 20) {
-                VStack(alignment: .leading, spacing: 14) {
-                    SectionLabel("Every drive")
-                    Chart(drives) { d in
-                        PointMark(x: .value("Temp", units.temperatureValue(celsius: d.outsideTempAvgC ?? 0)),
-                                  y: .value("Efficiency", units.efficiencyValue(whPerKm: (d.energyUsedKwh ?? 0) * 1000 / d.distanceKm)))
-                            .foregroundStyle(Self.tint(forC: d.outsideTempAvgC ?? 15).opacity(0.85))
-                            .symbolSize(min(140, 18 + d.distanceKm))
-                    }
-                    .chartXScale(domain: scatterDomain(drives.compactMap { $0.outsideTempAvgC.map(units.temperatureValue(celsius:)) }))
-                    .chartYScale(domain: scatterDomain(drives.map { units.efficiencyValue(whPerKm: ($0.energyUsedKwh ?? 0) * 1000 / $0.distanceKm) }))
-                    .chartStyled()
-                    .frame(height: 170)
-                    Text("Dot size reflects distance.").font(.system(size: 11)).foregroundStyle(ScreenKit.tertiary)
-                }
-            }
+            AnalyticsSectionHeader("Every drive", trailing: "Dot size reflects distance").padding(.top, AnalyticsStyle.sectionGap)
+            scatter(drives)
 
             if let capacity {
-                ScreenKit.GroupCard(title: "Estimated full-charge range",
-                                    footer: "Based on \(VoltaFormat.number(capacity, digits: 1)) kWh usable capacity and your real efficiency in each band.") {
+                AnalyticsSectionHeader("Full-charge range").padding(.top, AnalyticsStyle.sectionGap)
+                let ranges = bands.map { $0.whPerKm > 0 ? capacity * 1000 / $0.whPerKm : nil }
+                let longest = ranges.compactMap { $0 }.max() ?? 1
+                AnalyticsGroup {
                     ForEach(Array(bands.enumerated()), id: \.element.id) { index, band in
-                        ScreenKit.ValueRow(title: bandLabel(band, withUnit: true), subtitle: "\(band.drives) drive\(band.drives == 1 ? "" : "s")",
-                                           showsDivider: index < bands.count - 1) {
-                            Text(units.formatDistance(band.whPerKm > 0 ? capacity * 1000 / band.whPerKm : nil, fractionDigits: 0))
-                                .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).monospacedDigit()
+                        AnalyticsRow(title: bandLabel(band, withUnit: true), subtitle: "\(band.drives) drive\(band.drives == 1 ? "" : "s")",
+                                     value: units.formatDistance(ranges[index], fractionDigits: 0), showsDivider: index < bands.count - 1) {
+                            let tint = Self.tint(forC: celsius(band.mid))
+                            AnalyticsBar(fraction: ranges[index].map { $0 / longest }, colors: [tint.opacity(0.35), tint], height: 3)
                         }
                     }
                 }
+                AnalyticsFootnote("Estimated from \(VoltaFormat.number(capacity, digits: 1)) kWh usable capacity and your real efficiency in each band.")
+                    .padding(.top, 10)
             }
+        }
+    }
+
+    private func bandChart(_ bands: [Band], best: Band?) -> some View {
+        VStack(spacing: 8) {
+            AnalyticsGlowChart(height: 140) { ghost in
+                Chart(bands) { band in
+                    let tint = Self.tint(forC: celsius(band.mid))
+                    BarMark(x: .value("Temp", bandLabel(band, withUnit: false)),
+                            y: .value("Efficiency", units.efficiencyValue(whPerKm: band.whPerKm)), width: .fixed(8))
+                        .foregroundStyle(LinearGradient(colors: [tint, tint.opacity(ghost ? 0 : 0.18)], startPoint: .top, endPoint: .bottom))
+                        .clipShape(Capsule())
+                        .annotation(position: .top, spacing: 6) {
+                            Text(VoltaFormat.number(units.efficiencyValue(whPerKm: band.whPerKm), digits: 0))
+                                .font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                                .foregroundStyle(ghost ? .clear : band.id == best?.id ? .white : AnalyticsStyle.secondary)
+                        }
+                }
+                .chartStyled(ghost: ghost, showsYAxis: false)
+            }
+            Text("Outside temperature, \(units.temperatureUnit)")
+                .font(.system(size: 10, weight: .medium)).foregroundStyle(AnalyticsStyle.tertiary)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func scatter(_ drives: [DriveSummary]) -> some View {
+        let xDomain = scatterDomain(drives.compactMap { $0.outsideTempAvgC.map(units.temperatureValue(celsius:)) })
+        let yDomain = scatterDomain(drives.map { units.efficiencyValue(whPerKm: ($0.energyUsedKwh ?? 0) * 1000 / $0.distanceKm) })
+        return AnalyticsGlowChart(height: 170, radius: 4) { ghost in
+            Chart(drives) { d in
+                PointMark(x: .value("Temp", units.temperatureValue(celsius: d.outsideTempAvgC ?? 0)),
+                          y: .value("Efficiency", units.efficiencyValue(whPerKm: (d.energyUsedKwh ?? 0) * 1000 / d.distanceKm)))
+                    .foregroundStyle(Self.tint(forC: d.outsideTempAvgC ?? 15).opacity(ghost ? 1 : 0.8))
+                    .symbolSize(min(110, 14 + d.distanceKm * 0.8))
+            }
+            .chartXScale(domain: xDomain)
+            .chartYScale(domain: yDomain)
+            .chartStyled(ghost: ghost)
         }
     }
 
@@ -165,9 +187,9 @@ struct BatteryClimateView: View {
         return map.values.sorted { $0.lower < $1.lower }
     }
 
-    /// Cold → blue, mild → green, hot → amber.
+    /// Cold → blue, mild → mint, hot → amber.
     static func tint(forC c: Double) -> Color {
-        c < 5 ? ScreenKit.blue : c < 25 ? ScreenKit.green : ScreenKit.amber
+        c < 5 ? AnalyticsStyle.blue : c < 25 ? AnalyticsStyle.mint : AnalyticsStyle.amber
     }
 
     private func load() async {
