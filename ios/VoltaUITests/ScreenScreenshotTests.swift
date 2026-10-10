@@ -35,8 +35,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testDrives() throws {
         defer { app.terminate() }
         try launchDemo()
-        try tap("tab.drives")
-        try waitForScreen("drives")
+        try navigate("tab.drives", to: "drives")
         capture("drives")
     }
 
@@ -69,8 +68,7 @@ final class ScreenScreenshotTests: XCTestCase {
     func testDriveDetail() throws {
         defer { app.terminate() }
         try launchDemo()
-        try tap("tab.drives")
-        try waitForScreen("drives")
+        try navigate("tab.drives", to: "drives")
         try tapFirstRow(prefix: "row.drive.")
         try waitForScreen("drive-detail")
         capture("drive-detail")
@@ -124,8 +122,18 @@ final class ScreenScreenshotTests: XCTestCase {
     }
 
     private func openMore() throws {
-        try tap("button.more")
-        try waitForScreen("more")
+        try navigate("button.more", to: "more")
+    }
+
+    /// A cold CI simulator can report a tab hittable before its first synthesized
+    /// tap is delivered. Retry navigation once; the original final screen
+    /// assertion remains mandatory, so a persistent failure still fails the test.
+    private func navigate(_ button: String, to screen: String) throws {
+        try tap(button)
+        if !element("screen.\(screen)").waitForExistence(timeout: 10) {
+            try tap(button)
+        }
+        try waitForScreen(screen)
     }
 
     private func element(_ identifier: String) -> XCUIElement {
