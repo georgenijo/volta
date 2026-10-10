@@ -386,7 +386,7 @@ struct TelemetryMetricChart: View {
         .chartXSelection(value: chartSelection)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                AxisValueLabel(format: .dateTime.hour().minute())
+                AxisValueLabel(format: .voltaClock)
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
             }
         }

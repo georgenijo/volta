@@ -69,9 +69,7 @@ final class DriveInsightsTests: XCTestCase {
         XCTAssertEqual(groups[1].title(now: now, calendar: calendar), "Yesterday")
         XCTAssertNotEqual(groups[2].title(now: now, calendar: calendar), "Yesterday")
         let clock = yesterday.start.historyTime(timeZone: calendar.timeZone)
-        let expected = DateFormatter(); expected.locale = .autoupdatingCurrent
-        expected.timeZone = calendar.timeZone; expected.timeStyle = .short
-        XCTAssertEqual(clock, expected.string(from: yesterday.start))
+        XCTAssertEqual(clock, VoltaFormat.clock(yesterday.start, timeZone: calendar.timeZone))
         XCTAssertNotEqual(clock, yesterday.start.historyTime(timeZone: TimeZone(secondsFromGMT: 0)!))
     }
     func testRoadtripGapsOpenDrivesOverlapAndThreshold() {
@@ -121,6 +119,90 @@ final class DriveInsightsTests: XCTestCase {
         var invalid = point; invalid.longitude = 181
         XCTAssertEqual(DriveRouteSegments.runs([point, invalid, point]).map(\.count), [1, 1])
         XCTAssertTrue(DriveRouteSegments.normalized([invalid], in: size).isEmpty)
+    }
+    func testClockIsTwentyFourHourEvenInTwelveHourLocales() throws {
+        let utc = TimeZone(secondsFromGMT: 0)!
+        let afternoon = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-09T14:05:00Z"))
+        let morning = afternoon.addingTimeInterval(-12 * 3600 - 5 * 60) // 02:00
+        let us = Locale(identifier: "en_US")
+        XCTAssertEqual(VoltaFormat.clock(afternoon, timeZone: utc, locale: us), "14:05")
+        XCTAssertEqual(VoltaFormat.clock(morning, timeZone: utc, locale: us), "02:00")
+        XCTAssertEqual(VoltaFormat.clock(afternoon, timeZone: utc, locale: Locale(identifier: "en_GB")), "14:05")
+        // The joiner between date and time is the OS's ("," or "at"); the clock is fixed.
+        let dayTime = VoltaFormat.dayTime(afternoon, timeZone: utc, locale: us)
+        XCTAssertTrue(dayTime.hasPrefix("Oct 9") && dayTime.hasSuffix("14:05") && !dayTime.contains("2026"), dayTime)
+        let dateTime = VoltaFormat.dateTime(afternoon, timeZone: utc, locale: us)
+        XCTAssertTrue(dateTime.hasPrefix("Oct 9, 2026") && dateTime.hasSuffix("14:05"), dateTime)
+        for text in [VoltaFormat.clock(afternoon, timeZone: utc, locale: us), VoltaFormat.dateTime(afternoon, timeZone: utc, locale: us)] {
+            XCTAssertFalse(text.contains("PM") || text.contains("AM"), text)
+        }
+        XCTAssertEqual(VoltaClockFormat().format(afternoon), VoltaFormat.clock(afternoon))
+    }
+    private func route(_ count: Int, breaks: Set<Int> = []) -> [DriveRoutePoint] {
+        (0..<count).map { i in
+            DriveRoutePoint(t: Date(timeIntervalSince1970: Double(i) * 10), latitude: 37.4 + Double(i) * 0.001,
+                            longitude: -122.1 + Double(i) * 0.001, routeBreakBefore: breaks.contains(i) ? true : nil)
+        }
+    }
+    func testRouteBreakJitterDrawsContinuouslyButRealGapsStay() {
+        // Every point flagged (gap jitter): one continuous run.
+        let jitter = route(20, breaks: Set(0..<20))
+        XCTAssertEqual(DriveRouteSegments.runs(jitter).map(\.count), Array(repeating: 1, count: 20), "raw flags shatter the line")
+        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(jitter)).map(\.count), [20])
+        // Just over half flagged still reads as jitter.
+        let majority = route(11, breaks: Set(1...6))
+        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(majority)).map(\.count), [11])
+        // Exactly half, or a few real gaps, keep their breaks.
+        let half = route(11, breaks: Set(1...5))
+        XCTAssertEqual(DriveRouteSegments.tolerant(half), half)
+        let gaps = route(20, breaks: [7, 14])
+        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(gaps)).map(\.count), [7, 7, 6])
+        // Too short to judge: flags are kept.
+        let short = route(3, breaks: [1, 2])
+        XCTAssertEqual(DriveRouteSegments.tolerant(short), short)
+        // Invalid positions still break even when flags are dropped.
+        var invalid = jitter; invalid[10].latitude = .nan
+        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(invalid)).map(\.count), [10, 9])
+        var d = drive(); d.route = jitter
+        XCTAssertEqual(DriveRouteSegments.runs(d.drawableRoute).count, 1)
+        d.route = nil
+        XCTAssertTrue(d.drawableRoute.isEmpty)
+    }
+    func testCardEfficiencyFallsBackToRecordedEnergy() {
+        var d = drive(km: 32, kwh: 6.4)
+        d.efficiencyWhPerKm = 210
+        XCTAssertEqual(d.displayEfficiencyWhPerKm, 210, "the server value wins")
+        d.efficiencyWhPerKm = nil
+        XCTAssertEqual(try XCTUnwrap(d.displayEfficiencyWhPerKm), 200, accuracy: 1e-9)
+        XCTAssertEqual(UnitPreferences(distance: .miles).formatEfficiency(d.displayEfficiencyWhPerKm), "322 Wh/mi")
+        d.energyUsedKwh = 0
+        XCTAssertNil(d.displayEfficiencyWhPerKm, "an unchanged energy reading over distance is unknown, not 0")
+        d.energyUsedKwh = nil
+        XCTAssertNil(d.displayEfficiencyWhPerKm)
+        var parked = drive(km: 0.05, kwh: 0.1); parked.efficiencyWhPerKm = nil
+        XCTAssertNil(parked.displayEfficiencyWhPerKm, "a few metres would give a meaningless ratio")
+    }
+    func testCardCostUsesDriveRateThenSettingsRate() {
+        var d = drive(km: 31.5, kwh: 6.0)
+        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(d, fallback: 0.22)), 1.32, accuracy: 1e-9)
+        d.electricityRatePerKwh = 0.25; d.rateCurrency = "USD"
+        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(d, fallback: 0.22)), 1.50, accuracy: 1e-9)
+        XCTAssertEqual(VoltaFormat.money(DrivePricing.cost(d, fallback: 0.22), currency: "USD"), "$1.50")
+    }
+    func testHeroTotalsCoverDistanceScoreEnergyEfficiencyAndCost() {
+        var a = drive(1, km: 30, kwh: 6); a.driveScore = 90
+        var b = drive(2, km: 10, kwh: 3); b.driveScore = 50
+        let totals = DriveTotals([a, b])
+        XCTAssertEqual(totals.distanceKm, 40)
+        XCTAssertEqual(totals.drives, 2)
+        XCTAssertEqual(totals.score, 80, "distance-weighted: (90×30 + 50×10) / 40")
+        XCTAssertEqual(totals.energyUsedKwh.value, 9)
+        XCTAssertEqual(try XCTUnwrap(totals.efficiencyWhPerKm), 225, accuracy: 1e-9)
+        XCTAssertTrue(totals.notes.isEmpty)
+        let cost = DrivePricing.total([a, b], fallback: 0.20)
+        XCTAssertEqual(cost.display, "$1.80")
+        XCTAssertNil(cost.note)
+        XCTAssertEqual(DrivePricing.total([], fallback: 0.20).display, "—")
     }
     @MainActor func testRateSettingsPersistenceAndDefault() {
         let defaults = UserDefaults(suiteName: "DriveInsightsTests")!

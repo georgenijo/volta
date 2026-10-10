@@ -69,4 +69,34 @@ enum VoltaFormat {
     static func money(_ amount: Double?, currency: String = "USD") -> String {
         guard let amount else { return "—" }; return amount.formatted(.currency(code: currency))
     }
+    /// Clock time, always 24-hour ("14:05") whatever the locale's 12/24-hour
+    /// default; digits and separator still follow the locale.
+    static func clock(_ date: Date, timeZone: TimeZone = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent) -> String {
+        formatter(template: "HHmm", timeZone: timeZone, locale: locale).string(from: date)
+    }
+    /// Abbreviated date with a 24-hour time, e.g. "Oct 9, 2026, 14:05".
+    static func dateTime(_ date: Date, timeZone: TimeZone = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent) -> String {
+        formatter(template: "yMMMdHHmm", timeZone: timeZone, locale: locale).string(from: date)
+    }
+    /// Month, day and a 24-hour time, e.g. "Oct 9, 14:05".
+    static func dayTime(_ date: Date, timeZone: TimeZone = .autoupdatingCurrent, locale: Locale = .autoupdatingCurrent) -> String {
+        formatter(template: "MMMdHHmm", timeZone: timeZone, locale: locale).string(from: date)
+    }
+    private static func formatter(template: String, timeZone: TimeZone, locale: Locale) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        // An explicit `H` skeleton keeps the 24-hour cycle; `j` would follow the locale.
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter
+    }
+}
+
+/// `VoltaFormat.clock` as a format style, for chart axis labels.
+struct VoltaClockFormat: FormatStyle {
+    func format(_ value: Date) -> String { VoltaFormat.clock(value) }
+}
+
+extension FormatStyle where Self == VoltaClockFormat {
+    static var voltaClock: VoltaClockFormat { VoltaClockFormat() }
 }

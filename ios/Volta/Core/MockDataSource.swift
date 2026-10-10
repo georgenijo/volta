@@ -89,11 +89,33 @@ struct MockDataSource: VoltaDataSource {
             let stride = max(1, Int(ceil(Double(points.count) / 60)))
             return points.enumerated().filter { $0.offset % stride == 0 || $0.offset == points.count - 1 }
                 .map { DriveRoutePoint(t: $0.element.t, latitude: $0.element.latitude, longitude: $0.element.longitude, routeBreakBefore: $0.element.routeBreakBefore) }
-        } ?? (0...24).map { i in
-            let fraction = Double(i) / 24
-            return DriveRoutePoint(t: drive.start.addingTimeInterval(drive.durationMin * 60 * fraction), latitude: 37.4419 + fraction * 0.16, longitude: -122.1430 + fraction * 0.135)
-        }
+        } ?? Self.syntheticRoute(drive).map { DriveRoutePoint(t: $0.t, latitude: $0.latitude, longitude: $0.longitude) }
         return drive
+    }
+    /// Continuous synthetic polyline between two public town centres: street
+    /// legs, a curving arterial, street legs. Waypoints shift with the drive id
+    /// so cards differ. Generated, not a recorded route.
+    static func syntheticRoute(_ drive: DriveSummary, count: Int = 48) -> [(t: Date, latitude: Double, longitude: Double)] {
+        let v = Double(drive.id % 4)
+        let waypoints: [(lat: Double, lon: Double)] = [
+            (37.4419, -122.1430),
+            (37.4372 - 0.003 * v, -122.1372),
+            (37.4290 - 0.004 * v, -122.1170 - 0.006 * (v - 1.5)),
+            (37.4068 + 0.004 * v, -122.1120 + 0.002 * v),
+            (37.3950, -122.0950 - 0.004 * v),
+            (37.3861, -122.0839),
+        ]
+        let legs = zip(waypoints, waypoints.dropFirst()).map { hypot($1.lat - $0.lat, $1.lon - $0.lon) }
+        let total = legs.reduce(0, +)
+        return (0..<count).map { i in
+            let f = Double(i) / Double(count - 1)
+            var along = f * total, leg = 0
+            while leg < legs.count - 1 && along > legs[leg] { along -= legs[leg]; leg += 1 }
+            let a = waypoints[leg], b = waypoints[leg + 1], u = min(along / max(legs[leg], 1e-12), 1)
+            // A gentle bend that vanishes at both ends keeps the endpoints exact.
+            let bend = 0.003 * sin(f * .pi * (5 + v)) * sin(f * .pi)
+            return (drive.start.addingTimeInterval(drive.durationMin * 60 * f), a.lat + (b.lat - a.lat) * u + bend, a.lon + (b.lon - a.lon) * u - bend)
+        }
     }
     private var allCharges: [ChargeSummary] {
         guard !empty else { return [] }
@@ -124,9 +146,10 @@ struct MockDataSource: VoltaDataSource {
     func drive(id: Int) async throws -> DriveDetail {
         guard let drive = allDrives.first(where: { $0.id == id }) else { throw VoltaError.notFound }
         if let fixture = TripFixtures.detail(drive) { return fixture }
-        let path = (0...24).map { i in
-            let fraction = Double(i) / 24
-            return DrivePoint(t: drive.start.addingTimeInterval(drive.durationMin * 60 * fraction), latitude: 37.4419 + fraction * 0.16, longitude: -122.1430 + fraction * 0.135, speedKph: i == 0 || i == 24 ? 0 : 72, powerKw: 12.5, elevationM: 35 + sin(fraction * .pi) * 28, batteryLevel: 80 - Int(fraction * 8))
+        let route = Self.syntheticRoute(drive)
+        let path = route.enumerated().map { i, p in
+            let fraction = Double(i) / Double(route.count - 1)
+            return DrivePoint(t: p.t, latitude: p.latitude, longitude: p.longitude, speedKph: i == 0 || i == route.count - 1 ? 0 : 72, powerKw: 12.5, elevationM: 35 + sin(fraction * .pi) * 28, batteryLevel: 80 - Int(fraction * 8))
         }
         return DriveDetail(summary: drive, path: path, elevationGainM: 86)
     }

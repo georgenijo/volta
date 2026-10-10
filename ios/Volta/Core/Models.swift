@@ -101,7 +101,7 @@ struct TelemetryFreshness: Codable, Hashable, Sendable {
     var recordedAt: [String: Date]
     var label: String {
         if connected { return "Telemetry connected" }
-        return lastSeenAt.map { "Last telemetry as of \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Telemetry disconnected · no observations yet"
+        return lastSeenAt.map { "Last telemetry as of \(VoltaFormat.dateTime($0))" } ?? "Telemetry disconnected · no observations yet"
     }
 }
 

@@ -98,12 +98,6 @@ struct DayGroup<Item: Identifiable & Hashable>: Identifiable, Hashable {
 extension Date {
     var historyTime: String { historyTime(timeZone: .autoupdatingCurrent) }
 
-    func historyTime(timeZone: TimeZone) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = .autoupdatingCurrent
-        formatter.timeZone = timeZone
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        return formatter.string(from: self)
-    }
+    /// 24-hour clock time shared by every history list and detail.
+    func historyTime(timeZone: TimeZone) -> String { VoltaFormat.clock(self, timeZone: timeZone) }
 }

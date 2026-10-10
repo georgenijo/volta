@@ -27,7 +27,7 @@ struct MaintenanceView: View {
                             if let km = data.odometerKm {
                                 BigNumber(VoltaFormat.number(units.distanceValue(km: km), digits: 0), unit: units.distanceUnit, size: 56, weight: .bold)
                                 if let date = data.recordedAt {
-                                    Text("\(data.source == "fleet_telemetry" ? "Telemetry" : "TeslaMate") · \(date.formatted(date: .abbreviated, time: .shortened))")
+                                    Text("\(data.source == "fleet_telemetry" ? "Telemetry" : "TeslaMate") · \(VoltaFormat.dateTime(date))")
                                         .font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                                 }
                             } else {

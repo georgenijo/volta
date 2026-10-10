@@ -64,7 +64,7 @@ extension DriveSummary {
 
     /// Efficiency tint relative to a typical Model Y (~165 Wh/km is average).
     var efficiencyTint: Color {
-        guard let e = efficiencyWhPerKm else { return HistoryTheme.secondary }
+        guard let e = displayEfficiencyWhPerKm else { return HistoryTheme.secondary }
         return e < 140 ? HistoryTheme.green : e < 190 ? HistoryTheme.blue : HistoryTheme.amber
     }
 }
@@ -74,6 +74,7 @@ struct DrivesHistoryView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    @Environment(AppModel.self) private var model: AppModel?
 
     @State private var feed = HistoryFeed<DriveSummary>()
     @State private var range: HistoryRange
@@ -94,7 +95,7 @@ struct DrivesHistoryView: View {
         switch sort {
         case .newest: return items
         case .longest: return items.sorted { $0.distanceKm > $1.distanceKm }
-        case .mostEfficient: return items.sorted { ($0.efficiencyWhPerKm ?? .infinity) < ($1.efficiencyWhPerKm ?? .infinity) }
+        case .mostEfficient: return items.sorted { ($0.displayEfficiencyWhPerKm ?? .infinity) < ($1.displayEfficiencyWhPerKm ?? .infinity) }
         }
     }
 
@@ -213,6 +214,7 @@ struct DrivesHistoryView: View {
         let window = HistoryDayWindow(range: feed.range, oldestLoaded: feed.items.map(\.start).min(), hasMore: feed.hasMore)
         return DrivesHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "drives"),
                           totals: DriveTotals(drives), durationMin: drives.reduce(0) { $0 + $1.durationMin },
+                          cost: DrivePricing.total(drives, fallback: model?.settings.electricityRate ?? 0.20),
                           partial: feed.hasMore, daily: DailyDistance.series(drives, window: window), dailyLabel: window.label)
     }
 
@@ -229,7 +231,7 @@ struct DriveRow: View {
         HistoryCard {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 10) {
-                    DriveRouteThumbnail(points: drive.route ?? []).frame(width: 64, height: 64)
+                    DriveRouteThumbnail(points: drive.drawableRoute).frame(width: 64, height: 64)
                     VStack(alignment: .leading, spacing: 8) {
                         Text(drive.startPlace + " → " + drive.endPlace)
                             .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -247,7 +249,7 @@ struct DriveRow: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 10) {
                             HistoryInlineMetric(systemImage: "clock", text: VoltaFormat.duration(drive.durationMin))
-                            HistoryInlineMetric(systemImage: "leaf.fill", text: units.formatEfficiency(drive.efficiencyWhPerKm))
+                            HistoryInlineMetric(systemImage: "leaf.fill", text: units.formatEfficiency(drive.displayEfficiencyWhPerKm))
                         }
                         HistoryInlineMetric(systemImage: "creditcard", text: DrivePricing.cost(drive, fallback: model?.settings.electricityRate ?? 0.20)
                             .map { VoltaFormat.money($0, currency: DrivePricing.rate(drive, fallback: model?.settings.electricityRate ?? 0.20).currency) + " est." } ?? "Cost unknown")
