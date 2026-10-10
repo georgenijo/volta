@@ -24,9 +24,12 @@ export function efficiencyScore(whPerKm: number | null, ratedWhPerKm: number | n
 export function scoreFromStats(actual: number | null, rated: number | null, jerk: number | null, overspeed: number | null, harsh: number | null = null) {
   const measured=(n:number|null,scale:number)=>n !== null && Number.isFinite(n) && n>=0 ? Math.round(100*Math.exp(-n/scale)) : null;
   const scoreBreakdown={efficiency:efficiencyScore(actual,rated),smoothness:measured(jerk,.8),speed:measured(overspeed,20),acceleration:measured(harsh,.25)};
-  const parts: [number | null,number][]=[[scoreBreakdown.efficiency,.4],[scoreBreakdown.smoothness,.25],[scoreBreakdown.speed,.15],[scoreBreakdown.acceleration,.2]];
+  return {scoreBreakdown,driveScore:combineScore(scoreBreakdown)};
+}
+export function combineScore(b: { efficiency: number | null; smoothness: number | null; speed: number | null; acceleration: number | null }) {
+  const parts: [number | null,number][]=[[b.efficiency,.4],[b.smoothness,.25],[b.speed,.15],[b.acceleration,.2]];
   const known=parts.filter(([n])=>n !== null);
-  return {scoreBreakdown,driveScore:known.length ? Math.round(known.reduce((sum,[n,w])=>sum+n!*w,0)/known.reduce((sum,[,w])=>sum+w,0)) : null};
+  return known.length ? Math.round(known.reduce((sum,[n,w])=>sum+n!*w,0)/known.reduce((sum,[,w])=>sum+w,0)) : null;
 }
 export function driveStyleScore(actual: number | null, rated: number | null, points: Row[] = []) {
   let jerk=0,jerkTime=0,harsh=0,accelTime=0,speed=0,speedTime=0;
