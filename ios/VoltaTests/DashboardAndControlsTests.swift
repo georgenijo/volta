@@ -62,6 +62,15 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
 // MARK: - Dashboard
 
 @MainActor final class DashboardModelTests: XCTestCase {
+    func testEfficiencyCardSaysNoDrivesOnlyForALoadedEmptySummary() {
+        XCTAssertEqual(DashboardView.efficiencyDetail(nil), "Unavailable", "Missing or failed summary is not 'no drives'")
+        var empty = makeSummary(.thirtyDays, km: 0); empty.driveCount = 0; empty.efficiencyWhPerKm = nil
+        XCTAssertEqual(DashboardView.efficiencyDetail(empty), "No drives in 30 days")
+        var unmeasured = makeSummary(.thirtyDays); unmeasured.efficiencyWhPerKm = nil
+        XCTAssertEqual(DashboardView.efficiencyDetail(unmeasured), "Unavailable", "Drives without recorded energy are not 'no drives'")
+        XCTAssertEqual(DashboardView.efficiencyDetail(makeSummary(.thirtyDays)), "30-day average")
+    }
+
     func testOlderOverlappingLoadDoesNotOverwriteNewerData() async {
         let source = StubSource()
         let calls = Counter()

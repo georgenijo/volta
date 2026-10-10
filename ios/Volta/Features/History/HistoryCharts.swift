@@ -361,33 +361,94 @@ struct HistoryHeroNotes: View {
     }
 }
 
-/// One day in a fourteen-day strip.
+/// The calendar days a day strip can honestly show: whole days inside the
+/// requested range, inside what the loaded pages cover, at most `limit` of
+/// them. Days outside are omitted, never drawn as zero.
+struct HistoryDayWindow: Equatable {
+    /// Local day starts, oldest first.
+    var days: [Date]
+    /// The last day shown is today (so it can be lit).
+    var endsToday: Bool
+    /// Names exactly the days shown, e.g. "Last 7 days" or "Mar 7 – Mar 20".
+    var label: String
+
+    /// A strip needs at least two days to read as a rhythm.
+    var isDrawable: Bool { days.count >= 2 }
+
+    /// - Parameters:
+    ///   - range: The query the rows were loaded with.
+    ///   - oldestLoaded: Start of the oldest loaded row.
+    ///   - hasMore: A cursor remains, so older rows (including more on the
+    ///     oldest loaded row's day) are not loaded yet.
+    init(range: DateRange, oldestLoaded: Date?, hasMore: Bool, limit: Int = 14,
+         now: Date = .now, calendar: Calendar = .current) {
+        let today = calendar.startOfDay(for: now)
+        func nextDay(_ day: Date) -> Date { calendar.date(byAdding: .day, value: 1, to: day) ?? day }
+        // `to` is exclusive; the last whole day ends just before it.
+        let last = range.to.map { min(today, calendar.startOfDay(for: $0.addingTimeInterval(-1))) } ?? today
+        var first = calendar.date(byAdding: .day, value: -(max(limit, 1) - 1), to: last) ?? last
+        if let from = range.from {
+            // A day the range starts partway through is only partly queried.
+            let day = calendar.startOfDay(for: from)
+            first = max(first, day == from ? day : nextDay(day))
+        }
+        if hasMore {
+            // Unloaded pages hold older rows, and may hold more of the oldest loaded day.
+            first = max(first, oldestLoaded.map { nextDay(calendar.startOfDay(for: $0)) } ?? nextDay(last))
+        }
+        var days: [Date] = []
+        var day = first
+        while day <= last {
+            days.append(day)
+            let next = nextDay(day)
+            guard next > day else { break }
+            day = next
+        }
+        self.days = days
+        endsToday = days.last == today
+        if endsToday {
+            label = days.count == 1 ? "Today" : "Last \(days.count) days"
+        } else if let start = days.first, let end = days.last {
+            var style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+            style.calendar = calendar
+            style.timeZone = calendar.timeZone
+            label = start == end ? start.formatted(style) : "\(start.formatted(style)) – \(end.formatted(style))"
+        } else {
+            label = ""
+        }
+    }
+}
+
+/// One day in a day strip.
 struct HistoryRhythmDay: Hashable {
     var day: Date
     var value: Double
     /// Draw this bar in the accent color (e.g. a DC fast day).
     var accent = false
+    /// Today, drawn lit.
+    var isToday = false
 
+    /// One entry per day in `window`, oldest first; nothing outside it.
     static func series<T>(_ items: [T], date: (T) -> Date, value: (T) -> Double, accent: (T) -> Bool = { _ in false },
-                          days: Int = 14, now: Date = .now, calendar: Calendar = .current) -> [HistoryRhythmDay] {
-        let today = calendar.startOfDay(for: now)
+                          window: HistoryDayWindow, calendar: Calendar = .current) -> [HistoryRhythmDay] {
         let groups = Dictionary(grouping: items, by: { calendar.startOfDay(for: date($0)) })
-        return (0..<days).reversed().compactMap { offset in
-            calendar.date(byAdding: .day, value: -offset, to: today).map { day in
-                let group = groups[day] ?? []
-                return HistoryRhythmDay(day: day, value: group.reduce(0) { $0 + max(0, value($1)) }, accent: group.contains(where: accent))
-            }
+        return window.days.map { day in
+            let group = groups[day] ?? []
+            return HistoryRhythmDay(day: day, value: group.reduce(0) { $0 + max(0, value($1)) }, accent: group.contains(where: accent),
+                                    isToday: window.endsToday && day == window.days.last)
         }
     }
 }
 
-/// Fourteen thin capsule bars; today is lit, accent days carry a tint.
+/// Thin capsule bars, one per day in a `HistoryDayWindow`; today is lit,
+/// accent days carry a tint.
 struct HistoryRhythmStrip: View {
     var days: [HistoryRhythmDay]
     var tint: Color
     var accent: Color
     var lit: [Color]
-    var leading: String = "Last 14 days"
+    /// The window's label, so the caption names the days actually drawn.
+    var leading: String
     var trailing: String
     var legend: [(String, Color)] = []
     var accessibilityLabel: String
@@ -397,7 +458,7 @@ struct HistoryRhythmStrip: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 0) {
                 ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    let isToday = index == days.count - 1
+                    let isToday = day.isToday
                     let color = day.accent ? accent : tint
                     if index > 0 { Spacer(minLength: 2) }
                     Capsule()

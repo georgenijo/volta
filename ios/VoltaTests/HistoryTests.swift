@@ -567,3 +567,108 @@ final class HistoryRound2Tests: XCTestCase {
         XCTAssertEqual(noRegen?.kwh, 0, "measured with no regen is a real 0")
     }
 }
+
+/// Day strips (Drives, Charging, Idles) show only days the query and the
+/// loaded pages actually cover, labeled by what is shown.
+final class HistoryDayWindowTests: XCTestCase {
+    private var calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        calendar.locale = Locale(identifier: "en_US_POSIX")
+        return calendar
+    }()
+    /// Oct 10 2026, 14:00 local.
+    private var now: Date { calendar.date(from: DateComponents(year: 2026, month: 10, day: 10, hour: 14))! }
+    private func day(_ offset: Int, hour: Int = 0) -> Date {
+        calendar.date(byAdding: DateComponents(day: offset, hour: hour), to: calendar.startOfDay(for: now))!
+    }
+    private func window(_ range: HistoryRange, oldest: Date? = nil, hasMore: Bool = false) -> HistoryDayWindow {
+        HistoryDayWindow(range: range.dateRange(now: now, calendar: calendar), oldestLoaded: oldest, hasMore: hasMore,
+                         now: now, calendar: calendar)
+    }
+    private func drive(_ id: Int, start: Date, km: Double, score: Int? = nil) -> DriveSummary {
+        var drive = DriveSummary(id: id, start: start, end: nil, startAddress: nil, endAddress: nil,
+                                 distanceKm: km, durationMin: 10, startBatteryLevel: nil, endBatteryLevel: nil,
+                                 energyUsedKwh: nil, efficiencyWhPerKm: nil, maxSpeedKph: nil, avgSpeedKph: nil, outsideTempAvgC: nil)
+        drive.driveScore = score
+        return drive
+    }
+
+    func testTodayScopeIsOneDayAndNotDrawable() {
+        let today = window(.today)
+        XCTAssertEqual(today.days, [day(0)])
+        XCTAssertEqual(today.label, "Today")
+        XCTAssertFalse(today.isDrawable, "A single day must not render as a strip of fake zero days")
+        let series = DailyDistance.series([drive(1, start: day(0, hour: 9), km: 12)], window: today, calendar: calendar)
+        XCTAssertEqual(series.map(\.km), [12])
+        XCTAssertEqual(series.map(\.isToday), [true])
+    }
+
+    func testRangeShorterThanLimitIsLabeledByItsLength() {
+        // 7D starts partway through Oct 3; only whole days Oct 4…10 are shown.
+        let week = window(.sevenDays)
+        XCTAssertEqual(week.days, (-6...0).map { day($0) })
+        XCTAssertEqual(week.label, "Last 7 days")
+        XCTAssertTrue(week.endsToday)
+        let month = window(.thirtyDays)
+        XCTAssertEqual(month.days.count, 14)
+        XCTAssertEqual(month.days.first, day(-13))
+        XCTAssertEqual(month.label, "Last 14 days")
+    }
+
+    func testUnloadedPagesAreOmittedNotZero() {
+        // Oldest loaded drive is 3 days ago; its day may continue on the next page.
+        let partial = window(.thirtyDays, oldest: day(-3, hour: 10), hasMore: true)
+        XCTAssertEqual(partial.days, [day(-2), day(-1), day(0)])
+        XCTAssertEqual(partial.label, "Last 3 days")
+        XCTAssertTrue(window(.thirtyDays, oldest: nil, hasMore: true).days.isEmpty)
+        // Without a cursor every day in range is covered; empty days are real zeros.
+        let complete = window(.thirtyDays, oldest: day(-3, hour: 10), hasMore: false)
+        XCTAssertEqual(complete.days.count, 14)
+        let series = DailyDistance.series([drive(1, start: day(-1, hour: 8), km: 20), drive(2, start: day(-20), km: 99)],
+                                          window: complete, calendar: calendar)
+        XCTAssertEqual(series.count, 14)
+        XCTAssertEqual(series.map(\.km).reduce(0, +), 20, "A drive outside the window is not counted")
+        XCTAssertEqual(series[12].km, 20)
+        XCTAssertEqual(series.filter(\.isToday).map(\.day), [day(0)])
+    }
+
+    func testPastCustomRangeEndsAtItsLastDayAndIsNotLit() {
+        // Mar 1–20 2026 spans the DST change on Mar 8.
+        let from = calendar.date(from: DateComponents(year: 2026, month: 3, day: 1))!
+        let to = calendar.date(from: DateComponents(year: 2026, month: 3, day: 20, hour: 12))!
+        let custom = window(.custom(from: from, to: to))
+        XCTAssertEqual(custom.days.count, 14)
+        XCTAssertEqual(custom.days.first, calendar.date(from: DateComponents(year: 2026, month: 3, day: 7)))
+        XCTAssertEqual(custom.days.last, calendar.date(from: DateComponents(year: 2026, month: 3, day: 20)))
+        XCTAssertEqual(Set(custom.days).count, 14)
+        XCTAssertTrue(custom.days.allSatisfy { calendar.startOfDay(for: $0) == $0 })
+        XCTAssertFalse(custom.endsToday)
+        XCTAssertFalse(custom.label.hasPrefix("Last"))
+        XCTAssertTrue(custom.label.contains("–"))
+        let rhythm = HistoryRhythmDay.series([drive(1, start: to, km: 5)], date: \.start, value: \.distanceKm,
+                                             window: custom, calendar: calendar)
+        XCTAssertEqual(rhythm.last?.value, 5)
+        XCTAssertFalse(rhythm.contains(where: \.isToday))
+    }
+
+    @MainActor func testHeroTotalsFollowTheActiveFilter() {
+        let drives = [drive(1, start: day(0, hour: 9), km: 5), drive(2, start: day(0, hour: 11), km: 120), drive(3, start: day(-1), km: 40)]
+        let long = DrivesHistoryView.visible(drives, filter: .long, query: "", sort: .newest)
+        let totals = DriveTotals(long)
+        XCTAssertEqual(totals.drives, 1)
+        XCTAssertEqual(totals.distanceKm, 120)
+        let window = HistoryDayWindow(range: DateRange(from: nil, to: nil), oldestLoaded: day(-1), hasMore: false, now: now, calendar: calendar)
+        XCTAssertEqual(DailyDistance.series(long, window: window, calendar: calendar).map(\.km).reduce(0, +), 120)
+    }
+
+    func testDriveNotesDiscloseScoreAndEnergyCoverage() {
+        let mixed = DriveTotals([drive(1, start: now, km: 10, score: 90), drive(2, start: now, km: 30, score: 70), drive(3, start: now, km: 20)])
+        XCTAssertEqual(mixed.notes, ["Score from 2 of 3 drives, weighted by distance"])
+        XCTAssertTrue(DriveTotals([drive(1, start: now, km: 10, score: 90)]).notes.isEmpty)
+        XCTAssertTrue(DriveTotals([drive(1, start: now, km: 10)]).notes.isEmpty, "No score at all is shown as an empty dial, not a coverage note")
+        var measured = drive(4, start: now, km: 10, score: 80); measured.energyUsedKwh = 2
+        XCTAssertEqual(DriveTotals([measured, drive(5, start: now, km: 10)]).notes,
+                       ["Score from 1 of 2 drives, weighted by distance", "Efficiency from the 1 of 2 drives with recorded energy"])
+    }
+}

@@ -191,7 +191,8 @@ struct ChargingHistoryView: View {
 
     private var totals: some View {
         ChargingHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
-                     charges: visible, partial: feed.hasMore)
+                     charges: visible, partial: feed.hasMore,
+                     window: HistoryDayWindow(range: feed.range, oldestLoaded: feed.items.map(\.start).min(), hasMore: feed.hasMore))
     }
 
     private func dayTrailing(_ items: [ChargeSummary]) -> String {
@@ -248,6 +249,8 @@ struct ChargingHero: View {
     var scope: String
     var charges: [ChargeSummary]
     var partial: Bool
+    /// Days the rhythm strip may show.
+    var window: HistoryDayWindow
     @Environment(\.units) private var units
 
     var body: some View {
@@ -275,14 +278,14 @@ struct ChargingHero: View {
                 ])
                 HistoryHeroNotes(notes: totals.notes)
             }
-            let days = HistoryRhythmDay.series(charges, date: \.start, value: { $0.energyAddedKwh ?? 0 }, accent: \.fastCharger)
-            if days.contains(where: { $0.value > 0 }) {
+            let days = HistoryRhythmDay.series(charges, date: \.start, value: { $0.energyAddedKwh ?? 0 }, accent: \.fastCharger, window: window)
+            if window.isDrawable, days.contains(where: { $0.value > 0 }) {
                 let charged = days.filter { $0.value > 0 }
                 HistoryRhythmStrip(days: days, tint: HistoryTheme.mint, accent: HistoryTheme.blue,
-                                   lit: [HistoryTheme.mint, HistoryTheme.blue],
+                                   lit: [HistoryTheme.mint, HistoryTheme.blue], leading: window.label,
                                    trailing: "\(VoltaFormat.energy(charged.reduce(0) { $0 + $1.value } / Double(max(charged.count, 1)))) per charge day",
                                    legend: days.contains(where: \.accent) ? [("AC", HistoryTheme.mint), ("DC", HistoryTheme.blue)] : [],
-                                   accessibilityLabel: "Energy added per day, last 14 days")
+                                   accessibilityLabel: "Energy added per day, \(window.label)")
             }
         }
     }

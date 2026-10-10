@@ -36,7 +36,7 @@ private struct VoltaRootView: View {
                     if model.isLoadingVehicles || !model.hasLoadedVehicles {
                         ProgressView("Loading vehicles…").tint(Color.voltaTextSecondary).foregroundStyle(Color.voltaTextSecondary)
                     } else {
-                        TeslaSignInPanel(note: model.errorMessage ?? "No vehicles yet · waiting for your server to record one.")
+                        TeslaSignInPanel(note: "No vehicles yet · waiting for your server to record one.", error: model.errorMessage)
                         HStack(spacing: 18) {
                             PillButton("Retry", systemImage: "arrow.clockwise") { Task { await model.loadVehicles() } }
                             Button(model.isLaunchDemo ? "Exit launch demo" : "Disconnect") { model.unpair() }

@@ -162,16 +162,28 @@ struct StatsView: View {
                                     .clipShape(Capsule())
                             }
                         }
-                        ForEach(buckets.filter { $0.energyUsedKwh != nil }) { b in
-                            if !ghost {
-                                AreaMark(x: .value("Date", b.start, unit: period.bucket), y: .value("kWh", b.energyUsedKwh ?? 0))
-                                    .foregroundStyle(LinearGradient(colors: [AnalyticsStyle.mint.opacity(0.14), AnalyticsStyle.mint.opacity(0)], startPoint: .top, endPoint: .bottom))
-                                    .interpolationMethod(.monotone)
+                        // One series per run of measured buckets, so the line never
+                        // bridges a bucket with no energy recorded; a lone value is a dot.
+                        ForEach(Array(Self.energyUsedRuns(buckets).enumerated()), id: \.offset) { index, run in
+                            if run.count == 1, let b = run.first, let used = b.energyUsedKwh {
+                                PointMark(x: .value("Date", b.start, unit: period.bucket), y: .value("kWh", used))
+                                    .foregroundStyle(AnalyticsStyle.mint)
+                                    .symbolSize(ghost ? 70 : 22)
+                            } else {
+                                ForEach(run) { b in
+                                    if !ghost {
+                                        AreaMark(x: .value("Date", b.start, unit: period.bucket), y: .value("kWh", b.energyUsedKwh ?? 0),
+                                                 series: .value("Run", index), stacking: .unstacked)
+                                            .foregroundStyle(LinearGradient(colors: [AnalyticsStyle.mint.opacity(0.14), AnalyticsStyle.mint.opacity(0)], startPoint: .top, endPoint: .bottom))
+                                            .interpolationMethod(.monotone)
+                                    }
+                                    LineMark(x: .value("Date", b.start, unit: period.bucket), y: .value("kWh", b.energyUsedKwh ?? 0),
+                                             series: .value("Run", index))
+                                        .foregroundStyle(AnalyticsStyle.mint)
+                                        .lineStyle(StrokeStyle(lineWidth: ghost ? 4 : 1.8, lineCap: .round, lineJoin: .round))
+                                        .interpolationMethod(.monotone)
+                                }
                             }
-                            LineMark(x: .value("Date", b.start, unit: period.bucket), y: .value("kWh", b.energyUsedKwh ?? 0))
-                                .foregroundStyle(AnalyticsStyle.mint)
-                                .lineStyle(StrokeStyle(lineWidth: ghost ? 4 : 1.8, lineCap: .round, lineJoin: .round))
-                                .interpolationMethod(.monotone)
                         }
                     }
                     .chartStyled(ghost: ghost)
@@ -233,6 +245,24 @@ struct StatsView: View {
         guard let perKm = totals.costPerKm, perKm.amount > 0 else { return nil }
         let per = perKm.amount / units.distanceValue(km: 1) * 100
         return "\(VoltaFormat.money(per, currency: perKm.currency)) / 100 \(units.distanceUnit)"
+    }
+
+    /// Maximal runs of consecutive buckets that recorded energy used, in
+    /// order. A bucket with nothing measured ends a run, so no line or area
+    /// is drawn across it. Expects every bucket in the period, sorted.
+    static func energyUsedRuns(_ buckets: [Bucket]) -> [[Bucket]] {
+        var runs: [[Bucket]] = []
+        var current: [Bucket] = []
+        for bucket in buckets {
+            if bucket.energyUsedKwh != nil {
+                current.append(bucket)
+            } else if !current.isEmpty {
+                runs.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { runs.append(current) }
+        return runs
     }
 
     private func buckets(_ s: Snapshot, costCurrency: String?) -> [Bucket] {

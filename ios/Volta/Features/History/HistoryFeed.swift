@@ -44,7 +44,7 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     /// Bumped by every reload and page request; invalidates in-flight pages.
     private var pageGeneration = 0
     /// Query that produced `items` and `nextCursor`.
-    private var range = DateRange(from: nil, to: nil)
+    private(set) var range = DateRange(from: nil, to: nil)
     private var fetch: Fetch?
 
     var hasMore: Bool { nextCursor != nil }

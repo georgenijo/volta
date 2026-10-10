@@ -114,10 +114,17 @@ struct DriveTotals: Equatable {
         efficiencyWhPerKm = km > 0 ? kwh * 1000 / km : nil
     }
 
+    /// Coverage disclosures for the score and efficiency, shown whether or
+    /// not more pages remain.
     var notes: [String] {
-        energyUsedKwh.isPartial
-            ? ["Efficiency from the \(energyUsedKwh.known) of \(drives) drives with recorded energy"]
-            : []
+        var notes: [String] = []
+        if scoredDrives > 0 && scoredDrives < drives {
+            notes.append("Score from \(scoredDrives) of \(drives) drives, weighted by distance")
+        }
+        if energyUsedKwh.isPartial {
+            notes.append("Efficiency from the \(energyUsedKwh.known) of \(drives) drives with recorded energy")
+        }
+        return notes
     }
 }
 

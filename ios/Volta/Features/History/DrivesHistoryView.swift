@@ -86,8 +86,11 @@ struct DrivesHistoryView: View {
         _range = State(initialValue: range)
     }
 
-    private var visible: [DriveSummary] {
-        let items = feed.items.filter { filter.matches($0) && $0.matches(query: query) }
+    private var visible: [DriveSummary] { Self.visible(feed.items, filter: filter, query: query, sort: sort) }
+
+    /// The rows the list shows, and the set the hero totals: filter and search applied.
+    static func visible(_ items: [DriveSummary], filter: DriveFilter, query: String, sort: DriveSort) -> [DriveSummary] {
+        let items = items.filter { filter.matches($0) && $0.matches(query: query) }
         switch sort {
         case .newest: return items
         case .longest: return items.sorted { $0.distanceKm > $1.distanceKm }
@@ -202,10 +205,15 @@ struct DrivesHistoryView: View {
         }
     }
 
+    /// Totals follow the active filter and search, like the list below them.
     private var hero: some View {
-        DrivesHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "drives"),
-                   totals: DriveTotals(feed.items), durationMin: feed.items.reduce(0) { $0 + $1.durationMin },
-                   partial: feed.hasMore, daily: DailyDistance.series(feed.items))
+        let drives = visible
+        // Coverage comes from everything loaded, not the filtered subset: a day
+        // with no matching drives inside loaded pages is a real zero.
+        let window = HistoryDayWindow(range: feed.range, oldestLoaded: feed.items.map(\.start).min(), hasMore: feed.hasMore)
+        return DrivesHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "drives"),
+                          totals: DriveTotals(drives), durationMin: drives.reduce(0) { $0 + $1.durationMin },
+                          partial: feed.hasMore, daily: DailyDistance.series(drives, window: window), dailyLabel: window.label)
     }
 
 }

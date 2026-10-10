@@ -72,6 +72,16 @@ private final class FakeTeslaClient: TeslaAccountClient, Sendable {
 }
 
 @MainActor final class TeslaLinkModelTests: XCTestCase {
+    func testSignInPanelShowsVehicleLoadingErrorInEveryState() {
+        let note = "No vehicles yet", error = "Server unreachable"
+        XCTAssertEqual(TeslaSignInPanel.caption(state: .connected, note: note, error: error), error)
+        XCTAssertNil(TeslaSignInPanel.caption(state: .connected, note: note, error: nil), "Connected copy already says it is waiting")
+        for state: TeslaLinkModel.State in [.notAvailable, .disconnected, .needsReauth, .failed(message: "x", retryable: true)] {
+            XCTAssertEqual(TeslaSignInPanel.caption(state: state, note: note, error: error), error)
+            XCTAssertEqual(TeslaSignInPanel.caption(state: state, note: note, error: nil), note)
+        }
+    }
+
     private func makeModel(_ client: FakeTeslaClient, web: FakeWebAuth = FakeWebAuth()) async -> TeslaLinkModel {
         let model = TeslaLinkModel(webAuth: web, retryDelays: [.zero, .zero, .zero])
         model.setClient(client)

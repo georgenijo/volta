@@ -222,7 +222,8 @@ struct IdlesHistoryView: View {
 
     private var totals: some View {
         IdlesHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
-                  idles: visible, partial: feed.hasMore)
+                  idles: visible, partial: feed.hasMore,
+                  window: HistoryDayWindow(range: feed.range, oldestLoaded: feed.items.map(\.start).min(), hasMore: feed.hasMore))
     }
 
     private var mapView: some View {
@@ -272,6 +273,8 @@ struct IdlesHero: View {
     var scope: String
     var idles: [IdleSummary]
     var partial: Bool
+    /// Days the rhythm strip may show.
+    var window: HistoryDayWindow
     @Environment(\.units) private var units
 
     var body: some View {
@@ -301,13 +304,13 @@ struct IdlesHero: View {
                 ])
                 HistoryHeroNotes(notes: totals.notes)
             }
-            let days = HistoryRhythmDay.series(idles, date: \.start, value: { Double($0.drain ?? 0) }, accent: { ($0.drainPerDay ?? 0) > 3 })
-            if days.contains(where: { $0.value > 0 }) {
+            let days = HistoryRhythmDay.series(idles, date: \.start, value: { Double($0.drain ?? 0) }, accent: { ($0.drainPerDay ?? 0) > 3 }, window: window)
+            if window.isDrawable, days.contains(where: { $0.value > 0 }) {
                 let drained = days.filter { $0.value > 0 }
                 HistoryRhythmStrip(days: days, tint: .white, accent: HistoryTheme.amber,
-                                   lit: [HistoryTheme.blue, HistoryTheme.purple],
-                                   trailing: "\(VoltaFormat.number(drained.reduce(0) { $0 + $1.value }, digits: 0))% drained in 14 days",
-                                   accessibilityLabel: "Battery drained while parked per day, last 14 days")
+                                   lit: [HistoryTheme.blue, HistoryTheme.purple], leading: window.label,
+                                   trailing: "\(VoltaFormat.number(drained.reduce(0) { $0 + $1.value }, digits: 0))% drained",
+                                   accessibilityLabel: "Battery drained while parked per day, \(window.label)")
             }
         }
     }

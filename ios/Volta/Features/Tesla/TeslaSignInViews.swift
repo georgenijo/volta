@@ -33,12 +33,22 @@ private struct TeslaSignInButton: View {
 /// Presented as a quiet lit hero: a glowing emblem, a short title, the
 /// luminous sign-in button, and the scope disclosure.
 struct TeslaSignInPanel: View {
-    /// One quiet secondary line about why there's no vehicle yet (e.g. the server's error).
+    /// One quiet secondary line about why there's no vehicle yet.
     var note: String? = nil
+    /// The latest vehicle-loading error; shown in every state, connected included.
+    var error: String? = nil
     @Environment(AppModel.self) private var model
+
+    /// The panel's secondary line. An error always shows and replaces the
+    /// note; once connected the note is dropped because the panel already
+    /// says the collector is discovering the vehicle.
+    static func caption(state: TeslaLinkModel.State, note: String?, error: String?) -> String? {
+        state == .connected ? error : error ?? note
+    }
 
     var body: some View {
         let tesla = model.tesla
+        let caption = Self.caption(state: tesla.state, note: note, error: error)
         VStack(spacing: 16) {
             switch tesla.state {
             case .idle, .loading:
@@ -47,7 +57,7 @@ struct TeslaSignInPanel: View {
                 emblem(tint: .voltaTextTertiary, symbol: "car.side")
                 Text("Sign in with Tesla isn't set up on your server yet.")
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
-                noteLine
+                noteLine(caption)
             case .connected:
                 emblem(tint: .voltaMint, symbol: "checkmark")
                 ProgressView().tint(Color.voltaMint)
@@ -55,6 +65,9 @@ struct TeslaSignInPanel: View {
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
                 if tesla.status?.budget?.paused == true {
                     InlineBanner(systemImage: "pause.circle", message: "Data collection is paused: this month's Tesla API budget is used up.")
+                }
+                if let caption {
+                    InlineBanner(systemImage: "exclamationmark.triangle", message: caption)
                 }
             default:
                 emblem(tint: .voltaBlue, symbol: "car.side")
@@ -66,7 +79,7 @@ struct TeslaSignInPanel: View {
                     Text("Connect your Tesla")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(Color.voltaTextPrimary)
-                    noteLine
+                    noteLine(caption)
                         .padding(.top, 2)
                 }
                 if let message = tesla.failureMessage {
@@ -93,9 +106,9 @@ struct TeslaSignInPanel: View {
         .task { await model.refreshTesla() }
     }
 
-    @ViewBuilder private var noteLine: some View {
-        if let note {
-            Text(note)
+    @ViewBuilder private func noteLine(_ text: String?) -> some View {
+        if let text {
+            Text(text)
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

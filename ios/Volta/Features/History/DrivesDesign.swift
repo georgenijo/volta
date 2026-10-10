@@ -124,7 +124,9 @@ struct DrivesHero: View {
     var totals: DriveTotals
     var durationMin: Double
     var partial: Bool
+    /// One entry per day of `dailyLabel`'s window; empty when no window fits.
     var daily: [DailyDistance]
+    var dailyLabel: String
     @Environment(\.units) private var units
 
     var body: some View {
@@ -145,16 +147,20 @@ struct DrivesHero: View {
             }
             .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader).accessibilityIdentifier("screen.drives")
 
-            HStack(spacing: 0) {
-                stat(VoltaFormat.duration(durationMin), "Driving", index: 0)
-                divider
-                stat("\(totals.drives)\(partial ? "+" : "")", totals.drives == 1 && !partial ? "Drive" : "Drives", index: 1)
-                divider
-                stat(totals.energyUsedKwh.value.map { VoltaFormat.number($0) } ?? "—", "kWh", index: 2)
-                divider
-                stat(totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit, index: 3)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 0) {
+                    stat(VoltaFormat.duration(durationMin), "Driving", index: 0)
+                    divider
+                    stat("\(totals.drives)\(partial ? "+" : "")", totals.drives == 1 && !partial ? "Drive" : "Drives", index: 1)
+                    divider
+                    stat(totals.energyUsedKwh.value.map { VoltaFormat.number($0) } ?? "—", "kWh", index: 2)
+                    divider
+                    stat(totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit, index: 3)
+                }
+                // Coverage disclosures hold whether or not more pages remain.
+                HistoryHeroNotes(notes: totals.notes)
             }
-            if daily.contains(where: { $0.km > 0 }) { DailyRhythm(days: daily) }
+            if daily.count >= 2, daily.contains(where: { $0.km > 0 }) { DailyRhythm(days: daily, label: dailyLabel) }
         }
     }
 
@@ -175,20 +181,22 @@ struct DrivesHero: View {
 struct DailyDistance: Hashable {
     var day: Date
     var km: Double
+    /// Today, drawn lit.
+    var isToday = false
 
-    /// The last `days` calendar days ending today, zero-filled.
-    static func series(_ drives: [DriveSummary], days: Int = 14, now: Date = .now, calendar: Calendar = .current) -> [DailyDistance] {
-        let today = calendar.startOfDay(for: now)
-        let totals = Dictionary(grouping: drives, by: { calendar.startOfDay(for: $0.start) }).mapValues { $0.reduce(0) { $0 + $1.distanceKm } }
-        return (0..<days).reversed().compactMap { offset in
-            calendar.date(byAdding: .day, value: -offset, to: today).map { DailyDistance(day: $0, km: totals[$0] ?? 0) }
-        }
+    /// One entry per day in `window`, oldest first. A day inside the window
+    /// with no drives is a real zero; days outside it are not returned.
+    static func series(_ drives: [DriveSummary], window: HistoryDayWindow, calendar: Calendar = .current) -> [DailyDistance] {
+        HistoryRhythmDay.series(drives, date: \.start, value: \.distanceKm, window: window, calendar: calendar)
+            .map { DailyDistance(day: $0.day, km: $0.value, isToday: $0.isToday) }
     }
 }
 
-/// Fourteen-day bar strip; today is lit.
+/// Day bar strip over a `HistoryDayWindow`; today is lit.
 struct DailyRhythm: View {
     var days: [DailyDistance]
+    /// The window's label, e.g. "Last 7 days".
+    var label: String
     @Environment(\.units) private var units
 
     var body: some View {
@@ -197,7 +205,7 @@ struct DailyRhythm: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 0) {
                 ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    let isToday = index == days.count - 1
+                    let isToday = day.isToday
                     if index > 0 { Spacer(minLength: 2) }
                     Capsule()
                         .fill(day.km == 0 ? AnyShapeStyle(.white.opacity(0.1))
@@ -211,14 +219,14 @@ struct DailyRhythm: View {
             }
             .frame(height: 34, alignment: .bottom)
             HStack {
-                Text("Last 14 days")
+                Text(label)
                 Spacer()
                 Text("\(units.formatDistance(driven.reduce(0) { $0 + $1.km } / Double(max(driven.count, 1)))) per driving day")
             }
             .font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Distance per day, last 14 days")
+        .accessibilityLabel("Distance per day, \(label)")
     }
 }
 

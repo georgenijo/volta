@@ -405,8 +405,16 @@ struct DashboardView: View {
         let fraction = eff.map { ($0 - 100) / 150 }
         return DashboardMetricCard(
             systemImage: "leaf", title: "30D Eff", value: value, unit: units.efficiencyUnit,
-            detail: eff == nil ? "No drives in 30 days" : "30-day average",
+            detail: Self.efficiencyDetail(model.summaries[.thirtyDays]),
             gauge: ThinGauge(value: fraction, colors: [.voltaMint, .voltaMint, .voltaAmber, .voltaRed]))
+    }
+
+    /// "No drives" only when the 30-day summary loaded and counted none; a
+    /// missing or failed summary, or drives without recorded energy, is unavailable.
+    static func efficiencyDetail(_ summary: ActivitySummary?) -> String {
+        guard let summary else { return "Unavailable" }
+        if summary.efficiencyWhPerKm != nil { return "30-day average" }
+        return summary.driveCount == 0 ? "No drives in 30 days" : "Unavailable"
     }
 
     private func climateCard(_ status: VehicleStatus) -> some View {

@@ -221,4 +221,20 @@ final class AnalyticsMathTests: XCTestCase {
         XCTAssertFalse(ExportCleanup.shouldSweep(isActiveTab: true, scenePhase: .inactive, isSharing: true))
         XCTAssertFalse(ExportCleanup.shouldSweep(isActiveTab: true, scenePhase: .inactive, isSharing: false))
     }
+
+    // The energy line is split at buckets with nothing measured, so it never
+    // draws interpolated values across a gap; lone values become point runs.
+    @MainActor func testEnergyUsedRunsSplitAtMissingBuckets() {
+        let used: [Double?] = [nil, 4, 6, nil, nil, 3, nil, 2, 5, 1]
+        let buckets = used.enumerated().map { index, kwh in
+            StatsView.Bucket(start: t0.addingTimeInterval(Double(index) * 86_400), energyUsedKwh: kwh)
+        }
+        let runs = StatsView.energyUsedRuns(buckets)
+        XCTAssertEqual(runs.map { $0.map(\.energyUsedKwh) }, [[4, 6], [3], [2, 5, 1]])
+        XCTAssertEqual(runs.flatMap { $0 }.count, used.compactMap { $0 }.count, "Every measured bucket is drawn, no missing one is")
+        XCTAssertTrue(StatsView.energyUsedRuns(buckets.map { var b = $0; b.energyUsedKwh = nil; return b }).isEmpty)
+        // A measured zero is a real value and stays in its run.
+        XCTAssertEqual(StatsView.energyUsedRuns([StatsView.Bucket(start: t0, energyUsedKwh: 0),
+                                                 StatsView.Bucket(start: t0.addingTimeInterval(86_400), energyUsedKwh: 2)]).map(\.count), [2])
+    }
 }
