@@ -74,31 +74,36 @@ struct DayGroup<Item: Identifiable & Hashable>: Identifiable, Hashable {
     var items: [Item]
     var id: Date { day }
 
-    var title: String {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(day) { return "Today" }
-        if calendar.isDateInYesterday(day) { return "Yesterday" }
-        let sameYear = calendar.isDate(day, equalTo: .now, toGranularity: .year)
-        return sameYear
-            ? day.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
-            : day.formatted(.dateTime.month(.abbreviated).day().year())
+    var title: String { title(now: .now) }
+
+    func title(now: Date, calendar: Calendar = .current) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(day, inSameDayAs: yesterday) { return "Yesterday" }
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate(calendar.isDate(day, equalTo: now, toGranularity: .year) ? "EEE MMM d" : "EEE MMM d yyyy")
+        return formatter.string(from: day)
     }
 
-    static func group(_ items: [Item], by date: (Item) -> Date) -> [DayGroup] {
-        let calendar = Calendar.current
-        var groups: [DayGroup] = []
-        for item in items {
-            let day = calendar.startOfDay(for: date(item))
-            if let last = groups.indices.last, groups[last].day == day {
-                groups[last].items.append(item)
-            } else {
-                groups.append(DayGroup(day: day, items: [item]))
-            }
-        }
-        return groups
+    static func group(_ items: [Item], by date: (Item) -> Date, calendar: Calendar = .current) -> [DayGroup] {
+        Dictionary(grouping: items, by: { calendar.startOfDay(for: date($0)) })
+            .map { DayGroup(day: $0.key, items: $0.value) }
+            .sorted { $0.day > $1.day }
     }
 }
 
 extension Date {
-    var historyTime: String { formatted(date: .omitted, time: .shortened) }
+    var historyTime: String { historyTime(timeZone: .autoupdatingCurrent) }
+
+    func historyTime(timeZone: TimeZone) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.timeZone = timeZone
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: self)
+    }
 }

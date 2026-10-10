@@ -35,6 +35,29 @@ final class DecodingTests: XCTestCase {
         XCTAssertNil(try decode(Page<ChargeSummary>.self, "chargePage").nextCursor)
         XCTAssertTrue(try decode(Page<IdleSummary>.self, "idlePage").items.isEmpty)
     }
+    func testDriveScoreAliasesRouteAndNegativeIDRoundTrip() throws {
+        var row = try XCTUnwrap(JSONSerialization.jsonObject(with: Self.fixture("drive")) as? [String: Any])
+        row["id"] = -10
+        row["end"] = "2026-10-06T12:30:00Z" // Whole seconds isolate the score Codable round trip.
+        row["driveScore"] = 71
+        row["efficiencyScore"] = 87
+        row["route"] = [["t": "2026-10-08T12:00:00Z", "latitude": 37.4, "longitude": -122.1, "routeBreakBefore": true]]
+        func decode() throws -> DriveSummary {
+            try APIDataSource.makeDecoder().decode(DriveSummary.self, from: JSONSerialization.data(withJSONObject: row))
+        }
+        let current = try decode()
+        XCTAssertEqual(current.id, -10)
+        XCTAssertEqual(current.efficiencyScore, 71)
+        XCTAssertEqual(current.route?.first?.routeBreakBefore, true)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        XCTAssertEqual(try APIDataSource.makeDecoder().decode(DriveSummary.self, from: encoder.encode(current)), current)
+        row.removeValue(forKey: "driveScore")
+        XCTAssertEqual(try decode().efficiencyScore, 87)
+        row.removeValue(forKey: "efficiencyScore")
+        XCTAssertNil(try decode().efficiencyScore)
+        var positive = current; positive.id = 10
+        XCTAssertEqual(Set([current, positive]).count, 2)
+    }
     func testZonedSummaryPeriod() throws {
         let json = #"{"range":"today","distanceKm":12,"driveCount":1,"chargeCount":0,"energyUsedKwh":null,"efficiencyWhPerKm":null,"energyAddedKwh":null,"chargeCost":null,"currency":"USD","periodStart":"2026-07-01T04:00:00.000Z","periodEnd":"2026-07-01T16:30:00.123Z","timeZone":"America/New_York"}"#
         let summary = try APIDataSource.makeDecoder().decode(ActivitySummary.self, from: Data(json.utf8))

@@ -45,6 +45,19 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let result = try await api.drives(vehicleID: 1, range: DateRange(from: .now, to: nil), cursor: "opaque+cursor/=")
         XCTAssertEqual(result.items.count, 1)
     }
+    func testNegativeDriveIDReachesDetailWithoutUnsignedConversion() async throws {
+        var row = try XCTUnwrap(JSONSerialization.jsonObject(with: DecodingTests.fixture("driveDetail")) as? [String: Any])
+        row["id"] = -10
+        let data = try JSONSerialization.data(withJSONObject: row)
+        let api = source { request in
+            XCTAssertEqual(request.url?.path, "/v1/drives/-10")
+            return (200, data)
+        }
+        let detail = try await api.drive(id: -10)
+        XCTAssertEqual(detail.summary.id, -10)
+        XCTAssertNotEqual(DriveDetailView.LoadKey(driveID: -10, vehicleID: 1, server: nil),
+                          DriveDetailView.LoadKey(driveID: 10, vehicleID: 1, server: nil))
+    }
     func testSummarySendsDeviceTimeZone() async throws {
         let data = try DecodingTests.fixture("summary")
         let expected = APIDataSource.summaryTimeZone()

@@ -164,8 +164,17 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
     var rateCurrency: String? = nil
     var energySource: String? = nil
     var driveScore: Int? = nil
+    /// Compatibility with servers that sent the score under the earlier key.
+    var legacyDriveScore: Int? = nil
     var route: [DriveRoutePoint]? = nil
 
+    enum CodingKeys: String, CodingKey {
+        case id, start, end, startAddress, endAddress, distanceKm, durationMin
+        case startBatteryLevel, endBatteryLevel, energyUsedKwh, efficiencyWhPerKm
+        case maxSpeedKph, avgSpeedKph, outsideTempAvgC, startCity, endCity, ratedWhPerKm
+        case electricityRatePerKwh, rateCurrency, energySource, driveScore, route
+        case legacyDriveScore = "efficiencyScore"
+    }
 }
 
 struct DriveRoutePoint: Codable, Hashable, Sendable {

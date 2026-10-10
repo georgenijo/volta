@@ -8,7 +8,8 @@ Owned by Screens A. Other screens read and use it; ask Screens A for changes
 | Token | Value / use |
 |---|---|
 | `Color.voltaBackground` | `#0E0F11` app background. Use `.voltaScreenBackground()` on screens. |
-| `Color.voltaCard` | `#17191C` card surface |
+| `Color.voltaCardTop` / `Color.voltaCard` | `#1A1C20` → `#141518` lit card gradient (top → bottom) |
+| `Color.voltaMint` | `#34D399` route starts, high scores, positive accents |
 | `Color.voltaRaised` | `#23262B` pill buttons, steppers, selected segment |
 | `Color.voltaHairline` | white @ 8%, borders and dividers |
 | `Color.voltaTextPrimary / Secondary / Tertiary` | white / `#8A8F98` / `#5C6068` |
@@ -17,7 +18,7 @@ Owned by Screens A. Other screens read and use it; ask Screens A for changes
 | `VoltaSpacing.xxs…xxl` | 2, 4, 8, 12, 16, 24, 32 |
 | `VoltaSpacing.screen` | 20, horizontal screen inset |
 | `VoltaSpacing.tabBarClearance` | 110, bottom content inset so the floating tab bar doesn't cover content |
-| `VoltaRadius.card / control / wideButton` | 20 / 12 / 14 |
+| `VoltaRadius.card / control / wideButton` | 24 / 12 / 14 |
 | `Font.voltaNumeral(size)` | heavy SF Pro numerals (prefer `BigNumber`) |
 | `Font.voltaLabel`, `.voltaCardTitle`, `.voltaRowTitle`, `.voltaRowSubtitle`, `.voltaScreenTitle`, `.voltaUnit` | text styles (all Dynamic Type aware) |
 | `.voltaLabelStyle(color:)` | small-caps label treatment: uppercase, 11pt semibold, +1.5 tracking, gray |

@@ -55,6 +55,7 @@ struct MockDataSource: VoltaDataSource {
         drive.startCity = "Palo Alto"
         drive.endCity = "Mountain View"
         drive.ratedWhPerKm = 164
+        drive.driveScore = [87, 71, 64, 92, 78][(drive.id - 1) % 5]
         drive.energySource = "teslamate_rated_range"
         let path = TripFixtures.detail(base)?.path
         drive.route = path.map { points in

@@ -43,12 +43,12 @@ extension DriveSummary {
     }
     var startPlace: String { startCity ?? startAddress ?? "Start not recorded" }
     var endPlace: String { endCity ?? endAddress ?? "End not recorded" }
-    /// Efficiency score v1: rated / actual × 100, capped. A separate measure from smoothness.
+    /// Server score combines efficiency, smoothness and speed. Missing is unknown.
     var efficiencyScore: Int? {
-        guard let actual = efficiencyWhPerKm, let rated = ratedWhPerKm,
-              actual.isFinite, rated.isFinite, actual > 0, rated > 0 else { return nil }
-        return Int(min(100, max(0, rated / actual * 100)).rounded())
+        guard let score = driveScore ?? legacyDriveScore, (0...100).contains(score) else { return nil }
+        return score
     }
+
 }
 
 struct Roadtrip: Identifiable, Hashable {

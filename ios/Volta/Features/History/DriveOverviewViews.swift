@@ -2,16 +2,22 @@ import MapKit
 import SwiftUI
 
 struct DriveScoreRing: View {
-    var score: Int
+    var score: Int?
     var size: CGFloat = 44
-    private var tint: Color { score >= 85 ? HistoryTheme.green : score >= 70 ? HistoryTheme.blue : HistoryTheme.amber }
+    private var value: Int? { score.flatMap { (0...100).contains($0) ? $0 : nil } }
+    private var tint: Color {
+        guard let value else { return HistoryTheme.secondary }
+        return value >= 85 ? HistoryTheme.green : value >= 70 ? HistoryTheme.blue : HistoryTheme.amber
+    }
     var body: some View {
         ZStack {
             Circle().trim(from: 0.12, to: 0.88).stroke(HistoryTheme.track, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
-            Circle().trim(from: 0.12, to: 0.12 + 0.76 * Double(score) / 100).stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
-            Text("\(score)").font(.system(size: size * 0.30, weight: .bold, design: .rounded)).foregroundStyle(.white)
+            if let value {
+                Circle().trim(from: 0.12, to: 0.12 + 0.76 * Double(value) / 100).stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
+            }
+            Text(value.map(String.init) ?? "–").font(.system(size: size * 0.30, weight: .bold, design: .rounded)).foregroundStyle(.white)
         }.frame(width: size, height: size)
-            .accessibilityLabel("Efficiency score \(score) of 100; rated consumption divided by actual consumption")
+            .accessibilityLabel(value.map { "Drive score \($0) of 100" } ?? "Drive score unavailable")
     }
 }
 
@@ -27,6 +33,32 @@ enum DriveRouteSegments {
             breakPending = false
         }
         return runs
+    }
+
+    /// Fit a local coordinate projection into the thumbnail without stretching
+    /// or joining runs. Invalid positions break the path rather than bridging it.
+    static func normalized(_ points: [DriveRoutePoint], in size: CGSize, inset: CGFloat = 8) -> [[CGPoint]] {
+        let segments = runs(points)
+        let valid = segments.flatMap { $0 }
+        guard let origin = valid.first, size.width > 0, size.height > 0 else { return [] }
+        let longitudeScale = max(cos(origin.latitude * .pi / 180), 0.00001)
+        let projected = segments.map { run in
+            run.map { point in
+                var delta = point.longitude - origin.longitude
+                if delta > 180 { delta -= 360 }
+                if delta < -180 { delta += 360 }
+                return CGPoint(x: delta * longitudeScale, y: origin.latitude - point.latitude)
+            }
+        }
+        let all = projected.flatMap { $0 }
+        let minX = all.map(\.x).min()!, maxX = all.map(\.x).max()!
+        let minY = all.map(\.y).min()!, maxY = all.map(\.y).max()!
+        let width = max(size.width - inset * 2, 0), height = max(size.height - inset * 2, 0)
+        let scale = min(width / max(maxX - minX, 1e-9), height / max(maxY - minY, 1e-9))
+        return projected.map { run in
+            run.map { CGPoint(x: size.width / 2 + ($0.x - (minX + maxX) / 2) * scale,
+                              y: size.height / 2 + ($0.y - (minY + maxY) / 2) * scale) }
+        }
     }
 }
 
@@ -55,24 +87,39 @@ struct DrivesRouteMap: View {
     }
 }
 
+/// Pure drawing from the row payload; no map tiles or location lookup.
 struct DriveRouteThumbnail: View {
     var points: [DriveRoutePoint]
     var body: some View {
         GeometryReader { geometry in
-            let runs = DriveRouteSegments.runs(points)
+            let runs = DriveRouteSegments.normalized(points, in: geometry.size)
             let valid = runs.flatMap { $0 }
-            if let minLat = valid.map(\.latitude).min(), let maxLat = valid.map(\.latitude).max(), let minLon = valid.map(\.longitude).min(), let maxLon = valid.map(\.longitude).max() {
-                let latSpan = max(maxLat - minLat, 0.00001), lonSpan = max(maxLon - minLon, 0.00001)
-                Path { path in
-                    for run in runs {
-                        for (index, point) in run.enumerated() {
-                            let p = CGPoint(x: (point.longitude - minLon) / lonSpan * geometry.size.width, y: (maxLat - point.latitude) / latSpan * geometry.size.height)
-                            if index == 0 { path.move(to: p) } else { path.addLine(to: p) }
+            ZStack {
+                if valid.isEmpty {
+                    Image(systemName: "road.lanes").foregroundStyle(HistoryTheme.tertiary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Path { path in
+                        for run in runs {
+                            for (index, point) in run.enumerated() {
+                                if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                            }
                         }
+                    }.stroke(HistoryTheme.blue, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    ForEach(Array(valid.enumerated()), id: \.offset) { _, point in
+                        Circle().fill(HistoryTheme.blue).frame(width: 3, height: 3).position(point)
                     }
-                }.stroke(.white.opacity(0.08), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    if let start = valid.first {
+                        Circle().fill(HistoryTheme.green).frame(width: 8, height: 8).position(start)
+                    }
+                    if let end = valid.last {
+                        Circle().strokeBorder(HistoryTheme.blue, lineWidth: 2).background(Circle().fill(valid.count == 1 ? HistoryTheme.green : HistoryTheme.blue))
+                            .frame(width: 8, height: 8).position(end)
+                    }
+                }
             }
-        }.allowsHitTesting(false).accessibilityHidden(true)
+        }.background(HistoryTheme.background.opacity(0.6), in: .rect(cornerRadius: 12))
+            .allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 

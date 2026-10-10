@@ -15,7 +15,7 @@ struct TripHero: View {
                     .accessibilityIdentifier("screen.drive-detail")
                 Spacer(minLength: 12)
                 VStack(alignment: .trailing, spacing: 6) {
-                    if let score = summary.efficiencyScore { DriveScoreRing(score: score, size: 72) }
+                    DriveScoreRing(score: summary.efficiencyScore, size: 72)
                     if let eff = summary.efficiencyWhPerKm {
                         BigNumber(VoltaFormat.number(units.efficiencyValue(whPerKm: eff), digits: 0), unit: units.efficiencyUnit, size: 20)
                         GradientGauge(value: TripHero.efficiencyFraction(eff), colors: TripHero.efficiencyColors, knob: .ring, height: 4)

@@ -92,6 +92,8 @@ struct ChargingTotals: Equatable {
 struct DriveTotals: Equatable {
     var distanceKm: Double
     var drives: Int
+    var score: Int?
+    var scoredDrives: Int
     var energyUsedKwh: PartialSum
     /// Wh/km over only the drives that recorded energy.
     var efficiencyWhPerKm: Double?
@@ -99,6 +101,12 @@ struct DriveTotals: Equatable {
     init(_ drives: [DriveSummary]) {
         distanceKm = drives.reduce(0) { $0 + $1.distanceKm }
         self.drives = drives.count
+        let scored = drives.filter { $0.efficiencyScore != nil && $0.distanceKm.isFinite && $0.distanceKm > 0 }
+        scoredDrives = scored.count
+        let scoredKm = scored.reduce(0) { $0 + $1.distanceKm }
+        score = scoredKm > 0
+            ? Int((scored.reduce(0) { $0 + Double($1.efficiencyScore!) * $1.distanceKm } / scoredKm).rounded())
+            : nil
         energyUsedKwh = PartialSum(drives.map(\.costableEnergyKwh))
         let measured = drives.filter { $0.costableEnergyKwh != nil }
         let km = measured.reduce(0) { $0 + $1.distanceKm }

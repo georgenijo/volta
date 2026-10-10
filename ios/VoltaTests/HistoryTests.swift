@@ -80,6 +80,23 @@ private struct Row: Codable, Hashable, Sendable, Identifiable { var id: Int }
         XCTAssertEqual(gate.requests.count, 2, "no request past the last page")
     }
 
+    func testFourRowFirstPageContinuesThroughEmptyPageAndNegativeIDs() async {
+        let gate = Gate()
+        let feed = await loadedFeed(gate, ids: [-1, -2, -3, -4], next: "A")
+        let second = Task { await feed.loadMore() }
+        await settle { gate.requests.count == 2 }
+        gate.succeed(1, ids: [], next: "B")
+        await second.value
+        XCTAssertTrue(feed.hasMore, "An empty page with a continuation is not the end")
+        let third = Task { await feed.loadMore() }
+        await settle { gate.requests.count == 3 }
+        XCTAssertEqual(gate.requests[2].cursor, "B")
+        gate.succeed(2, ids: [-4, -5, -6], next: nil)
+        await third.value
+        XCTAssertEqual(feed.items.map(\.id), [-1, -2, -3, -4, -5, -6])
+        XCTAssertFalse(feed.hasMore)
+    }
+
     /// Finding 1: starting a page load must not change the footer's task id.
     func testPaginationTriggerIsStableWhileLoading() async {
         let gate = Gate()

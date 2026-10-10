@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Card
 
-/// Rounded card surface: `#17191C` fill, 1px hairline border, 20pt radius.
+/// Rounded card surface lit from above: `#1A1C20`→`#141518` fill, top-bright 1px edge, 24pt radius.
 ///
 ///     Card { Text("Hello") }
 ///     Card(padding: 0) { ... }   // edge-to-edge content
@@ -25,7 +25,7 @@ extension View {
     func voltaCardBackground(tint: Color? = nil, radius: CGFloat = VoltaRadius.card) -> some View {
         background {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(Color.voltaCard)
+                .fill(LinearGradient(colors: [Color.voltaCardTop, Color.voltaCard], startPoint: .top, endPoint: .bottom))
                 .overlay {
                     if let tint {
                         RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -39,7 +39,7 @@ extension View {
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(Color.voltaHairline, lineWidth: 1)
+                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.11), .white.opacity(0.03)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
                 }
         }
     }

@@ -37,6 +37,21 @@ final class ScreenScreenshotTests: XCTestCase {
         try launchDemo()
         try navigate("tab.drives", to: "drives")
         capture("drives")
+        try scroll("drives", screenshot: "drives-day-sections")
+    }
+
+    func testDrivesPagination() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try navigate("tab.drives", to: "drives")
+        let container = element("scroll.drives")
+        let last = element("row.drive.60")
+        for _ in 0..<45 {
+            if last.exists && last.isHittable { break }
+            container.swipeUp()
+        }
+        XCTAssertTrue(last.exists && last.isHittable, "Scrolling must load the second page and expose the final synthetic drive")
+        capture("drives-last-page")
     }
 
     func testIdles() throws {
