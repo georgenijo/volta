@@ -33,6 +33,16 @@ final class VoltaMotionTests: XCTestCase {
         XCTAssertFalse(VoltaMotion.shouldRun(isActive: true, motionAllowed: true, isVisible: true, isActiveTab: true, scenePhase: .background))
     }
 
+    func testRepeatingAnimationsPauseOnceScrolledOutOfView() {
+        let size = CGSize(width: 300, height: 200)
+        XCTAssertTrue(VoltaMotion.isInViewport(size: size, scrollBounds: nil), "Outside a scroll view counts as visible")
+        XCTAssertTrue(VoltaMotion.isInViewport(size: size, scrollBounds: CGRect(x: 0, y: 0, width: 400, height: 800)))
+        XCTAssertTrue(VoltaMotion.isInViewport(size: size, scrollBounds: CGRect(x: 0, y: 150, width: 400, height: 800)), "Partly visible keeps running")
+        XCTAssertFalse(VoltaMotion.isInViewport(size: size, scrollBounds: CGRect(x: 0, y: 900, width: 400, height: 800)), "Scrolled above the viewport")
+        XCTAssertFalse(VoltaMotion.isInViewport(size: size, scrollBounds: CGRect(x: 0, y: -1200, width: 400, height: 800)), "Not yet scrolled into view")
+        XCTAssertTrue(VoltaMotion.isInViewport(size: .zero, scrollBounds: CGRect(x: 0, y: -100, width: 400, height: 800)), "Collapsed paused content on screen can still start")
+    }
+
     // MARK: Count up
 
     func testCountUpInterpolation() {

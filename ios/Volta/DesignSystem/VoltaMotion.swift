@@ -182,6 +182,15 @@ enum VoltaMotion {
     static func shouldRun(isActive: Bool, motionAllowed: Bool, isVisible: Bool, isActiveTab: Bool, scenePhase: ScenePhase) -> Bool {
         isActive && motionAllowed && isVisible && isActiveTab && scenePhase == .active
     }
+
+    /// Whether a view of `size` is inside its enclosing scroll view's visible bounds,
+    /// expressed in the view's own coordinates. No scroll view means it is on screen.
+    static func isInViewport(size: CGSize, scrollBounds: CGRect?) -> Bool {
+        guard let scrollBounds else { return true }
+        // Closed ranges, so a zero-size view (paused content collapses) still counts.
+        return size.width >= scrollBounds.minX && scrollBounds.maxX >= 0
+            && size.height >= scrollBounds.minY && scrollBounds.maxY >= 0
+    }
 }
 
 // MARK: - Environment
@@ -508,7 +517,8 @@ struct MotionTimeline<Content: View>: View {
     @VoltaMotionAllowed private var motionAllowed
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.isActiveTab) private var isActiveTab
-    @State private var isVisible = false
+    @State private var hasAppeared = false
+    @State private var isInViewport = true
     @State private var startedAt: Date?
 
     init(isActive: Bool, minimumInterval: Double? = nil, @ViewBuilder content: @escaping (_ elapsed: TimeInterval?) -> Content) {
@@ -518,7 +528,7 @@ struct MotionTimeline<Content: View>: View {
     }
 
     private var isRunning: Bool {
-        VoltaMotion.shouldRun(isActive: isActive, motionAllowed: motionAllowed, isVisible: isVisible, isActiveTab: isActiveTab, scenePhase: scenePhase)
+        VoltaMotion.shouldRun(isActive: isActive, motionAllowed: motionAllowed, isVisible: hasAppeared && isInViewport, isActiveTab: isActiveTab, scenePhase: scenePhase)
     }
 
     var body: some View {
@@ -526,8 +536,12 @@ struct MotionTimeline<Content: View>: View {
         TimelineView(.animation(minimumInterval: minimumInterval, paused: !running)) { context in
             content(running ? max(0, context.date.timeIntervalSince(startedAt ?? context.date)) : nil)
         }
-        .onAppear { isVisible = true }
-        .onDisappear { isVisible = false }
+        .onAppear { hasAppeared = true }
+        .onDisappear { hasAppeared = false }
+        // Eager stacks keep views "appeared" after they scroll away; check the viewport too.
+        .onGeometryChange(for: Bool.self) { proxy in
+            VoltaMotion.isInViewport(size: proxy.size, scrollBounds: proxy.bounds(of: .scrollView))
+        } action: { isInViewport = $0 }
         .onChange(of: running, initial: true) { _, running in startedAt = running ? .now : nil }
     }
 }
