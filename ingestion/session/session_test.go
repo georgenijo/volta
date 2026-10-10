@@ -288,3 +288,17 @@ func TestBufferedPayloadsInsideKnownDisconnectRemainPartial(t *testing.T) {
 		}
 	}
 }
+
+func TestPersistedGapsDropsLossJitter(t *testing.T) {
+	gs := []Gap{
+		{Start: at(0), End: at(0).Add(500 * time.Millisecond), Reason: GapDisconnected},
+		{Start: at(1), End: at(5), Reason: GapSilence},
+		{Start: at(10), End: at(15), Reason: GapDisconnected},
+		{Start: at(20), End: at(21), Reason: GapGearInvalid},
+		{Start: at(30), End: at(30), Reason: GapChargeInvalid},
+	}
+	got := PersistedGaps(gs, MinPersistedLoss)
+	if len(got) != 3 || !got[0].Start.Equal(at(10)) || got[1].Reason != GapGearInvalid || got[2].Reason != GapChargeInvalid {
+		t.Fatalf("unexpected persisted gaps: %+v", got)
+	}
+}

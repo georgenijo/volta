@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
 import { endpointEnergy, driveStyleScore } from './drive-parity';
+import { coverageGap, lossGap, lostBetween, realGaps } from './fleet-gaps';
 
 const idBase = 2097152;
 export type Window = { id: number; start: Date; end: Date; _cursorStart: string; endReason: string; startReason?: string; membership?: string; parts?: {start: Date; end: Date}[] };
@@ -15,14 +16,19 @@ export function telemetryDriveId(vehicle: number, start: Date) {
   return -(seconds * idBase + vehicle);
 }
 export function telemetryDriveVehicle(id: number) { return Number.isSafeInteger(id) && id < 0 ? -id % idBase : 0; }
-export function mergeSessions(vehicle: number, sessions: Row[], gaps: Gap[]): Window[] {
+/** `moving(end,start)`: speed >5 km/h within 15s on both sides of a boundary. */
+export function mergeSessions(vehicle: number, sessions: Row[], gaps: Gap[], moving: (end: Date, start: Date) => boolean = () => false): Window[] {
   const out: Window[] = [];
+  gaps=realGaps(gaps);
   for (const s of sessions) {
     const start = new Date(s.start), end = new Date(s.end), previous = out.at(-1);
-    // Only an observed Park stop may join trips. Disconnect/silence/invalid
-    // gear never proves the driver stayed parked or resumed the same trip.
-    if (previous && previous.endReason === 'gear' && s.startReason === 'gear' && +start - +previous.end < 180000
-      && +start >= +previous.end && !gaps.some(g => +g.start < +start && +g.end > +previous.end && g.reason !== 'charge_invalid')) {
+    // An observed Park stop joins trips unless data was lost or gear unknown.
+    // A <60s seam with the car rolling on both sides is one trip whatever the
+    // reasons (brief P/D, forgotten gear); never join across real data loss.
+    const parked = previous && previous.endReason === 'gear' && s.startReason === 'gear' && +start - +previous.end < 180000
+      && !gaps.some(g => coverageGap(g) && +g.start < +start && +g.end > +previous.end);
+    const rolling = previous && +start - +previous.end < 60000 && !lostBetween(gaps,previous.end,start) && moving(previous.end,start);
+    if (previous && +start >= +previous.end && (parked || rolling)) {
       previous.end = end; previous.endReason = s.endReason; if (s.membership==='partial') previous.membership='partial'; previous.parts!.push({start,end});
     } else out.push({id:telemetryDriveId(vehicle,start),start,end,_cursorStart:s._cursorStart ?? start.toISOString(),endReason:s.endReason,startReason:s.startReason,membership:s.membership,parts:[{start,end}]});
   }
@@ -48,7 +54,7 @@ export function replacedDrive(row: Row, catalog: Catalog) {
   const overlaps=overlappingWindows(row,catalog.windows);
   if (overlaps.length) return overlaps.some(w=>!preferTeslaMate(row,w));
   return catalog.start !== null && catalog.end !== null && start >= +catalog.start && end <= +catalog.end
-    && !catalog.gaps.some(g => g.reason !== 'charge_invalid' && +g.start < end && +g.end > start);
+    && !catalog.gaps.some(g => coverageGap(g) && +g.start < end && +g.end > start);
 }
 /** Resolve a connected overlap group. Edges point from the preferred source
  * to the row it replaces. Select unopposed rows, remove only their losers,
@@ -92,15 +98,21 @@ export function thin(points: Row[], limit: number): Row[] {
   }
   return out;
 }
-export function deriveDrive(window: Window, locations: Row[], payloads: Row[], samples: Row[], rated: number | null, gaps: Gap[]): Row {
-  gaps=gaps.filter(g=>+g.start<=+window.end && +g.end>=+window.start);
+/** `before`: latest EnergyRemaining observation in the 30 min before the window. */
+export function deriveDrive(window: Window, locations: Row[], payloads: Row[], samples: Row[], rated: number | null, gaps: Gap[], before?: Row): Row {
+  // EnergyRemaining is change-only: absent real loss, the last value before a
+  // parked start still holds at the start (a first_observed start often waits
+  // minutes for the first in-window change).
+  const held=before && finite(before.energy_remaining_kwh) && +window.start-+new Date(before.source_ts)<=1800000
+    && !lostBetween(realGaps(gaps),new Date(before.source_ts),window.start) ? before.energy_remaining_kwh as number : null;
+  gaps=realGaps(gaps.filter(g=>+new Date(g.start)<=+window.end && +new Date(g.end)>=+window.start));
   const path = locations.filter(gps).map(p => ({t:new Date(p.source_ts),latitude:p.latitude,longitude:p.longitude,
-    speedKph:p.speed_kph,powerKw:p.power_kw,batteryLevel:finite(p.battery_level_pct) ? Math.round(p.battery_level_pct) : finite(p.soc_pct) ? Math.round(p.soc_pct) : null,socPct:p.soc_pct,elevationM:null,routeBreakBefore:!!p.route_break_before}));
-  for (let i=1;i<path.length;i++) path[i]!.routeBreakBefore ||= +path[i]!.t-+path[i-1]!.t>120000
-    || gaps.some(g => g.reason !== 'charge_invalid' && +g.start < +path[i]!.t && +g.end > +path[i-1]!.t);
+    speedKph:p.speed_kph,powerKw:p.power_kw,batteryLevel:finite(p.battery_level_pct) ? Math.round(p.battery_level_pct) : finite(p.soc_pct) ? Math.round(p.soc_pct) : null,socPct:p.soc_pct,elevationM:null,routeBreakBefore:false}));
+  // The view's route_break_before trusts every jitter row; break only at real loss.
+  for (let i=1;i<path.length;i++) path[i]!.routeBreakBefore = +path[i]!.t-+path[i-1]!.t>120000 || lostBetween(gaps,path[i-1]!.t,path[i]!.t);
   const odometers = payloads.filter(p => finite(p.odometer_km));
   const first = odometers[0], last = odometers.at(-1);
-  const interrupted = gaps.some(g => g.reason !== 'charge_invalid' && +g.start < +window.end && +g.end > +window.start);
+  const interrupted = lostBetween(gaps,window.start,window.end);
   const observed=window.startReason==='gear' && window.endReason==='gear' && window.membership !== 'partial' && !interrupted;
   const validDelta = first && last && first !== last && (observed || (+new Date(first.source_ts)-+window.start<=120000
     && +window.end-+new Date(last.source_ts)<=120000)) && odometers.every((p,i) => !i || p.odometer_km >= odometers[i-1]!.odometer_km);
@@ -120,6 +132,7 @@ export function deriveDrive(window: Window, locations: Row[], payloads: Row[], s
   let energy: number | null = null, energySource: string | null = null;
   if (!interrupted) {
     const remaining = samples.filter(p => finite(p.energy_remaining_kwh)).map(p => ({t:new Date(p.source_ts),value:p.energy_remaining_kwh}));
+    if (held !== null && (!remaining.length || +remaining[0]!.t-+window.start>120000)) remaining.unshift({t:window.start,value:held});
     if (!samples.some(p => p.invalid_fields?.includes('EnergyRemaining'))) energy=endpointEnergy(remaining[0],remaining.at(-1),window.start,window.end);
     if (energy !== null) energySource='fleet_energy_remaining';
     // Integrate calibrated signed pack power only over continuous observations.
@@ -135,13 +148,13 @@ export function deriveDrive(window: Window, locations: Row[], payloads: Row[], s
   const batteries=payloads.filter(p => finite(p.battery_level_pct) || finite(p.soc_pct));
   const actual=energy !== null && distance !== null && distance>0 ? energy*1000/distance : null;
   const scorePoints=samples.map(p => ({t:new Date(p.source_ts),speedKph:p.speed_kph,longitudinalAccelerationMps2:p.longitudinal_acceleration_mps2,lateralAccelerationMps2:p.lateral_acceleration_mps2,
-    routeBreakBefore:gaps.some(g=>g.reason !== 'charge_invalid' && +g.start<=+new Date(p.source_ts) && +g.end>=+new Date(p.source_ts))}));
+    routeBreakBefore:gaps.some(g=>lossGap(g) && +g.start<=+new Date(p.source_ts) && +g.end>=+new Date(p.source_ts))}));
   const socByTime=new Map(payloads.filter(p=>finite(p.soc_pct)).map(p=>[+new Date(p.source_ts),p.soc_pct]));
   const series=samples.map(p => ({t:new Date(p.source_ts),latitude:p.latitude,longitude:p.longitude,speedKph:p.speed_kph,
     powerKw:p.power_kw,batteryLevel:p.battery_level ?? socByTime.get(+new Date(p.source_ts)) ?? null,socPct:socByTime.get(+new Date(p.source_ts)) ?? null,energyRemainingKwh:p.energy_remaining_kwh,outsideTempC:p.outside_temp_c,
     longitudinalAccelerationMps2:p.longitudinal_acceleration_mps2,elevationM:null,routeBreakBefore:false,invalidFields:p.invalid_fields ?? []}));
   let previous: Row | null=null;
-  for (const p of series) if (gps(p)) { p.routeBreakBefore=previous !== null && (+p.t-+previous.t>120000 || gaps.some(g => +g.start<+p.t && +g.end>+previous!.t && g.reason !== 'charge_invalid')); previous=p; }
+  for (const p of series) if (gps(p)) { p.routeBreakBefore=previous !== null && (+p.t-+previous.t>120000 || lostBetween(gaps,previous.t,p.t)); previous=p; }
   const temperatures=samples.filter(p => finite(p.outside_temp_c)).map(p => p.outside_temp_c);
   return {id:window.id,start:window.start,end:window.end,_cursorStart:window._cursorStart,source:'fleet_telemetry',
     startAddress:null,endAddress:null,startCity:null,endCity:null,
@@ -167,7 +180,7 @@ function seriesCoverage(source: Row[], returned: Row[], window: Window, gaps: Ga
   for (const [key,field] of Object.entries(fields)) {
     const points=source.filter(p=>finite(p[key])), selected=returned.filter(p=>finite(p[key]));
     if (!points.length) continue;
-    const receiverGapCount=gaps.filter(g=>g.reason !== 'charge_invalid' && +g.start<+points.at(-1)!.t && +g.end>+points[0]!.t).length;
+    const receiverGapCount=gaps.filter(g=>lossGap(g) && +g.start<+points.at(-1)!.t && +g.end>+points[0]!.t).length;
     let invalidGapCount=0, invalid=false;
     for (const p of source) { const bad=p.invalidFields.includes(field) || (key==='powerKw' && p.invalidFields.some((f:string)=>['PackVoltage','PackCurrent'].includes(f))); if (bad && !invalid) invalidGapCount++; if (bad || finite(p[key])) invalid=bad; }
     metrics[key]={start:points[0]!.t,end:points.at(-1)!.t,sourceSampleCount:points.length,returnedSampleCount:selected.length,
@@ -188,31 +201,40 @@ export class FleetDrives {
       this.sql`SELECT start_ts AS start,end_ts AS end,start_reason AS "startReason",end_reason AS "endReason",membership,
         to_char(start_ts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart"
         FROM volta_telemetry.sessions WHERE vehicle_id=${id} AND kind='drive' ORDER BY start_ts`,
-      this.sql`SELECT start_ts AS start,end_ts AS end,reason FROM volta_telemetry.gaps WHERE vehicle_id=${id} ORDER BY start_ts`,
+      this.sql`SELECT start_ts AS start,end_ts AS end,reason FROM volta_telemetry.gaps WHERE vehicle_id=${id} AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '90 seconds') ORDER BY start_ts`,
       this.sql`SELECT
         (SELECT source_ts FROM volta_telemetry.connectivity WHERE vehicle_id=${id} AND status='CONNECTED' ORDER BY source_ts LIMIT 1) AS connected,
         (SELECT max(source_ts) FROM volta_telemetry.latest_samples WHERE vehicle_id=${id}) AS latest`
     ]);
-    const spans=gaps.map(g=>({start:new Date(g.start),end:new Date(g.end),reason:g.reason as string}));
+    const spans=realGaps(gaps);
+    // Speed evidence only for <60s seams; one query per catalog.
+    const seams=sessions.slice(1).map((s,i)=>({end:sessions[i]!.end,start:s.start}))
+      .filter(p=>+new Date(p.start)>=+new Date(p.end) && +new Date(p.start)-+new Date(p.end)<60000);
+    const rolling=new Set((seams.length ? await this.sql`SELECT b.start FROM jsonb_to_recordset(${this.sql.json(seams)}::jsonb) AS b("end" timestamptz,start timestamptz)
+      WHERE EXISTS(SELECT 1 FROM volta_telemetry.session_samples p WHERE p.vehicle_id=${id} AND p.speed_kph>5
+          AND p.source_ts BETWEEN b."end"-interval '15 seconds' AND b."end")
+        AND EXISTS(SELECT 1 FROM volta_telemetry.session_samples p WHERE p.vehicle_id=${id} AND p.speed_kph>5
+          AND p.source_ts BETWEEN b.start AND b.start+interval '15 seconds')` : []).map(r=>+new Date(r.start)));
     const starts=[sessions[0]?.start,bounds[0]?.connected].filter(Boolean).map(t=>new Date(t));
     const ends=[sessions.at(-1)?.end,bounds[0]?.latest].filter(Boolean).map(t=>new Date(t));
-    return {windows:mergeSessions(id,sessions,spans),gaps:spans,
+    return {windows:mergeSessions(id,sessions,spans,(_,start)=>rolling.has(+start)),gaps:spans,
       start:starts.length ? starts.reduce((a,b)=>+a<+b?a:b) : null,end:ends.length ? ends.reduce((a,b)=>+a>+b?a:b) : null};
   }
   /** Mileage needs totals, not GPS/chart arrays. Aggregate dense route and
    * power observations in PostgreSQL; transfer only slow odometer/energy rows. */
   private async totals(vehicle: number,w: Window,gaps: Gap[]) {
-    const parts=this.sql.json(w.parts ?? [{start:w.start,end:w.end}]);
-    const [payloads,route,power]=await Promise.all([
+    const parts=this.sql.json(w.parts ?? [{start:w.start,end:w.end}]),lost=this.sql.json(realGaps(gaps).filter(g=>lossGap(g) && +g.start<=+w.end && +g.end>=+w.start));
+    const [payloads,route,power,held]=await Promise.all([
       this.sql`SELECT * FROM volta_telemetry.payload_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end}
         AND (odometer_km IS NOT NULL OR battery_level_pct IS NOT NULL OR soc_pct IS NOT NULL) ORDER BY source_ts`,
       this.sql`WITH p AS MATERIALIZED (
-        SELECT source_ts,latitude,longitude,route_break_before,
+        SELECT source_ts,latitude,longitude,
           lag(source_ts) OVER t AS previous_ts,lag(latitude) OVER t AS previous_latitude,lag(longitude) OVER t AS previous_longitude
         FROM volta_telemetry.drive_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end}
           AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180 WINDOW t AS (ORDER BY source_ts)
       ) SELECT min(source_ts) AS start,max(source_ts) AS finish,count(*) AS count,
-        bool_and(previous_ts IS NULL OR (NOT route_break_before AND source_ts-previous_ts<=interval '120 seconds')
+        bool_and(previous_ts IS NULL OR (source_ts-previous_ts<=interval '120 seconds' AND NOT EXISTS(
+            SELECT 1 FROM jsonb_to_recordset(${lost}::jsonb) AS g(start timestamptz,"end" timestamptz) WHERE g.start<source_ts AND g."end">previous_ts))
           OR EXISTS(SELECT 1 FROM jsonb_to_recordset(${parts}::jsonb) AS a(start timestamptz,"end" timestamptz)
             JOIN jsonb_to_recordset(${parts}::jsonb) AS b(start timestamptz,"end" timestamptz) ON a."end"<b.start
             WHERE previous_ts<=a."end" AND source_ts>=b.start AND source_ts-previous_ts>interval '120 seconds'
@@ -230,10 +252,13 @@ export class FleetDrives {
         count(*)>1 AND min(source_ts)>=${w.start}::timestamptz AND min(source_ts)<=${w.start}::timestamptz+interval '120 seconds'
           AND max(source_ts)>=${w.end}::timestamptz-interval '120 seconds'
           AND max(source_ts-previous_ts)<=interval '30 seconds'
-          AND NOT EXISTS(SELECT 1 FROM p WHERE invalid_fields && ARRAY['PackVoltage','PackCurrent']) AS valid FROM powers`
+          AND NOT EXISTS(SELECT 1 FROM p WHERE invalid_fields && ARRAY['PackVoltage','PackCurrent']) AS valid FROM powers`,
+      this.sql`SELECT source_ts,energy_remaining_kwh FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle}
+        AND source_ts<${w.start} AND source_ts>=${w.start}::timestamptz-interval '30 minutes'
+        AND (energy_remaining_kwh IS NOT NULL OR 'EnergyRemaining'=ANY(invalid_fields)) ORDER BY source_ts DESC LIMIT 1`
     ]);
-    const row=deriveDrive(w,[],payloads,power[0]?.samples ?? [],null,gaps),r=route[0];
-    const interrupted=gaps.some(g=>g.reason !== 'charge_invalid' && +g.start<+w.end && +g.end>+w.start);
+    const row=deriveDrive(w,[],payloads,power[0]?.samples ?? [],null,gaps,held[0]),r=route[0];
+    const interrupted=lostBetween(realGaps(gaps),w.start,w.end);
     if (row.distanceKm === null && w.parts && w.parts.length>1) {
       const partials=[];
       for (const part of w.parts) partials.push(await this.totals(vehicle,{...w,...part,parts:undefined},gaps.filter(g=>+g.start<=+part.end && +g.end>=+part.start)));
@@ -250,14 +275,17 @@ export class FleetDrives {
     // Seek only requested session windows, not the car's entire GPS history.
     for (const w of windows) {
       let row: Row;
-      if (totalsOnly) row=await this.totals(vehicle,w,gaps.filter(g=>+g.start<=+w.end && +g.end>=+w.start));
+      if (totalsOnly) row=await this.totals(vehicle,w,gaps);
       else {
-      const [locations,payloads,samples]=await Promise.all([
+      const [locations,payloads,samples,held]=await Promise.all([
         this.sql`SELECT * FROM volta_telemetry.drive_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
         this.sql`SELECT * FROM volta_telemetry.payload_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
-        this.sql`SELECT * FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`
+        this.sql`SELECT * FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
+        this.sql`SELECT source_ts,energy_remaining_kwh FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle}
+        AND source_ts<${w.start} AND source_ts>=${w.start}::timestamptz-interval '30 minutes'
+        AND (energy_remaining_kwh IS NOT NULL OR 'EnergyRemaining'=ANY(invalid_fields)) ORDER BY source_ts DESC LIMIT 1`
       ]);
-      row=deriveDrive(w,locations,payloads,samples,rated,gaps);
+      row=deriveDrive(w,locations,payloads,samples,rated,gaps,held[0]);
       }
       // Isolated parking manoeuvres are noise; joined ones already belong to
       // their trip. Keep unknown distances unknown rather than inventing zero.

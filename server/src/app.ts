@@ -59,7 +59,7 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
     });
   }
   app.get('/v1/drives/:id', async c => c.json(await telemetry.drive(driveId(c.req.param('id')))));
-  app.get('/v1/charges/:id', async c => c.json(await telemetry.charge(integer(c.req.param('id'), 'id'))));
+  app.get('/v1/charges/:id', async c => c.json(await telemetry.charge(driveId(c.req.param('id')))));
   app.get('/v1/vehicles/:id/battery', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.battery(id)); });
   app.get('/v1/vehicles/:id/mileage', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.mileage(id, choice(c.req.query('bucket'), ['day','week','month'], 'month'))); });
   app.get('/v1/vehicles/:id/firmware', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.firmware(id)); });
