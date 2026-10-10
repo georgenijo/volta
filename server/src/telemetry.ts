@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
 import { ApiError, missing } from './errors';
-import type { ListInput } from './validation';
+import { timestamp, type ListInput } from './validation';
 import { summaryPeriod } from './period';
+import { FleetDrives, replacedDrive, overlappingWindows, resolveDriveSources, telemetryDriveVehicle, type Catalog, type Window } from './fleet-drives';
 import { FleetSeries } from './fleet-series';
 import { FleetLive, liveValues } from './fleet-live';
-import { applyDriveEnergy, efficiencyScore } from './drive-parity';
+import { applyDriveEnergy, scoreFromStats, aggregateDriveScore } from './drive-parity';
 
 export class Telemetry {
   constructor(private sql: DB, private currency: string | null = null, private clock: () => Date = () => new Date(), private fleetEnabled = false,
@@ -145,6 +146,8 @@ export class Telemetry {
     const s = this.sql, efficiency = s`eff.value`;
     return s`WITH rated_efficiency AS MATERIALIZED (SELECT car.id, ${this.efficiency()} AS value FROM public.cars car)
       SELECT d.id, to_char(d.start_date, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart", d.start_date AS start, d.end_date AS end,
+      COALESCE(startpoint.latitude,live_start.latitude) AS "startLatitude",COALESCE(startpoint.longitude,live_start.longitude) AS "startLongitude",
+      COALESCE(endpoint.latitude,live.latitude) AS "endLatitude",COALESCE(endpoint.longitude,live.longitude) AS "endLongitude",
       COALESCE(sg.name, sa.display_name) AS "startAddress", COALESCE(eg.name, ea.display_name) AS "endAddress",
       COALESCE(NULLIF(sa.city,''), NULLIF(sg.name,''), NULLIF(sa.neighbourhood,''), NULLIF(sa.name,'')) AS "startCity",
       COALESCE(NULLIF(ea.city,''), NULLIF(eg.name,''), NULLIF(ea.neighbourhood,''), NULLIF(ea.name,'')) AS "endCity",
@@ -178,17 +181,96 @@ export class Telemetry {
       AND COALESCE(d.end_km, (SELECT odometer FROM public.positions WHERE id = d.end_position_id),
         (SELECT odometer FROM public.positions WHERE d.end_position_id IS NULL AND drive_id = d.id ORDER BY date DESC, id DESC LIMIT 1)) IS NOT NULL END`;
   }
+  private async driveCatalog(id: number) {
+    if (!this.fleetEnabled) return null;
+    try { return await new FleetDrives(this.sql).catalog(id); }
+    catch { this.log({event:'fleet_drives_failed',code:'telemetry_query_failed'}); return null; }
+  }
+  private async mergedDrives(id: number, q: ListInput, catalog: Catalog, enrich = true, previews = true) {
+    // Fetch only TeslaMate identities before merging, so pagination applies
+    // to the complete set rather than two independently truncated pages.
+    const legacy = await this.sql`SELECT id,start_date AS start,end_date AS end,
+      to_char(start_date,'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart" FROM public.drives d
+      WHERE car_id=${id} AND ${this.measurableDrive()}`;
+    const fleetStore=new FleetDrives(this.sql),cache=new Map<number,Row>();
+    const matches=(r:Row)=>(!q.from || r._cursorStart>=q.from) && (!q.to || r._cursorStart<q.to)
+      && (!q.before || r._cursorStart<q.before || (r._cursorStart===q.before && r.id<q.beforeId!));
+    const candidates: Row[]=[...legacy.filter(matches),...catalog.windows.filter(matches)];
+    candidates.sort((a,b)=>b._cursorStart.localeCompare(a._cursorStart) || b.id-a.id);
+    const rows: Row[]=[];
+    const [rated]=await this.sql`SELECT ${this.efficiency()}*1000 AS value FROM public.cars car WHERE id=${id}`;
+    const hydrate=async(windows: Window[])=>{
+      const missing=windows.filter(w=>!cache.has(w.id));
+      if (!missing.length) return;
+      for (const row of await fleetStore.rows(id,missing,rated?.value ?? null,catalog.gaps,enrich && previews,!enrich)) cache.set(row.id,row);
+    };
+    const shown=new Map<number,boolean>();
+    const resolve=async(seed: Row)=>{
+      if (shown.has(seed.id)) return shown.get(seed.id)!;
+      const windows=new Map<number,Window>(),tm=new Map<number,Row>(),pending: Window[]=[];
+      const add=(w:Window)=>{if (!windows.has(w.id)) {windows.set(w.id,w);pending.push(w);}};
+      if (seed.id<0) add(seed as Window);
+      else {tm.set(seed.id,seed);for (const w of overlappingWindows(seed,catalog.windows)) add(w);}
+      for (let i=0;i<pending.length;i++) {
+        const w=pending[i]!;
+        for (const row of legacy) if (+row.start<+w.end && (!row.end || +row.end>+w.start) && !tm.has(row.id)) {
+          tm.set(row.id,row);for (const other of overlappingWindows(row,catalog.windows)) add(other);
+        }
+      }
+      const ordered=[...windows.values()].sort((a,b)=>a._cursorStart.localeCompare(b._cursorStart) || a.id-b.id);
+      await hydrate(ordered);
+      const measured=new Set(ordered.filter(w=>cache.has(w.id) && cache.get(w.id)!._omitReason !== 'unknown').map(w=>w.id));
+      const selected=resolveDriveSources([...tm.values()],ordered,measured,catalog);
+      for (const row of [...tm.values(),...ordered]) shown.set(row.id,selected.has(row.id));
+      return shown.get(seed.id)!;
+    };
+    // Resolve complete connected groups BEFORE date/cursor filtering. A
+    // hidden row from either source can never suppress another visible trip.
+    for (const candidate of candidates) {
+      if (rows.length>q.limit) break;
+      if (!await resolve(candidate)) continue;
+      if (candidate.id<0) {
+        const row=cache.get(candidate.id);
+        if (row && !row._omitReason) {const {_omitReason,...fields}=row;rows.push(fields);}
+      } else rows.push(candidate);
+    }
+    const ids=rows.filter(r=>r.id>0).map(r=>r.id);
+    const tm=ids.length ? await this.sql`${this.driveSelect(this.sql`(SELECT * FROM public.drives WHERE id=ANY(${ids}::integer[]))`)}` : [];
+    const byId=new Map(tm.map(r=>[r.id,r]));
+    if (enrich) await this.enrichDrives(tm,previews);
+    else {
+      const missing=tm.filter(r=>!(r.energyUsedKwh>0)).map(r=>r.id);
+      const fallback=missing.length ? await new FleetSeries(this.sql).driveEnergy(missing) : new Map();
+      for (const row of tm) applyDriveEnergy(row,fallback.get(row.id));
+    }
+    return rows.map(r=>r.id>0 ? byId.get(r.id)! : r).filter(Boolean);
+  }
   async drives(id: number, q: ListInput) {
+    const catalog=await this.driveCatalog(id);
+    if (catalog?.windows.length) {
+      const rows=await this.mergedDrives(id,q,catalog);
+      return rows.map(({path,telemetry,elevationGainM,...row})=>row);
+    }
     const source = this.sql`(SELECT d.* FROM public.drives d WHERE car_id = ${id} AND ${this.measurableDrive()}
       AND (${q.from}::timestamp IS NULL OR start_date >= ${q.from}::timestamp)
       AND (${q.to}::timestamp IS NULL OR start_date < ${q.to}::timestamp)
-      AND (${q.before}::timestamp IS NULL OR (start_date, id) < (${q.before}::timestamp, ${q.beforeId}::integer))
+      AND (${q.before}::timestamp IS NULL OR (start_date, id::bigint) < (${q.before}::timestamp, ${q.beforeId}::bigint))
       ORDER BY start_date DESC, id DESC LIMIT ${q.limit + 1})`;
     const rows = await this.sql`${this.driveSelect(source)} ORDER BY d.start_date DESC, d.id DESC`;
     await this.enrichDrives(rows);
     return rows;
   }
   async drive(id: number) {
+    if (id<0) {
+      const vehicle=telemetryDriveVehicle(id),catalog=await this.driveCatalog(vehicle),window=catalog?.windows.find(w=>w.id===id);
+      if (!window || !catalog) throw missing();
+      const [rated]=await this.sql`SELECT ${this.efficiency()}*1000 AS value FROM public.cars car WHERE id=${vehicle}`;
+      const [row]=await new FleetDrives(this.sql).rows(vehicle,[window],rated?.value ?? null,catalog.gaps);
+      if (!row || row._omitReason) throw missing();
+      const {_cursorStart,_omitReason,...fields}=row;
+      fields.telemetry=await new FleetSeries(this.sql).session('drive',id,{car_id:vehicle,start:window.start,finish:window.end});
+      return fields;
+    }
     const [summary] = await this.sql`${this.driveSelect()} WHERE d.id = ${id}`;
     if (!summary) throw missing();
     const path = await this.sql`SELECT date AS t, latitude, longitude, speed AS "speedKph", power AS "powerKw", elevation AS "elevationM", battery_level AS "batteryLevel" FROM public.positions WHERE drive_id = ${id} ORDER BY date, id`;
@@ -246,12 +328,12 @@ export class Telemetry {
       ORDER BY cp.start_date DESC,cp.id DESC LIMIT ${q.limit+1}`;
   }
   /** One bounded route query per page; no per-drive detail fetch or geocoder. */
-  private async enrichDrives(rows: Row[]) {
+  private async enrichDrives(rows: Row[], previews = true) {
     if (!rows.length) return;
     const ids = rows.map(r => r.id);
     // One cumulative pass, including charge events before drive events at equal
     // timestamps. Summary/mileage never invoke enrichment or compute prices.
-    const rates = this.currency == null ? [] : await this.sql`WITH requested AS MATERIALIZED (
+    const rates = this.currency == null || !previews ? [] : await this.sql`WITH requested AS MATERIALIZED (
       SELECT id,car_id,start_date FROM public.drives WHERE id=ANY(${ids}::integer[])
     ), events AS (
       SELECT cp.car_id,cp.end_date AS t,0 AS kind,NULL::integer AS id,cp.cost,cp.charge_energy_added AS energy
@@ -268,7 +350,7 @@ export class Telemetry {
     // Seek at 63 time targets plus the final point. Only this small subset is
     // windowed. For exact gaps, only the last point of each 120-second bucket
     // can begin a >120s gap; seek its successor rather than windowing all GPS.
-    const routes = await this.sql`WITH bounds AS MATERIALIZED (
+    const routes: Row[] = previews ? await this.sql`WITH bounds AS MATERIALIZED (
       SELECT d.id AS drive_id,first.date AS start,last.date AS finish,last.id AS last_id
       FROM public.drives d
       CROSS JOIN LATERAL (SELECT date FROM public.positions WHERE drive_id=d.id
@@ -296,7 +378,7 @@ export class Telemetry {
       SELECT *,lag(t) OVER(PARTITION BY drive_id ORDER BY t,id) AS previous FROM selected
     ) SELECT drive_id,t,latitude,longitude,EXISTS(SELECT 1 FROM gaps g
       WHERE g.drive_id=o.drive_id AND g.start>=o.previous AND g.finish<=o.t) AS "routeBreakBefore"
-      FROM ordered o ORDER BY drive_id,t,id`;
+      FROM ordered o ORDER BY drive_id,t,id` : [];
     let energy = new Map<number, { energy: number | null; source: string | null }>();
     const missingEnergyIds = rows.filter(r => r.energyUsedKwh == null || !Number.isFinite(r.energyUsedKwh)
       || r.energyUsedKwh < 0 || (r.distanceKm > 0 && r.energyUsedKwh === 0)).map(r => r.id);
@@ -304,11 +386,30 @@ export class Telemetry {
       try { energy = await new FleetSeries(this.sql).driveEnergy(missingEnergyIds); }
       catch { this.log({event:'drive_energy_failed',code:'telemetry_query_failed'}); }
     }
+    const stats=await this.sql`WITH buckets AS (
+      SELECT drive_id,to_timestamp(floor(extract(epoch FROM date)/5)*5) AT TIME ZONE 'UTC' AS date,avg(speed) AS speed
+      FROM public.positions WHERE drive_id=ANY(${ids}::integer[]) AND speed IS NOT NULL GROUP BY 1,2
+    ), points AS (
+      SELECT drive_id,date,speed,lag(date) OVER w AS previous_date,lag(speed) OVER w AS previous_speed
+      FROM buckets WINDOW w AS (PARTITION BY drive_id ORDER BY date)
+    ), intervals AS (
+      SELECT *,extract(epoch FROM date-previous_date) AS dt FROM points
+    ), acceleration AS (
+      SELECT *,CASE WHEN dt>0 AND dt<=30 THEN (speed-previous_speed)/3.6/NULLIF(dt,0) END AS a FROM intervals
+    ), derivatives AS (
+      SELECT *,lag(a) OVER(PARTITION BY drive_id ORDER BY date) AS previous_a FROM acceleration
+    ) SELECT drive_id,
+      sum(greatest(0,abs(a-previous_a)/NULLIF(dt,0)-.6)*dt) FILTER(WHERE previous_a IS NOT NULL)/sum(dt) FILTER(WHERE previous_a IS NOT NULL) AS jerk,
+      sum(CASE WHEN a>2.941995 OR a< -3.4323275 THEN dt ELSE 0 END)/sum(dt) AS harsh,
+      sum(greatest(0,(speed+previous_speed)/2.0-130)*dt)/sum(dt) AS overspeed
+      FROM derivatives WHERE dt>0 AND dt<=30 GROUP BY drive_id`;
+    const statsById=new Map(stats.map(r=>[r.drive_id,r]));
     for (const row of rows) {
+      row.source='teslamate';
       row.electricityRatePerKwh = rateById.get(row.id) ?? null;
       row.rateCurrency = row.electricityRatePerKwh == null ? null : this.currency;
       applyDriveEnergy(row, energy.get(row.id));
-      row.driveScore = efficiencyScore(row.efficiencyWhPerKm, row.ratedWhPerKm);
+      Object.assign(row,scoreFromStats(row.efficiencyWhPerKm,row.ratedWhPerKm,statsById.get(row.id)?.jerk ?? null,statsById.get(row.id)?.overspeed ?? null,statsById.get(row.id)?.harsh ?? null));
       row.route = routes.filter(p => p.drive_id===row.id).map(({drive_id, ...point}) => point);
     }
   }
@@ -463,9 +564,37 @@ export class Telemetry {
       (SELECT CASE WHEN count(*) FILTER (WHERE charge_energy_added IS NULL) > 0 THEN NULL ELSE sum(charge_energy_added) END FROM charges) AS "energyAddedKwh", (SELECT CASE WHEN count(*) FILTER (WHERE cost IS NULL) > 0 THEN NULL ELSE sum(cost) END FROM charges) AS "chargeCost", ${this.currency}::text AS currency`;
     if (row?._missingDistance) throw new ApiError(409, 'data_unavailable', 'TeslaMate has incomplete drive distance for this summary');
     const { _missingDistance, ...fields } = row!;
+    const catalog=await this.driveCatalog(id);
+    if (catalog?.windows.length) {
+      const rows=await this.mergedDrives(id,{from:timestamp(period.periodStart),to:timestamp(period.periodEnd),before:null,beforeId:null,limit:Number.MAX_SAFE_INTEGER,minMinutes:10},catalog,true,false);
+      fields.distanceKm=rows.reduce((sum,r)=>sum+r.distanceKm,0); fields.driveCount=rows.length;
+      fields.energyUsedKwh=rows.length && rows.every(r=>r.energyUsedKwh !== null) ? rows.reduce((sum,r)=>sum+r.energyUsedKwh,0) : null;
+      fields.efficiencyWhPerKm=fields.energyUsedKwh !== null && fields.distanceKm>0 ? fields.energyUsedKwh*1000/fields.distanceKm : null;
+      // Aggregate full-resolution drive scores, weighted by measured distance.
+      fields.driveScore=aggregateDriveScore(rows);
+    } else {
+      const rows=await this.sql`${this.driveSelect()} WHERE d.car_id=${id} AND d.start_date>=${period.periodStart}::timestamp AND d.start_date<${period.periodEnd}::timestamp AND ${this.measurableDrive()}`;
+      await this.enrichDrives(rows,false);
+      fields.driveScore=aggregateDriveScore(rows);
+    }
     return fields;
   }
   async mileage(id: number, bucket: 'day' | 'week' | 'month') {
+    const catalog=await this.driveCatalog(id);
+    if (catalog?.windows.length) {
+      const drives=await this.mergedDrives(id,{from:null,to:null,before:null,beforeId:null,limit:Number.MAX_SAFE_INTEGER,minMinutes:10},catalog,false);
+      const buckets=new Map<string,Row>();
+      for (const d of drives) {
+        const date=new Date(d.start); date.setUTCHours(0,0,0,0);
+        if (bucket==='month') date.setUTCDate(1);
+        if (bucket==='week') date.setUTCDate(date.getUTCDate()-(date.getUTCDay()+6)%7);
+        const key=date.toISOString(),row=buckets.get(key) ?? {start:date,distanceKm:0,driveCount:0,energyUsedKwh:0};
+        row.distanceKm+=d.distanceKm; row.driveCount++;
+        row.energyUsedKwh=row.energyUsedKwh !== null && d.energyUsedKwh !== null ? row.energyUsedKwh+d.energyUsedKwh : null;
+        buckets.set(key,row);
+      }
+      return [...buckets.values()].sort((a,b)=>+b.start-+a.start);
+    }
     const rows = await this.sql`WITH drives AS (${this.driveSelect()} WHERE d.car_id = ${id} AND ${this.measurableDrive()})
       SELECT date_trunc(${bucket}, start) AS start, sum("distanceKm") AS "distanceKm", count(*)::integer AS "driveCount", CASE WHEN count(*) FILTER (WHERE "energyUsedKwh" IS NULL) > 0 THEN NULL ELSE sum("energyUsedKwh") END AS "energyUsedKwh",
       count(*) FILTER (WHERE "distanceKm" IS NULL)::integer AS "_missingDistance"

@@ -55,9 +55,9 @@ export class FleetSeries {
     return out;
   }
 
-  async session(kind: 'drive' | 'charge', id: number) {
+  async session(kind: 'drive' | 'charge', id: number, window?: {car_id: number; start: Date; finish: Date}) {
     const s = this.sql;
-    const [session] = kind === 'drive'
+    const [session] = window ? [window] : kind === 'drive'
       ? await s`SELECT car_id, start_date AS start, COALESCE(end_date, now() AT TIME ZONE 'UTC') AS finish FROM public.drives WHERE id=${id}`
       : await s`SELECT car_id, start_date AS start, COALESCE(end_date, now() AT TIME ZONE 'UTC') AS finish FROM public.charging_processes WHERE id=${id}`;
     if (!session) return null;
@@ -89,7 +89,7 @@ export class FleetSeries {
       LEFT JOIN LATERAL (
         -- Reuse TeslaMate's SRTM elevation only at a nearby recorded location
         -- within 60 seconds. No interpolation across a sparse route.
-        SELECT elevation FROM public.positions tm WHERE ${kind === 'drive'} AND tm.drive_id=${id}
+        SELECT elevation FROM public.positions tm WHERE ${kind === 'drive'} AND tm.drive_id=${window ? 0 : id}
           AND tm.elevation IS NOT NULL AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
           AND tm.date BETWEEN (p.source_ts AT TIME ZONE 'UTC')-interval '60 seconds' AND (p.source_ts AT TIME ZONE 'UTC')+interval '60 seconds'
           AND 6371000*2*asin(least(1.0,sqrt(power(sin(radians((tm.latitude-p.latitude)/2)),2)

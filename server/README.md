@@ -169,3 +169,48 @@ page. No indexes or DDL are added to TeslaMate.
 Bodies are capped at 4096 bytes; SQL has a 15-second statement timeout. Health
 is public but contains only reachability and last recording time. Apply tailnet
 ACLs to George's device; pairing tokens still authorize all recorded vehicles.
+
+## Telemetry drive history
+
+With Fleet telemetry enabled, verified `api_vehicle_bindings` (digest checked
+against the current TeslaMate car identity) allow recorded telemetry sessions
+to replace overlapping TeslaMate drives after measurement. Unknown-distance telemetry retains the TeslaMate trip; partial telemetry cannot truncate a longer TM trip that starts earlier or ends later. A telemetry trip starting before TM's incorrect late segment still wins. The ingestion allowlist assigns the
+same car ID and permanently binds it to a digest; numeric ID equality alone
+never authorizes access. History before/after telemetry coverage and within
+known receiver/gear gaps retains TeslaMate drives. A fully covered TeslaMate
+span without a telemetry trip is suppressed. No remote geocoder is used:
+labels come from a containing local geofence, then a local address within 150m.
+
+Observed Park stops under three minutes join adjacent sessions. Stops of three
+minutes or longer, invalid gear, silence and disconnects split them. Isolated
+manoeuvres shorter than two minutes and 0.1 miles are dropped. IDs are negative
+safe integers `-(floor(startEpochSeconds) * 2097152 + carId)`; car IDs occupy 21
+bits and timestamps 32 bits (through 2106). TeslaMate IDs stay positive. Only
+drive detail IDs and drive cursors accept negative IDs. Both sources share the
+existing descending `(start, id)` pagination and UTC microsecond cursor format.
+
+List rows retain the existing fields and add `source` (`fleet_telemetry` or
+`teslamate`). `route` has at most 64 points, preserves endpoints and carries
+hidden route breaks. Telemetry detail has the same flat summary plus `path`,
+`telemetry.samples`, per-metric coverage and gaps; detail series are bounded to
+2000 points. Elevation is unknown. Fleet distances use already converted km
+from `payload_points`/`drive_points` (raw Odometer is miles); partial-session endpoints must be within two minutes of trip boundaries. Closed observed gear-to-gear sessions retain change-only readings across stationary boundary time when no continuity gap exists. GPS distance is a fallback only without
+unsupported route spans. Energy uses valid boundary EnergyRemaining readings,
+then continuous calibrated pack-power integration. Unknown energy stays null.
+Summary and mileage totals use the same merged history.
+
+`driveScore` v2 combines efficiency 40%, smoothness 25%, acceleration 20%,
+and speed 15%. Each integer component appears in `scoreBreakdown` as
+`{efficiency, acceleration, speed, smoothness}`; missing components are null,
+excluded, and remaining weights normalized. All-missing means null overall.
+Efficiency is `100 * exp(-ln(2.5)/1.15 * max(0,actual/rated - .85))` (100 at
+<=85% rated consumption, 40 at twice rated). Smoothness is
+`100 * exp(-mean(max(0,abs(jerk)-.6))/.8)`, where jerk is change in longitudinal
+acceleration per second. Acceleration is `100 * exp(-4 * harshTimeShare)`:
+launches above 0.30g, braking below -0.35g, or cornering above 0.35g absolute
+lateral acceleration count as harsh. Speed is
+`100 * exp(-mean(max(0,speedKph-130))/20)`. Means are weighted by observed time;
+intervals over 30s and known gaps are excluded. Smoothness uses fixed five-second means to avoid cadence and speed-quantization noise. Recorded longitudinal/lateral
+acceleration is preferred; trips without recorded longitudinal acceleration use speed differences, without mixing the two sources. Components and overall are rounded to 0–100. List and detail
+calculate scores from full-resolution observations. Summary `driveScore` is
+the distance-weighted mean of known drive scores with positive distance.

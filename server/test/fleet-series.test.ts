@@ -425,3 +425,10 @@ test('batched energy retains validated car and windows during concurrent drive e
   }});
   expect((await new FleetSeries(concurrent).driveEnergy([1])).get(1)).toEqual({energy:5,source:'fleet_energy_remaining'});
 });
+
+test('telemetry drive windows support safe negative IDs without int32 TeslaMate lookups',async()=>{
+  await datum('VehicleSpeed',20,start,'first');await datum('VehicleSpeed',25,at(10),'last');
+  const series=await new FleetSeries(reader).session('drive',-3700000000000001,{car_id:1,start,finish:at(10)});
+  expect(series?.samples).toHaveLength(2);expect(series?.samples[0]?.speedKph).toBeCloseTo(32.18688);
+  expect(series?.samples[0]?.elevationM).toBeNull();expect(series?.coverage.metrics.speedKph.sourceSampleCount).toBe(2);
+});

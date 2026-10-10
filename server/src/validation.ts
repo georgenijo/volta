@@ -6,6 +6,13 @@ export function integer(value: string | undefined, name: string, fallback?: numb
   if (!Number.isSafeInteger(n) || n > max) throw invalid(`${name} is out of range`);
   return n;
 }
+/** TeslaMate IDs stay positive int32; Fleet drive IDs are negative safe integers. */
+export function driveId(value: string | undefined): number {
+  if (!value || !/^-?[1-9]\d*$/.test(value)) throw invalid('id must be a nonzero integer');
+  const n=Number(value);
+  if (!Number.isSafeInteger(n) || (n>0 && n>2147483647)) throw invalid('id is out of range');
+  return n;
+}
 export function choice<T extends string>(value: string | undefined, values: readonly T[], fallback: T): T {
   if (value === undefined) return fallback;
   if (!values.includes(value as T)) throw invalid(`Expected ${values.join(', ')}`);
@@ -38,7 +45,7 @@ export function listInput(query: Record<string, string>, scope: string): ListInp
       if (decoded.scope !== scope || decoded.from !== from || decoded.to !== to || decoded.minMinutes !== (query.minMinutes ?? '10')) throw invalid('Cursor belongs to another query');
       if (typeof decoded.start !== 'string' || typeof decoded.id !== 'number') throw invalid('Invalid cursor');
       before = timestamp(decoded.start);
-      beforeId = integer(String(decoded.id), 'cursor id', undefined, scope.endsWith('/idles') ? 4294967295 : 2147483647);
+      beforeId = scope.endsWith('/drives') ? driveId(String(decoded.id)) : integer(String(decoded.id), 'cursor id', undefined, scope.endsWith('/idles') ? 4294967295 : 2147483647);
       if (!before) throw invalid('Invalid cursor');
     } catch { throw invalid('Invalid cursor'); }
   }
