@@ -11,8 +11,16 @@ struct MainShell: View {
         case dashboard, charging, drives, idles, more
     }
 
-    @State private var selection: Tab = .dashboard
-    @State private var visited: Set<Tab> = [.dashboard]
+    @State private var selection: Tab = MainShell.initialTab
+    @State private var visited: Set<Tab> = [MainShell.initialTab]
+
+    /// Screenshot aid (DEBUG): `-demoTab charging` opens on that tab.
+    private static var initialTab: Tab {
+        #if DEBUG
+        if let raw = UserDefaults.standard.string(forKey: "demoTab"), let tab = Tab(rawValue: raw) { return tab }
+        #endif
+        return .dashboard
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {

@@ -442,6 +442,15 @@ struct ChargeSummary: Codable, Hashable, Sendable, Identifiable {
     /// Optional; added by a server follow-up. Absent means "not sent", not 0,0.
     var latitude: Double? = nil
     var longitude: Double? = nil
+    /// Optional; newer servers only. "fleet_telemetry" or "teslamate". Fleet
+    /// Telemetry sessions may use negative ids.
+    var source: String? = nil
+    var avgPowerKw: Double? = nil
+    /// Recorded locality from the server; the app never geocodes.
+    var city: String? = nil
+    var street: String? = nil
+    /// Measured energy drawn from the charger. Absent means "not measured".
+    var energyFromGridKwh: Double? = nil
 }
 
 struct ChargeSample: Codable, Hashable, Sendable {

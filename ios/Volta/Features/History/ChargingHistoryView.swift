@@ -42,7 +42,8 @@ extension ChargeSummary {
         return .other
     }
 
-    var title: String { placeName ?? address ?? "Unknown location" }
+    /// Street, then place name, then the first address component (same as the detail title).
+    var title: String { ChargePlace.title(self) }
 
     var kindIcon: String {
         switch kind {
@@ -66,7 +67,7 @@ extension ChargeSummary {
 
     func matches(query: String) -> Bool {
         guard !query.isEmpty else { return true }
-        return [placeName, address].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }
+        return [placeName, address, street, city].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 }
 
@@ -125,8 +126,29 @@ struct ChargingHistoryView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: ChargeSummary.self) { ChargingDetailView(charge: $0) }
         }
-        .task(id: range) { await reload(skeleton: true) }
+        .task(id: range) {
+            await reload(skeleton: true)
+            #if DEBUG
+            openDemoCharge()
+            #endif
+        }
     }
+
+    #if DEBUG
+    /// Screenshot aid (DEBUG): `-demoOpenCharge fast|home|<id>` opens that
+    /// session once the list has loaded.
+    private func openDemoCharge() {
+        guard path.isEmpty, let target = UserDefaults.standard.string(forKey: "demoOpenCharge") else { return }
+        let match = feed.items.first { charge in
+            switch target {
+            case "fast": charge.fastCharger
+            case "home": charge.kind == .home
+            default: String(charge.id) == target
+            }
+        }
+        if let match { path.append(match) }
+    }
+    #endif
 
     private func reload(skeleton: Bool = false) async {
         let ds = dataSource, vid = vehicleID
@@ -301,11 +323,13 @@ struct ChargingHero: View {
                            accessibility: share.map { "Home charging \($0)% of energy, public \(100 - $0)%" } ?? "Home share unavailable")
     }
 
-    /// Blended price over sessions that recorded both cost and energy, single currency only.
+    /// Blended price per kWh added over sessions that recorded both cost and
+    /// energy (as on the detail screen), single currency only. Estimates are
+    /// left out so the total reflects what was actually paid.
     private func averageRate(_ totals: ChargingTotals) -> String? {
         guard case .single(_, let currency) = totals.cost else { return nil }
         let priced = charges.compactMap { c -> (Double, Double)? in
-            guard let cost = c.cost, let kwh = c.energyUsedKwh ?? c.energyAddedKwh, kwh > 0 else { return nil }
+            guard let cost = c.cost, let kwh = c.energyAddedKwh, kwh > 0 else { return nil }
             return (cost, kwh)
         }
         let kwh = priced.reduce(0) { $0 + $1.1 }
@@ -371,6 +395,12 @@ struct ChargeCurveWatermark: View {
 struct ChargeRow: View {
     var charge: ChargeSummary
     @Environment(\.units) private var units
+    /// Optional so previews without an app model still render.
+    @Environment(AppModel.self) private var model: AppModel?
+
+    private var cost: ChargeCost? {
+        ChargeCost.resolve(charge, fallbackRate: model?.settings.electricityRate ?? 0.20, fallbackCurrency: units.currency)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -438,20 +468,31 @@ struct ChargeRow: View {
         }
     }
 
-    private var subtitle: String? {
-        if let address = charge.address, address != charge.title { return address }
-        return charge.kind == .home ? "Home charger" : nil
-    }
+    /// Place and city, matching the detail subtitle.
+    private var subtitle: String? { ChargePlace.subtitle(charge) }
 
     private func metrics(compact: Bool) -> some View {
         HStack(spacing: 8) {
             metric("clock", VoltaFormat.duration(charge.durationMin))
+            if !compact {
+                dot
+                metric("bolt", charge.maxPowerKw.map { "\(VoltaFormat.number($0, digits: $0 >= 20 ? 0 : 1)) kW" } ?? "—")
+            }
             dot
-            metric("bolt", charge.maxPowerKw.map { "\(VoltaFormat.number($0, digits: $0 >= 20 ? 0 : 1)) kW" } ?? "—")
-            dot
-            metric("creditcard", VoltaFormat.money(charge.cost, currency: charge.currency ?? units.currency), tint: HistoryTheme.amber)
-            if !compact, let rate = ratePerKwh { dot; metric(nil, rate) }
+            metric("creditcard", costText, tint: HistoryTheme.amber)
+            if let soc = socText { dot; metric("battery.75percent", soc) }
         }
+    }
+
+    /// Recorded cost, or "~$4.52" when estimated from the electricity rate.
+    private var costText: String {
+        guard let cost else { return "—" }
+        let amount = VoltaFormat.money(cost.amount, currency: cost.currency)
+        return cost.isEstimated ? "~" + amount : amount
+    }
+
+    private var socText: String? {
+        ChargeSocBar(start: charge.startBatteryLevel, end: charge.endBatteryLevel).map { "\($0.start)→\($0.end)%" }
     }
 
     private var dot: some View { Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5) }
@@ -462,11 +503,6 @@ struct ChargeRow: View {
             Text(text).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.78))
         }
         .lineLimit(1).fixedSize()
-    }
-
-    private var ratePerKwh: String? {
-        guard let cost = charge.cost, let kwh = charge.energyUsedKwh ?? charge.energyAddedKwh, kwh > 0 else { return nil }
-        return VoltaFormat.money(cost / kwh, currency: charge.currency ?? units.currency) + "/kWh"
     }
 }
 
