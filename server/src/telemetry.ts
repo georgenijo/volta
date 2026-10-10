@@ -5,7 +5,7 @@ import { timestamp, type ListInput } from './validation';
 import { summaryPeriod } from './period';
 import { FleetDrives, replacedDrive, overlappingWindows, resolveDriveSources, telemetryDriveVehicle, type Catalog, type Window } from './fleet-drives';
 import { FleetSeries } from './fleet-series';
-import { FleetCharges, coveredCharge, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
+import { FleetCharges, chargeGroups, coveredCharge, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
 import { FleetLive, liveValues } from './fleet-live';
 import { applyDriveEnergy, scoreFromStats, aggregateDriveScore } from './drive-parity';
 
@@ -441,15 +441,17 @@ export class Telemetry {
       to_char(cp.start_date,'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart" FROM public.charging_processes cp
       LEFT JOIN public.positions p ON p.id=cp.position_id LEFT JOIN public.addresses a ON a.id=cp.address_id WHERE cp.car_id=${id}`;
   }
-  /** Mirrors mergedDrives: one merged, cursor-ordered list. A measured
-   * telemetry charge hides overlapping TeslaMate processes; TeslaMate stays
-   * wherever telemetry lacks coverage or could not measure power. */
+  /** Mirrors mergedDrives: one merged, cursor-ordered list. Each complete
+   * overlap group resolves to telemetry or TeslaMate (resolveCharges);
+   * TeslaMate stays wherever telemetry lacks coverage, lost data, could not
+   * measure energy, or saw no power. Rows keep `_cursorStart` and `_priced`. */
   private async mergedCharges(id: number, q: ListInput, catalog: ChargeCatalog) {
     const legacy=await this.legacyCharges(id),fleet=new FleetCharges(this.sql),cache=new Map<number,Promise<Row | null>>();
     // A failed telemetry charge degrades to TeslaMate, like a missing catalog.
     const hydrate=(w: ChargeWindow)=>{if (!cache.has(w.id)) cache.set(w.id,fleet.row(id,w,catalog.gaps,legacy,this.currency)
       .catch(()=>{this.log({event:'fleet_charge_failed',code:'telemetry_query_failed'});return null;}));return cache.get(w.id)!;};
-    const overlaps=(r: Row)=>catalog.windows.filter(w=>+w.start<(r.end ? +new Date(r.end) : Infinity) && +w.end>+new Date(r.start));
+    const resolve=chargeGroups(catalog,legacy,hydrate);
+    const lone=(r: Row)=>r.id>0 && !catalog.windows.some(w=>+w.start<(r.end ? +new Date(r.end) : Infinity) && +w.end>+new Date(r.start));
     const matches=(r:Row)=>(!q.from || r._cursorStart>=q.from) && (!q.to || r._cursorStart<q.to)
       && (!q.before || r._cursorStart<q.before || (r._cursorStart===q.before && r.id<q.beforeId!));
     const candidates: Row[]=[...legacy.filter(matches),...catalog.windows.filter(matches)];
@@ -457,12 +459,12 @@ export class Telemetry {
     const rows: Row[]=[];
     for (let i=0;i<candidates.length && rows.length<=q.limit;i++) {
       // Prefetch the rest of the page concurrently; the loop consumes in order.
-      for (const c of candidates.slice(i,i+q.limit+1-rows.length)) for (const w of c.id<0 ? [c as ChargeWindow] : overlaps(c)) void hydrate(w);
+      for (const c of candidates.slice(i,i+q.limit+1-rows.length)) if (!lone(c)) void resolve(c);
       const c=candidates[i]!;
-      if (c.id<0) { const row=await hydrate(c as ChargeWindow); if (row) rows.push(row); continue; }
-      const covering=overlaps(c);
-      if ((await Promise.all(covering.map(hydrate))).some(Boolean) || (!covering.length && coveredCharge(c,catalog))) continue;
-      rows.push(c);
+      if (lone(c)) { if (!coveredCharge(c,catalog)) rows.push(c); continue; }
+      const {shown,replaced}=await resolve(c);
+      if (c.id<0) { const row=shown.get(c.id); if (row) rows.push(row); }
+      else if (!replaced.has(c.id)) rows.push(c);
     }
     const ids=rows.filter(r=>r.id>0).map(r=>r.id);
     const tm=ids.length ? await this.sql`${this.chargeSelect()} WHERE cp.id=ANY(${ids}::integer[])` : [];
@@ -471,21 +473,25 @@ export class Telemetry {
   }
   async charges(id: number, q: ListInput) {
     const catalog=await this.chargeCatalog(id);
-    if (catalog?.windows.length) return this.mergedCharges(id,q,catalog);
+    if (catalog?.windows.length) return (await this.mergedCharges(id,q,catalog)).map(({_uncertain,_priced,...row})=>row);
     return this.sql`${this.chargeSelect()} WHERE cp.car_id = ${id}
       AND (${q.from}::timestamp IS NULL OR cp.start_date >= ${q.from}::timestamp)
       AND (${q.to}::timestamp IS NULL OR cp.start_date < ${q.to}::timestamp)
-      AND (${q.before}::timestamp IS NULL OR (cp.start_date, cp.id) < (${q.before}::timestamp, ${q.beforeId}::integer))
+      AND (${q.before}::timestamp IS NULL OR (cp.start_date, cp.id::bigint) < (${q.before}::timestamp, ${q.beforeId}::bigint))
       ORDER BY cp.start_date DESC, cp.id DESC LIMIT ${q.limit + 1}`;
   }
   async charge(id: number) {
     if (id<0) {
       const vehicle=telemetryChargeVehicle(id),catalog=await this.chargeCatalog(vehicle),window=catalog?.windows.find(w=>w.id===id);
       if (!window || !catalog) throw missing();
-      const row=await new FleetCharges(this.sql).row(vehicle,window,catalog.gaps,await this.legacyCharges(vehicle),this.currency,true);
+      const fleet=new FleetCharges(this.sql),legacy=await this.legacyCharges(vehicle);
+      const target=fleet.row(vehicle,window,catalog.gaps,legacy,this.currency,true);
+      // Same group resolution as the list, for the reconciled cost.
+      const {shown}=await chargeGroups(catalog,legacy,w=>w.id===id ? target : fleet.row(vehicle,w,catalog.gaps,legacy,this.currency))(window);
+      const row=await target;
       if (!row) throw missing();
-      const {_cursorStart,...fields}=row;
-      return {...fields,efficiency:null,telemetry:await this.fleetSession('charge',id,{car_id:vehicle,start:row.start,finish:row.end})} as Row;
+      const {_cursorStart,_uncertain,_priced,...fields}=row;
+      return {...fields,cost:shown.get(id)?.cost ?? null,efficiency:null,telemetry:await this.fleetSession('charge',id,{car_id:vehicle,start:row.start,finish:row.end})} as Row;
     }
     const [summary] = await this.sql`${this.chargeSelect()} WHERE cp.id = ${id}`;
     if (!summary) throw missing();
@@ -635,7 +641,8 @@ export class Telemetry {
     const charges=await this.chargeCatalog(id);
     if (charges?.windows.length) {
       const rows=await this.mergedCharges(id,{from:timestamp(period.periodStart),to:timestamp(period.periodEnd),before:null,beforeId:null,limit:Number.MAX_SAFE_INTEGER,minMinutes:10},charges);
-      const total=(key: string)=>rows.length && rows.every(r=>r[key] !== null && r[key] !== undefined) ? rows.reduce((sum,r)=>sum+Number(r[key]),0) : null;
+      const known=(r: Row,key: string)=>r[key] !== null && r[key] !== undefined || (key==='cost' && r._priced);
+      const total=(key: string)=>rows.length && rows.every(r=>known(r,key)) ? rows.reduce((sum,r)=>sum+Number(r[key] ?? 0),0) : null;
       fields.chargeCount=rows.length; fields.energyAddedKwh=total('energyAddedKwh'); fields.chargeCost=total('cost');
     }
     return fields;

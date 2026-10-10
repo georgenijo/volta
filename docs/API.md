@@ -152,18 +152,29 @@ Place          { id, name, latitude, longitude, radiusM, costPerKwh }
 With Fleet Telemetry enabled and bound, charge lists merge derived telemetry
 charge sessions (`source:"fleet_telemetry"`, negative `id`, accepted by
 `/v1/charges/{id}` and cursors) with TeslaMate processes (`source:"teslamate"`).
-A measured telemetry charge hides overlapping TeslaMate processes; TeslaMate
-remains where telemetry has no coverage, lost data (gap >=90s) or no reported
-charge power. Telemetry `start`/`end` are trimmed to reported AC/DC power >0
-and never reach the next drive; order, `from/to` and cursors use the untrimmed
-session start. Battery levels are rounded BatteryLevel at the edges;
-`energyAddedKwh` is the EnergyRemaining delta, else held-power integration
-(null across lost data); `maxPowerKw` and energy-weighted `avgPowerKw` use the
-charge power rule below. `address/placeName/city/street` come from TeslaMate's
-nearest address (<=150m) and containing geofence, never an external geocoder.
-`cost` comes from an overlapping priced TeslaMate process, else null;
-`energyUsedKwh`, `efficiency` and `energyFromGridKwh` are null (no measured grid
-energy is exposed). Detail `samples` hold at most 2,000 thinned points.
+Telemetry windows and TeslaMate processes linked by overlap resolve as one
+group. Telemetry replaces the group's TeslaMate processes only when every
+measured telemetry charge has a measurable `energyAddedKwh`, an explicit stop
+and no lost data (gap >=90s), and no lost data falls inside any process's
+telemetry-covered span; otherwise TeslaMate stays and the overlapping partial
+telemetry is dropped from lists and totals. TeslaMate also remains where
+telemetry has no coverage or no reported charge power. Telemetry `start`/`end`
+are trimmed to reported AC/DC power >0 and never reach the next drive; the end
+is the charging source's first explicit non-positive power, never an invalid or
+missing reading (that leaves the stop uncertain). Order, `from/to` and cursors
+use the untrimmed session start. Battery levels are rounded BatteryLevel at the
+edges; `energyAddedKwh` is the EnergyRemaining delta, else held-power
+integration (null across lost data or unknown power). Edge values hold
+change-only readings but never across an invalid observation or lost data.
+`maxPowerKw` and energy-weighted `avgPowerKw` use the charge power rule below.
+`address/placeName/city/street` come from TeslaMate's nearest address (<=150m)
+and containing geofence, never an external geocoder. Each replaced TeslaMate
+receipt counts once: `cost` sums the receipts assigned to that charge (largest
+overlap, then more energy, then earlier), null when it has none or any is
+unpriced; summary `chargeCost` counts a charge whose overlapping receipts are
+all priced but carried by a sibling. `energyUsedKwh`, `efficiency` and
+`energyFromGridKwh` are null (no measured grid energy is exposed). Detail
+`samples` hold at most 2,000 thinned points.
 Summary charge totals use the merged list; charger locations and timeline remain
 TeslaMate-only. `street` is house number plus road, else null.
 
