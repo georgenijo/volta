@@ -307,15 +307,6 @@ final class TripTests: XCTestCase {
         XCTAssertEqual(list.first { $0.id == TripFixtures.denseDriveID }?.distanceKm, dense.summary.distanceKm)
     }
 
-    func testSamplingCopyDisclosesCountsAndConflicts() {
-        let t = TripTimeline(path: TripFixtures.sparse(summary(minutes: 56)).path, start: t0, end: t0.addingTimeInterval(56 * 60))
-        XCTAssertTrue(TripSamplingNote.title(t).contains("5 distinct samples"))
-        let detail = TripSamplingNote.detail(t)
-        XCTAssertTrue(detail.contains("1,335"))
-        XCTAssertTrue(detail.contains("conflicting"))
-        XCTAssertTrue(detail.contains("not the driven path"))
-    }
-
     func testPlaceSplitting() {
         XCTAssertEqual(TripPlace("Union City, CA"), TripPlace(primary: "Union City", secondary: "CA"))
         XCTAssertEqual(TripPlace(nil).primary, "Unknown place")

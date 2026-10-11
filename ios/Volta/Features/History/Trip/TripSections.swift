@@ -4,13 +4,13 @@ import SwiftUI
 
 extension View {
     /// Small uppercase tracked label (10.5 pt), tertiary by default.
-    func tripLabel(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 10.5) -> some View {
+    func tripLabel(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 8.5) -> some View {
         self.font(.system(size: size, weight: .medium)).tracking(size * 0.2).textCase(.uppercase).foregroundStyle(color)
             .lineLimit(1)
     }
 
     /// Kept for older call sites: the same uppercase caption voice.
-    func tripCaption(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 10) -> some View {
+    func tripCaption(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 8) -> some View {
         tripLabel(color, size: size)
     }
 }
@@ -28,11 +28,11 @@ struct TripSection<Trailing: View, Content: View>: View {
             Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
             HStack(alignment: .center, spacing: 0) {
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
                     .frame(width: 34, alignment: .leading)
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold)).tracking(2.6).textCase(.uppercase)
+                    .font(.system(size: 12.5, weight: .semibold)).tracking(2.2).textCase(.uppercase)
                     .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 10)
                 trailing
@@ -58,7 +58,7 @@ struct TripHeaderValue: View {
     var text: String
     var color: Color = .white
     var body: some View {
-        Text(text).font(.system(size: 16, weight: .medium)).monospacedDigit().foregroundStyle(color)
+        Text(text).font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(color)
             .lineLimit(1).minimumScaleFactor(0.75)
     }
 }
@@ -101,7 +101,7 @@ struct TripHero: View {
             }
             .padding(.top, 30)
             Text(TripHero.dateLine(summary))
-                .tripLabel(HistoryTheme.tertiary, size: 10)
+                .tripLabel(HistoryTheme.tertiary, size: 8)
                 .minimumScaleFactor(0.8)
                 .padding(.top, 26)
         }
@@ -125,7 +125,7 @@ struct TripHero: View {
         return HStack(alignment: .center, spacing: 0) {
             TripGlowDot(color: color, size: 8).frame(width: 21, alignment: .leading)
             Text(place.primary)
-                .font(.system(size: 21, weight: .medium))
+                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(address == nil ? HistoryTheme.secondary : .white)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Spacer(minLength: 8)
@@ -133,9 +133,9 @@ struct TripHero: View {
                 if let level {
                     Image(systemName: TripPlace.batterySymbol(level)).font(.system(size: 15, weight: .regular))
                         .foregroundStyle(HistoryTheme.secondary)
-                    Text("\(level)%").font(.system(size: 21, weight: .medium)).monospacedDigit().foregroundStyle(.white)
+                    Text("\(level)%").font(.system(size: 20, weight: .medium)).monospacedDigit().foregroundStyle(.white)
                 } else {
-                    Text("—").font(.system(size: 21, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    Text("—").font(.system(size: 20, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                 }
             }
         }
@@ -226,8 +226,8 @@ struct TripStatsRow: View {
                 if let regenKwh {
                     HStack(spacing: 7) {
                         Text(VoltaFormat.number(regenKwh))
-                            .font(.system(size: 11, weight: .semibold)).monospacedDigit().foregroundStyle(HistoryTheme.green)
-                        Text("Regen").tripLabel(size: 10)
+                            .font(.system(size: 8.5, weight: .semibold)).monospacedDigit().foregroundStyle(HistoryTheme.green)
+                        Text("Regen").tripLabel(size: 8)
                     }
                 }
             }
@@ -236,8 +236,8 @@ struct TripStatsRow: View {
                    TripStatsRow.avgSpeedKph(summary).map { "\(VoltaFormat.number(units.distanceValue(km: $0), digits: 0)) \(speedUnit)" } ?? "—",
                    color: .white) {
                 HStack(spacing: 7) {
-                    Text("Max").tripLabel(size: 10)
-                    Text(maxText).font(.system(size: 11, weight: .semibold)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                    Text("Max").tripLabel(size: 8)
+                    Text(maxText).font(.system(size: 8.5, weight: .semibold)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
                 }
             }
         }
@@ -249,12 +249,12 @@ struct TripStatsRow: View {
                                    @ViewBuilder sub: () -> Sub) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 7) {
-                Image(systemName: icon).font(.system(size: 12, weight: .medium))
+                Image(systemName: icon).font(.system(size: 10, weight: .medium))
                     .foregroundStyle(icon == "bolt.fill" ? HistoryTheme.green : HistoryTheme.secondary)
-                Text(label).tripLabel(HistoryTheme.secondary, size: 10)
+                Text(label).tripLabel(HistoryTheme.secondary, size: 8)
             }
             Text(value)
-                .font(.system(size: 22, weight: .medium)).monospacedDigit()
+                .font(.system(size: 19, weight: .medium)).monospacedDigit()
                 .foregroundStyle(color).lineLimit(1).minimumScaleFactor(0.7)
                 .padding(.top, 14)
             sub().padding(.top, 14).frame(minHeight: 14)
@@ -317,62 +317,6 @@ struct TripStatsRow: View {
     }
 }
 
-// MARK: - Sampling disclosure
-
-/// Plain-language account of what was recorded. Shown only when the trip is
-/// not densely sampled.
-struct TripSamplingNote: View {
-    var timeline: TripTimeline
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: timeline.quality == .partial ? "waveform.path.ecg" : "exclamationmark.triangle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(HistoryTheme.amber)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(TripSamplingNote.title(timeline))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                Text(TripSamplingNote.detail(timeline))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(HistoryTheme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 28)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("trip.sampling")
-    }
-
-    static func title(_ t: TripTimeline) -> String {
-        let samples = "\(t.points.count) distinct sample\(t.points.count == 1 ? "" : "s")"
-        switch t.quality {
-        case .dense: return "Densely recorded · \(samples)"
-        case .partial: return "Partly recorded · \(samples) over \(VoltaFormat.duration(t.totalMinutes))"
-        case .sparse: return "Sparse recording · \(samples) over \(VoltaFormat.duration(t.totalMinutes))"
-        case .none: return "No positions recorded"
-        }
-    }
-
-    static func detail(_ t: TripTimeline) -> String {
-        var parts: [String] = []
-        if t.duplicatesRemoved > 0 || t.conflictingRowsDropped > 0 {
-            parts.append("\(t.rawCount.formatted()) rows received; \(t.duplicatesRemoved.formatted()) exact repeats removed.")
-        }
-        if t.conflictingTimestamps > 0 {
-            parts.append("\(t.conflictingTimestamps) timestamp\(t.conflictingTimestamps == 1 ? "" : "s") had conflicting rows; one row was kept by a fixed rule.")
-        }
-        parts.append("\(TripAnalysis.percent(t.coverage)) of the trip lies within \(Int(TripTimeline.gapThreshold / 60)) min of a sample.")
-        if t.gapCount > 0 || t.longestGap > 0 {
-            parts.append("Map gaps are preserved (longest \(VoltaFormat.duration(t.longestGap / 60))): dashed map lines only join samples and are not the driven path. Chart values are held between observations.")
-        }
-        if t.quality != .dense { parts.append("Regen and smoothness need denser samples.") }
-        return parts.joined(separator: " ")
-    }
-}
-
 // MARK: - Cost
 
 /// Trip cost: electric against the fuel equivalent, drawn to scale, with the
@@ -402,6 +346,8 @@ struct TripCostCard: View {
 
     private static let labelWidth: CGFloat = 80
     private static let valueWidth: CGFloat = 70
+    private static let rowHeight: CGFloat = 16
+    private static let rowGap: CGFloat = 10
 
     private func bars(_ e: TripCostEstimate) -> some View {
         let top = max(e.electric, e.fuel ?? 0, 0.000_001)
@@ -420,7 +366,7 @@ struct TripCostCard: View {
                     if let fuel = e.fuel, let fuelWidth {
                         row("Fuel eq.", width: fuelWidth, fill: AnyShapeStyle(Color(hex: 0x6B5A2E)),
                             value: VoltaFormat.money(fuel, currency: e.currency), valueColor: .white.opacity(0.75))
-                            .padding(.top, 16)
+                            .padding(.top, Self.rowGap)
                         if let savings = e.savings, savings > 0 {
                             let from = Self.labelWidth + electricWidth, to = Self.labelWidth + fuelWidth
                             TripSavingsBracket()
@@ -429,9 +375,9 @@ struct TripCostCard: View {
                                 .offset(x: from)
                                 .padding(.top, 14)
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text("Savings").tripLabel(HistoryTheme.green, size: 10)
+                                Text("Savings").tripLabel(HistoryTheme.green, size: 8)
                                 Text(VoltaFormat.money(savings, currency: e.currency))
-                                    .font(.system(size: 18, weight: .semibold)).monospacedDigit().foregroundStyle(HistoryTheme.green)
+                                    .font(.system(size: 13, weight: .semibold)).monospacedDigit().foregroundStyle(HistoryTheme.green)
                             }
                             .fixedSize()
                             .frame(width: max(8, to - from))
@@ -445,10 +391,10 @@ struct TripCostCard: View {
             .frame(height: TripCostCard.barsHeight(e))
             HStack(alignment: .firstTextBaseline) {
                 if let percent = e.percentVsFuel {
-                    Text(TripCostCard.percentText(percent)).tripLabel(size: 10)
+                    Text(TripCostCard.percentText(percent)).tripLabel(size: 8)
                 }
                 Spacer(minLength: 8)
-                Text(e.source.label).tripLabel(size: 10)
+                Text(e.source.label).tripLabel(size: 8)
             }
             .padding(.top, 26)
             if editable, e.source == .estimated {
@@ -462,19 +408,20 @@ struct TripCostCard: View {
     }
 
     private static func barsHeight(_ e: TripCostEstimate) -> CGFloat {
-        guard e.fuel != nil else { return 24 }
-        return (e.savings ?? 0) > 0 ? 24 + 16 + 24 + 14 + 7 + 10 + 24 : 24 + 16 + 24
+        let row = Self.rowHeight
+        guard e.fuel != nil else { return row }
+        return (e.savings ?? 0) > 0 ? row + rowGap + row + 14 + 7 + 10 + 20 : row + rowGap + row
     }
 
     private func row(_ label: String, width: CGFloat, fill: AnyShapeStyle, value: String, valueColor: Color) -> some View {
         HStack(spacing: 0) {
-            Text(label).tripLabel(HistoryTheme.secondary, size: 10).frame(width: Self.labelWidth, alignment: .leading)
+            Text(label).tripLabel(HistoryTheme.secondary, size: 8).frame(width: Self.labelWidth, alignment: .leading)
             RoundedRectangle(cornerRadius: 3).fill(fill).frame(width: width, height: 10)
-            Text(value).font(.system(size: 17, weight: .medium)).monospacedDigit().foregroundStyle(valueColor)
+            Text(value).font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(valueColor)
                 .lineLimit(1).fixedSize()
                 .padding(.leading, 8)
         }
-        .frame(height: 24)
+        .frame(height: Self.rowHeight)
     }
 
     /// "−69% VS FUEL" (cheaper) or "+12% VS FUEL" (dearer).
@@ -585,7 +532,7 @@ struct TripScoreRing: View {
                     .rotationEffect(.degrees(90 + (360 - 280) / 2))
             }
             Text(value.map(String.init) ?? "—")
-                .font(.system(size: 46, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                .font(.system(size: 40, weight: .bold)).monospacedDigit().foregroundStyle(.white)
         }
         .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
@@ -601,10 +548,10 @@ struct ScoreBreakdownRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).tripLabel(HistoryTheme.secondary, size: 10)
+                Text(title).tripLabel(HistoryTheme.secondary, size: 8)
                 Spacer(minLength: 6)
                 Text(value.map(String.init) ?? "—")
-                    .font(.system(size: 15, weight: .medium)).monospacedDigit()
+                    .font(.system(size: 10.5, weight: .medium)).monospacedDigit()
                     .foregroundStyle(value == nil ? HistoryTheme.tertiary : .white)
             }
             GeometryReader { geo in
@@ -635,7 +582,7 @@ struct TripScoreCard: View {
     var body: some View {
         TripSection(icon: "star.fill", title: "Driving score") {
             if let word = TripScoreStyle.word(score) {
-                Text(word.uppercased()).font(.system(size: 16, weight: .semibold)).foregroundStyle(TripScoreStyle.tint(score))
+                Text(word.uppercased()).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(TripScoreStyle.tint(score))
             }
         } content: {
             VStack(alignment: .leading, spacing: 22) {
@@ -684,7 +631,7 @@ struct TripScoreCard: View {
         HStack(spacing: 8) {
             Image(systemName: icon).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
             Text(value).font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
-            Text(label).tripLabel(size: 10)
+            Text(label).tripLabel(size: 8)
         }
         .accessibilityElement(children: .combine)
     }
@@ -714,7 +661,7 @@ struct TripDetailsList: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 if index > 0 { Rectangle().fill(HistoryTheme.hairline).frame(height: 1) }
                 HStack(alignment: .firstTextBaseline) {
-                    Text(row.0).tripLabel(HistoryTheme.secondary, size: 10.5)
+                    Text(row.0).tripLabel(HistoryTheme.secondary, size: 8.5)
                     Spacer(minLength: 12)
                     Text(row.1).font(.system(size: 16, weight: .regular)).foregroundStyle(.white)
                         .multilineTextAlignment(.trailing)

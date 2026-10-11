@@ -44,9 +44,6 @@ struct DriveDetailView: View {
                     Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 22)
                     TripStatsRow(summary: summary, units: units, regen: snapshot?.regen, maxSpeed: snapshot?.maxSpeed)
                         .padding(.top, 46).padding(.bottom, 46)
-                    if let timeline = snapshot?.timeline, timeline.quality != .dense {
-                        TripSamplingNote(timeline: timeline)
-                    }
                     TripCostCard(estimate: costEstimate, editable: model != nil) { editingRate = true }
                     TripScoreCard(score: summary.efficiencyScore,
                                   breakdown: .resolved(server: summary.scoreBreakdown, local: snapshot?.score),
@@ -398,7 +395,7 @@ struct DriveDetailView: View {
                     if let used = summary.energyUsedKwh {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Image(systemName: "battery.25percent").font(.system(size: 15)).foregroundStyle(HistoryTheme.secondary)
-                            Text("Used").tripLabel(HistoryTheme.tertiary, size: 10.5)
+                            Text("Used").tripLabel(HistoryTheme.tertiary, size: 8.5)
                             Text("\(number(used, 1)) kWh")
                                 .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                         }
@@ -417,7 +414,7 @@ struct DriveDetailView: View {
                 ?? TripStatsRow.avgSpeedKph(summary).map { units.distanceValue(km: $0) }
             TripSection(icon: "gauge.with.dots.needle.33percent", title: "Speed") {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("Max \(maxText)").tripLabel(HistoryTheme.tertiary, size: 10.5)
+                    Text("Max \(maxText)").tripLabel(HistoryTheme.tertiary, size: 8.5)
                     TripHeaderValue(text: current.map { "\(number($0)) \(speedUnit)" } ?? "—")
                 }
             } content: {
@@ -435,9 +432,9 @@ struct DriveDetailView: View {
         if let lo = points.map(\.v).min(), let hi = points.map(\.v).max() {
             TripSection(icon: "mountain.2.fill", title: "Elevation") {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Min").tripLabel(size: 10)
+                    Text("Min").tripLabel(size: 8)
                     TripHeaderValue(text: "\(number(loader.detail?.elevationMinM.flatMap { $0.isFinite ? height($0) : nil } ?? lo)) \(heightUnit)", color: HistoryTheme.amber)
-                    Text("Max").tripLabel(size: 10).padding(.leading, 8)
+                    Text("Max").tripLabel(size: 8).padding(.leading, 8)
                     TripHeaderValue(text: "\(number(loader.detail?.elevationMaxM.flatMap { $0.isFinite ? height($0) : nil } ?? hi)) \(heightUnit)", color: HistoryTheme.amber)
                 }
             } content: {

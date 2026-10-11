@@ -173,15 +173,6 @@ final class DriveDetailChartsTests: XCTestCase {
         XCTAssertTrue(TripBand.points(actual: [], ideal: ideal).isEmpty)
     }
 
-    func testSamplingNoteDescribesHeldChartValues() {
-        let path = [DrivePoint(t: at(0), latitude: 37.4, longitude: -122.1, speedKph: 10, powerKw: nil, elevationM: nil, batteryLevel: nil),
-                    DrivePoint(t: at(900), latitude: 37.41, longitude: -122.1, speedKph: 20, powerKw: nil, elevationM: nil, batteryLevel: nil)]
-        let note = TripSamplingNote.detail(TripTimeline(path: path, start: t0, end: at(1800)))
-        XCTAssertTrue(note.contains("Map gaps are preserved"), note)
-        XCTAssertTrue(note.contains("Chart values are held between observations"), note)
-        XCTAssertFalse(note.contains("not drawn across gaps"), note)
-    }
-
     // MARK: Range efficiency
 
     func testRangeEfficiencyIdealAndPercent() throws {

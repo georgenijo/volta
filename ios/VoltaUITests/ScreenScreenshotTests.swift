@@ -105,9 +105,14 @@ final class ScreenScreenshotTests: XCTestCase {
         capture("drive-detail")
         try scroll("drive-detail", screenshot: "drive-detail-scrolled")
         let elevation = element("trip.chart.coverage.elevation")
-        for _ in 0..<8 {
+        // Slow swipes; step back if a swipe carries the section past the top.
+        for _ in 0..<12 {
             if elevation.exists && elevation.isHittable { break }
-            element("scroll.drive-detail").swipeUp()
+            if elevation.exists && elevation.frame.maxY < app.frame.midY {
+                element("scroll.drive-detail").swipeDown(velocity: .slow)
+            } else {
+                element("scroll.drive-detail").swipeUp(velocity: .slow)
+            }
         }
         XCTAssertTrue(elevation.exists && elevation.isHittable, "The synthetic drive must render its elevation section")
         capture("drive-detail-elevation")
