@@ -297,6 +297,31 @@ final class ChargeInsightsTests: XCTestCase {
         XCTAssertEqual(detail.samples.count, 1)
     }
 
+    // MARK: Peak state of charge
+
+    private func curve(_ values: [(minute: Double, value: Double, segment: Int)]) -> [ChargeCurvePoint] {
+        values.enumerated().map { ChargeCurvePoint(id: $0, t: t0.addingTimeInterval($1.minute * 60), value: $1.value, segment: $1.segment) }
+    }
+
+    func testSocAtPeakPairsOnlyTheShownPeakSample() {
+        let power = curve([(0, 40, 0), (1, 80, 0), (2, 70, 0)])
+        let soc = curve([(0, 55, 0), (1, 60, 0), (2, 62, 0)])
+        XCTAssertEqual(ChargeCurve.socAtPeak(power: power, soc: soc, shownPeak: 80), 60)
+        XCTAssertNil(ChargeCurve.socAtPeak(power: power, soc: soc, shownPeak: 150),
+                     "the summary's 150 kW peak is not the sample where the car was at 60%")
+        XCTAssertNil(ChargeCurve.socAtPeak(power: power, soc: [], shownPeak: 80))
+    }
+
+    func testSocAtPeakNeverCrossesAGap() {
+        // Power peaks just before a recording gap; the only SoC reading is after it.
+        let power = curve([(0, 60, 0), (1, 80, 0), (10, 50, 1), (11, 45, 1)])
+        XCTAssertNil(ChargeCurve.socAtPeak(power: power, soc: curve([(1.5, 61, 0), (10, 70, 0)]), shownPeak: 80),
+                     "a reading past the end of the peak's stretch is across the gap")
+        XCTAssertNil(ChargeCurve.socAtPeak(power: curve([(0, 80, 0), (20, 60, 0)]), soc: curve([(10, 50, 0)]), shownPeak: 80),
+                     "too far from the peak in time")
+        XCTAssertEqual(ChargeCurve.socAtPeak(power: power, soc: curve([(0.5, 58, 0), (10, 70, 0)]), shownPeak: 80), 58)
+    }
+
     // MARK: Demo data
 
     func testDemoChargesExerciseTheNewFields() async throws {

@@ -471,15 +471,14 @@ struct ChargingDetailView: View {
 
     private var curveSection: some View {
         let power = powerCurve, soc = socCurve
-        let peak = ChargeCurve.peak(power.points)
-        let socAtPeak = peak.flatMap { p in soc.points.min { abs($0.t.timeIntervalSince(p.t)) < abs($1.t.timeIntervalSince(p.t)) } }
+        let socAtPeak = peakPowerKw.flatMap { ChargeCurve.socAtPeak(power: power.points, soc: soc.points, shownPeak: $0) }
         let title = unitTitle("Charge curve", [("kW", HistoryTheme.green)] + (soc.points.count >= 2 ? [("%", HistoryTheme.blue)] : []))
         return VStack(alignment: .leading, spacing: 14) {
             DetailSectionHeader(title: title) {
                 if let peakPowerKw, power.points.count >= 2 {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         peakValue(kw(peakPowerKw), color: HistoryTheme.green)
-                        if let socAtPeak { peakValue("\(Int(socAtPeak.value.rounded()))%", color: HistoryTheme.blue) }
+                        if let socAtPeak { peakValue("\(Int(socAtPeak.rounded()))%", color: HistoryTheme.blue) }
                         Text("peak").font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                     }
                 }

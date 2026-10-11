@@ -238,6 +238,9 @@ final class DriveInsightsTests: XCTestCase {
         // Builds with the 0.20 default stored the rate only when the user saved one.
         defaults.set(0.20, forKey: "electricityRate")
         XCTAssertEqual(UserSettings(defaults: defaults).electricityRate, 0.20)
+        // A saved rate above today's typing ceiling is still the user's.
+        defaults.set(1500.0, forKey: "electricityRate")
+        XCTAssertEqual(UserSettings(defaults: defaults).electricityRate, 1500)
     }
     func testRateValidation() {
         XCTAssertEqual(ElectricityRates.validated(0.31), 0.31)
@@ -251,12 +254,24 @@ final class DriveInsightsTests: XCTestCase {
         XCTAssertEqual(ElectricityRates.input(""), .empty)
         XCTAssertEqual(ElectricityRates.input("  "), .empty)
         XCTAssertEqual(ElectricityRates.input("0.15"), .valid(0.15))
-        XCTAssertEqual(ElectricityRates.input("0,15"), .valid(0.15), "either decimal separator")
-        XCTAssertEqual(ElectricityRates.input("$0.48"), .valid(0.48), "a typed symbol is ignored")
+        XCTAssertEqual(ElectricityRates.input(" 0.25 "), .valid(0.25))
+        XCTAssertEqual(ElectricityRates.input("0,25"), .valid(0.25), "either decimal separator")
+        XCTAssertEqual(ElectricityRates.input(".5"), .valid(0.5))
+        XCTAssertEqual(ElectricityRates.input("$0.25"), .valid(0.25), "one leading symbol is allowed")
+        XCTAssertEqual(ElectricityRates.input("€0,25", currency: "EUR"), .valid(0.25))
         XCTAssertEqual(ElectricityRates.input("0"), .valid(0), "free charging is a rate")
+        XCTAssertEqual(ElectricityRates.input("30", currency: "JPY"), .valid(30), "yen rates fit under the ceiling")
         XCTAssertEqual(ElectricityRates.input("-0.1"), .invalid)
-        XCTAssertEqual(ElectricityRates.input("12"), .invalid, "above the maximum")
+        XCTAssertEqual(ElectricityRates.input("\u{2212}0.1"), .invalid, "a Unicode minus is not dropped")
+        XCTAssertEqual(ElectricityRates.input("1e0"), .invalid, "no exponents")
+        XCTAssertEqual(ElectricityRates.input("1,000"), .valid(1), "a comma is a decimal separator, not grouping")
+        XCTAssertEqual(ElectricityRates.input("1,000.5"), .invalid, "no grouping")
+        XCTAssertEqual(ElectricityRates.input("1001"), .invalid, "above the maximum")
         XCTAssertEqual(ElectricityRates.input("1.2.3"), .invalid)
+        XCTAssertEqual(ElectricityRates.input("."), .invalid)
+        XCTAssertEqual(ElectricityRates.input("$"), .invalid)
+        XCTAssertEqual(ElectricityRates.input("$$1"), .invalid)
+        XCTAssertEqual(ElectricityRates.input("0.25$"), .invalid)
         XCTAssertEqual(ElectricityRates.input("abc"), .invalid)
         XCTAssertEqual(ElectricityRates.symbol(for: "USD"), "$")
         XCTAssertEqual(ElectricityRates.symbol(for: "EUR"), "€")
@@ -268,6 +283,16 @@ final class DriveInsightsTests: XCTestCase {
         XCTAssertEqual(ElectricityRates(home: 0.2, dcFast: nil, currency: "USD").perKwh(fastCharger: true), 0.2, "DC falls back to home")
         XCTAssertNil(ElectricityRates(home: nil, dcFast: 0.5, currency: "USD").perKwh(fastCharger: false), "home never uses the DC rate")
         XCTAssertNil(ElectricityRates(home: nil, dcFast: nil, currency: "USD").homeTripRate)
+    }
+    func testRateSheetSavesPrefilledRateExactly() {
+        for saved in [0.0004, 0.12345, 0.1 + 0.2, 0.15, 0, 1500] {
+            let text = ElectricityRateSheet.text(saved)
+            XCTAssertEqual(ElectricityRateSheet.input(text, saved: saved, currency: "USD"), .valid(saved), "\(saved) shown as \(text)")
+        }
+        XCTAssertEqual(ElectricityRateSheet.text(0.0004), "0.0004")
+        XCTAssertEqual(ElectricityRateSheet.text(0.12345), "0.12345")
+        XCTAssertEqual(ElectricityRateSheet.input("0.2", saved: 0.12345, currency: "USD"), .valid(0.2), "an edit is parsed")
+        XCTAssertEqual(ElectricityRateSheet.input("", saved: 0.12345, currency: "USD"), .empty, "clearing removes the rate")
     }
 }
 

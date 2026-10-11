@@ -273,6 +273,21 @@ enum ChargeCurve {
         points.max { $0.value < $1.value }
     }
 
+    /// The state of charge at the power peak, only when the curve's peak is the
+    /// one shown (`shownPeak` may come from the session summary instead) and a
+    /// SoC sample sits close to it inside the same unbroken stretch of power
+    /// samples. Otherwise nil: pairing readings from different moments, or
+    /// across a gap, would claim a SoC the car never had at that power.
+    static func socAtPeak(power: [ChargeCurvePoint], soc: [ChargeCurvePoint], shownPeak: Double,
+                          within window: TimeInterval = TripTimeline.gapThreshold) -> Double? {
+        guard let peak = peak(power), abs(peak.value - shownPeak) <= max(0.05, shownPeak * 0.005) else { return nil }
+        let stretch = power.filter { $0.segment == peak.segment }
+        guard let first = stretch.first?.t, let last = stretch.last?.t else { return nil }
+        func offset(_ point: ChargeCurvePoint) -> TimeInterval { abs(point.t.timeIntervalSince(peak.t)) }
+        return soc.filter { (first...last).contains($0.t) && offset($0) <= window }
+            .min { offset($0) < offset($1) }?.value
+    }
+
     /// At least two live readings above `floor`. With `requireVariation` (DC
     /// sessions) the values must also change: a constant trace there is a
     /// stale reading (e.g. the last AC voltage), not a series.

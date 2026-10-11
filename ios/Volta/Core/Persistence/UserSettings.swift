@@ -36,8 +36,8 @@ final class UserSettings {
         demoMode = defaults?.bool(forKey: "demoMode") ?? false
         // Only a rate the user saved survives; builds before the rate form
         // assumed 0.20 without storing it, and that assumption is dropped.
-        electricityRate = ElectricityRates.validated(defaults?.object(forKey: "electricityRate") as? Double)
-        dcFastRate = ElectricityRates.validated(defaults?.object(forKey: "dcFastRate") as? Double)
+        electricityRate = ElectricityRates.stored(defaults?.object(forKey: "electricityRate") as? Double)
+        dcFastRate = ElectricityRates.stored(defaults?.object(forKey: "dcFastRate") as? Double)
         ratePromptDismissed = defaults?.bool(forKey: "ratePromptDismissed") ?? false
         emptyDemo = defaults?.bool(forKey: "emptyDemo") ?? false
         drivingLiveActivity = defaults?.bool(forKey: "drivingLiveActivity") ?? false
@@ -58,12 +58,20 @@ struct ElectricityRates: Equatable, Sendable {
     var dcFast: Double?
     var currency: String
 
-    /// Anything above this per kWh is a typo, not a tariff.
-    static let maximum = 10.0
+    /// Anything above this per kWh is a typo, not a tariff, in any currency
+    /// (JPY and KRW rates run into the tens and hundreds).
+    static let maximum = 1000.0
 
-    /// A usable rate: finite, zero (free) or more, at most `maximum`.
+    /// A usable typed rate: finite, zero (free) or more, at most `maximum`.
     static func validated(_ value: Double?) -> Double? {
-        guard let value, value.isFinite, value >= 0, value <= maximum else { return nil }
+        guard let value = stored(value), value <= maximum else { return nil }
+        return value
+    }
+
+    /// A rate saved earlier: any finite, non-negative value is kept, so a
+    /// change to the typing ceiling never drops what the user saved.
+    static func stored(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value >= 0 else { return nil }
         return value
     }
 
@@ -72,12 +80,19 @@ struct ElectricityRates: Equatable, Sendable {
         case empty, valid(Double), invalid
     }
 
-    /// Accepts either decimal separator and ignores a typed currency symbol.
-    static func input(_ text: String) -> Input {
-        let trimmed = text.filter { $0.isNumber || $0 == "." || $0 == "," || $0 == "-" }
-            .replacingOccurrences(of: ",", with: ".")
-        if trimmed.isEmpty { return text.trimmingCharacters(in: .whitespaces).isEmpty ? .empty : .invalid }
-        guard let value = validated(Double(trimmed)) else { return .invalid }
+    /// Parses the whole field: digits with at most one decimal separator
+    /// (either "." or ","), optionally after one leading currency symbol.
+    /// Signs, exponents, grouping and anything else are invalid rather than
+    /// silently dropped.
+    static func input(_ text: String, currency: String = "USD") -> Input {
+        var rest = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        if rest.isEmpty { return .empty }
+        if let prefix = [symbol(for: currency), "$"].first(where: { rest.hasPrefix($0) }) {
+            rest = rest.dropFirst(prefix.count).drop { $0.isWhitespace }
+        }
+        guard rest.wholeMatch(of: /[0-9]*([.,][0-9]*)?/) != nil, rest.contains(where: { $0 != "." && $0 != "," }),
+              let value = validated(Double(rest.replacingOccurrences(of: ",", with: ".")))
+        else { return .invalid }
         return .valid(value)
     }
 

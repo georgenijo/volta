@@ -14,8 +14,8 @@ struct ElectricityRateSheet: View {
     private enum Field { case home, dc }
 
     private var symbol: String { ElectricityRates.symbol(for: rates.currency) }
-    private var home: ElectricityRates.Input { ElectricityRates.input(homeText) }
-    private var dc: ElectricityRates.Input { ElectricityRates.input(dcText) }
+    private var home: ElectricityRates.Input { Self.input(homeText, saved: rates.home, currency: rates.currency) }
+    private var dc: ElectricityRates.Input { Self.input(dcText, saved: rates.dcFast, currency: rates.currency) }
     private var canSave: Bool { home != .invalid && dc != .invalid }
 
     var body: some View {
@@ -97,8 +97,15 @@ struct ElectricityRateSheet: View {
         dismiss()
     }
 
-    private static func text(_ value: Double?) -> String {
-        value.map { $0.formatted(.number.precision(.fractionLength(0...3)).grouping(.never)) } ?? ""
+    /// The saved rate as editable text, without rounding it to a display precision.
+    static func text(_ value: Double?) -> String {
+        value.map { $0.formatted(.number.precision(.fractionLength(0...10)).grouping(.never).locale(Locale(identifier: "en_US_POSIX"))) } ?? ""
+    }
+
+    /// A field left as prefilled saves the saved value exactly; anything typed is parsed.
+    static func input(_ text: String, saved: Double?, currency: String) -> ElectricityRates.Input {
+        if let saved, text == Self.text(saved) { return .valid(saved) }
+        return ElectricityRates.input(text, currency: currency)
     }
 }
 
