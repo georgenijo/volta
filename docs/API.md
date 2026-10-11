@@ -132,7 +132,7 @@ DriveSummary   { id, start, end, startAddress, endAddress, distanceKm, durationM
                  startBatteryLevel, endBatteryLevel, energyUsedKwh, efficiencyWhPerKm,
                  maxSpeedKph, avgSpeedKph, outsideTempAvgC, regenKwh?, drivingMin? }
 DriveDetail    DriveSummary + { path: [DrivePoint], elevationGainM, elevationLossM?,
-                 charts?: DriveCharts | null }
+                 elevationMinM?, elevationMaxM?, charts?: DriveCharts | null }
 DriveCharts    { start, end, series: { energyRemainingKwh?, batteryLevel?,
                  batteryTempMinC?, batteryTempMaxC?, insideTempC?, outsideTempC?,
                  ratedRangeKm?, speedKph?, elevationM?, powerKw?: [ChartPoint] } }

@@ -39,7 +39,9 @@ if not names or len(names) > 400:
 print('\n'.join(names))
 PY
 )
-mkdir -p "$out"
+if ! mkdir -p "$out" 2>/dev/null || ! chmod 755 "$out" 2>/dev/null; then
+  echo "could not prepare terrain directory" >&2; exit 1
+fi
 base=https://s3.amazonaws.com/elevation-tiles-prod/skadi
 fetched=0 skipped=0 missing=0
 while IFS= read -r name; do
@@ -49,8 +51,12 @@ while IFS= read -r name; do
     size=$(wc -c <"$target")
     if [[ $size -eq 2884802 || $size -eq 25934402 ]]; then skipped=$((skipped+1)); continue; fi
   fi
-  mkdir -p "$out/$row"
-  tmp=$(mktemp "$out/$row/.tile.XXXXXX")
+  if ! mkdir -p "$out/$row" 2>/dev/null || ! chmod 755 "$out/$row" 2>/dev/null; then
+    echo "could not prepare tile directory" >&2; exit 1
+  fi
+  if ! tmp=$(mktemp "$out/$row/.tile.XXXXXX" 2>/dev/null); then
+    echo "could not prepare tile download" >&2; exit 1
+  fi
   trap 'rm -f "$tmp" "$tmp.hgt"' EXIT
   code=$(curl -sS --retry 3 -o "$tmp" -w '%{http_code}' "$base/$row/$name.hgt.gz" || true)
   if [[ $code == 200 ]] && gzip -dc "$tmp" >"$tmp.hgt" 2>/dev/null && size=$(wc -c <"$tmp.hgt") && [[ $size -eq 2884802 || $size -eq 25934402 ]]; then

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -11,7 +11,7 @@ function fixture(run: (dir: string, fetch: (...args: string[]) => ReturnType<typ
   writeFileSync(curl,`#!/usr/bin/env bash\nset -eu\nprintf '%s\\n' "\${@: -1}" >> "$TILE_TEST_CALLS"\nwhile [[ $# -gt 0 ]]; do if [[ $1 == -o ]]; then cp "$TILE_TEST_RESPONSE" "$2"; shift; fi; shift; done\nprintf '%s' "$TILE_TEST_CODE"\n`);
   chmodSync(curl,0o755);
   const response=join(dir,'response');writeFileSync(response,gzipSync(Buffer.alloc(1201*1201*2)));
-  const fetch=(...args:string[])=>Bun.spawnSync(['bash',new URL('../scripts/fetch-elevation-tiles.sh',import.meta.url).pathname,join(dir,'tiles'),...args],{
+  const fetch=(...args:string[])=>Bun.spawnSync(['bash','-c','umask 077; exec bash "$@"','tile-fetch',new URL('../scripts/fetch-elevation-tiles.sh',import.meta.url).pathname,join(dir,'tiles'),...args],{
     env:{...process.env,PATH:`${bin}:${process.env.PATH}`,TILE_TEST_CALLS:calls,TILE_TEST_RESPONSE:response,TILE_TEST_CODE:existsSync(join(dir,'code')) ? readFileSync(join(dir,'code'),'utf8') : '200'},
   });
   try { run(dir,fetch); } finally { rmSync(dir,{recursive:true,force:true}); }
@@ -22,6 +22,8 @@ test('named tile manifests deduplicate, fetch only public tile objects, and pres
   let r=fetch('--tiles-file',manifest);expect(r.exitCode).toBe(0);expect(r.stdout!.toString()).toContain('1 fetched');
   expect(readFileSync(join(dir,'calls'),'utf8')).toBe('https://s3.amazonaws.com/elevation-tiles-prod/skadi/N37/N37W123.hgt.gz\n');
   expect(readFileSync(join(dir,'tiles/N37/N37W123.hgt')).length).toBe(2884802);
+  expect(statSync(join(dir,'tiles')).mode & 0o777).toBe(0o755);
+  expect(statSync(join(dir,'tiles/N37')).mode & 0o777).toBe(0o755);
   r=fetch('--tiles-file',manifest);expect(r.exitCode).toBe(0);expect(r.stdout!.toString()).toContain('1 already present');
   expect(readFileSync(join(dir,'calls'),'utf8').trim().split('\n')).toHaveLength(1);
   writeFileSync(join(dir,'tiles/N37/N37W123.hgt'),'corrupt');
