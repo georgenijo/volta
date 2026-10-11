@@ -69,7 +69,7 @@ struct TripCostEstimate: Equatable, Sendable {
     /// 1. `server`: the drive's own server rate (the existing precedence, kept);
     /// 2. `previousCharge`: the latest priced charge before the drive (may be free);
     /// 3. `homeRate`, then 4. `dcFastRate` from Settings, priced in `settingsCurrency`;
-    /// 5. `defaultRatePerKwh` in `settingsCurrency`.
+    /// 5. `defaultRatePerKwh` in `defaultCurrency` (a USD figure, whatever Settings says).
     ///
     /// A rate is usable when it is finite and ≥ 0. Returns nil only when the
     /// energy used is unknown, negative or not finite.
@@ -89,7 +89,7 @@ struct TripCostEstimate: Equatable, Sendable {
         } else if let value = usable(dcFastRate) {
             chosen = (value, settingsCurrency, .dcFast)
         } else {
-            chosen = (defaultRatePerKwh, settingsCurrency, .estimated)
+            chosen = (defaultRatePerKwh, defaultCurrency, .estimated)
         }
         let (rate, currency, source) = chosen
         let fuelCost = fuel.currency == currency ? fuel.cost(distanceKm: distanceKm) : nil

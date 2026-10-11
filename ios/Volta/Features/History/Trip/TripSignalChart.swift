@@ -25,7 +25,8 @@ struct TripSignalChart: View {
     var end: Date
     var domain: ClosedRange<Double>
     var axisLabel: (Double) -> String
-    /// Shade between the first two traces (range efficiency).
+    /// Shade between the first two traces (range efficiency): the first is a
+    /// step series, the second is linear.
     var fillBetween = false
     var height: CGFloat = 132
     var tooltip: ((Double) -> String?)? = nil
@@ -35,18 +36,35 @@ struct TripSignalChart: View {
     private var totalMinutes: Double { max(end.timeIntervalSince(start) / 60, 1) }
     private func minute(_ t: Date) -> Double { t.timeIntervalSince(start) / 60 }
 
+    /// Most points a trace plots. Server series are already bounded; samples
+    /// rebuilt on device can be far denser. Scrub lookups use the full series.
+    static let maxPlotPoints = 600
+
+    /// A bounded, min/max-preserving reduction of `points` for drawing.
+    static func plotPoints(_ points: [DriveCharts.Point], maxPoints: Int = maxPlotPoints) -> [DriveCharts.Point] {
+        guard points.count > maxPoints else { return points }
+        let mapped = points.map { HistoryChartPoint(t: $0.t, value: $0.v) }
+        return HistorySeries.downsample(mapped, maxPoints: maxPoints).map { DriveCharts.Point(t: $0.t, v: $0.value) }
+    }
+
     var body: some View {
+        let plotted = traces.map { trace in
+            var trace = trace
+            trace.points = Self.plotPoints(trace.points)
+            return trace
+        }
         Chart {
-            if fillBetween, traces.count >= 2 {
-                ForEach(Array(zip(traces[0].points, traces[1].points).enumerated()), id: \.offset) { _, pair in
-                    AreaMark(x: .value("Minute", minute(pair.0.t)),
-                             yStart: .value("Ideal", pair.1.v), yEnd: .value("Actual", pair.0.v),
+            if fillBetween, plotted.count >= 2 {
+                ForEach(Array(TripBand.points(actual: plotted[0].points, ideal: plotted[1].points).enumerated()),
+                        id: \.offset) { _, p in
+                    AreaMark(x: .value("Minute", minute(p.t)),
+                             yStart: .value("Ideal", p.ideal), yEnd: .value("Actual", p.actual),
                              series: .value("Band", "band"))
                         .interpolationMethod(.linear)
-                        .foregroundStyle(traces[0].color.opacity(0.22))
+                        .foregroundStyle(plotted[0].color.opacity(0.22))
                 }
             }
-            ForEach(traces) { trace in
+            ForEach(plotted) { trace in
                 if trace.fill {
                     ForEach(Array(trace.points.enumerated()), id: \.offset) { _, p in
                         AreaMark(x: .value("Minute", minute(p.t)), yStart: .value("Floor", domain.lowerBound),
@@ -117,6 +135,47 @@ struct TripSignalChart: View {
         } else {
             AnyShapeStyle(trace.color.opacity(trace.dashed ? 0.55 : 1))
         }
+    }
+}
+
+/// The shaded band between a step trace (actual) and a linear trace (ideal),
+/// drawn with linear interpolation. Each step of the actual trace becomes an
+/// explicit vertical edge (two points at one time), so the band follows the
+/// drawn step line; the ideal side is interpolated linearly at every time.
+enum TripBand {
+    struct Point: Equatable {
+        var t: Date
+        var ideal: Double
+        var actual: Double
+    }
+
+    static func points(actual: [DriveCharts.Point], ideal: [DriveCharts.Point]) -> [Point] {
+        guard !actual.isEmpty, !ideal.isEmpty else { return [] }
+        let times = Set(actual.map(\.t) + ideal.map(\.t)).sorted()
+        var out: [Point] = []
+        var previous: Double?
+        for t in times {
+            guard let i = linear(ideal, at: t), let a = DriveChartSeries.value(actual, at: t) else { continue }
+            if let previous, previous != a { out.append(Point(t: t, ideal: i, actual: previous)) }
+            out.append(Point(t: t, ideal: i, actual: a))
+            previous = a
+        }
+        return out
+    }
+
+    /// Linear interpolation, clamped to the first/last value outside the series.
+    static func linear(_ points: [DriveCharts.Point], at t: Date) -> Double? {
+        guard let first = points.first, let last = points.last else { return nil }
+        if t <= first.t { return first.v }
+        if t >= last.t { return last.v }
+        var lo = 0, hi = points.count - 1
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2
+            if points[mid].t <= t { lo = mid } else { hi = mid }
+        }
+        let a = points[lo], b = points[hi]
+        let span = b.t.timeIntervalSince(a.t)
+        return span > 0 ? a.v + (b.v - a.v) * t.timeIntervalSince(a.t) / span : b.v
     }
 }
 

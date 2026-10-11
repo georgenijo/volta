@@ -170,8 +170,8 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
     /// The server's per-component drive score; nil when not sent or all unknown.
     var scoreBreakdown: DriveScoreBreakdown? = nil
     /// Energy recovered by regenerative braking, from the server. Nil means
-    /// "not sent", never 0.
-    var regenKwh: Double? = nil
+    /// "not sent", never 0. A malformed value also decodes to nil.
+    @Lenient var regenKwh: Double? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, start, end, startAddress, endAddress, distanceKm, durationMin
@@ -181,6 +181,41 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
         case legacyDriveScore = "efficiencyScore"
         case scoreBreakdown
         case regenKwh
+    }
+}
+
+/// An optional field that decodes to nil when it is missing, null or malformed,
+/// so one bad value never fails the enclosing object (or its page). Encodes
+/// nothing when nil. Use with synthesized `Codable`: `@Lenient var x: Double? = nil`.
+@propertyWrapper
+struct Lenient<Value: Codable & Hashable & Sendable>: Codable, Hashable, Sendable {
+    var wrappedValue: Value?
+
+    init(wrappedValue: Value?) { self.wrappedValue = wrappedValue }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        wrappedValue = container.decodeNil() ? nil : try? container.decode(Value.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        if let wrappedValue { try container.encode(wrappedValue) } else { try container.encodeNil() }
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// Synthesized `Codable` calls this for `@Lenient` properties: a missing key
+    /// or a value of the wrong type is nil rather than an error.
+    func decode<V>(_: Lenient<V>.Type, forKey key: Key) throws -> Lenient<V> {
+        Lenient(wrappedValue: (try? decodeIfPresent(V.self, forKey: key)) ?? nil)
+    }
+}
+
+extension KeyedEncodingContainer {
+    /// Omits a nil `@Lenient` value instead of writing null.
+    mutating func encode<V>(_ value: Lenient<V>, forKey key: Key) throws {
+        try encodeIfPresent(value.wrappedValue, forKey: key)
     }
 }
 

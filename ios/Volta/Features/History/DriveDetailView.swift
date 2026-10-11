@@ -113,7 +113,13 @@ struct DriveDetailView: View {
         rebuild()
     }
 
-    private func reload() { Task { await load(key) } }
+    /// Retry: the detail and the previous-charge rate lookup, which may have
+    /// failed with it. Both keep their own generation/cancellation guards.
+    private func reload() {
+        let key = key
+        Task { await load(key) }
+        Task { await lookUpRate(key) }
+    }
 
     private func rebuild() {
         snapshot = loader.detail.map { TripSnapshot($0, units: units) }
@@ -343,11 +349,13 @@ struct DriveDetailView: View {
         }
     }
 
+    /// `id` keeps the UI-test identifier the section's chart had before the redesign.
     private func chart(_ traces: [TripTrace], start: Date, end: Date, domain: ClosedRange<Double>,
-                       axis: @escaping (Double) -> String, fillBetween: Bool = false,
+                       axis: @escaping (Double) -> String, fillBetween: Bool = false, id: String? = nil,
                        tooltip: @escaping (Double) -> String?) -> some View {
         TripSignalChart(traces: traces, start: start, end: end, domain: domain, axisLabel: axis,
                         fillBetween: fillBetween, tooltip: tooltip, scrub: $scrub, focusMinute: focusMinute)
+            .accessibilityIdentifier(id ?? "")
     }
 
     private func at(_ points: [DriveCharts.Point], _ start: Date, _ minute: Double) -> Double? {
@@ -368,7 +376,7 @@ struct DriveDetailView: View {
             } content: {
                 chart([TripTrace(label: "Battery", color: HistoryTheme.blue, points: points, fill: true)],
                       start: start, end: end, domain: TripSignalDomain.padded(points.map(\.v), minSpan: 4),
-                      axis: { "\(number($0))%" }) { m in at(points, start, m).map { "\(number($0))%" } }
+                      axis: { "\(number($0))%" }, id: "trip.chart.coverage.battery") { m in at(points, start, m).map { "\(number($0))%" } }
             }
         }
     }
@@ -380,16 +388,22 @@ struct DriveDetailView: View {
                 TripHeaderValue(text: "\(number(first, 1)) → \(number(last, 1)) kWh", color: HistoryTheme.green)
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
+                    let domain = TripSignalDomain.padded(points.map(\.v), minSpan: 1)
+                    // Small spans tick in fractions of a kWh; whole numbers would repeat.
+                    let digits = domain.upperBound - domain.lowerBound < 6 ? 1 : 0
                     chart([TripTrace(label: "Energy", color: HistoryTheme.green, points: points, fill: true)],
-                          start: start, end: end, domain: TripSignalDomain.padded(points.map(\.v), minSpan: 1),
-                          axis: { number($0) }) { m in at(points, start, m).map { "\(number($0, 1)) kWh" } }
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Image(systemName: "battery.25percent").font(.system(size: 15)).foregroundStyle(HistoryTheme.secondary)
-                        Text("Used").tripLabel(HistoryTheme.tertiary, size: 10.5)
-                        Text("\(number(summary.energyUsedKwh ?? max(0, first - last), 1)) kWh")
-                            .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                          start: start, end: end, domain: domain,
+                          axis: { number($0, digits) }, id: "trip.telemetry.energy-remaining") { m in at(points, start, m).map { "\(number($0, 1)) kWh" } }
+                    // Only the server's figure; the chart's ends are not the energy used.
+                    if let used = summary.energyUsedKwh {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Image(systemName: "battery.25percent").font(.system(size: 15)).foregroundStyle(HistoryTheme.secondary)
+                            Text("Used").tripLabel(HistoryTheme.tertiary, size: 10.5)
+                            Text("\(number(used, 1)) kWh")
+                                .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
                     }
-                    .accessibilityElement(children: .combine)
                 }
             }
         }
@@ -411,7 +425,7 @@ struct DriveDetailView: View {
                                  gradient: [Color(hex: 0x4FD1C5), HistoryTheme.blue, Color(hex: 0xF5A35B), Color(hex: 0xC084FC)],
                                  fill: true, endDot: .white)],
                       start: start, end: end, domain: TripSignalDomain.zeroBased(points.map(\.v)),
-                      axis: { number($0) }) { m in at(points, start, m).map { "\(number($0)) \(speedUnit)" } }
+                      axis: { number($0) }, id: "trip.chart.coverage.speed") { m in at(points, start, m).map { "\(number($0)) \(speedUnit)" } }
             }
         }
     }
@@ -430,7 +444,7 @@ struct DriveDetailView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     chart([TripTrace(label: "Elevation", color: HistoryTheme.amber, points: points, fill: true)],
                           start: start, end: end, domain: TripSignalDomain.padded(points.map(\.v), minSpan: 10),
-                          axis: { number($0) }) { m in at(points, start, m).map { "\(number($0)) \(heightUnit)" } }
+                          axis: { number($0) }, id: "trip.chart.coverage.elevation") { m in at(points, start, m).map { "\(number($0)) \(heightUnit)" } }
                     Text("↑ \(climbText) · ↓ \(descentText)")
                         .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                 }
@@ -464,7 +478,7 @@ struct DriveDetailView: View {
                     chart([TripTrace(label: "Max", color: Color(hex: 0xE5695F), points: maxPoints),
                            TripTrace(label: "Min", color: HistoryTheme.blue, points: minPoints)].filter { !$0.points.isEmpty },
                           start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 2),
-                          axis: { degrees($0) }) { m in
+                          axis: { degrees($0) }, id: "trip.telemetry.battery-temperature") { m in
                         let hi = at(maxPoints, start, m), lo = at(minPoints, start, m)
                         return [hi.map { "max \(degrees($0))" }, lo.map { "min \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
                     }
@@ -486,7 +500,7 @@ struct DriveDetailView: View {
                     chart([TripTrace(label: "Inside", color: HistoryTheme.amber, points: inside),
                            TripTrace(label: "Outside", color: Color(hex: 0x8E8E8E), points: outside)].filter { !$0.points.isEmpty },
                           start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 4),
-                          axis: { degrees($0) }) { m in
+                          axis: { degrees($0) }, id: "trip.telemetry.cabin-&-outside") { m in
                         let a = at(inside, start, m), b = at(outside, start, m)
                         return [a.map { "in \(degrees($0))" }, b.map { "out \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
                     }

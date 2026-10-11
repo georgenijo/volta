@@ -366,7 +366,7 @@ struct TripSamplingNote: View {
         }
         parts.append("\(TripAnalysis.percent(t.coverage)) of the trip lies within \(Int(TripTimeline.gapThreshold / 60)) min of a sample.")
         if t.gapCount > 0 || t.longestGap > 0 {
-            parts.append("Lines are not drawn across gaps (longest \(VoltaFormat.duration(t.longestGap / 60))); dashed map lines only join samples and are not the driven path.")
+            parts.append("Map gaps are preserved (longest \(VoltaFormat.duration(t.longestGap / 60))): dashed map lines only join samples and are not the driven path. Chart values are held between observations.")
         }
         if t.quality != .dense { parts.append("Regen and smoothness need denser samples.") }
         return parts.joined(separator: " ")

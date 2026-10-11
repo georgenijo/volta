@@ -152,7 +152,7 @@ enum TripFixtures {
     static func showcase(_ base: DriveSummary) -> DriveDetail {
         let dt = 2.0, duration = 31.7 * 60
         let steps = Int(duration / dt)
-        let mass = 1900.0, packKwh = 78.6, startEnergy = 49.2, ratedKmPerKwh = 7.2
+        let mass = 1900.0, packKwh = 78.6, startEnergy = 49.2, ratedKmPerKwh = 9.0
         var v = 0.0, distance = 0.0, used = 0.0, regen = 0.0
         var rows: [(t: Double, v: Double, p: Double, e: Double, d: Double, used: Double)] = []
         func elevation(_ f: Double) -> Double {

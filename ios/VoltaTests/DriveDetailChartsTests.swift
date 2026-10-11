@@ -51,6 +51,20 @@ final class DriveDetailChartsTests: XCTestCase {
         XCTAssertTrue(DriveChartSeries.stepSeries([(at(0), nil), (at(10), .nan)], start: t0, end: at(60)).isEmpty)
     }
 
+    func testStepSeriesIgnoresPostEndSamplesBeforeSeeding() {
+        // The only sample is after the end: nothing is eligible, so no series.
+        XCTAssertTrue(DriveChartSeries.stepSeries([(at(120), 50)], start: t0, end: at(60)).isEmpty)
+        // A post-end sample never becomes the seed either.
+        let mixed = DriveChartSeries.stepSeries([(at(120), 50), (at(30), 7)], start: t0, end: at(60))
+        XCTAssertEqual(values(mixed), [7, 7])
+    }
+
+    func testStepSeriesSeedResolvesDuplicateTimestampsLastWins() {
+        let points = DriveChartSeries.stepSeries([(at(30), 4), (at(30), 5)], start: t0, end: at(60))
+        XCTAssertEqual(times(points), [0, 60])
+        XCTAssertEqual(values(points), [5, 5], "seed is the last row at the shared timestamp")
+    }
+
     func testValueLookupIsStepwise() {
         let points = [DriveCharts.Point(t: t0, v: 1), .init(t: at(60), v: 2), .init(t: at(120), v: 2)]
         XCTAssertEqual(DriveChartSeries.value(points, at: at(-5)), 1)
@@ -86,6 +100,86 @@ final class DriveDetailChartsTests: XCTestCase {
         XCTAssertEqual(built.end, at(600))
         XCTAssertEqual(times(built.series["speedKph"] ?? []), [0, 600])
         XCTAssertEqual(Set(built.series.keys), ["speedKph", "powerKw"])
+    }
+
+    private func telemetryRow(_ offset: Double, speed: Double? = nil, range: Double? = nil, energy: Double? = nil,
+                              invalid: [String] = []) -> FleetTelemetrySample {
+        FleetTelemetrySample(t: at(offset), latitude: nil, longitude: nil, speedKph: speed, powerKw: nil,
+                             elevationM: nil, batteryLevel: nil, energyRemainingKwh: energy, batteryTempMinC: nil,
+                             batteryTempMaxC: nil, insideTempC: nil, outsideTempC: nil, voltage: nil, currentA: nil,
+                             ratedRangeKm: range, routeBreakBefore: false, invalidFields: invalid)
+    }
+
+    func testBuildFallbackSkipsInvalidTelemetryAndHoldsLastValid() {
+        let rows = [telemetryRow(0, range: 300, energy: 60),
+                    telemetryRow(300, range: 0, energy: 0, invalid: ["RatedRange", "EnergyRemaining"]),
+                    telemetryRow(600, range: 295, energy: 0, invalid: ["EnergyRemaining"]),
+                    telemetryRow(900, range: 290, energy: 59)]
+        let telemetry = FleetTelemetrySeries(source: "fleet_telemetry", samples: rows, gaps: [], truncated: false)
+        let built = DriveChartSeries.build(DriveDetail(summary: summary(), path: [], elevationGainM: nil, telemetry: telemetry))
+        XCTAssertEqual(values(built.series["ratedRangeKm"] ?? []), [300, 295, 290, 290])
+        XCTAssertEqual(times(built.series["ratedRangeKm"] ?? []), [0, 600, 900, 1800])
+        XCTAssertEqual(values(built.series["energyRemainingKwh"] ?? []), [60, 59, 59], "invalid rows are skipped, not zero")
+        // Only Fleet Telemetry samples are used.
+        let other = FleetTelemetrySeries(source: "teslamate", samples: rows, gaps: [], truncated: false)
+        XCTAssertNil(DriveChartSeries.build(DriveDetail(summary: summary(), path: [], elevationGainM: nil,
+                                                        telemetry: other)).series["ratedRangeKm"])
+    }
+
+    func testBuildFallbackSourceFollowsCoveragePolicy() {
+        let path = [DrivePoint(t: at(0), latitude: 37.4, longitude: -122.1, speedKph: 10, powerKw: nil, elevationM: nil, batteryLevel: nil),
+                    DrivePoint(t: at(900), latitude: 37.4, longitude: -122.1, speedKph: 20, powerKw: nil, elevationM: nil, batteryLevel: nil)]
+        // Many more telemetry rows, but no coverage proof: the recorded path
+        // keeps the speed chart, exactly as TripSnapshot keeps its speed.
+        let rows = stride(from: 0.0, through: 1800, by: 60).map { telemetryRow($0, speed: 80) }
+        let telemetry = FleetTelemetrySeries(source: "fleet_telemetry", samples: rows, gaps: [], truncated: false)
+        let detail = DriveDetail(summary: summary(), path: path, elevationGainM: nil, telemetry: telemetry)
+        XCTAssertEqual(values(DriveChartSeries.build(detail).series["speedKph"] ?? []), [10, 20, 20])
+        XCTAssertFalse(TripSnapshot(detail, units: UnitPreferences()).usesTelemetrySpeed)
+        // A path without the signal leaves telemetry as the only source.
+        let bare = path.map { var p = $0; p.speedKph = nil; return p }
+        let fromTelemetry = DriveChartSeries.build(DriveDetail(summary: summary(), path: bare, elevationGainM: nil, telemetry: telemetry))
+        XCTAssertEqual(values(fromTelemetry.series["speedKph"] ?? []), [80, 80])
+    }
+
+    // MARK: Plotting
+
+    func testPlotPointsAreBoundedAndKeepExtremes() {
+        var dense: [DriveCharts.Point] = []
+        for i in 0..<5000 {
+            let v: Double = i == 2500 ? 99 : i == 1200 ? -7 : Double(i % 10)
+            dense.append(DriveCharts.Point(t: at(Double(i)), v: v))
+        }
+        let plotted = TripSignalChart.plotPoints(dense)
+        XCTAssertLessThanOrEqual(plotted.count, TripSignalChart.maxPlotPoints)
+        XCTAssertEqual(plotted.first, dense.first)
+        XCTAssertEqual(plotted.last, dense.last)
+        XCTAssertTrue(plotted.contains { $0.v == 99 })
+        XCTAssertTrue(plotted.contains { $0.v == -7 })
+        XCTAssertEqual(plotted.map(\.t), plotted.map(\.t).sorted())
+        let short = Array(dense.prefix(100))
+        XCTAssertEqual(TripSignalChart.plotPoints(short), short, "small series plot at full resolution")
+    }
+
+    func testRangeBandStepsOnActualAndIsLinearOnIdeal() {
+        let actual = [DriveCharts.Point(t: t0, v: 300), .init(t: at(600), v: 290), .init(t: at(1200), v: 290)]
+        let ideal = [DriveCharts.Point(t: t0, v: 300), .init(t: at(1200), v: 280)]
+        let band = TripBand.points(actual: actual, ideal: ideal)
+        XCTAssertEqual(band.map { $0.t.timeIntervalSince(t0) }, [0, 600, 600, 1200])
+        // A vertical edge at the step: the old value, then the new one, at one time.
+        XCTAssertEqual(band.map(\.actual), [300, 300, 290, 290])
+        // The ideal side is interpolated linearly.
+        XCTAssertEqual(band.map(\.ideal), [300, 290, 290, 280])
+        XCTAssertTrue(TripBand.points(actual: [], ideal: ideal).isEmpty)
+    }
+
+    func testSamplingNoteDescribesHeldChartValues() {
+        let path = [DrivePoint(t: at(0), latitude: 37.4, longitude: -122.1, speedKph: 10, powerKw: nil, elevationM: nil, batteryLevel: nil),
+                    DrivePoint(t: at(900), latitude: 37.41, longitude: -122.1, speedKph: 20, powerKw: nil, elevationM: nil, batteryLevel: nil)]
+        let note = TripSamplingNote.detail(TripTimeline(path: path, start: t0, end: at(1800)))
+        XCTAssertTrue(note.contains("Map gaps are preserved"), note)
+        XCTAssertTrue(note.contains("Chart values are held between observations"), note)
+        XCTAssertFalse(note.contains("not drawn across gaps"), note)
     }
 
     // MARK: Range efficiency
@@ -167,7 +261,11 @@ final class DriveDetailChartsTests: XCTestCase {
         XCTAssertNil(euro.savings); XCTAssertNil(euro.percentVsFuel)
         let settings = try XCTUnwrap(estimate(home: 0.2, currency: "GBP"))
         XCTAssertEqual(settings.currency, "GBP")
-        XCTAssertEqual(try XCTUnwrap(estimate(currency: "CAD")).currency, "CAD")
+        // The $0.30 default is a USD figure, whatever currency Settings uses.
+        let fallback = try XCTUnwrap(estimate(currency: "CAD"))
+        XCTAssertEqual(fallback.source, .estimated)
+        XCTAssertEqual(fallback.currency, TripCostEstimate.defaultCurrency)
+        XCTAssertEqual(fallback.currency, "USD")
     }
 
     func testCostNilOnlyWithoutUsableEnergy() {
@@ -254,6 +352,42 @@ final class DriveDetailChartsTests: XCTestCase {
         XCTAssertNil(bad.charts)
         XCTAssertNil(bad.elevationLossM)
         XCTAssertEqual(bad.summary.id, 10)
+    }
+
+    func testMalformedRegenDecodesToNilInDetailAndPage() throws {
+        let detail = try detailJSON(["regenKwh": "lots"])
+        XCTAssertNil(detail.summary.regenKwh)
+        XCTAssertEqual(detail.summary.id, 10)
+        XCTAssertNil(try detailJSON(["regenKwh": ["kwh": 1]]).summary.regenKwh)
+
+        var page = try XCTUnwrap(JSONSerialization.jsonObject(with: DecodingTests.fixture("drivePage")) as? [String: Any])
+        var items = try XCTUnwrap(page["items"] as? [[String: Any]])
+        let goodID = try XCTUnwrap(items.first?["id"] as? Int)
+        items[0]["regenKwh"] = "bad"
+        var second = items[0]
+        second["id"] = goodID + 1
+        second["regenKwh"] = 0.8
+        items.append(second)
+        page["items"] = items
+        let decoded = try APIDataSource.makeDecoder().decode(Page<DriveSummary>.self,
+                                                             from: JSONSerialization.data(withJSONObject: page))
+        XCTAssertEqual(decoded.items.count, items.count, "one bad regen value never drops the page")
+        XCTAssertNil(decoded.items[0].regenKwh)
+        XCTAssertEqual(decoded.items.last?.regenKwh, 0.8)
+    }
+
+    func testRegenRoundTripsAndOmitsNil() throws {
+        var drive = summary()
+        drive.regenKwh = 1.25
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(try decoder.decode(DriveSummary.self, from: encoder.encode(drive)).regenKwh, 1.25)
+        drive.regenKwh = nil
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(drive)) as? [String: Any])
+        XCTAssertNil(json["regenKwh"], "nil is omitted, not written as null")
+        XCTAssertNil(try decoder.decode(DriveSummary.self, from: encoder.encode(drive)).regenKwh)
     }
 
     // MARK: Demo

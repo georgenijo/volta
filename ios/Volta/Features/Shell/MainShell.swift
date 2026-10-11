@@ -29,6 +29,12 @@ struct MainShell: View {
                     screen(for: tab)
                         // Kept-alive tabs never disappear; tell them when they're hidden.
                         .environment(\.isActiveTab, selection == tab)
+                        // Hosted UIKit views (scroll views, maps) ignore
+                        // accessibilityHidden and still win accessibility hit
+                        // tests over the visible tab. Park hidden tabs off screen
+                        // (never animated); they stay mounted, so state survives.
+                        .offset(x: selection == tab ? 0 : 10_000)
+                        .animation(nil, value: selection)
                         .opacity(selection == tab ? 1 : 0)
                         .allowsHitTesting(selection == tab)
                         .accessibilityHidden(selection != tab)

@@ -4,6 +4,32 @@ import Foundation
 enum DriveChartMetric: String, CaseIterable, Sendable {
     case energyRemainingKwh, batteryLevel, batteryTempMinC, batteryTempMaxC, insideTempC, outsideTempC
     case ratedRangeKm, speedKph, elevationM, powerKw
+
+    /// The Fleet Telemetry field name a sample lists in `invalidFields` when this
+    /// value is not valid (the same mapping `TelemetryMetricSeries` uses).
+    /// Elevation has none.
+    var invalidField: String? {
+        switch self {
+        case .energyRemainingKwh: "EnergyRemaining"
+        case .batteryLevel: "BatteryLevel"
+        case .batteryTempMinC: "ModuleTempMin"
+        case .batteryTempMaxC: "ModuleTempMax"
+        case .insideTempC: "InsideTemp"
+        case .outsideTempC: "OutsideTemp"
+        case .ratedRangeKm: "RatedRange"
+        case .speedKph: "VehicleSpeed"
+        case .elevationM: nil
+        case .powerKw: "Power"
+        }
+    }
+
+    /// Whether the legacy drive path also records this signal.
+    var hasPathValue: Bool {
+        switch self {
+        case .speedKph, .powerKw, .elevationM, .batteryLevel: true
+        default: false
+        }
+    }
 }
 
 /// Builds the continuous step series the drive detail charts draw.
@@ -17,32 +43,29 @@ enum DriveChartSeries {
 
     /// A step series from unordered, possibly sparse samples.
     ///
-    /// - Non-finite and nil values are ignored; a series with none is empty.
-    /// - The seed (at `start`) is the latest value at or before `start`, else
-    ///   the first value after it.
-    /// - Samples after `end` are ignored. Samples sharing a timestamp resolve to
-    ///   the last one in input order.
+    /// - Non-finite and nil values and samples after `end` are dropped first;
+    ///   samples sharing a timestamp then resolve to the last one in input order.
+    ///   A series with nothing left is empty.
+    /// - The seed (at `start`) is the latest remaining value at or before
+    ///   `start`, else the first remaining value after it.
     static func stepSeries(_ samples: [(t: Date, v: Double?)], start: Date, end: Date) -> [Point] {
-        let known = samples.enumerated()
+        let finish = max(start, end)
+        let ordered = samples.enumerated()
             .compactMap { offset, sample -> (Date, Double, Int)? in
-                guard let v = sample.v, v.isFinite else { return nil }
+                guard let v = sample.v, v.isFinite, sample.t <= finish else { return nil }
                 return (sample.t, v, offset)
             }
             .sorted { ($0.0, $0.2) < ($1.0, $1.2) }
-        guard !known.isEmpty else { return [] }
-        let finish = max(start, end)
-        let seed = known.last(where: { $0.0 <= start })?.1 ?? known[0].1
+        // One value per timestamp: the last row in input order wins.
+        var known: [(t: Date, v: Double)] = []
+        for (t, v, _) in ordered {
+            if known.last?.t == t { known[known.count - 1].v = v } else { known.append((t, v)) }
+        }
+        guard let first = known.first else { return [] }
+        let seed = known.last(where: { $0.t <= start })?.v ?? first.v
         var out = [Point(t: start, v: seed)]
-        var index = 0
-        while index < known.count {
-            let (t, _, _) = known[index]
-            // The last row at this timestamp wins.
-            var last = index
-            while last + 1 < known.count, known[last + 1].0 == t { last += 1 }
-            let v = known[last].1
-            index = last + 1
-            guard t > start, t <= finish else { continue }
-            if v != out[out.count - 1].v { out.append(Point(t: t, v: v)) }
+        for (t, v) in known where t > start && v != out[out.count - 1].v {
+            out.append(Point(t: t, v: v))
         }
         if let tail = out.last, tail.t < finish { out.append(Point(t: finish, v: tail.v)) }
         return out
@@ -53,28 +76,48 @@ enum DriveChartSeries {
         stepSeries(points.map { ($0.t, Optional($0.v)) }, start: start, end: end)
     }
 
-    /// The chart series for a drive. Server `charts` win metric by metric; any
-    /// metric the server didn't send is built from the telemetry samples or the
-    /// legacy path, whichever recorded more values for it. Empty metrics are omitted.
+    /// The chart series for a drive. Server `charts` win metric by metric. A
+    /// metric the server didn't send is built from the Fleet Telemetry samples
+    /// (skipping rows that flag the field invalid) or the legacy path, chosen
+    /// with the same coverage policy `TripSnapshot` uses: telemetry replaces a
+    /// recorded path signal only when `shouldPrefer` says so; a path without
+    /// the signal leaves telemetry as the only source. Empty metrics are omitted.
     static func build(_ detail: DriveDetail) -> DriveCharts {
         let s = detail.summary
         let start = detail.charts?.start ?? s.start
         let end = detail.charts?.end ?? s.end ?? s.start.addingTimeInterval(s.durationMin * 60)
+        let summaryEnd = s.end ?? s.start.addingTimeInterval(s.durationMin * 60)
+        let legacy = TripTimeline(path: detail.path, start: s.start, end: summaryEnd)
         var series: [String: [Point]] = [:]
         for metric in DriveChartMetric.allCases {
             if let server = detail.charts?.series[metric.rawValue] {
                 let points = normalized(server, start: start, end: end)
                 if !points.isEmpty { series[metric.rawValue] = points; continue }
             }
-            let telemetry = (detail.telemetry?.samples ?? []).map { ($0.t, telemetryValue($0, metric)) }
-            let path = detail.path.map { ($0.t, pathValue($0, metric)) }
-            let telemetryCount = telemetry.count { $0.1?.isFinite == true }
-            let pathCount = path.count { $0.1?.isFinite == true }
-            let samples = telemetryCount >= pathCount ? telemetry : path
+            let telemetry = telemetrySamples(detail.telemetry, metric)
+            let samples: [(t: Date, v: Double?)]
+            if metric.hasPathValue {
+                let coverage = RecordedMetricCoverage.values(in: legacy) { pathValue($0, metric) }
+                let prefersTelemetry = detail.telemetry?.shouldPrefer(metric: metric.rawValue, over: coverage) == true
+                samples = prefersTelemetry || coverage.count == 0
+                    ? telemetry : detail.path.map { ($0.t, pathValue($0, metric)) }
+            } else {
+                samples = telemetry
+            }
             let points = stepSeries(samples, start: start, end: end)
             if !points.isEmpty { series[metric.rawValue] = points }
         }
         return DriveCharts(start: start, end: end, series: series)
+    }
+
+    /// Fleet Telemetry values for `metric`. A row that marks the metric's field
+    /// invalid contributes nothing, so the step series holds the last valid value.
+    static func telemetrySamples(_ telemetry: FleetTelemetrySeries?, _ metric: DriveChartMetric) -> [(t: Date, v: Double?)] {
+        guard let telemetry, telemetry.isFleetTelemetry else { return [] }
+        return telemetry.samples.compactMap { sample in
+            if let field = metric.invalidField, sample.invalidFields.contains(field) { return nil }
+            return (sample.t, telemetryValue(sample, metric))
+        }
     }
 
     static func telemetryValue(_ sample: FleetTelemetrySample, _ metric: DriveChartMetric) -> Double? {
