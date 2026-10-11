@@ -621,15 +621,31 @@ export class Telemetry {
     for (const row of rows) { delete row._finish; delete row._kwhPerKm; delete row._startRange; }
     return rows;
   }
-  /** The ongoing idle ends at the car's current battery reading, when one exists after it parked. */
+  /** The ongoing idle ends at the newest battery and range readings each measured after the car parked. */
   private async closeLiveIdle(id: number, row: Row) {
-    let now: Awaited<ReturnType<Telemetry['status']>> | null = null;
-    try { now = await this.status(id); } catch { return; }
-    if (!now.updatedAt || +new Date(now.updatedAt) < +new Date(row.start)) return;
-    row.endBatteryLevel = now.batteryLevel ?? null;
-    const startRange = row._startRange, endRange = now.ratedRangeKm;
-    if (startRange != null && endRange != null) {
-      row.rangeLostKm = Math.max(startRange - endRange, 0);
+    const after = row._cursorStart as string;
+    const [db] = await this.sql`SELECT
+      (SELECT battery_level FROM public.positions WHERE car_id = ${id} AND date > ${after}::timestamp AND battery_level IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1) AS battery,
+      (SELECT max(date) FROM public.positions WHERE car_id = ${id} AND date > ${after}::timestamp AND battery_level IS NOT NULL) AS battery_at,
+      (SELECT rated_battery_range_km FROM public.positions WHERE car_id = ${id} AND date > ${after}::timestamp AND rated_battery_range_km IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1) AS range,
+      (SELECT max(date) FROM public.positions WHERE car_id = ${id} AND date > ${after}::timestamp AND rated_battery_range_km IS NOT NULL) AS range_at`;
+    let battery = db?.battery ?? null, range = db?.range ?? null;
+    if (this.fleetEnabled) {
+      try {
+        const live = liveValues(await new FleetLive(this.sql).read(id), this.clock());
+        // A streamed sample counts only when measured after parking and newer than the logger's.
+        const newer = (field: string, value: number | null, than: Date | null) => {
+          const at = live?.by.get(field)?.source_ts;
+          return value != null && at != null && +new Date(at) > +new Date(after) && (than == null || +new Date(at) >= +new Date(than));
+        };
+        if (newer('BatteryLevel', live?.values.batteryLevel ?? null, db?.battery_at ?? null)) battery = Math.round(live!.values.batteryLevel!);
+        if (newer('RatedRange', live?.values.ratedRangeKm ?? null, db?.range_at ?? null)) range = live!.values.ratedRangeKm;
+      } catch { this.log({event:'fleet_live_failed',code:'telemetry_query_failed'}); }
+    }
+    row.endBatteryLevel = battery;
+    const startRange = row._startRange;
+    if (startRange != null && range != null) {
+      row.rangeLostKm = Math.max(startRange - range, 0);
       row.energyLostKwh = row._kwhPerKm == null ? null : row.rangeLostKm * row._kwhPerKm;
     }
   }

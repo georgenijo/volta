@@ -401,10 +401,19 @@ describe('metric telemetry contract', () => {
     await owner`UPDATE addresses SET city='Synthetic City', road='Synthetic Street', house_number='2' WHERE id=2`;
     const first = await json('/v1/vehicles/1/idles');
     const live = first.items[0];
-    expect(live).toMatchObject({id:6,end:null,city:'Synthetic City',street:'2 Synthetic Street',startBatteryLevel:84,endBatteryLevel:84,rangeLostKm:0});
+    // Status timestamps newer than parking cannot vouch for readings measured before it.
+    expect(live).toMatchObject({id:6,end:null,city:'Synthetic City',street:'2 Synthetic Street',startBatteryLevel:84,endBatteryLevel:null,rangeLostKm:null,energyLostKwh:null});
     expect(live.durationMin).toBeGreaterThan(14*60);
     for (const key of ['_finish','_kwhPerKm','_startRange']) expect(live[key]).toBeUndefined();
     expect(first.items.find((r:any)=>r.id===2)).toMatchObject({city:'Synthetic City',street:'2 Synthetic Street'});
+    // A reading at the very instant it parked is not after it.
+    await owner`INSERT INTO positions(id,car_id,date,latitude,longitude,battery_level,usable_battery_level,rated_battery_range_km,ideal_battery_range_km)
+      VALUES(28,1,${live.start}::timestamp,40.01,-74.01,70,70,350,350)`;
+    expect((await json('/v1/vehicles/1/idles')).items[0]).toMatchObject({id:6,endBatteryLevel:null,rangeLostKm:null});
+    // Battery and range must each be measured after parking.
+    await owner`INSERT INTO positions(id,car_id,date,latitude,longitude,battery_level,usable_battery_level)
+      VALUES(29,1,now() AT TIME ZONE 'UTC' - interval '2 minutes',40.01,-74.01,82,82)`;
+    expect((await json('/v1/vehicles/1/idles')).items[0]).toMatchObject({id:6,endBatteryLevel:82,rangeLostKm:null,energyLostKwh:null});
     // A later poll while parked is the live end reading.
     await owner`INSERT INTO positions(id,car_id,date,latitude,longitude,battery_level,usable_battery_level,rated_battery_range_km,ideal_battery_range_km)
       VALUES(30,1,now() AT TIME ZONE 'UTC' - interval '1 minute',40.01,-74.01,80,80,400,400)`;

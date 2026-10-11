@@ -516,7 +516,7 @@ struct IdleLiveBand: View {
                         .foregroundStyle(HistoryTheme.liveAccent.opacity(0.7))
                 }
                 .padding(.top, 9)
-                if let level = idle.endBatteryLevel {
+                if let level = idle.endBatteryLevel ?? idle.startBatteryLevel {
                     HStack(spacing: 7) {
                         Image(systemName: Self.batteryIcon(level)).font(.system(size: 12, weight: .regular))
                         Text("\(level)%").font(.system(size: 11, weight: .regular)).monospacedDigit()
