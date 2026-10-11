@@ -242,6 +242,22 @@ final class DriveInsightsTests: XCTestCase {
         defaults.set(1500.0, forKey: "electricityRate")
         XCTAssertEqual(UserSettings(defaults: defaults).electricityRate, 1500)
     }
+    @MainActor func testMigratedRatesAboveTheTypingCeilingStillPrice() throws {
+        let defaults = UserDefaults(suiteName: "DriveInsightsTests.ceiling")!
+        defaults.removePersistentDomain(forName: "DriveInsightsTests.ceiling")
+        defer { defaults.removePersistentDomain(forName: "DriveInsightsTests.ceiling") }
+        defaults.set(1500.0, forKey: "electricityRate")
+        defaults.set(1500.0, forKey: "dcFastRate")
+        let rates = UserSettings(defaults: defaults).rates
+        func charge(fast: Bool) -> ChargeSummary {
+            ChargeSummary(id: 1, start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 1800), address: nil, placeName: nil,
+                          energyAddedKwh: 40, energyUsedKwh: nil, startBatteryLevel: 20, endBatteryLevel: 80, durationMin: 30,
+                          maxPowerKw: nil, fastCharger: fast, cost: nil, currency: nil, outsideTempAvgC: nil)
+        }
+        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(fast: false), rates: rates)).amount, 60_000)
+        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(fast: true), rates: rates)).amount, 60_000)
+        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(drive(kwh: 10), home: rates.homeTripRate)), 15_000, accuracy: 1e-9)
+    }
     func testRateValidation() {
         XCTAssertEqual(ElectricityRates.validated(0.31), 0.31)
         XCTAssertEqual(ElectricityRates.validated(0), 0)

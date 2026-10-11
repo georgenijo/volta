@@ -322,6 +322,23 @@ final class ChargeInsightsTests: XCTestCase {
         XCTAssertEqual(ChargeCurve.socAtPeak(power: power, soc: curve([(0.5, 58, 0), (10, 70, 0)]), shownPeak: 80), 58)
     }
 
+    func testSocAtPeakNeedsAnUnbrokenSocStretch() {
+        let end = t0.addingTimeInterval(600)
+        func at(_ seconds: Double) -> Date { t0.addingTimeInterval(seconds) }
+        let power = ChargeCurve.points([(at(0), 40), (at(30), 60), (at(60), 80), (at(90), 70)], start: t0, end: end, gap: 120)
+        // BatteryLevel is invalid at the peak; the next valid reading starts a new SoC segment.
+        let broken = ChargeCurve.points([(at(0), 55), (at(30), 58), (at(60), nil), (at(90), 65)], start: t0, end: end,
+                                        gap: 120, breaks: [at(60)...at(60)])
+        XCTAssertNil(ChargeCurve.socAtPeak(power: power, soc: broken, shownPeak: 80),
+                     "65% after the invalid reading is not the SoC at the peak")
+        let onlyAfter = ChargeCurve.points([(at(60), nil), (at(90), 65)], start: t0, end: end, gap: 120, breaks: [at(60)...at(60)])
+        XCTAssertNil(ChargeCurve.socAtPeak(power: power, soc: onlyAfter, shownPeak: 80))
+        let continuous = ChargeCurve.points([(at(0), 55), (at(30), 58), (at(90), 65)], start: t0, end: end, gap: 120)
+        XCTAssertEqual(ChargeCurve.socAtPeak(power: power, soc: continuous, shownPeak: 80), 58)
+        let atPeak = ChargeCurve.points([(at(30), 58), (at(60), 61), (at(90), 65)], start: t0, end: end, gap: 120)
+        XCTAssertEqual(ChargeCurve.socAtPeak(power: power, soc: atPeak, shownPeak: 80), 61)
+    }
+
     // MARK: Demo data
 
     func testDemoChargesExerciseTheNewFields() async throws {

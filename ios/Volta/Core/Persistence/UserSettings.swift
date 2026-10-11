@@ -106,12 +106,13 @@ struct ElectricityRates: Equatable, Sendable {
     }
 
     /// The rate for one charging session; DC fast uses its own rate when set.
+    /// Saved rates are costed as saved: the typing ceiling doesn't apply.
     func perKwh(fastCharger: Bool) -> Double? {
-        fastCharger ? (dcFast ?? home) : home
+        fastCharger ? (Self.stored(dcFast) ?? Self.stored(home)) : Self.stored(home)
     }
 
     /// The home rate as a trip rate, for drives (which don't know where the energy came from).
     var homeTripRate: TripRate? {
-        home.map { TripRate(perKwh: $0, currency: currency, source: .manual) }
+        Self.stored(home).map { TripRate(perKwh: $0, currency: currency, source: .manual) }
     }
 }

@@ -88,7 +88,7 @@ struct ChargeCost: Equatable {
             return ChargeCost(amount: cost, currency: charge.currency ?? rates.currency, isEstimated: false,
                               pricePerKwh: added.map { cost / $0 })
         }
-        guard let added, let rate = ElectricityRates.validated(rates.perKwh(fastCharger: charge.fastCharger)) else { return nil }
+        guard let added, let rate = ElectricityRates.stored(rates.perKwh(fastCharger: charge.fastCharger)) else { return nil }
         return ChargeCost(amount: added * rate, currency: rates.currency, isEstimated: true, pricePerKwh: rate)
     }
 }
@@ -274,17 +274,22 @@ enum ChargeCurve {
     }
 
     /// The state of charge at the power peak, only when the curve's peak is the
-    /// one shown (`shownPeak` may come from the session summary instead) and a
-    /// SoC sample sits close to it inside the same unbroken stretch of power
+    /// one shown (`shownPeak` may come from the session summary instead), the
+    /// peak lies inside one unbroken stretch of SoC readings (a reading at or
+    /// on both sides of it, same segment), and a reading from that stretch
+    /// sits close to it within the peak's own unbroken stretch of power
     /// samples. Otherwise nil: pairing readings from different moments, or
-    /// across a gap, would claim a SoC the car never had at that power.
+    /// across a gap or invalid reading in either series, would claim a SoC the
+    /// car never had at that power. Both series are time-ordered.
     static func socAtPeak(power: [ChargeCurvePoint], soc: [ChargeCurvePoint], shownPeak: Double,
                           within window: TimeInterval = TripTimeline.gapThreshold) -> Double? {
         guard let peak = peak(power), abs(peak.value - shownPeak) <= max(0.05, shownPeak * 0.005) else { return nil }
         let stretch = power.filter { $0.segment == peak.segment }
-        guard let first = stretch.first?.t, let last = stretch.last?.t else { return nil }
+        guard let first = stretch.first?.t, let last = stretch.last?.t,
+              let before = soc.last(where: { $0.t <= peak.t }), let after = soc.first(where: { $0.t >= peak.t }),
+              before.segment == after.segment else { return nil }
         func offset(_ point: ChargeCurvePoint) -> TimeInterval { abs(point.t.timeIntervalSince(peak.t)) }
-        return soc.filter { (first...last).contains($0.t) && offset($0) <= window }
+        return soc.filter { $0.segment == before.segment && (first...last).contains($0.t) && offset($0) <= window }
             .min { offset($0) < offset($1) }?.value
     }
 
