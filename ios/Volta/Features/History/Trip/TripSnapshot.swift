@@ -28,6 +28,12 @@ struct TripSnapshot {
     let maxSpeed: TripMetric
     let descent: TripMetric
     let score: SmoothnessScore.Result
+    /// Continuous step series for the detail charts (server `charts`, else built from samples).
+    let charts: DriveCharts
+    /// Nil without rated-range data.
+    let rangeEfficiency: DriveRangeEfficiency?
+
+    func series(_ metric: DriveChartMetric) -> [DriveCharts.Point] { charts.series[metric.rawValue] ?? [] }
 
     init(_ detail: DriveDetail, units: UnitPreferences) {
         self.detail = detail
@@ -99,6 +105,11 @@ struct TripSnapshot {
         maxSpeed = TripAnalysis.maxSpeed(summary: s.maxSpeedKph, timeline: speedTimeline)
         descent = TripAnalysis.descent(elevationForDescent)
         score = useTelemetryScore ? candidateScore : legacyScore
+        let charts = DriveChartSeries.build(detail)
+        self.charts = charts
+        rangeEfficiency = DriveRangeEfficiency.compute(range: charts.series[DriveChartMetric.ratedRangeKm.rawValue] ?? [],
+                                                       speed: charts.series[DriveChartMetric.speedKph.rawValue] ?? [],
+                                                       distanceKm: s.distanceKm, start: charts.start, end: charts.end)
     }
 
     /// Builds a signal-only timeline without inventing positions. Rows for

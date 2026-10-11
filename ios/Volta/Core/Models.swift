@@ -169,6 +169,9 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
     var route: [DriveRoutePoint]? = nil
     /// The server's per-component drive score; nil when not sent or all unknown.
     var scoreBreakdown: DriveScoreBreakdown? = nil
+    /// Energy recovered by regenerative braking, from the server. Nil means
+    /// "not sent", never 0.
+    var regenKwh: Double? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, start, end, startAddress, endAddress, distanceKm, durationMin
@@ -177,6 +180,7 @@ struct DriveSummary: Codable, Hashable, Sendable, Identifiable {
         case electricityRatePerKwh, rateCurrency, energySource, driveScore, route
         case legacyDriveScore = "efficiencyScore"
         case scoreBreakdown
+        case regenKwh
     }
 }
 
@@ -399,12 +403,19 @@ struct DriveDetail: Codable, Hashable, Sendable {
     var path: [DrivePoint]
     var elevationGainM: Double?
     var telemetry: FleetTelemetrySeries?
+    /// Total descent over the drive, from the server. Nil means "not sent".
+    var elevationLossM: Double? = nil
+    /// Server-built step series for the detail charts. Nil on older servers;
+    /// the app then builds the same series from `path` and `telemetry`.
+    var charts: DriveCharts? = nil
 
     // The API flattens summary fields into the detail object.
-    init(summary: DriveSummary, path: [DrivePoint], elevationGainM: Double?, telemetry: FleetTelemetrySeries? = nil) {
+    init(summary: DriveSummary, path: [DrivePoint], elevationGainM: Double?, telemetry: FleetTelemetrySeries? = nil,
+         elevationLossM: Double? = nil, charts: DriveCharts? = nil) {
         self.summary = summary; self.path = path; self.elevationGainM = elevationGainM; self.telemetry = telemetry
+        self.elevationLossM = elevationLossM; self.charts = charts
     }
-    private enum Keys: String, CodingKey { case path, elevationGainM, telemetry }
+    private enum Keys: String, CodingKey { case path, elevationGainM, telemetry, elevationLossM, charts }
     init(from decoder: Decoder) throws {
         summary = try DriveSummary(from: decoder)
         let c = try decoder.container(keyedBy: Keys.self)
@@ -413,6 +424,8 @@ struct DriveDetail: Codable, Hashable, Sendable {
         // Telemetry is supplemental. An incompatible or malformed block must
         // not discard the successfully decoded legacy detail.
         telemetry = try? c.decodeIfPresent(FleetTelemetrySeries.self, forKey: .telemetry)
+        elevationLossM = (try? c.decodeIfPresent(Double.self, forKey: .elevationLossM)) ?? nil
+        charts = (try? c.decodeIfPresent(DriveCharts.self, forKey: .charts)) ?? nil
     }
     func encode(to encoder: Encoder) throws {
         try summary.encode(to: encoder)
@@ -420,7 +433,23 @@ struct DriveDetail: Codable, Hashable, Sendable {
         try c.encode(path, forKey: .path)
         try c.encodeIfPresent(elevationGainM, forKey: .elevationGainM)
         try c.encodeIfPresent(telemetry, forKey: .telemetry)
+        try c.encodeIfPresent(elevationLossM, forKey: .elevationLossM)
+        try c.encodeIfPresent(charts, forKey: .charts)
     }
+}
+
+/// Step series for the drive detail charts. Each series is seeded at `start`,
+/// holds its value until the next change and runs to `end`; points appear only
+/// where the value changes.
+struct DriveCharts: Codable, Hashable, Sendable {
+    struct Point: Codable, Hashable, Sendable {
+        var t: Date
+        var v: Double
+    }
+    var start: Date
+    var end: Date
+    /// Keyed by metric (`DriveChartMetric.rawValue`), e.g. "speedKph".
+    var series: [String: [Point]]
 }
 
 struct ChargeSummary: Codable, Hashable, Sendable, Identifiable {
