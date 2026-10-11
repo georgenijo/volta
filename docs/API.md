@@ -236,11 +236,14 @@ the antimeridian) to fill `series.elevationM`; a drive that would need more than
 hysteresis (the final residual is settled), computed separately for each
 continuous run (split at route breaks and terrain voids, so a level change
 across a break or void is never counted) and summed, rounded to 0.1 m, and are null unless at least 80% of samples have terrain
-data. Without `ELEVATION_DEM_DIR` (or tiles) they are null and `elevationM`
-is omitted. The API never downloads tiles; `server/scripts/fetch-elevation-tiles.sh
-<dir> <min-lat> <min-lon> <max-lat> <max-lon>` fetches public Skadi tiles from
-the AWS Open Data `elevation-tiles-prod` bucket for a bounding box (no default
-region, at most 400 tiles per run).
+data. `elevationMinM`/`elevationMaxM` are the extrema of the full DEM profile,
+before chart thinning, or null without terrain data. Without `ELEVATION_DEM_DIR` (or tiles) they are null and `elevationM`
+is omitted. The API never downloads tiles. `server/scripts/fetch-elevation-tiles.sh
+<dir> --tiles-file <private-manifest>` fetches named public Skadi tiles from
+the AWS Open Data `elevation-tiles-prod` bucket. Select tile names on the private
+database host, keep the manifest outside git, and send only tile names upstream.
+The legacy four bounding-box arguments remain supported; conversion to tile names
+is local. There is no default region, and each run accepts at most 400 unique tiles.
 
 With Fleet Telemetry enabled and bound, charge lists merge derived telemetry
 charge sessions (`source:"fleet_telemetry"`, negative `id`, accepted by

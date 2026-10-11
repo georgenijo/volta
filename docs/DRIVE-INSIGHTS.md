@@ -33,3 +33,40 @@ Heatmap groups drive start dates by the device's calendar/time zone. Each month 
 ## Deployment compatibility
 
 Summary fields are optional and additive; old clients ignore them and new clients decode older APIs. Reapply `deploy/telemetry/sql/002_api_series.sql` before enabling lifetime fallback: the new lifetime column is appended to the read-only view. If a supplemental telemetry query fails, TeslaMate history still loads and the logger emits only a stable, nonsensitive error code. No migration or deployment was run on a real server for this change.
+
+## Offline terrain provisioning
+
+The API Compose service mounts `${ELEVATION_DEM_PATH:-/opt/volta-elevation}`
+read-only at `/elevation` and sets `ELEVATION_DEM_DIR=/elevation`. Provision that
+host directory before recreating the API. An empty directory keeps elevation
+unknown. No download or coordinate service runs in the API.
+
+On the database host, select distinct SRTM names from the car's recorded
+locations using `floor(latitude)`/`floor(longitude)` and hemisphere prefixes.
+Keep the resulting one-name-per-line manifest private and outside the checkout.
+Run `server/scripts/fetch-elevation-tiles.sh <host-directory> --tiles-file
+<private-manifest>` there. Only public tile object names go to the public Skadi
+bucket. Tiles and manifests are excluded from git. The downloader validates
+names and decoded file sizes, keeps valid existing tiles, and reports counts
+without logging the selected region.
+
+Drive detail returns the elevation series, full-profile `elevationMinM` and
+`elevationMaxM`, and `elevationGainM`/`elevationLossM`. The app uses the optional
+extrema for the min/max labels and shows the existing amber chart and ↑/↓ totals.
+Older APIs still render using the series extrema.
+
+## Regen prerequisite
+
+PackVoltage and PackCurrent must be valid in the same payload. The SQL views
+keep power and regen unknown until an operator records the physically verified
+PackCurrent sign in `volta_telemetry.power_calibration` with source
+`operator_live_gate` and a private evidence note. A profile re-push cannot fix
+missing calibration. Never infer the sign from charger input power, and never
+write an assumed sign merely to populate the UI. Because power is derived in
+views, a verified calibration applies to retained samples without replay.
+
+TeslaMate's recorded `positions.power` can contain negative drive power and
+support a historical regen estimate where its cadence and coverage are adequate.
+It has no stored per-drive regen-energy counter; coarse or missing power cannot
+establish a Wattly total. This change adds no historical backfill or automatic
+calibration.

@@ -21,7 +21,7 @@ export class DriveDetail {
         if (catalog && window && +window.start===+new Date(detail.start) && +new Date(detail.end)<=+window.end && +new Date(detail.end)>=+window.start)
           return {...detail,...await store.detailExtras(vehicle,{...window,end:new Date(detail.end)},catalog.gaps,this.dem)};
       } catch { this.log({event:'drive_detail_extras_unavailable',category:'optional_telemetry'}); }
-      return {...detail,charts:null,elevationGainM:detail.elevationGainM ?? null,elevationLossM:null};
+      return {...detail,charts:null,elevationGainM:detail.elevationGainM ?? null,elevationLossM:null,elevationMinM:null,elevationMaxM:null};
     }
     let loss: number | null=null;
     try {

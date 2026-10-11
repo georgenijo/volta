@@ -181,10 +181,12 @@ test('drive detail adds forward-filled charts and DEM elevation for telemetry dr
     expect(Object.keys(d.charts.series).sort()).toEqual(['elevationM','energyRemainingKwh','outsideTempC','speedKph']);
     expect(d.charts.series.elevationM[0]).toEqual({t:at(0).toISOString(),v:8400});expect(d.charts.series.elevationM.at(-1).t).toBe(at(600).toISOString());
     expect(d.elevationGainM).toBeCloseTo(72,0);expect(d.elevationLossM).toBe(0);
+    expect(d.elevationMinM).toBeCloseTo(8400,6);expect(d.elevationMaxM).toBeCloseTo(8472,6);
     const plain=await get(`/v1/drives/${id}`);expect(plain.charts).toBeUndefined(); // no DriveDetail configured
     const noDem=createApp(auth,telemetry,()=>{},null,null,null,new DriveDetail(reader,null));
     const bare=await (await noDem.request(`/v1/drives/${id}`,{headers:{Authorization:`Bearer ${token}`}})).json() as any;
-    expect(bare.elevationGainM).toBeNull();expect(bare.elevationLossM).toBeNull();expect(bare.charts.series.elevationM).toBeUndefined();
+    expect(bare.elevationGainM).toBeNull();expect(bare.elevationLossM).toBeNull();
+    expect(bare.elevationMinM).toBeNull();expect(bare.elevationMaxM).toBeNull();expect(bare.charts.series.elevationM).toBeUndefined();
     const legacy=await read('/v1/drives/5');expect(legacy.charts).toBeNull();expect(legacy.elevationGainM).toBe(30);expect(legacy.elevationLossM).toBe(12);
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
@@ -294,4 +296,27 @@ for (const end of ['gear','open','gap']) test(`touching joined sessions keep the
   const list=await distanceParity();expect(list).toHaveLength(1);
   // All 120 steps of 0.0001 degrees latitude, including 590->600 and 600->610.
   expect(list[0].distanceKm).toBeCloseTo(120*6371.0088*.0001*Math.PI/180,3);
+});
+
+test('operator sign calibration unlocks existing same-payload power and regen without replaying data',async()=>{
+  await trip(0,600);
+  // The raw current is negative while discharging. The first half discharges;
+  // the second half regenerates. Calibration must never be inferred by ingest.
+  await owner`INSERT INTO volta_telemetry.samples(vehicle_id,field,source_ts,received_at,value_num,invalid,quality,payload_id,source_unit)
+    SELECT 1,f.field,${at(0)}::timestamptz+i*interval '10 seconds',${at(0)}::timestamptz+i*interval '10 seconds',
+      CASE f.field WHEN 'PackVoltage' THEN 400 ELSE CASE WHEN i<30 THEN -25 ELSE 25 END END,false,'ok','0-'||i,''
+    FROM generate_series(0,60) i CROSS JOIN (VALUES ('PackVoltage'),('PackCurrent')) f(field)`;
+  const id=(await get('/v1/vehicles/1/drives')).items[0].id;
+  const detailed=createApp(auth,telemetry,()=>{},null,null,null,new DriveDetail(reader,null));
+  const read=async()=>await (await detailed.request(`/v1/drives/${id}`,{headers:{Authorization:`Bearer ${token}`}})).json() as any;
+  let d=await read();expect(d.regenKwh).toBeNull();expect(d.charts.series.powerKw).toBeUndefined();
+  const [before]=await owner`SELECT count(*)::integer AS n FROM volta_telemetry.samples`;
+  await owner`INSERT INTO volta_telemetry.power_calibration(vehicle_id,sign,source,evidence_note) VALUES (1,'discharge_negative','operator_live_gate','synthetic verified sign')`;
+  d=await read();expect(d.regenKwh).toBeCloseTo((3000+25)/3600,6);
+  expect(d.charts.series.powerKw.map((p:any)=>p.v)).toEqual([10,-10,-10]);
+  const [points]=await owner`SELECT count(power_kw)::integer AS n FROM volta_telemetry.drive_points WHERE vehicle_id=1`;
+  expect(points!.n).toBe(61);
+  const [after]=await owner`SELECT count(*)::integer AS n FROM volta_telemetry.samples`;expect(after!.n).toBe(before!.n);
+  await owner`DELETE FROM volta_telemetry.power_calibration`;
+  d=await read();expect(d.regenKwh).toBeNull();expect(d.charts.series.powerKw).toBeUndefined();
 });

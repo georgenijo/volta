@@ -440,17 +440,21 @@ struct DriveDetail: Codable, Hashable, Sendable {
     var telemetry: FleetTelemetrySeries?
     /// Total descent over the drive, from the server. Nil means "not sent".
     var elevationLossM: Double? = nil
+    /// Extrema from the full offline terrain profile, before chart thinning.
+    var elevationMinM: Double? = nil
+    var elevationMaxM: Double? = nil
     /// Server-built step series for the detail charts. Nil on older servers;
     /// the app then builds the same series from `path` and `telemetry`.
     var charts: DriveCharts? = nil
 
     // The API flattens summary fields into the detail object.
     init(summary: DriveSummary, path: [DrivePoint], elevationGainM: Double?, telemetry: FleetTelemetrySeries? = nil,
-         elevationLossM: Double? = nil, charts: DriveCharts? = nil) {
+         elevationLossM: Double? = nil, charts: DriveCharts? = nil, elevationMinM: Double? = nil, elevationMaxM: Double? = nil) {
         self.summary = summary; self.path = path; self.elevationGainM = elevationGainM; self.telemetry = telemetry
         self.elevationLossM = elevationLossM; self.charts = charts
+        self.elevationMinM = elevationMinM; self.elevationMaxM = elevationMaxM
     }
-    private enum Keys: String, CodingKey { case path, elevationGainM, telemetry, elevationLossM, charts }
+    private enum Keys: String, CodingKey { case path, elevationGainM, telemetry, elevationLossM, charts, elevationMinM, elevationMaxM }
     init(from decoder: Decoder) throws {
         summary = try DriveSummary(from: decoder)
         let c = try decoder.container(keyedBy: Keys.self)
@@ -461,6 +465,8 @@ struct DriveDetail: Codable, Hashable, Sendable {
         telemetry = try? c.decodeIfPresent(FleetTelemetrySeries.self, forKey: .telemetry)
         elevationLossM = (try? c.decodeIfPresent(Double.self, forKey: .elevationLossM)) ?? nil
         charts = (try? c.decodeIfPresent(DriveCharts.self, forKey: .charts)) ?? nil
+        elevationMinM = (try? c.decodeIfPresent(Double.self, forKey: .elevationMinM)) ?? nil
+        elevationMaxM = (try? c.decodeIfPresent(Double.self, forKey: .elevationMaxM)) ?? nil
     }
     func encode(to encoder: Encoder) throws {
         try summary.encode(to: encoder)
@@ -469,6 +475,8 @@ struct DriveDetail: Codable, Hashable, Sendable {
         try c.encodeIfPresent(elevationGainM, forKey: .elevationGainM)
         try c.encodeIfPresent(telemetry, forKey: .telemetry)
         try c.encodeIfPresent(elevationLossM, forKey: .elevationLossM)
+        try c.encodeIfPresent(elevationMinM, forKey: .elevationMinM)
+        try c.encodeIfPresent(elevationMaxM, forKey: .elevationMaxM)
         try c.encodeIfPresent(charts, forKey: .charts)
     }
 }

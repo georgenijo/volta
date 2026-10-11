@@ -330,13 +330,17 @@ final class DriveDetailChartsTests: XCTestCase {
 
     func testDecodesChartsRegenAndElevationLoss() throws {
         let parsed = try detailJSON([
-            "regenKwh": 1.5, "elevationLossM": 208,
+            "regenKwh": 1.5, "elevationLossM": 208, "elevationMinM": 32, "elevationMaxM": 121,
             "charts": ["start": "2026-07-01T10:00:00.000Z", "end": "2026-07-01T10:30:00.000Z",
                        "series": ["batteryLevel": [["t": "2026-07-01T10:00:00.000Z", "v": 62],
                                                    ["t": "2026-07-01T10:30:00.000Z", "v": 59]]]],
         ])
         XCTAssertEqual(parsed.summary.regenKwh, 1.5)
         XCTAssertEqual(parsed.elevationLossM, 208)
+        XCTAssertEqual(parsed.elevationMinM, 32); XCTAssertEqual(parsed.elevationMaxM, 121)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let roundTrip = try APIDataSource.makeDecoder().decode(DriveDetail.self, from: encoder.encode(parsed))
+        XCTAssertEqual(roundTrip.elevationMinM, 32); XCTAssertEqual(roundTrip.elevationMaxM, 121)
         let charts = try XCTUnwrap(parsed.charts)
         XCTAssertEqual(charts.end.timeIntervalSince(charts.start), 1800)
         XCTAssertEqual(charts.series["batteryLevel"]?.map(\.v), [62, 59])
@@ -344,12 +348,14 @@ final class DriveDetailChartsTests: XCTestCase {
 
     func testMissingOrMalformedChartFieldsDecodeToNil() throws {
         let absent = try detailJSON([:])
+        XCTAssertNil(absent.elevationMinM); XCTAssertNil(absent.elevationMaxM)
         XCTAssertNil(absent.charts); XCTAssertNil(absent.elevationLossM); XCTAssertNil(absent.summary.regenKwh)
         let nulls = try detailJSON(["charts": NSNull(), "regenKwh": NSNull(), "elevationLossM": NSNull()])
         XCTAssertNil(nulls.charts); XCTAssertNil(nulls.summary.regenKwh)
         // A bad charts block never fails the whole drive.
-        let bad = try detailJSON(["charts": ["start": "nope", "series": 3], "elevationLossM": "x"])
+        let bad = try detailJSON(["charts": ["start": "nope", "series": 3], "elevationLossM": "x", "elevationMinM": "bad", "elevationMaxM": "bad"])
         XCTAssertNil(bad.charts)
+        XCTAssertNil(bad.elevationMinM); XCTAssertNil(bad.elevationMaxM)
         XCTAssertNil(bad.elevationLossM)
         XCTAssertEqual(bad.summary.id, 10)
     }

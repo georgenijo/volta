@@ -104,6 +104,13 @@ final class ScreenScreenshotTests: XCTestCase {
         try waitForScreen("drive-detail")
         capture("drive-detail")
         try scroll("drive-detail", screenshot: "drive-detail-scrolled")
+        let elevation = element("trip.chart.coverage.elevation")
+        for _ in 0..<8 {
+            if elevation.exists && elevation.isHittable { break }
+            element("scroll.drive-detail").swipeUp()
+        }
+        XCTAssertTrue(elevation.exists && elevation.isHittable, "The synthetic drive must render its elevation section")
+        capture("drive-detail-elevation")
     }
 
     func testChargeDetail() throws {

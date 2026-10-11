@@ -9,3 +9,8 @@ docs/screens/latest/
 ios/Config/Signing.local.xcconfig
 acceptance.test
 __pycache__/
+
+# Offline elevation data and private regional manifests are deployment data.
+*.hgt
+*.hgt.gz
+*.tiles

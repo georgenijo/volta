@@ -15,9 +15,9 @@ struct HistoryHeader<Filter: View, Trailing: View>: View {
 
     var body: some View {
         VoltaHeader(title) {
-            GlassPill(height: 48) { rangeControls }
+            GlassPill(height: 44) { rangeControls }
         } trailing: {
-            GlassPill(height: 48) { trailing }
+            GlassPill(height: 44) { trailing }
         }
         .padding(.bottom, 6)
         .sheet(isPresented: $showingCustomRange) {
@@ -41,10 +41,10 @@ struct HistoryHeader<Filter: View, Trailing: View>: View {
                 HStack(spacing: 10) {
                     Image(systemName: "calendar")
                     Text(range.label)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .monospacedDigit()
                 }
-                .frame(height: 48)
+                .frame(height: 44)
                 .contentShape(.rect)
             }
             .accessibilityLabel("Date range, \(range.menuTitle)")
@@ -54,7 +54,7 @@ struct HistoryHeader<Filter: View, Trailing: View>: View {
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease")
                         .foregroundStyle(filterActive ? HistoryTheme.blue : .white)
-                        .frame(height: 48)
+                        .frame(height: 44)
                         .contentShape(.rect)
                 }
                 .accessibilityLabel("Filter")
@@ -74,7 +74,7 @@ struct HistoryHeaderButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .foregroundStyle(isOn ? HistoryTheme.blue : .white)
-                .frame(minWidth: 28, minHeight: 48)
+                .frame(minWidth: 28, minHeight: 44)
                 .contentShape(.rect)
                 .contentTransition(.symbolEffect(.replace))
         }

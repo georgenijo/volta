@@ -436,9 +436,9 @@ struct DriveDetailView: View {
             TripSection(icon: "mountain.2.fill", title: "Elevation") {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("Min").tripLabel(size: 10)
-                    TripHeaderValue(text: "\(number(lo)) \(heightUnit)", color: HistoryTheme.amber)
+                    TripHeaderValue(text: "\(number(loader.detail?.elevationMinM.flatMap { $0.isFinite ? height($0) : nil } ?? lo)) \(heightUnit)", color: HistoryTheme.amber)
                     Text("Max").tripLabel(size: 10).padding(.leading, 8)
-                    TripHeaderValue(text: "\(number(hi)) \(heightUnit)", color: HistoryTheme.amber)
+                    TripHeaderValue(text: "\(number(loader.detail?.elevationMaxM.flatMap { $0.isFinite ? height($0) : nil } ?? hi)) \(heightUnit)", color: HistoryTheme.amber)
                 }
             } content: {
                 VStack(alignment: .leading, spacing: 22) {

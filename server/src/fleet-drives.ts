@@ -419,7 +419,7 @@ export class FleetDrives {
   }
   /** Detail-only extras for one resolved window: forward-filled chart series
    * and DEM elevation gain/loss (null without a configured DEM). */
-  async detailExtras(vehicle: number, w: Window, gaps: Gap[], dem: Dem | null): Promise<{charts: DriveCharts; elevationGainM: number | null; elevationLossM: number | null}> {
+  async detailExtras(vehicle: number, w: Window, gaps: Gap[], dem: Dem | null): Promise<{charts: DriveCharts; elevationGainM: number | null; elevationLossM: number | null; elevationMinM: number | null; elevationMaxM: number | null}> {
     const cols=Object.entries(chartMetrics);
     const [samples,seeds,locations]=await Promise.all([
       this.sql`SELECT * FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
@@ -437,7 +437,9 @@ export class FleetDrives {
     const real=realGaps(gaps), path=locations.map(p=>({t:new Date(p.source_ts),latitude:p.latitude,longitude:p.longitude,routeBreakBefore:false}));
     for (let i=1;i<path.length;i++) path[i]!.routeBreakBefore=+path[i]!.t-+path[i-1]!.t>120000 || lostBetween(real,path[i-1]!.t,path[i]!.t);
     const profile=elevationProfile(dem,path);
-    return {charts:driveCharts(w.start,w.end,samples,seedValues(seeds,w.start,real),profile.points),elevationGainM:profile.gainM,elevationLossM:profile.lossM};
+    return {charts:driveCharts(w.start,w.end,samples,seedValues(seeds,w.start,real),profile.points),elevationGainM:profile.gainM,elevationLossM:profile.lossM,
+      elevationMinM:profile.points.length ? profile.points.reduce((min,p)=>Math.min(min,p.v),Infinity) : null,
+      elevationMaxM:profile.points.length ? profile.points.reduce((max,p)=>Math.max(max,p.v),-Infinity) : null};
   }
   /** City only (never an address) of the nearest local TeslaMate address
    * within 3 km, for endpoints no geofence/150 m address labels. */

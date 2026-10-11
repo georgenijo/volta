@@ -12,6 +12,9 @@ services:
       TESLAMATE_DATABASE_URL: ${TESLAMATE_DATABASE_URL:?set read-only database URL}
       AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:?set auth database URL}
       CURRENCY: ${CURRENCY:-USD}
+      ELEVATION_DEM_DIR: /elevation
+    volumes:
+      - ${ELEVATION_DEM_PATH:-/opt/volta-elevation}:/elevation:ro
     ports:
       - '${TAILSCALE_IP:?set ubuntu Tailscale IPv4}:8080:8080'
     networks: [teslamate]

@@ -408,3 +408,23 @@ func contains(xs []string, x string) bool {
 	}
 	return false
 }
+
+// The runtime reader and Compose must agree, and the API must never be able
+// to overwrite privately provisioned terrain data.
+func TestUbuntuOfflineElevationMount(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "ubuntu", "compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c compose
+	if err := yaml.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	api := c.Services["api"]
+	if api.Environment["ELEVATION_DEM_DIR"] != "/elevation" {
+		t.Fatal("offline DEM directory not configured")
+	}
+	if !contains(api.Volumes, "${ELEVATION_DEM_PATH:-/opt/volta-elevation}:/elevation:ro") {
+		t.Fatal("offline DEM must have an external read-only bind mount")
+	}
+}
