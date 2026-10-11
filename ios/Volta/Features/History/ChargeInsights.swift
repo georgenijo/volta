@@ -84,10 +84,11 @@ struct ChargeSocBar: Equatable {
 
 // MARK: - Cost
 
-/// Recorded session cost, or an estimate from the energy added and the user's
-/// electricity rate (the DC fast rate for DC fast sessions). Price per kWh is
-/// always per kWh added to the battery, so a recorded cost and an estimate
-/// compare like for like. No recorded cost and no rate means unknown.
+/// Recorded session cost, or an estimate from the user's electricity rate (the
+/// DC fast rate for DC fast sessions) times the energy drawn from the grid, as
+/// the charger bills it: measured or recorded when known, else added energy over
+/// the assumed efficiency. A recorded cost's price is per kWh added; an
+/// estimate's price is the rate itself. No recorded cost and no rate means unknown.
 struct ChargeCost: Equatable {
     var amount: Double
     var currency: String
@@ -100,8 +101,9 @@ struct ChargeCost: Equatable {
             return ChargeCost(amount: cost, currency: charge.currency ?? rates.currency, isEstimated: false,
                               pricePerKwh: added.map { cost / $0 })
         }
-        guard let added, let rate = ElectricityRates.stored(rates.perKwh(fastCharger: charge.fastCharger)) else { return nil }
-        return ChargeCost(amount: added * rate, currency: rates.currency, isEstimated: true, pricePerKwh: rate)
+        guard let grid = ChargeEnergyFlow.resolve(charge)?.gridKwh,
+              let rate = ElectricityRates.stored(rates.perKwh(fastCharger: charge.fastCharger)) else { return nil }
+        return ChargeCost(amount: grid * rate, currency: rates.currency, isEstimated: true, pricePerKwh: rate)
     }
 }
 

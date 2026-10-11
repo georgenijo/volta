@@ -252,8 +252,8 @@ final class DriveInsightsTests: XCTestCase {
                           energyAddedKwh: 40, energyUsedKwh: nil, startBatteryLevel: 20, endBatteryLevel: 80, durationMin: 30,
                           maxPowerKw: nil, fastCharger: fast, cost: nil, currency: nil, outsideTempAvgC: nil)
         }
-        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(fast: false), rates: rates)).amount, 60_000)
-        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(fast: true), rates: rates)).amount, 60_000)
+        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(fast: false), rates: rates)).amount, 40 / ChargeEnergyFlow.assumedEfficiency * 1500, accuracy: 1e-6)
+        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(fast: true), rates: rates)).amount, 40 / ChargeEnergyFlow.assumedEfficiency * 1500, accuracy: 1e-6)
         XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(drive(kwh: 10), home: rates.homeTripRate)), 15_000, accuracy: 1e-9)
     }
     func testRateValidation() {
