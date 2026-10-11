@@ -51,7 +51,7 @@ export function mergeSessions(vehicle: number, sessions: Row[], gaps: Gap[], mov
     const parked = previous && previous.endReason === 'gear' && resumeReasons.includes(s.startReason) && +start - +previous.end < parkJoinMs
       && !gaps.some(g => coverageGap(g) && +g.start < +start && +g.end > +previous.end);
     const rolling = previous && +start - +previous.end < 60000 && !lostBetween(gaps,previous.end,start) && moving(previous.end,start);
-    const charged = previous && charges.some(c => +new Date(c.start) < +start && +new Date(c.end) > +previous.end);
+    const charged = previous && charges.some(c => +new Date(c.start) < +start && +new Date(c.end) >= +previous.end);
     const part: Part = {start,end,startReason:s.startReason,endReason:s.endReason,membership:s.membership};
     if (previous && +start >= +previous.end && (parked || rolling) && !charged) {
       previous.end = end; previous.endReason = s.endReason; if (s.membership==='partial') previous.membership='partial'; previous.parts!.push(part);

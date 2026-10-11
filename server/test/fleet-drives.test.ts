@@ -15,6 +15,8 @@ test('a short stop containing a known charge never joins the drives around it',(
   // Rolling seams are blocked too; charges outside the stop do not block.
   expect(mergeSessions(2,[session(0,600),session(630,900)],[],()=>true,[{start:at(605),end:at(625)}])).toHaveLength(2);
   expect(mergeSessions(2,parked,[],undefined,[{start:at(-900),end:at(-60)},{start:at(1600),end:at(2000)}])).toHaveLength(1);
+  // An open charge (end = start) recorded at the Park instant still splits.
+  expect(mergeSessions(2,parked,[],undefined,[{start:at(600),end:at(600)}])).toHaveLength(2);
 });
 test('a stop under ten minutes joins trips, observed or first_observed resume; exactly ten minutes, gaps and unknown gear do not',()=>{
   const merged=mergeSessions(2,[session(0,60),session(659,1000),session(1010,1040)],[]);
