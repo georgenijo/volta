@@ -30,10 +30,12 @@ The frame project already includes `project.uitests.yml` conditionally.
 Generation sets `VOLTA_INCLUDE_UITESTS=true` and enables widgets when present.
 See [the UI harness contract](../ios/VoltaUITests/README.md) for demo launch and
 screen identifiers. CI generates with XcodeGen, builds app and test runners
-once under `VoltaCI`, runs `VoltaTests`, then runs `VoltaUITests` using the same
-build products. UI failures remain failures even if partial PNGs export.
-Screenshots, xcresults, and capture logs upload as an Actions artifact with a
-seven-day retention period. The repo is public, so artifacts are readable by
+once under `VoltaCI` (so the UI target still compiles), and runs `VoltaTests`.
+Pull requests stop there: run `scripts/screenshots.sh` locally before pushing.
+A manual `workflow_dispatch` run additionally runs `VoltaUITests` using the same
+build products; UI failures remain failures even if partial PNGs export.
+Screenshots (manual runs only), xcresults, and capture logs upload as an Actions
+artifact with a seven-day retention period. The repo is public, so artifacts are readable by
 anyone signed in to GitHub; they contain demo data only.
 
 ## Cost budget

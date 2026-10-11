@@ -97,6 +97,7 @@ are populated demo screens, whereas the supplied history reference images are
 empty states. This suite establishes navigation and screenshots; visual
 comparison and empty-state acceptance remain the lead's integration checks.
 
-CI builds test runners once, runs unit tests, then calls `--skip-build` to run
-only the UI target. `--export-only build/screenshots.xcresult` can re-export an
+CI builds test runners once and runs unit tests. On pull requests the UI target
+is compiled but not run; run this suite locally before pushing. Manual
+`workflow_dispatch` runs then call `--skip-build` to run only the UI target. `--export-only build/screenshots.xcresult` can re-export an
 existing result without launching the app.
