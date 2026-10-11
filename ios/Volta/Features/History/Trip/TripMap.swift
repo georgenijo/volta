@@ -235,16 +235,19 @@ struct TripMapView: View {
     var mode: TripMapMode
     /// Highlighted sample (replay position or chart scrub), if any.
     var highlight: DrivePoint?
+    /// Bottom safe-area padding so MapKit's legal label clears the page fade.
+    var bottomInset: CGFloat = 0
 
     @State private var position: MapCameraPosition
     /// The map's visible rect, from the latest camera change; nil until MapKit reports one.
     @State private var visible: MKMapRect?
 
-    init(timeline: TripTimeline, route: TripRoute, mode: TripMapMode, highlight: DrivePoint?) {
+    init(timeline: TripTimeline, route: TripRoute, mode: TripMapMode, highlight: DrivePoint?, bottomInset: CGFloat = 0) {
         self.timeline = timeline
         self.route = route
         self.mode = mode
         self.highlight = highlight
+        self.bottomInset = bottomInset
         _position = State(initialValue: TripRoute.framing(timeline.points))
     }
 
@@ -257,7 +260,10 @@ struct TripMapView: View {
             .saturation(0)
             .brightness(-0.06)
             .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
+            .safeAreaPadding(.bottom, bottomInset)
             .ignoresSafeArea()
+            // Darker than MapKit's dark style so labels recede behind the route.
+            .overlay { Color.black.opacity(0.36).ignoresSafeArea().allowsHitTesting(false) }
             .overlay {
                 GeometryReader { geo in
                     if let visible {
@@ -332,13 +338,13 @@ private struct TripRouteCanvas: View {
             let colored = buckets.keys.sorted().map { key in
                 (buckets[key]!, TripPalette.color(Double(key) / Double(Self.colorSteps), stops: stops))
             }
-            ctx.stroke(neutral, with: .color(.white.opacity(0.15)), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+            ctx.stroke(neutral, with: .color(.white.opacity(0.08)), style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
             for (path, color) in colored {
-                ctx.stroke(path, with: .color(color.opacity(0.28)), style: StrokeStyle(lineWidth: 12, lineCap: .butt, lineJoin: .round))
+                ctx.stroke(path, with: .color(color.opacity(0.18)), style: StrokeStyle(lineWidth: 8, lineCap: .butt, lineJoin: .round))
             }
-            ctx.stroke(neutral, with: .color(.white.opacity(0.6)), style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+            ctx.stroke(neutral, with: .color(.white.opacity(0.55)), style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round))
             for (path, color) in colored {
-                ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 4.5, lineCap: .butt, lineJoin: .round))
+                ctx.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 3.5, lineCap: .butt, lineJoin: .round))
             }
             for q in p.isolated { ctx.fill(Self.circle(q, 3.5), with: .color(.white.opacity(0.85))) }
             if let start = p.start { Self.endpoint(&ctx, start, HistoryTheme.green) }
@@ -357,8 +363,8 @@ private struct TripRouteCanvas: View {
     }
 
     private static func endpoint(_ ctx: inout GraphicsContext, _ c: CGPoint, _ color: Color) {
-        ctx.fill(circle(c, 11), with: .color(color.opacity(0.3)))
-        ctx.fill(circle(c, 5.5), with: .color(color))
-        ctx.stroke(circle(c, 4.75), with: .color(.white.opacity(0.9)), lineWidth: 1.5)
+        ctx.fill(circle(c, 9), with: .color(color.opacity(0.22)))
+        ctx.fill(circle(c, 5), with: .color(.white))
+        ctx.fill(circle(c, 3.5), with: .color(color))
     }
 }

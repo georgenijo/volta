@@ -10,6 +10,7 @@ struct DriveDetailView: View {
     /// Optional so previews without an app model still render; nil = no local persistence.
     @Environment(AppModel.self) private var model: AppModel?
     @State private var loader = HistoryDetailLoader<DriveDetail>()
+    @State private var rateLoader = TripRateLoader()
     @State private var snapshot: TripSnapshot?
     @State private var loadedKey: LoadKey?
     @State private var mode: TripMapMode = .speed
@@ -31,6 +32,8 @@ struct DriveDetailView: View {
     private var summary: DriveSummary { loader.detail?.summary ?? drive }
 
     private static let mapHeight: CGFloat = 400
+    /// Wattly's text margin on a 402 pt wide phone.
+    static let margin: CGFloat = 28
 
     var body: some View {
         ScrollView {
@@ -38,37 +41,22 @@ struct DriveDetailView: View {
                 routeMap
                 VStack(alignment: .leading, spacing: 0) {
                     TripHero(summary: summary, units: units)
-                        .padding(.top, 6).padding(.bottom, 26)
+                    Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 22)
                     TripStatsRow(summary: summary, units: units, regen: snapshot?.regen, maxSpeed: snapshot?.maxSpeed)
-                        .padding(.bottom, 28)
-                    VStack(spacing: 12) {
-                        if let timeline = snapshot?.timeline, timeline.quality != .dense {
-                            TripSamplingNote(timeline: timeline)
-                        }
-                        TripCostCard(energyKwh: summary.costableEnergyKwh, rate: DrivePricing.rate(summary, home: model?.settings.rates.homeTripRate),
-                                     lookup: nil, editable: model != nil && DrivePricing.rate(summary, home: nil) == nil,
-                                     note: summary.costableEnergyKwh != nil ? summary.energyProvenance : nil) { editingRate = true }
+                        .padding(.top, 46).padding(.bottom, 46)
+                    if let timeline = snapshot?.timeline, timeline.quality != .dense {
+                        TripSamplingNote(timeline: timeline)
                     }
-                    .padding(.bottom, 32)
-                    TripSectionHeader(title: "Drive score", trailing: scoreTrailing)
-                        .padding(.bottom, 12)
-                    TripScoreCard(score: summary.efficiencyScore, breakdown: .resolved(server: summary.scoreBreakdown, local: snapshot?.score),
+                    TripCostCard(estimate: costEstimate, editable: model != nil) { editingRate = true }
+                    TripScoreCard(score: summary.efficiencyScore,
+                                  breakdown: .resolved(server: summary.scoreBreakdown, local: snapshot?.score),
                                   result: snapshot?.score)
-                        .padding(.bottom, 32)
-                    TripSectionHeader(title: "Telemetry", trailing: telemetryTrailing)
-                        .padding(.bottom, 12)
-                    VStack(spacing: 12) {
-                        charts
-                        if supplementalTelemetryMissing {
-                            TripUnrecordedCard(outsideAvg: summary.outsideTempAvgC.map { "\(VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0))\(units.temperatureUnit)" })
-                        }
+                    signalSections
+                    TripSection(icon: "list.bullet", title: "Details") {
+                        TripDetailsList(rows: detailRows)
                     }
-                    .padding(.bottom, 32)
-                    TripSectionHeader(title: "Details")
-                        .padding(.bottom, 12)
-                    TripDetailsList(rows: detailRows)
                 }
-                .padding(.horizontal, HistoryTheme.gutter)
+                .padding(.horizontal, Self.margin)
             }
         }
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
@@ -80,18 +68,32 @@ struct DriveDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
         .task(id: key) { await load(key) }
+        .task(id: key) { await lookUpRate(key) }
         .onChange(of: units) { rebuild() }
         .onDisappear { stopReplay() }
     }
 
-    private var scoreTrailing: String? {
-        guard let score = summary.efficiencyScore else { return nil }
-        return score >= 85 ? "Excellent" : score >= 70 ? "Good" : "Fair"
+    // MARK: Cost
+
+    /// Server rate → previous priced charge → home → DC → default. Shown at
+    /// once from what's known; the previous-charge lookup upgrades it later.
+    private var costEstimate: TripCostEstimate? {
+        let settings = model?.settings
+        return TripCostEstimate.make(energyKwh: summary.costableEnergyKwh, distanceKm: summary.distanceKm,
+                                     server: DrivePricing.rate(summary, home: nil),
+                                     previousCharge: rateLoader.result?.rate,
+                                     homeRate: settings?.electricityRate, dcFastRate: settings?.dcFastRate,
+                                     settingsCurrency: settings?.units.currency ?? units.currency)
     }
 
-    private var telemetryTrailing: String? {
-        guard let t = snapshot?.timeline, !t.points.isEmpty else { return nil }
-        return "\(t.points.count.formatted()) samples" + (snapshot?.usesFleetTelemetry == true ? " · Fleet" : "")
+    private func lookUpRate(_ key: LoadKey) async {
+        rateLoader.reset()
+        // The server's own rate wins; no lookup needed.
+        guard DrivePricing.rate(drive, home: nil) == nil else { return }
+        let ds = dataSource, vehicle = key.vehicleID, before = drive.start
+        await rateLoader.load(before: before) { cursor in
+            try await ds.charges(vehicleID: vehicle, range: DateRange(from: nil, to: before), cursor: cursor)
+        }
     }
 
     // MARK: Loading
@@ -109,7 +111,6 @@ struct DriveDetailView: View {
         await loader.load { try await ds.drive(id: id) }
         guard !Task.isCancelled, loadedKey == key else { return }
         rebuild()
-
     }
 
     private func reload() { Task { await load(key) } }
@@ -151,9 +152,8 @@ struct DriveDetailView: View {
         replayTask = nil
     }
 
-    /// The one resolved position the map and every chart show: a chart scrub
-    /// wins over replay. Resolved against the full timeline, never a chart's
-    /// reduced plotting points.
+    /// The one resolved position the map shows: a chart scrub wins over
+    /// replay. Resolved against the full timeline.
     private var focus: TripSelection? {
         guard let timeline = snapshot?.timeline, let minute = scrub ?? replayMinute else { return nil }
         return TripSelection(minute: minute, timeline: timeline)
@@ -171,14 +171,14 @@ struct DriveDetailView: View {
     private var header: some View {
         ZStack(alignment: .top) {
             LinearGradient(stops: [.init(color: HistoryTheme.background, location: 0),
-                                   .init(color: HistoryTheme.background.opacity(0.75), location: 0.55),
+                                   .init(color: HistoryTheme.background.opacity(0.7), location: 0.5),
                                    .init(color: HistoryTheme.background.opacity(0), location: 1)],
                            startPoint: .top, endPoint: .bottom)
-                .frame(height: 150)
+                .frame(height: 140)
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
             HStack(spacing: 10) {
-                BackButton()
+                BackPill()
                 Spacer(minLength: 0)
                 // Not GlassPill: its interactive glass swallowed taps on these
                 // buttons in this overlay (verified on the simulator).
@@ -187,8 +187,8 @@ struct DriveDetailView: View {
                         Button { mode = m } label: {
                             Image(systemName: m.systemImage)
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(mode == m ? Color.black : .white)
-                                .frame(width: 38, height: 38)
+                                .foregroundStyle(mode == m ? Color.black : .white.opacity(0.85))
+                                .frame(width: 34, height: 34)
                                 .background(Circle().fill(mode == m ? HistoryTheme.green : .clear))
                                 .contentShape(Circle())
                         }
@@ -197,7 +197,6 @@ struct DriveDetailView: View {
                         .accessibilityIdentifier("trip.mode.\(m.rawValue)")
                     }
                 }
-                Spacer(minLength: 0)
                 headerPill {
                     Button(action: toggleReplay) {
                         headerIcon(isPlaying ? "pause.fill" : "play.fill")
@@ -218,24 +217,24 @@ struct DriveDetailView: View {
                     }
                 }
             }
-            .padding(.horizontal, HistoryTheme.gutter)
+            .padding(.horizontal, 16)
         }
     }
 
     private func headerPill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 6) { content() }
+        HStack(spacing: 4) { content() }
             .foregroundStyle(.white)
             .buttonStyle(.plain)
             .padding(.horizontal, 5)
-            .frame(height: 48)
+            .frame(height: 44)
             .glassEffect(.regular, in: .capsule)
     }
 
     private func headerIcon(_ systemImage: String) -> some View {
         Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .semibold))
-            .frame(width: 38, height: 38)
-            .contentShape(Circle())
+            .font(.system(size: 17, weight: .semibold))
+            .frame(width: 40, height: 34)
+            .contentShape(Rectangle())
     }
 
     // MARK: Map
@@ -248,7 +247,8 @@ struct DriveDetailView: View {
                 switch state {
                 case .route, .single:
                     if let snapshot, let route = snapshot.routes[mode] {
-                        TripMapView(timeline: snapshot.timeline, route: route, mode: mode, highlight: highlight)
+                        TripMapView(timeline: snapshot.timeline, route: route, mode: mode, highlight: highlight,
+                                    bottomInset: 64)
                     } else {
                         mapPlaceholder(nil)
                     }
@@ -260,11 +260,19 @@ struct DriveDetailView: View {
                     mapPlaceholder(message, retry: true)
                 }
             }
-            LinearGradient(colors: [.clear, HistoryTheme.background], startPoint: .init(x: 0.5, y: 0.72), endPoint: .bottom)
+            // Fade the map into the page; MapKit's legal label sits above it.
+            LinearGradient(stops: [.init(color: HistoryTheme.background.opacity(0), location: 0),
+                                   .init(color: HistoryTheme.background.opacity(0.85), location: 0.6),
+                                   .init(color: HistoryTheme.background, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: 64)
                 .allowsHitTesting(false)
-            if let snapshot, case .route = state {
-                mapCaption(snapshot)
-                    .padding(.bottom, 10)
+            if let snapshot, case .route = state, let text = mapCaption(snapshot) {
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.bottom, 8)
+                    .accessibilityIdentifier("trip.map.caption")
             }
         }
         .frame(height: Self.mapHeight)
@@ -272,8 +280,8 @@ struct DriveDetailView: View {
 
     private func mapPlaceholder(_ message: String?, loading: Bool = false, retry: Bool = false) -> some View {
         ZStack {
-            HistoryTheme.card
-            RouteWatermark(points: summary.drawableRoute, opacity: 0.35)
+            HistoryTheme.background
+            RouteWatermark(points: summary.drawableRoute, opacity: 0.3)
                 .padding(.horizontal, 60).padding(.top, 110).padding(.bottom, 80)
             VStack(spacing: 10) {
                 if loading { ProgressView().tint(HistoryTheme.secondary) }
@@ -287,149 +295,225 @@ struct DriveDetailView: View {
         }
     }
 
-    private func mapCaption(_ snapshot: TripSnapshot) -> some View {
+    /// A quiet line under the route only while scrubbing/replaying or when the
+    /// route has gaps; nil otherwise.
+    private func mapCaption(_ snapshot: TripSnapshot) -> String? {
         let timeline = snapshot.timeline
-        let text: String
-        if let focus, focus.index == nil {
-            text = "No sample at \(TripChart.minuteLabel(focus.minute))"
-        } else if let focus {
-            text = "\(TripChart.minuteLabel(focus.sampleMinute ?? focus.minute)) of \(TripChart.minuteLabel(timeline.totalMinutes))"
-        } else if timeline.gapCount > 0 {
-            text = "\(timeline.gapCount) gap\(timeline.gapCount == 1 ? "" : "s") · dashed lines are not the driven path"
+        if let focus, focus.index == nil { return "No sample at \(TripChart.minuteLabel(focus.minute))" }
+        if let focus {
+            return "\(TripChart.minuteLabel(focus.sampleMinute ?? focus.minute)) of \(TripChart.minuteLabel(timeline.totalMinutes))"
+        }
+        if timeline.gapCount > 0 {
+            return "\(timeline.gapCount) gap\(timeline.gapCount == 1 ? "" : "s") · dashed lines are not the driven path"
+        }
+        return nil
+    }
+
+    // MARK: Signal sections
+
+    private var speedUnit: String { units.distance == .miles ? "mph" : "km/h" }
+    private var heightUnit: String { units.distance == .miles ? "ft" : "m" }
+    private func height(_ m: Double) -> Double { units.distance == .miles ? m * 3.28084 : m }
+    private func number(_ v: Double, _ digits: Int = 0) -> String { VoltaFormat.number(v, digits: digits) }
+    private func temp(_ c: Double) -> Double { units.temperatureValue(celsius: c) }
+    private func degrees(_ v: Double) -> String { "\(number(v))\(units.temperatureUnit)" }
+
+    private func mapped(_ points: [DriveCharts.Point], _ transform: (Double) -> Double) -> [DriveCharts.Point] {
+        points.map { DriveCharts.Point(t: $0.t, v: transform($0.v)) }
+    }
+
+    @ViewBuilder private var signalSections: some View {
+        if let snapshot {
+            let start = snapshot.charts.start, end = snapshot.charts.end
+            batterySection(snapshot, start: start, end: end)
+            energySection(snapshot, start: start, end: end)
+            speedSection(snapshot, start: start, end: end)
+            elevationSection(snapshot, start: start, end: end)
+            batteryTempSection(snapshot, start: start, end: end)
+            temperatureSection(snapshot, start: start, end: end)
+            rangeSection(snapshot, start: start, end: end)
+        } else if let error = loader.error {
+            TripSection(icon: "waveform.path.ecg", title: "Charts") {
+                HistoryChartPlaceholder(height: 120, message: error) { reload() }
+            }
         } else {
-            text = mode.title
-        }
-        return Text(text)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.white.opacity(0.85))
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .glassEffect(.regular, in: .capsule)
-            .accessibilityIdentifier("trip.map.caption")
-    }
-
-    // MARK: Charts
-
-    @ViewBuilder private var charts: some View {
-        let speedUnit = units.distance == .miles ? "mph" : "km/h"
-        let heightUnit = units.distance == .miles ? "ft" : "m"
-        chartCard("Speed", "speedometer", HistoryTheme.blue, speedUnit, series: snapshot?.speed,
-                  accessory: snapshot?.speed.values.max().map { "\(sampledPrefix(snapshot?.speed))MAX \(VoltaFormat.number($0, digits: 0))" + (summary.avgSpeedKph.map { " · AVG \(VoltaFormat.number(units.distanceValue(km: $0), digits: 0))" } ?? "") },
-                  gradient: [HistoryTheme.green, HistoryTheme.amber, HistoryTheme.red], domain: { TripChartDomain.zeroBased($0) })
-        chartCard("Power", "bolt.fill", HistoryTheme.amber, "kW", series: snapshot?.power,
-                  accessory: snapshot?.power.values.max().map { "\(sampledPrefix(snapshot?.power))PEAK \(VoltaFormat.number($0, digits: 0)) kW" },
-                  digits: 1, showsZero: true, domain: { TripChartDomain.zeroBased($0) })
-        chartCard("Battery", "battery.75percent", HistoryTheme.green, "%", series: snapshot?.battery,
-                  accessory: batteryAccessory, step: true, domain: { TripChartDomain.padded($0) })
-        chartCard("Elevation", "mountain.2.fill", HistoryTheme.purple, heightUnit, series: snapshot?.elevation,
-                  accessory: snapshot.flatMap { rangeAccessory($0.elevation.values, unit: heightUnit) },
-                  domain: { TripChartDomain.padded($0) })
-        if let snapshot, !snapshot.longitudinalAcceleration.isEmpty || !snapshot.lateralAcceleration.isEmpty {
-            let values = snapshot.longitudinalAcceleration.values + snapshot.lateralAcceleration.values
-            telemetryChartCard("Acceleration", "gyroscope", "m/s²",
-                               traces: [
-                                .init(label: "Longitudinal", color: HistoryTheme.green, series: snapshot.longitudinalAcceleration),
-                                .init(label: "Lateral", color: HistoryTheme.blue, series: snapshot.lateralAcceleration),
-                               ], accessory: "LONG / LAT", digits: 2, domain: TelemetryAcceleration.domain(values),
-                               showsZero: true, height: 110)
-        }
-        if let snapshot, !snapshot.energyRemaining.isEmpty {
-            telemetryChartCard("Energy remaining", "bolt.batteryblock.fill", "kWh",
-                               traces: [.init(label: "Energy", color: HistoryTheme.green, series: snapshot.energyRemaining)],
-                               accessory: energyAccessory(snapshot), digits: 1, domain: TripChartDomain.padded(snapshot.energyRemaining.values, minPad: 0.5))
-        }
-        if let snapshot, !snapshot.batteryTempMin.isEmpty || !snapshot.batteryTempMax.isEmpty {
-            let values = snapshot.batteryTempMin.values + snapshot.batteryTempMax.values
-            telemetryChartCard("Battery temperature", "thermometer.medium", units.temperatureUnit,
-                               traces: [
-                                .init(label: "Min", color: HistoryTheme.blue, series: snapshot.batteryTempMin),
-                                .init(label: "Max", color: HistoryTheme.red, series: snapshot.batteryTempMax),
-                               ], accessory: rangeAccessory(values, unit: units.temperatureUnit), digits: 1, domain: TripChartDomain.padded(values, minPad: 2))
-        }
-        if let snapshot, !snapshot.insideTemp.isEmpty || !snapshot.outsideTemp.isEmpty {
-            let values = snapshot.insideTemp.values + snapshot.outsideTemp.values
-            telemetryChartCard("Cabin & outside", "thermometer.sun.fill", units.temperatureUnit,
-                               traces: [
-                                .init(label: "Inside", color: HistoryTheme.amber, series: snapshot.insideTemp),
-                                .init(label: "Outside", color: HistoryTheme.blue, series: snapshot.outsideTemp),
-                               ], accessory: "INSIDE / OUTSIDE", digits: 1, domain: TripChartDomain.padded(values, minPad: 2))
-        }
-    }
-
-    private func rangeAccessory(_ values: [Double], unit: String) -> String? {
-        guard let min = values.min(), let max = values.max() else { return nil }
-        return "MIN \(VoltaFormat.number(min, digits: 0)) · MAX \(VoltaFormat.number(max, digits: 0)) \(unit)"
-    }
-
-    private func energyAccessory(_ snapshot: TripSnapshot) -> String? {
-        guard let first = snapshot.energyRemaining.values.first, let last = snapshot.energyRemaining.values.last else { return nil }
-        let used = summary.energyUsedKwh.map { " · USED \(VoltaFormat.number($0)) kWh" } ?? ""
-        return "\(VoltaFormat.number(first)) → \(VoltaFormat.number(last)) kWh" + used
-    }
-
-    private var supplementalTelemetryMissing: Bool {
-        guard let snapshot else { return true }
-        return snapshot.energyRemaining.isEmpty && snapshot.batteryTempMin.isEmpty && snapshot.batteryTempMax.isEmpty
-            && snapshot.insideTemp.isEmpty && snapshot.outsideTemp.isEmpty
-    }
-
-    /// Extremes of a sparsely recorded signal are only those of its samples,
-    /// which can differ from the server's summary (e.g. the hero's max speed).
-    private func sampledPrefix(_ series: TripChartSeries?) -> String { series?.signal.isDense == true ? "" : "SAMPLED " }
-
-    private var batteryAccessory: String? {
-        guard let from = summary.startBatteryLevel, let to = summary.endBatteryLevel else { return nil }
-        let delta = to - from
-        return "\(from)% → \(to)% · \(delta > 0 ? "+" : "")\(delta)%"
-    }
-
-    private func chartCard(_ title: String, _ icon: String, _ color: Color, _ unit: String, series: TripChartSeries?,
-                           accessory: String?, digits: Int = 0, step: Bool = false, showsZero: Bool = false,
-                           gradient: [Color]? = nil, domain: @escaping ([Double]) -> ClosedRange<Double>) -> some View {
-        TripChartPanel(title: title, color: gradient?.last ?? color, accessory: accessory) {
-            if let error = loader.error {
-                HistoryChartPlaceholder(height: 130, message: error) { reload() }
-            } else if snapshot == nil {
-                HistoryChartPlaceholder(height: 130)
-            } else if let series, !series.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    TripChart(series: series, color: color, gradient: gradient, unit: unit, digits: digits, step: step,
-                              showsZero: showsZero, yDomain: domain(series.values), scrub: $scrub, selection: focus)
-                    if let note = TripChartSeries.coverageNote(series, title: title) {
-                        Text(note)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(HistoryTheme.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("trip.chart.coverage.\(title.lowercased())")
-                    }
-                }
-            } else {
-                TripChartEmpty(message: "Not recorded for this drive.")
+            TripSection(icon: "waveform.path.ecg", title: "Charts") {
+                HistoryChartPlaceholder(height: 120)
             }
         }
     }
 
-    private func telemetryChartCard(_ title: String, _ icon: String, _ unit: String,
-                                    traces: [TelemetryTrace], accessory: String?, digits: Int,
-                                    domain: ClosedRange<Double>, showsZero: Bool = false,
-                                    height: CGFloat = 140) -> some View {
-        let recorded = traces.reduce(0) { $0 + $1.series.points.count }
-        let gapCount = Set(traces.flatMap(\.series.gaps).map { "\($0.start)-\($0.end)" }).count
-        let downsampled = traces.contains { $0.series.downsampled }
-        let truncated = traces.contains { $0.series.truncated }
-        var note = "Fleet Telemetry · \(recorded.formatted()) recorded sample\(recorded == 1 ? "" : "s")"
-        if gapCount > 0 { note += " · \(gapCount) known gap\(gapCount == 1 ? "" : "s") not joined" }
-        if downsampled { note += " · downsampled" }
-        if truncated { note += " · history truncated" }
-        let end = summary.end ?? summary.start.addingTimeInterval(summary.durationMin * 60)
-        return TripChartPanel(title: title, color: traces.first?.color ?? HistoryTheme.blue, accessory: accessory) {
-            VStack(alignment: .leading, spacing: 8) {
-                TelemetryMetricChart(traces: traces, unit: unit, domain: domain,
-                                     sessionStart: summary.start, sessionEnd: end, digits: digits,
-                                     showsZero: showsZero, height: height, scrub: $scrub,
-                                     selectionMinute: focusMinute)
-                Text(note).font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("trip.telemetry.\(title.lowercased().replacingOccurrences(of: " ", with: "-"))")
+    private func chart(_ traces: [TripTrace], start: Date, end: Date, domain: ClosedRange<Double>,
+                       axis: @escaping (Double) -> String, fillBetween: Bool = false,
+                       tooltip: @escaping (Double) -> String?) -> some View {
+        TripSignalChart(traces: traces, start: start, end: end, domain: domain, axisLabel: axis,
+                        fillBetween: fillBetween, tooltip: tooltip, scrub: $scrub, focusMinute: focusMinute)
+    }
+
+    private func at(_ points: [DriveCharts.Point], _ start: Date, _ minute: Double) -> Double? {
+        DriveChartSeries.value(points, at: start.addingTimeInterval(minute * 60))
+    }
+
+    @ViewBuilder private func batterySection(_ s: TripSnapshot, start: Date, end: Date) -> some View {
+        let points = s.series(.batteryLevel)
+        if !points.isEmpty {
+            let from = summary.startBatteryLevel ?? Int(points.first!.v.rounded())
+            let to = summary.endBatteryLevel ?? Int(points.last!.v.rounded())
+            TripSection(icon: "battery.75percent", title: "Battery") {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("\(to - from > 0 ? "+" : "")\(to - from)%").font(.system(size: 12, weight: .regular))
+                        .monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
+                    TripHeaderValue(text: "\(from)% → \(to)%", color: HistoryTheme.blue)
+                }
+            } content: {
+                chart([TripTrace(label: "Battery", color: HistoryTheme.blue, points: points, fill: true)],
+                      start: start, end: end, domain: TripSignalDomain.padded(points.map(\.v), minSpan: 4),
+                      axis: { "\(number($0))%" }) { m in at(points, start, m).map { "\(number($0))%" } }
+            }
+        }
+    }
+
+    @ViewBuilder private func energySection(_ s: TripSnapshot, start: Date, end: Date) -> some View {
+        let points = s.series(.energyRemainingKwh)
+        if let first = points.first?.v, let last = points.last?.v {
+            TripSection(icon: "bolt.fill", title: "Energy remaining") {
+                TripHeaderValue(text: "\(number(first, 1)) → \(number(last, 1)) kWh", color: HistoryTheme.green)
+            } content: {
+                VStack(alignment: .leading, spacing: 22) {
+                    chart([TripTrace(label: "Energy", color: HistoryTheme.green, points: points, fill: true)],
+                          start: start, end: end, domain: TripSignalDomain.padded(points.map(\.v), minSpan: 1),
+                          axis: { number($0) }) { m in at(points, start, m).map { "\(number($0, 1)) kWh" } }
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Image(systemName: "battery.25percent").font(.system(size: 15)).foregroundStyle(HistoryTheme.secondary)
+                        Text("Used").tripLabel(HistoryTheme.tertiary, size: 10.5)
+                        Text("\(number(summary.energyUsedKwh ?? max(0, first - last), 1)) kWh")
+                            .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func speedSection(_ s: TripSnapshot, start: Date, end: Date) -> some View {
+        let points = mapped(s.series(.speedKph)) { units.distanceValue(km: $0) }
+        if let top = points.map(\.v).max() {
+            let maxText = number(summary.maxSpeedKph.map { units.distanceValue(km: $0) } ?? top)
+            let current = focusMinute.flatMap { at(points, start, $0) }
+                ?? TripStatsRow.avgSpeedKph(summary).map { units.distanceValue(km: $0) }
+            TripSection(icon: "gauge.with.dots.needle.33percent", title: "Speed") {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("Max \(maxText)").tripLabel(HistoryTheme.tertiary, size: 10.5)
+                    TripHeaderValue(text: current.map { "\(number($0)) \(speedUnit)" } ?? "—")
+                }
+            } content: {
+                chart([TripTrace(label: "Speed", color: Color(hex: 0x4FD1C5), points: points,
+                                 gradient: [Color(hex: 0x4FD1C5), HistoryTheme.blue, Color(hex: 0xF5A35B), Color(hex: 0xC084FC)],
+                                 fill: true, endDot: .white)],
+                      start: start, end: end, domain: TripSignalDomain.zeroBased(points.map(\.v)),
+                      axis: { number($0) }) { m in at(points, start, m).map { "\(number($0)) \(speedUnit)" } }
+            }
+        }
+    }
+
+    @ViewBuilder private func elevationSection(_ s: TripSnapshot, start: Date, end: Date) -> some View {
+        let points = mapped(s.series(.elevationM)) { height($0) }
+        if let lo = points.map(\.v).min(), let hi = points.map(\.v).max() {
+            TripSection(icon: "mountain.2.fill", title: "Elevation") {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Min").tripLabel(size: 10)
+                    TripHeaderValue(text: "\(number(lo)) \(heightUnit)", color: HistoryTheme.amber)
+                    Text("Max").tripLabel(size: 10).padding(.leading, 8)
+                    TripHeaderValue(text: "\(number(hi)) \(heightUnit)", color: HistoryTheme.amber)
+                }
+            } content: {
+                VStack(alignment: .leading, spacing: 22) {
+                    chart([TripTrace(label: "Elevation", color: HistoryTheme.amber, points: points, fill: true)],
+                          start: start, end: end, domain: TripSignalDomain.padded(points.map(\.v), minSpan: 10),
+                          axis: { number($0) }) { m in at(points, start, m).map { "\(number($0)) \(heightUnit)" } }
+                    Text("↑ \(climbText) · ↓ \(descentText)")
+                        .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                }
+            }
+        }
+    }
+
+    private var hasElevation: Bool {
+        loader.detail?.elevationGainM != nil || snapshot?.series(.elevationM).isEmpty == false
+    }
+
+    private var climbText: String {
+        loader.detail?.elevationGainM.map { "\(number(height($0))) \(heightUnit)" } ?? "—"
+    }
+
+    private var descentText: String {
+        if let loss = loader.detail?.elevationLossM, loss.isFinite { return "\(number(height(loss))) \(heightUnit)" }
+        if case .value(let v) = snapshot?.descent { return "\(number(height(v))) \(heightUnit)" }
+        return "—"
+    }
+
+    @ViewBuilder private func batteryTempSection(_ s: TripSnapshot, start: Date, end: Date) -> some View {
+        let maxPoints = mapped(s.series(.batteryTempMaxC), temp), minPoints = mapped(s.series(.batteryTempMinC), temp)
+        if !maxPoints.isEmpty || !minPoints.isEmpty {
+            let values = (maxPoints + minPoints).map(\.v)
+            let headline = (minPoints.last ?? maxPoints.last).map { degrees($0.v) } ?? "—"
+            TripSection(icon: "thermometer.medium", title: "Battery temperature") {
+                TripHeaderValue(text: headline, color: HistoryTheme.blue)
+            } content: {
+                VStack(alignment: .leading, spacing: 22) {
+                    chart([TripTrace(label: "Max", color: Color(hex: 0xE5695F), points: maxPoints),
+                           TripTrace(label: "Min", color: HistoryTheme.blue, points: minPoints)].filter { !$0.points.isEmpty },
+                          start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 2),
+                          axis: { degrees($0) }) { m in
+                        let hi = at(maxPoints, start, m), lo = at(minPoints, start, m)
+                        return [hi.map { "max \(degrees($0))" }, lo.map { "min \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
+                    }
+                    TripChartLegend(items: [.init(label: "Max", color: Color(hex: 0xE5695F)), .init(label: "Min", color: HistoryTheme.blue)])
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func temperatureSection(_ s: TripSnapshot, start: Date, end: Date) -> some View {
+        let inside = mapped(s.series(.insideTempC), temp), outside = mapped(s.series(.outsideTempC), temp)
+        if !inside.isEmpty || !outside.isEmpty {
+            let values = (inside + outside).map(\.v)
+            let headline = [inside.last, outside.last].compactMap { $0.map { degrees($0.v) } }.joined(separator: " · ")
+            TripSection(icon: "thermometer.sun.fill", title: "Temperatures") {
+                TripHeaderValue(text: headline, color: HistoryTheme.amber)
+            } content: {
+                VStack(alignment: .leading, spacing: 22) {
+                    chart([TripTrace(label: "Inside", color: HistoryTheme.amber, points: inside),
+                           TripTrace(label: "Outside", color: Color(hex: 0x8E8E8E), points: outside)].filter { !$0.points.isEmpty },
+                          start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 4),
+                          axis: { degrees($0) }) { m in
+                        let a = at(inside, start, m), b = at(outside, start, m)
+                        return [a.map { "in \(degrees($0))" }, b.map { "out \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
+                    }
+                    TripChartLegend(items: [.init(label: "Inside", color: HistoryTheme.amber), .init(label: "Outside", color: Color(hex: 0x8E8E8E))])
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func rangeSection(_ s: TripSnapshot, start: Date, end: Date) -> some View {
+        if let efficiency = s.rangeEfficiency, efficiency.points.count > 1 {
+            let actual = efficiency.points.map { DriveCharts.Point(t: $0.t, v: units.distanceValue(km: $0.actualKm)) }
+            let ideal = efficiency.points.map { DriveCharts.Point(t: $0.t, v: units.distanceValue(km: $0.idealKm)) }
+            TripSection(icon: "gauge.with.dots.needle.67percent", title: "Range efficiency") {
+                TripHeaderValue(text: efficiency.percent.map { "\(number($0))%" } ?? "—",
+                                color: (efficiency.percent ?? 0) >= 100 ? HistoryTheme.green : HistoryTheme.amber)
+            } content: {
+                VStack(alignment: .leading, spacing: 22) {
+                    chart([TripTrace(label: "Actual", color: HistoryTheme.green, points: actual),
+                           TripTrace(label: "Ideal", color: .white, points: ideal, dashed: true, interpolation: .linear)],
+                          start: start, end: end, domain: TripSignalDomain.padded((actual + ideal).map(\.v), minSpan: 4),
+                          axis: { number($0) }, fillBetween: true) { m in
+                        at(actual, start, m).map { "\(number($0)) \(units.distanceUnit) rated" }
+                    }
+                    TripChartLegend(items: [.init(label: "Actual", color: HistoryTheme.green),
+                                            .init(label: "Ideal", color: HistoryTheme.secondary, dashed: true)])
+                }
             }
         }
     }
@@ -437,100 +521,50 @@ struct DriveDetailView: View {
     // MARK: Details
 
     private var detailRows: [(String, String)] {
-        let speedUnit = units.distance == .miles ? "mph" : "km/h"
-        let heightUnit = units.distance == .miles ? "ft" : "m"
-        func height(_ m: Double) -> String { "\(VoltaFormat.number(units.distance == .miles ? m * 3.28084 : m, digits: 0)) \(heightUnit)" }
+        let regenKwh = TripStatsRow.regenKwh(server: summary.regenKwh, estimate: snapshot?.regen)
         var rows: [(String, String)] = [
-            ("Average speed", summary.avgSpeedKph.map { "\(VoltaFormat.number(units.distanceValue(km: $0), digits: 0)) \(speedUnit)" } ?? "—"),
+            ("Avg speed", TripStatsRow.avgSpeedKph(summary).map { "\(number(units.distanceValue(km: $0))) \(speedUnit)" } ?? "—"),
         ]
         switch snapshot?.maxSpeed {
-        case .value(let v): rows.append(("Max speed", "\(VoltaFormat.number(units.distanceValue(km: v), digits: 0)) \(speedUnit)"))
-        case .atLeast(let v): rows.append(("Max speed", "≥ \(VoltaFormat.number(units.distanceValue(km: v), digits: 0)) \(speedUnit) (sparse samples)"))
-        default: rows.append(("Max speed", "—"))
+        case .value(let v): rows.append(("Max speed", "\(number(units.distanceValue(km: v))) \(speedUnit)"))
+        case .atLeast(let v): rows.append(("Max speed", "≥ \(number(units.distanceValue(km: v))) \(speedUnit)"))
+        default: rows.append(("Max speed", summary.maxSpeedKph.map { "\(number(units.distanceValue(km: $0))) \(speedUnit)" } ?? "—"))
         }
-        rows.append(("Regen recovered", TripStatsRow.regenDetail(snapshot?.regen)))
-        rows.append(("Climb", loader.detail?.elevationGainM.map { "↑ " + height($0) } ?? "—"))
-        switch snapshot?.descent {
-        case .value(let v): rows.append(("Descent", "↓ " + height(v)))
-        case .atLeast(let v): rows.append(("Descent", "≥ ↓ " + height(v) + " (partial)"))
-        case .unavailable(let reason): rows.append(("Descent", "— · \(reason)"))
-        case nil: rows.append(("Descent", "—"))
+        if let regenKwh { rows.append(("Regen", "\(number(regenKwh, 2)) kWh")) }
+        if hasElevation { rows.append(("Elevation", "↑ \(climbText)  ↓ \(descentText)")) }
+        rows.append(("Energy used", summary.energyUsedKwh.map { "\(number($0, 2)) kWh" } ?? "—"))
+        rows.append(("Efficiency", summary.displayEfficiencyWhPerKm.map { "\(number(units.efficiencyValue(whPerKm: $0))) \(units.efficiencyUnit)" } ?? "—"))
+        rows.append(("Outside temp", summary.outsideTempAvgC.map { degrees(temp($0)) } ?? "—"))
+        if let from = summary.startBatteryLevel, let to = summary.endBatteryLevel {
+            rows.append(("Battery", "\(from)% → \(to)%"))
         }
-        rows.append(("Outside (average)", summary.outsideTempAvgC.map { "\(VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0))\(units.temperatureUnit)" } ?? "—"))
-        if let t = snapshot?.timeline {
-            let telemetrySources: [String] = [
-                snapshot?.usesFleetTelemetry == true ? "route" : nil,
-                snapshot?.usesTelemetryBattery == true ? "battery" : nil,
-                snapshot?.usesTelemetryPower == true ? "power" : nil,
-                snapshot?.usesTelemetrySpeed == true ? "speed" : nil,
-                snapshot?.usesTelemetryElevation == true ? "elevation" : nil,
-            ].compactMap { $0 }
-            if !telemetrySources.isEmpty {
-                rows.append(("Fleet Telemetry used for", telemetrySources.joined(separator: ", ")))
-            }
-            rows.append(("Samples", "\(t.points.count.formatted()) distinct of \(t.rawCount.formatted()) rows"))
-            if t.conflictingTimestamps > 0 {
-                rows.append(("Conflicting timestamps", "\(t.conflictingTimestamps) · kept 1 row each by a fixed rule"))
-            }
-            rows.append(("Coverage", TripAnalysis.percent(t.coverage) + (t.gapCount > 0 ? " · \(t.gapCount) gap\(t.gapCount == 1 ? "" : "s")" : "")))
-            if let median = t.medianInterval { rows.append(("Typical interval", "\(VoltaFormat.number(median, digits: 0)) s")) }
+        rows.append(("Duration", VoltaFormat.duration(TripStatsRow.durationMinutes(summary))))
+        if let t = snapshot?.timeline, !t.points.isEmpty {
+            rows.append(("Samples", "\(t.points.count.formatted()) · \(TripAnalysis.percent(t.coverage)) covered"))
         }
         let tz = TimeZone.current
-        rows.append(("Times shown in", "This device · \(tz.abbreviation(for: summary.start) ?? tz.identifier)"))
+        rows.append(("Time zone", tz.abbreviation(for: summary.start) ?? tz.identifier))
         return rows
     }
 }
 
-/// Back button matching the other detail screens.
-private struct BackButton: View {
+/// "‹ Back" text pill.
+private struct BackPill: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        GlassCircleButton(systemImage: "chevron.left", size: 48, accessibilityLabel: "Back") { dismiss() }
-    }
-}
-
-/// One trip chart card: a key dot, the title, a quiet summary on the right,
-/// then the plot.
-private struct TripChartPanel<Plot: View>: View {
-    var title: String
-    var color: Color
-    var accessory: String?
-    @ViewBuilder var plot: Plot
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 9) {
-                TripGlowDot(color: color, size: 6)
-                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white).fixedSize()
-                Spacer(minLength: 8)
-                if let accessory {
-                    Text(accessory).tripCaption(HistoryTheme.secondary).monospacedDigit()
-                        .lineLimit(1).minimumScaleFactor(0.75)
-                }
+        Button { dismiss() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
+                Text("Back").font(.system(size: 17, weight: .regular))
             }
-            .accessibilityElement(children: .combine)
-            plot
+            .foregroundStyle(.white)
+            .padding(.leading, 12).padding(.trailing, 16)
+            .frame(height: 44)
+            .contentShape(Capsule())
         }
-        .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .driveSurface()
-    }
-}
-
-/// Quiet empty state inside a chart panel.
-private struct TripChartEmpty: View {
-    var message: String
-    var body: some View {
-        ZStack {
-            Path { p in p.move(to: .zero); p.addLine(to: CGPoint(x: 1000, y: 0)) }
-                .stroke(.white.opacity(0.08), style: StrokeStyle(lineWidth: 1, dash: [3, 5]))
-                .frame(height: 1)
-            Text(message).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
-                .padding(.horizontal, 10)
-                .background(Color.voltaCard)
-        }
-        .frame(height: 64)
-        .clipped()
+        .buttonStyle(.plain)
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityLabel("Back")
     }
 }
 

@@ -4,7 +4,8 @@ import Foundation
 /// Coordinates follow a synthetic curve between public town centres; they are
 /// not a recorded route.
 enum TripFixtures {
-    /// Demo drive shown densely sampled (every 3 s).
+    /// Demo drive shown densely sampled (every 2 s), with server-style chart
+    /// series, regen and descent: the showcase for every detail section.
     static let denseDriveID = 1
     /// Demo drive reproducing the cached-collector pattern: 1,335 rows that hold
     /// only 5 distinct timestamps about 14 minutes apart, plus one conflicting row.
@@ -29,7 +30,7 @@ enum TripFixtures {
     /// row and the detail agree.
     static func summary(_ base: DriveSummary) -> DriveSummary {
         switch base.id {
-        case denseDriveID: dense(base).summary
+        case denseDriveID: showcase(base).summary
         case sparseDriveID: sparse(base).summary
         case signalGapDriveID: signalGaps(base).summary
         case intermittentDriveID: intermittent(base).summary
@@ -41,7 +42,7 @@ enum TripFixtures {
 
     static func detail(_ base: DriveSummary) -> DriveDetail? {
         switch base.id {
-        case denseDriveID: dense(base)
+        case denseDriveID: showcase(base)
         case sparseDriveID: sparse(base)
         case signalGapDriveID: signalGaps(base)
         case intermittentDriveID: intermittent(base)
@@ -141,6 +142,99 @@ enum TripFixtures {
         }
         let telemetry = FleetTelemetrySeries(source: "fleet_telemetry", samples: telemetrySamples, gaps: [], truncated: false)
         return DriveDetail(summary: summary, path: path, elevationGainM: gain, telemetry: telemetry)
+    }
+
+    // MARK: Showcase
+
+    /// 31.7 min, ~16.6 km: town streets with lights, a short expressway run and
+    /// more town streets. Rows every 2 s, plus a server-style `charts` block
+    /// (step series with points only on change), `regenKwh` and `elevationLossM`.
+    static func showcase(_ base: DriveSummary) -> DriveDetail {
+        let dt = 2.0, duration = 31.7 * 60
+        let steps = Int(duration / dt)
+        let mass = 1900.0, packKwh = 78.6, startEnergy = 49.2, ratedKmPerKwh = 7.2
+        var v = 0.0, distance = 0.0, used = 0.0, regen = 0.0
+        var rows: [(t: Double, v: Double, p: Double, e: Double, d: Double, used: Double)] = []
+        func elevation(_ f: Double) -> Double {
+            // Rolling hills that end lower than they start (synthetic).
+            88 + 26 * sin(f * .pi * 1.3 + 0.4) - 40 * f + 7 * sin(f * 37) + 3 * sin(f * 91)
+        }
+        for i in 0...steps {
+            let t = Double(i) * dt
+            let f = t / duration
+            var target: Double
+            switch f {
+            case ..<0.18: target = 31 + 7 * sin(t / 37)
+            case ..<0.30: target = 84 + 6 * sin(t / 23)
+            case ..<0.62: target = 34 + 7 * sin(t / 29)
+            case ..<0.86: target = 27 + 6 * sin(t / 31)
+            default: target = 32 + 8 * sin(t / 19)
+            }
+            for stop in [0.05, 0.33, 0.42, 0.52, 0.66, 0.75, 0.90] where abs(f - stop) < 0.012 { target = 0 }
+            if i == steps || t < 4 { target = 0 }
+            let targetMs = target / 3.6
+            let accel = max(-2.6, min(2.0, (targetMs - v) / dt))
+            let next = max(0, v + accel * dt)
+            let mean = (v + next) / 2
+            let e0 = elevation(Double(i) / Double(steps)), e1 = elevation(Double(min(i + 1, steps)) / Double(steps))
+            let segment = max(mean * dt, 0.001)
+            let slope = mean > 0.1 ? max(-0.08, min(0.08, (e1 - e0) / segment)) : 0
+            let road: Double = mass * accel * mean + 0.5 * 1.2 * 0.23 * 2.2 * pow(mean, 3)
+                + 0.009 * mass * 9.81 * mean + mass * 9.81 * slope * mean
+            var powerKw = road / 1000 / 0.9 + (mean > 0.1 ? 1.4 : 1.0)
+            if powerKw < 0 { powerKw = max(-60, powerKw * 0.75 * 0.9 * 0.9) }
+            distance += mean * dt
+            used += powerKw * dt / 3600
+            if powerKw < 0 { regen += -powerKw * dt / 3600 }
+            rows.append((t, next * 3.6, powerKw, e0, distance, used))
+            v = next
+        }
+        let totalKm = distance / 1000
+        let startLevel = startEnergy / packKwh * 100
+        let path = rows.map { r -> DrivePoint in
+            let c = coordinate(fraction: r.d / distance)
+            let level: Double = startLevel - r.used / packKwh * 100
+            return DrivePoint(t: base.start.addingTimeInterval(r.t), latitude: c.lat, longitude: c.lon,
+                              speedKph: r.v.rounded(), powerKw: (r.p * 10).rounded() / 10,
+                              elevationM: (r.e * 10).rounded() / 10, batteryLevel: Int(level.rounded(.down)))
+        }
+        var gain = 0.0, loss = 0.0
+        for (a, b) in zip(path, path.dropFirst()) {
+            let rise = (b.elevationM ?? 0) - (a.elevationM ?? 0)
+            if rise > 0 { gain += rise } else { loss -= rise }
+        }
+        let start = base.start, end = base.start.addingTimeInterval(duration)
+        func series(_ value: (Int, Double) -> Double) -> [DriveCharts.Point] {
+            DriveChartSeries.stepSeries(rows.enumerated().map { (start.addingTimeInterval($1.t), value($0, $1.t / duration)) },
+                                        start: start, end: end)
+        }
+        func round(_ v: Double, _ step: Double) -> Double { (v / step).rounded() * step }
+        let charts = DriveCharts(start: start, end: end, series: [
+            DriveChartMetric.speedKph.rawValue: series { i, _ in rows[i].v.rounded() },
+            DriveChartMetric.powerKw.rawValue: series { i, _ in round(rows[i].p, 0.5) },
+            DriveChartMetric.elevationM.rawValue: series { i, _ in rows[i].e.rounded() },
+            DriveChartMetric.batteryLevel.rawValue: series { i, _ in Double(path[i].batteryLevel ?? 0) },
+            DriveChartMetric.energyRemainingKwh.rawValue: series { i, _ in round(startEnergy - rows[i].used, 0.2) },
+            DriveChartMetric.ratedRangeKm.rawValue: series { i, _ in round((startEnergy - rows[i].used) * ratedKmPerKwh, 0.5) },
+            // The coolest module settles in the first minute; the warmest creeps up late.
+            DriveChartMetric.batteryTempMinC.rawValue: series { _, f in f < 0.03 ? 27.0 : 26.5 },
+            DriveChartMetric.batteryTempMaxC.rawValue: series { _, f in f < 0.6 ? 28.0 : 28.5 },
+            DriveChartMetric.insideTempC.rawValue: series { _, f in round(min(20, 17.5 + f * 30), 0.5) },
+            DriveChartMetric.outsideTempC.rawValue: series { _, f in round(13 - f * 3.6 + 0.4 * sin(f * 19), 0.5) },
+        ])
+        var summary = base
+        summary.end = end
+        summary.durationMin = duration / 60
+        summary.distanceKm = totalKm
+        summary.startBatteryLevel = path.first?.batteryLevel
+        summary.endBatteryLevel = path.last?.batteryLevel
+        summary.energyUsedKwh = used
+        summary.efficiencyWhPerKm = used * 1000 / totalKm
+        summary.maxSpeedKph = path.compactMap(\.speedKph).max()
+        summary.avgSpeedKph = totalKm / (duration / 3600)
+        summary.outsideTempAvgC = 11.5
+        summary.regenKwh = regen
+        return DriveDetail(summary: summary, path: path, elevationGainM: gain, elevationLossM: loss, charts: charts)
     }
 
     // MARK: Sparse
