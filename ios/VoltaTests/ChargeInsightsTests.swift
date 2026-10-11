@@ -19,34 +19,53 @@ final class ChargeInsightsTests: XCTestCase {
 
     // MARK: Cost
 
+    private func rates(home: Double? = 0.2, dc: Double? = nil) -> ElectricityRates {
+        ElectricityRates(home: home, dcFast: dc, currency: "USD")
+    }
+
     func testRecordedCostWinsAndPriceIsPerKwhAdded() throws {
-        let cost = try XCTUnwrap(ChargeCost.resolve(charge(added: 40, used: 44, cost: 12), fallbackRate: 0.2, fallbackCurrency: "USD"))
+        let cost = try XCTUnwrap(ChargeCost.resolve(charge(added: 40, used: 44, cost: 12), rates: rates()))
         XCTAssertFalse(cost.isEstimated)
         XCTAssertEqual(cost.amount, 12)
         XCTAssertEqual(cost.currency, "EUR")
         XCTAssertEqual(try XCTUnwrap(cost.pricePerKwh), 0.30, accuracy: 1e-9)
+        // The server price wins over both local rates, home and DC fast alike.
+        XCTAssertEqual(ChargeCost.resolve(charge(added: 40, cost: 12, fast: true), rates: rates(dc: 0.5))?.amount, 12)
+        XCTAssertEqual(ChargeCost.resolve(charge(added: 40, cost: 12), rates: rates(home: nil))?.amount, 12)
     }
 
     func testMissingCostIsEstimatedFromTheElectricityRate() throws {
-        let cost = try XCTUnwrap(ChargeCost.resolve(charge(added: 40), fallbackRate: 0.25, fallbackCurrency: "USD"))
+        let cost = try XCTUnwrap(ChargeCost.resolve(charge(added: 40), rates: rates(home: 0.25)))
         XCTAssertTrue(cost.isEstimated)
         XCTAssertEqual(cost.amount, 10, accuracy: 1e-9)
         XCTAssertEqual(cost.pricePerKwh, 0.25)
         XCTAssertEqual(cost.currency, "USD")
     }
 
-    func testFastChargeWithoutCostStillGetsALabelledEstimate() throws {
-        let cost = try XCTUnwrap(ChargeCost.resolve(charge(added: 43.2, fast: true), fallbackRate: 0.2, fallbackCurrency: "USD"))
-        XCTAssertTrue(cost.isEstimated)
-        XCTAssertEqual(cost.amount, 8.64, accuracy: 1e-9)
+    func testFastChargeUsesTheDCRateAndHomeChargeTheHomeRate() throws {
+        let fast = try XCTUnwrap(ChargeCost.resolve(charge(added: 40, fast: true), rates: rates(home: 0.2, dc: 0.5)))
+        XCTAssertTrue(fast.isEstimated)
+        XCTAssertEqual(fast.amount, 20, accuracy: 1e-9)
+        XCTAssertEqual(fast.pricePerKwh, 0.5)
+        let home = try XCTUnwrap(ChargeCost.resolve(charge(added: 40), rates: rates(home: 0.2, dc: 0.5)))
+        XCTAssertEqual(home.amount, 8, accuracy: 1e-9)
+        // DC fast with no DC rate falls back to the home rate, labelled as an estimate.
+        let fallback = try XCTUnwrap(ChargeCost.resolve(charge(added: 43.2, fast: true), rates: rates()))
+        XCTAssertTrue(fallback.isEstimated)
+        XCTAssertEqual(fallback.amount, 8.64, accuracy: 1e-9)
+        // A DC rate alone never prices a home session.
+        XCTAssertNil(ChargeCost.resolve(charge(added: 40), rates: rates(home: nil, dc: 0.5)))
     }
 
-    func testNoCostWithoutEnergyOrRate() {
-        XCTAssertNil(ChargeCost.resolve(charge(added: nil), fallbackRate: 0.2, fallbackCurrency: "USD"))
-        XCTAssertNil(ChargeCost.resolve(charge(added: 40), fallbackRate: 0, fallbackCurrency: "USD"))
-        XCTAssertNil(ChargeCost.resolve(charge(added: 40, cost: .nan), fallbackRate: 0, fallbackCurrency: "USD"))
+    func testNoCostWithoutEnergyOrRate() throws {
+        XCTAssertNil(ChargeCost.resolve(charge(added: nil), rates: rates()))
+        XCTAssertNil(ChargeCost.resolve(charge(added: 40), rates: rates(home: nil)))
+        XCTAssertNil(ChargeCost.resolve(charge(added: 40, fast: true), rates: rates(home: nil)))
+        XCTAssertNil(ChargeCost.resolve(charge(added: 40, cost: .nan), rates: rates(home: nil)))
         // A recorded cost with no energy has no price per kWh.
-        XCTAssertNil(ChargeCost.resolve(charge(added: nil, cost: 5), fallbackRate: 0.2, fallbackCurrency: "USD")?.pricePerKwh)
+        XCTAssertNil(ChargeCost.resolve(charge(added: nil, cost: 5), rates: rates())?.pricePerKwh)
+        // Free charging is a real rate.
+        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(added: 40), rates: rates(home: 0))).amount, 0)
     }
 
     // MARK: Energy flow

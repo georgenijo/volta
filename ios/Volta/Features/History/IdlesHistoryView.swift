@@ -96,10 +96,8 @@ struct IdleBreakdownBar: View {
                 }
                 ForEach(slices) { slice in
                     Capsule()
-                        .fill(LinearGradient(colors: [slice.color.opacity(slice.intensity), slice.color.opacity(slice.intensity * 0.55)],
-                                             startPoint: .leading, endPoint: .trailing))
+                        .fill(slice.color.opacity(slice.intensity))
                         .frame(width: max(height, (proxy.size.width - gaps) * slice.minutes / total))
-                        .shadow(color: slice.color.opacity(slice.kind == .unclassified ? 0 : slice.kind == .sentry ? 0.12 : 0.35), radius: min(6, height * 0.9))
                 }
             }
         }
@@ -150,7 +148,6 @@ struct IdlesHistoryView: View {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .historyGlow(HistoryTheme.blue, HistoryTheme.purple, strength: 0.15)
             .historyScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: IdleSummary.self) { IdleDetailView(idle: $0) }
@@ -196,7 +193,6 @@ struct IdlesHistoryView: View {
                                 NavigationLink(value: idle) { IdleRow(idle: idle) }
                                     .buttonStyle(VoltaPressStyle())
                                     .accessibilityIdentifier("row.idle.\(idle.id)")
-                                    .voltaCascade()
                             }
                         }
                         .padding(.bottom, 10)
@@ -212,7 +208,6 @@ struct IdlesHistoryView: View {
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .refreshable { await reload() }
-        .voltaArrivalScope()
     }
 
     private func drainLabel(_ items: [IdleSummary]) -> String {
@@ -222,8 +217,7 @@ struct IdlesHistoryView: View {
 
     private var totals: some View {
         IdlesHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
-                  idles: visible, partial: feed.hasMore,
-                  window: HistoryDayWindow(range: feed.range, oldestLoaded: feed.items.map(\.start).min(), hasMore: feed.hasMore))
+                  idles: visible, partial: feed.hasMore)
     }
 
     private var mapView: some View {
@@ -268,13 +262,11 @@ struct IdlesHistoryView: View {
 
 // MARK: - Hero
 
-/// Open hero: total parked time, sleep-share dial, drain strip, drain per day.
+/// Open hero: total parked time, sleep-share dial, flow stats.
 struct IdlesHero: View {
     var scope: String
     var idles: [IdleSummary]
     var partial: Bool
-    /// Days the rhythm strip may show.
-    var window: HistoryDayWindow
     @Environment(\.units) private var units
 
     var body: some View {
@@ -282,35 +274,25 @@ struct IdlesHero: View {
         let energy = PartialSum(idles.map(\.energyLostKwh)).value
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(scope).voltaLabelStyle(color: HistoryTheme.tertiary)
-                    HistoryHeroNumeral(value: VoltaFormat.number(totals.parkedMinutes / 60, digits: 0), unit: "h parked")
-                }
+                HistoryHeroNumeral(value: VoltaFormat.number(totals.parkedMinutes / 60, digits: 0), unit: "h parked", size: 92)
                 Spacer(minLength: 0)
-                sleepDial.padding(.trailing, 4)
+                sleepDial.padding(.trailing, 6)
             }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
+            .accessibilityLabel(scope)
             .accessibilityIdentifier("screen.idles")
 
-            VStack(alignment: .leading, spacing: 10) {
-                HistoryStatStrip(items: [
-                    .init(value: totals.drainPerDay.map { VoltaFormat.number($0, digits: 1) + "%" } ?? "—", caption: "Per day",
-                          accent: (totals.drainPerDay ?? 0) > 3 ? HistoryTheme.amber : nil),
-                    .init(value: totals.rangeLostKm.value.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
-                          caption: "\(units.distanceUnit) lost"),
-                    .init(value: energy.map { VoltaFormat.number($0, digits: $0 >= 10 ? 0 : 1) } ?? "—", caption: "kWh"),
-                    .init(value: "\(idles.count)\(partial ? "+" : "")", caption: idles.count == 1 && !partial ? "Session" : "Sessions"),
+            VStack(alignment: .leading, spacing: 14) {
+                HistoryFlowStats(items: [
+                    ("battery.25percent", totals.drainPerDay.map { VoltaFormat.number($0, digits: 1) + "% / day" } ?? "—"),
+                    ("moon.zzz.fill", "\(idles.count)\(partial ? "+" : "") \(idles.count == 1 && !partial ? "session" : "sessions")"),
+                ])
+                HistoryFlowStats(items: [
+                    ("road.lanes", totals.rangeLostKm.value.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) + " \(units.distanceUnit) lost" } ?? "—"),
+                    ("bolt.fill", energy.map { VoltaFormat.number($0, digits: $0 >= 10 ? 0 : 1) + " kWh" } ?? "— kWh"),
                 ])
                 HistoryHeroNotes(notes: totals.notes)
-            }
-            let days = HistoryRhythmDay.series(idles, date: \.start, value: { Double($0.drain ?? 0) }, accent: { ($0.drainPerDay ?? 0) > 3 }, window: window)
-            if window.isDrawable, days.contains(where: { $0.value > 0 }) {
-                let drained = days.filter { $0.value > 0 }
-                HistoryRhythmStrip(days: days, tint: .white, accent: HistoryTheme.amber,
-                                   lit: [HistoryTheme.blue, HistoryTheme.purple], leading: window.label,
-                                   trailing: "\(VoltaFormat.number(drained.reduce(0) { $0 + $1.value }, digits: 0))% drained",
-                                   accessibilityLabel: "Battery drained while parked per day, \(window.label)")
             }
         }
     }
@@ -322,7 +304,7 @@ struct IdlesHero: View {
         let asleep = recorded.reduce(0) { $0 + ($1.asleepMinutes ?? 0) }
         let share = minutes > 0 ? Int((min(asleep, minutes) / minutes * 100).rounded()) : nil
         return SegmentDial(segments: [.init(label: "Asleep", value: share.map(Double.init) ?? 0, color: HistoryTheme.blue)],
-                           center: share.map { "\($0)%" } ?? "–", caption: "Asleep", scale: 100,
+                           center: share.map { "\($0)%" } ?? "–", caption: "Asleep", scale: 100, size: 100,
                            accessibility: share.map { "Asleep \($0)% of parked time" } ?? "Sleep share unavailable")
     }
 }

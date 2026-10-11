@@ -125,10 +125,6 @@ struct DrivesHistoryView: View {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .background(alignment: .top) {
-                RadialGradient(colors: [HistoryTheme.blue.opacity(0.16), HistoryTheme.mint.opacity(0.04), .clear], center: .init(x: 0.85, y: 0), startRadius: 0, endRadius: 420)
-                    .frame(height: 520).ignoresSafeArea().allowsHitTesting(false)
-            }
             .historyScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: DriveSummary.self) { DriveDetailView(drive: $0) }
@@ -159,13 +155,17 @@ struct DrivesHistoryView: View {
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                hero.padding(.top, 8).padding(.bottom, 26)
+                if visible.contains(where: { !$0.drawableRoute.isEmpty }) {
+                    DrivesRouteMap(drives: visible, height: 300)
+                        .padding(.horizontal, -HistoryTheme.gutter).padding(.top, -8).padding(.bottom, -24)
+                }
+                hero.padding(.top, 8).padding(.bottom, 34)
                 HStack(spacing: 10) {
                     NavigationLink { RoadtripsView(drives: visible, partial: feed.hasMore) } label: { DriveShortcut(title: "Roadtrips", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
                         .accessibilityIdentifier("button.drives.roadtrips")
                     NavigationLink { DrivesHeatmapView(drives: visible, partial: feed.hasMore) } label: { DriveShortcut(title: "Heatmap", systemImage: "square.grid.3x3.fill") }
                         .accessibilityIdentifier("button.drives.heatmap")
-                }.buttonStyle(VoltaPressStyle()).padding(.bottom, 18)
+                }.buttonStyle(VoltaPressStyle()).padding(.bottom, 26)
                 if visible.isEmpty && !feed.hasMore {
                     HistoryEmptyState(systemImage: "road.lanes", title: feed.items.isEmpty ? "No drives \(range.emptyPhrase ?? "yet")" : "No matching drives",
                                       message: feed.items.isEmpty ? "Try a different range or wait for your next drive." : "Try a different search or distance filter.")
@@ -191,17 +191,14 @@ struct DrivesHistoryView: View {
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.drives")
         .refreshable { await reload() }
-        .voltaArrivalScope()
     }
 
     private func rows(_ items: [DriveSummary]) -> some View {
-        let newest = visible.first?.id
-        return VStack(spacing: 12) {
+        VStack(spacing: 14) {
             ForEach(items) { drive in
-                NavigationLink(value: drive) { DriveCard(drive: drive, showsDate: sort != .newest, isNewest: drive.id == newest) }
+                NavigationLink(value: drive) { DriveCard(drive: drive, showsDate: sort != .newest) }
                     .buttonStyle(VoltaPressStyle())
                     .accessibilityIdentifier("row.drive.\(drive.id)")
-                    .voltaCascade()
             }
         }
     }
@@ -209,13 +206,10 @@ struct DrivesHistoryView: View {
     /// Totals follow the active filter and search, like the list below them.
     private var hero: some View {
         let drives = visible
-        // Coverage comes from everything loaded, not the filtered subset: a day
-        // with no matching drives inside loaded pages is a real zero.
-        let window = HistoryDayWindow(range: feed.range, oldestLoaded: feed.items.map(\.start).min(), hasMore: feed.hasMore)
         return DrivesHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "drives"),
                           totals: DriveTotals(drives), durationMin: drives.reduce(0) { $0 + $1.durationMin },
-                          cost: DrivePricing.total(drives, fallback: model?.settings.electricityRate ?? 0.20),
-                          partial: feed.hasMore, daily: DailyDistance.series(drives, window: window), dailyLabel: window.label)
+                          cost: DrivePricing.total(drives, home: model?.settings.rates.homeTripRate),
+                          partial: feed.hasMore)
     }
 
 }
@@ -251,8 +245,8 @@ struct DriveRow: View {
                             HistoryInlineMetric(systemImage: "clock", text: VoltaFormat.duration(drive.durationMin))
                             HistoryInlineMetric(systemImage: "leaf.fill", text: units.formatEfficiency(drive.displayEfficiencyWhPerKm))
                         }
-                        HistoryInlineMetric(systemImage: "creditcard", text: DrivePricing.cost(drive, fallback: model?.settings.electricityRate ?? 0.20)
-                            .map { VoltaFormat.money($0, currency: DrivePricing.rate(drive, fallback: model?.settings.electricityRate ?? 0.20).currency) + " est." } ?? "Cost unknown")
+                        HistoryInlineMetric(systemImage: "creditcard", text: DrivePricing.rate(drive, home: model?.settings.rates.homeTripRate)
+                            .flatMap { rate in rate.cost(energyKwh: drive.costableEnergyKwh).map { VoltaFormat.money($0, currency: rate.currency) + " est." } } ?? "Cost unknown")
                     }
                     Spacer(minLength: 0)
                     DriveScoreRing(score: drive.efficiencyScore)

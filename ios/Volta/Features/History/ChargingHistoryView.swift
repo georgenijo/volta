@@ -55,7 +55,7 @@ extension ChargeSummary {
 
     var kindTint: Color {
         switch kind {
-        case .home: HistoryTheme.mint
+        case .home: HistoryTheme.green
         case .fast: HistoryTheme.blue
         case .other: Color(hex: 0x7DD3C0)
         }
@@ -63,7 +63,7 @@ extension ChargeSummary {
 
     /// "AC" / "DC" plus where, for the card's kind line.
     var currentLabel: String { fastCharger ? "DC" : "AC" }
-    var currentTint: Color { fastCharger ? HistoryTheme.blue : HistoryTheme.mint }
+    var currentTint: Color { fastCharger ? HistoryTheme.blue : HistoryTheme.green }
 
     func matches(query: String) -> Bool {
         guard !query.isEmpty else { return true }
@@ -76,6 +76,8 @@ struct ChargingHistoryView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    /// Optional so previews without an app model still render.
+    @Environment(AppModel.self) private var model: AppModel?
 
     @State private var feed = HistoryFeed<ChargeSummary>()
     @State private var range: HistoryRange
@@ -121,7 +123,6 @@ struct ChargingHistoryView: View {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .historyGlow(HistoryTheme.mint, HistoryTheme.blue, strength: 0.13)
             .historyScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: ChargeSummary.self) { ChargingDetailView(charge: $0) }
@@ -185,7 +186,10 @@ struct ChargingHistoryView: View {
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                totals.padding(.top, 8).padding(.bottom, 22)
+                if let settings = model?.settings, settings.electricityRate == nil, !settings.ratePromptDismissed {
+                    RatePromptCard(settings: settings).padding(.top, 4).padding(.bottom, 22)
+                }
+                totals.padding(.top, 8).padding(.bottom, 30)
                 ForEach(DayGroup.group(visible, by: \.start)) { group in
                     Section {
                         VStack(spacing: 12) {
@@ -193,7 +197,6 @@ struct ChargingHistoryView: View {
                                 NavigationLink(value: charge) { ChargeRow(charge: charge) }
                                     .buttonStyle(VoltaPressStyle())
                                     .accessibilityIdentifier("row.charge.\(charge.id)")
-                                    .voltaCascade()
                             }
                         }
                         .padding(.bottom, 10)
@@ -208,13 +211,11 @@ struct ChargingHistoryView: View {
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .refreshable { await reload() }
-        .voltaArrivalScope()
     }
 
     private var totals: some View {
         ChargingHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
-                     charges: visible, partial: feed.hasMore,
-                     window: HistoryDayWindow(range: feed.range, oldestLoaded: feed.items.map(\.start).min(), hasMore: feed.hasMore))
+                     charges: visible, partial: feed.hasMore)
     }
 
     private func dayTrailing(_ items: [ChargeSummary]) -> String {
@@ -266,13 +267,11 @@ struct ChargingHistoryView: View {
 
 // MARK: - Hero
 
-/// Open hero: energy added, home/public split dial, stat strip, kWh per day.
+/// Open hero: energy added, home/public split dial, flow stats.
 struct ChargingHero: View {
     var scope: String
     var charges: [ChargeSummary]
     var partial: Bool
-    /// Days the rhythm strip may show.
-    var window: HistoryDayWindow
     @Environment(\.units) private var units
 
     var body: some View {
@@ -280,34 +279,23 @@ struct ChargingHero: View {
         let energy = totals.energyAddedKwh.value
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(scope).voltaLabelStyle(color: HistoryTheme.tertiary)
-                    HistoryHeroNumeral(value: energy.map { VoltaFormat.number($0, digits: $0 >= 100 ? 0 : 1) } ?? "—", unit: "kWh")
-                }
+                HistoryHeroNumeral(value: energy.map { VoltaFormat.number($0, digits: $0 >= 100 ? 0 : 1) } ?? "—", unit: "kWh", size: 92)
                 Spacer(minLength: 0)
-                splitDial.padding(.trailing, 4)
+                splitDial.padding(.trailing, 6)
             }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
+            .accessibilityLabel(scope)
             .accessibilityIdentifier("screen.charging")
 
-            VStack(alignment: .leading, spacing: 10) {
-                HistoryStatStrip(items: [
-                    .init(value: totals.cost.display, caption: "Cost", accent: HistoryTheme.amber),
-                    .init(value: "\(charges.count)\(partial ? "+" : "")", caption: charges.count == 1 && !partial ? "Session" : "Sessions"),
-                    .init(value: VoltaFormat.duration(charges.reduce(0) { $0 + $1.durationMin }), caption: "Plugged"),
-                    .init(value: averageRate(totals) ?? "—", caption: "Per kWh"),
+            VStack(alignment: .leading, spacing: 14) {
+                HistoryFlowStats(items: [
+                    ("clock", VoltaFormat.duration(charges.reduce(0) { $0 + $1.durationMin })),
+                    ("bolt.fill", "\(charges.count)\(partial ? "+" : "") \(charges.count == 1 && !partial ? "session" : "sessions")"),
                 ])
+                HistoryFlowStats(items: [("creditcard.fill", totals.cost.display)]
+                                 + (averageRate(totals).map { [("tag.fill", $0 + "/kWh")] } ?? []))
                 HistoryHeroNotes(notes: totals.notes)
-            }
-            let days = HistoryRhythmDay.series(charges, date: \.start, value: { $0.energyAddedKwh ?? 0 }, accent: \.fastCharger, window: window)
-            if window.isDrawable, days.contains(where: { $0.value > 0 }) {
-                let charged = days.filter { $0.value > 0 }
-                HistoryRhythmStrip(days: days, tint: HistoryTheme.mint, accent: HistoryTheme.blue,
-                                   lit: [HistoryTheme.mint, HistoryTheme.blue], leading: window.label,
-                                   trailing: "\(VoltaFormat.energy(charged.reduce(0) { $0 + $1.value } / Double(max(charged.count, 1)))) per charge day",
-                                   legend: days.contains(where: \.accent) ? [("AC", HistoryTheme.mint), ("DC", HistoryTheme.blue)] : [],
-                                   accessibilityLabel: "Energy added per day, \(window.label)")
             }
         }
     }
@@ -317,9 +305,9 @@ struct ChargingHero: View {
         let publicKwh = charges.filter { $0.kind != .home }.reduce(0) { $0 + ($1.energyAddedKwh ?? 0) }
         let total = home + publicKwh
         let share = total > 0 ? Int((home / total * 100).rounded()) : nil
-        return SegmentDial(segments: [.init(label: "Home", value: home, color: HistoryTheme.mint),
+        return SegmentDial(segments: [.init(label: "Home", value: home, color: HistoryTheme.green),
                                       .init(label: "Public", value: publicKwh, color: HistoryTheme.blue)],
-                           center: share.map { "\($0)%" } ?? "–", caption: "Home",
+                           center: share.map { "\($0)%" } ?? "–", caption: "Home", size: 100,
                            accessibility: share.map { "Home charging \($0)% of energy, public \(100 - $0)%" } ?? "Home share unavailable")
     }
 
@@ -340,7 +328,7 @@ struct ChargingHero: View {
 
 // MARK: - Charge curve
 
-/// The session's state-of-charge climb drawn as a faint luminous curve.
+/// The session's state-of-charge climb drawn as a faint curve behind the row.
 /// AC rises steadily; DC tapers as the pack fills.
 struct ChargeCurveWatermark: View {
     var from: Int?
@@ -355,7 +343,7 @@ struct ChargeCurveWatermark: View {
                 let path = Path { p in
                     p.move(to: points[0]); points.dropFirst().forEach { p.addLine(to: $0) }
                 }
-                let gradient = LinearGradient(colors: [HistoryTheme.mint, HistoryTheme.blue], startPoint: .leading, endPoint: .trailing)
+                let tint = fast ? HistoryTheme.blue : HistoryTheme.green
                 let area = Path { p in
                     p.addPath(path)
                     p.addLine(to: CGPoint(x: points[points.count - 1].x, y: geometry.size.height))
@@ -363,12 +351,8 @@ struct ChargeCurveWatermark: View {
                     p.closeSubpath()
                 }
                 ZStack {
-                    area.fill(LinearGradient(colors: [HistoryTheme.blue.opacity(0.14), HistoryTheme.mint.opacity(0)], startPoint: .top, endPoint: .bottom))
-                    path.stroke(gradient, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round)).blur(radius: 7).opacity(0.45)
-                    path.stroke(gradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-                    Circle().fill(HistoryTheme.mint).frame(width: 5, height: 5).position(points[0])
-                    Circle().fill(HistoryTheme.blue).frame(width: 5, height: 5).position(points[points.count - 1])
-                        .shadow(color: HistoryTheme.blue, radius: 4)
+                    area.fill(LinearGradient(colors: [tint.opacity(0.12), tint.opacity(0)], startPoint: .top, endPoint: .bottom))
+                    path.stroke(tint, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
                 }
                 .opacity(opacity)
             }
@@ -399,7 +383,7 @@ struct ChargeRow: View {
     @Environment(AppModel.self) private var model: AppModel?
 
     private var cost: ChargeCost? {
-        ChargeCost.resolve(charge, fallbackRate: model?.settings.electricityRate ?? 0.20, fallbackCurrency: units.currency)
+        ChargeCost.resolve(charge, rates: model?.settings.rates ?? ElectricityRates(home: nil, dcFast: nil, currency: units.currency))
     }
 
     var body: some View {
@@ -415,7 +399,7 @@ struct ChargeRow: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
                         Text(charge.energyAddedKwh.map { "+" + VoltaFormat.number($0) } ?? "—")
-                            .font(.system(size: 30, weight: .bold)).fontWidth(.expanded).tracking(-0.8).monospacedDigit()
+                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
                         Text("KWH").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.white)
@@ -436,16 +420,14 @@ struct ChargeRow: View {
                     metrics(compact: true)
                 }
                 Spacer(minLength: 8)
-                SocDial(from: charge.startBatteryLevel, to: charge.endBatteryLevel, size: 38,
-                        colors: charge.fastCharger ? [HistoryTheme.mint, HistoryTheme.blue] : [HistoryTheme.mint.opacity(0.7), HistoryTheme.mint])
+                SocDial(from: charge.startBatteryLevel, to: charge.endBatteryLevel, size: 44)
             }
             .padding(.top, 12)
         }
-        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 14)
+        .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 14)
         .background {
-            ChargeCurveWatermark(from: charge.startBatteryLevel, to: charge.endBatteryLevel, fast: charge.fastCharger, opacity: 0.6)
-                .padding(.leading, 120).padding(.trailing, 110).padding(.top, 6).padding(.bottom, 52)
-                .mask(RadialGradient(colors: [.black, .black.opacity(0.6), .clear], center: .center, startRadius: 10, endRadius: 110))
+            ChargeCurveWatermark(from: charge.startBatteryLevel, to: charge.endBatteryLevel, fast: charge.fastCharger, opacity: 0.5)
+                .padding(.leading, 150).padding(.trailing, 110).padding(.top, 6).padding(.bottom, 56)
         }
         .driveSurface()
         .accessibilityElement(children: .combine)
@@ -456,9 +438,8 @@ struct ChargeRow: View {
         HStack(spacing: 6) {
             if charge.fastCharger {
                 Image(systemName: "bolt.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(HistoryTheme.blue)
-                    .shadow(color: HistoryTheme.blue.opacity(0.8), radius: 3)
             } else {
-                Circle().fill(HistoryTheme.mint).frame(width: 6, height: 6).shadow(color: HistoryTheme.mint.opacity(0.8), radius: 3)
+                Circle().fill(HistoryTheme.green).frame(width: 6, height: 6)
             }
             Text(charge.fastCharger ? "DC FAST" : "AC").font(.system(size: 10, weight: .bold)).tracking(1)
                 .foregroundStyle(charge.currentTint)
@@ -480,7 +461,8 @@ struct ChargeRow: View {
             }
             dot
             metric("creditcard", costText, tint: HistoryTheme.amber)
-            if let soc = socText { dot; metric("battery.75percent", soc) }
+            if needsRate { SetRateButton(settings: model?.settings, size: 12) }
+            if let soc = socText, !needsRate || !compact { dot; metric("battery.75percent", soc) }
         }
     }
 
@@ -490,6 +472,9 @@ struct ChargeRow: View {
         let amount = VoltaFormat.money(cost.amount, currency: cost.currency)
         return cost.isEstimated ? "~" + amount : amount
     }
+
+    /// Energy is known but no rate applies, so the cost can't be estimated.
+    private var needsRate: Bool { cost == nil && charge.energyAddedKwh != nil && model != nil }
 
     private var socText: String? {
         ChargeSocBar(start: charge.startBatteryLevel, end: charge.endBatteryLevel).map { "\($0.start)→\($0.end)%" }
@@ -503,6 +488,55 @@ struct ChargeRow: View {
             Text(text).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.78))
         }
         .lineLimit(1).fixedSize()
+    }
+}
+
+// MARK: - Rate prompt
+
+/// One-time card asking for a home rate; hidden once a rate is saved or the
+/// card is dismissed.
+private struct RatePromptCard: View {
+    var settings: UserSettings
+    @State private var editing = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "tag.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(HistoryTheme.green)
+                .frame(width: 40, height: 40)
+                .background(HistoryTheme.green.opacity(0.14), in: .circle)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Add your electricity rate for accurate charging costs")
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { editing = true } label: {
+                    Text("Set rate")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.black)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        .background(HistoryTheme.green, in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("button.rate-prompt.set")
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .padding(.trailing, 22)
+        .driveSurface(radius: 20)
+        .overlay(alignment: .topTrailing) {
+            Button { withAnimation(.snappy) { settings.ratePromptDismissed = true } } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold)).foregroundStyle(HistoryTheme.secondary)
+                    .frame(width: 36, height: 36).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .padding(6)
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("button.rate-prompt.dismiss")
+        }
+        .accessibilityIdentifier("card.rate-prompt")
+        .electricityRateSheet(isPresented: $editing, settings: settings)
     }
 }
 

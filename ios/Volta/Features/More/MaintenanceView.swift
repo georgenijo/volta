@@ -19,29 +19,24 @@ struct MaintenanceView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 LoadableContent(state: state, retry: load) { data in
-                    VStack(alignment: .leading, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Recorded odometer")
-                                .font(.system(size: 11, weight: .semibold)).tracking(1.5).textCase(.uppercase)
-                                .foregroundStyle(ScreenKit.tertiary)
+                    Card {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SectionLabel("Recorded odometer")
                             if let km = data.odometerKm {
-                                BigNumber(VoltaFormat.number(units.distanceValue(km: km), digits: 0), unit: units.distanceUnit, size: 56, weight: .bold)
+                                ScreenKit.Numeral(value: VoltaFormat.number(units.distanceValue(km: km), digits: 0), unit: units.distanceUnit, size: 48)
                                 if let date = data.recordedAt {
                                     Text("\(data.source == "fleet_telemetry" ? "Telemetry" : "TeslaMate") · \(VoltaFormat.dateTime(date))")
-                                        .font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                        .font(.caption).foregroundStyle(ScreenKit.secondary)
                                 }
                             } else {
-                                Text("No odometer recorded yet. You can still log service dates.")
-                                    .font(.system(size: 13, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                Text("No odometer recorded yet. You can still log service dates.").foregroundStyle(ScreenKit.secondary)
                             }
                         }
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 6)
                     Text("Personal reminders, not a service recommendation. Set intervals for your vehicle. Suggested intervals to add: rotation 6,250 mi, filter 2 years, brake fluid check 4 years, wipers 1 year. Add an item and record its last completion to start reminders. Due status appears here when you open Maintenance.")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    PillButton("Add service item", systemImage: "plus", size: .wide, style: .accent) { adding = true }
+                        .font(.caption).foregroundStyle(ScreenKit.secondary)
+                    Button { adding = true } label: { Label("Add service item", systemImage: "plus.circle.fill").frame(maxWidth: .infinity) }
+                        .buttonStyle(.borderedProminent).tint(ScreenKit.mint)
                     if data.items.isEmpty {
                         EmptyState(systemImage: "wrench.and.screwdriver", title: "Start your service log", message: "Add a suggested or custom item, then record the last service date and odometer to establish its next due point.")
                     }
@@ -50,66 +45,49 @@ struct MaintenanceView: View {
                         Card {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack {
-                                    Text(item.name).font(.system(size: 16, weight: .semibold))
+                                    Text(item.name).font(.headline)
                                     Spacer()
                                     Menu {
                                         Button("Edit item") { editingItem = item }
                                         Button("Delete item and history", role: .destructive) { deletingItem = item }
-                                    } label: {
-                                        Image(systemName: "ellipsis").font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(ScreenKit.secondary).frame(width: 32, height: 32)
-                                    }.disabled(mutating)
+                                    } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
                                     if let progress = item.progress {
-                                        let tint = progress >= 1 ? ScreenKit.amber : ScreenKit.mint
                                         ZStack {
-                                            Circle().stroke(Color.white.opacity(0.06), lineWidth: 3)
-                                            SweepIn { p in
-                                                let reach = min(min(1, progress) * p, 1)
-                                                ZStack {
-                                                    Circle().trim(from: 0, to: reach).stroke(tint.opacity(0.5 + 0.4 * VoltaMotion.bloom(p)), style: StrokeStyle(lineWidth: 5, lineCap: .round)).blur(radius: 4)
-                                                    Circle().trim(from: 0, to: reach).stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                                                }
-                                                .rotationEffect(.degrees(-90))
-                                            }
-                                            Text("\(Int(progress * 100))%").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                                            Circle().stroke(ScreenKit.hairline, lineWidth: 4)
+                                            Circle().trim(from: 0, to: progress).stroke(progress >= 1 ? ScreenKit.amber : ScreenKit.mint, style: StrokeStyle(lineWidth: 4, lineCap: .round)).rotationEffect(.degrees(-90))
+                                            Text("\(Int(progress * 100))%").font(.system(size: 10, weight: .semibold))
                                         }.frame(width: 44, height: 44)
                                     }
                                 }
-                                Text(interval(item)).font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                Text(interval(item)).font(.caption).foregroundStyle(ScreenKit.secondary)
                                 if let km = item.remainingKm {
                                     Text(km > 0 ? "Due in \(units.formatDistance(km, fractionDigits: 0))" : "Distance interval reached · \(units.formatDistance(-km, fractionDigits: 0)) past due")
                                 } else if item.intervalKm != nil {
-                                    Text("Distance due unknown — record a service odometer and wait for a current reading.").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                    Text("Distance due unknown — record a service odometer and wait for a current reading.").font(.caption).foregroundStyle(ScreenKit.secondary)
                                 }
                                 if let days = item.remainingDays {
                                     Text(days > 0 ? "Due in \(days) days" : days == 0 ? "Due today" : "\(-days) days past due")
-                                    if let date = item.nextDate { Text("Next: \(date.formatted(date: .abbreviated, time: .omitted))").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary) }
+                                    if let date = item.nextDate { Text("Next: \(date.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary) }
                                 } else if item.intervalMonths != nil {
-                                    Text("Date due unknown — record the last completion.").font(.system(size: 12, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                    Text("Date due unknown — record the last completion.").font(.caption).foregroundStyle(ScreenKit.secondary)
                                 }
-                                if let progress = item.progress { ScreenKit.ProgressBar(fraction: progress, tint: progress >= 1 ? ScreenKit.amber : ScreenKit.mint, height: 4) }
-                                PillButton("Record completion", systemImage: "checkmark") { completing = item }
+                                if let progress = item.progress { ProgressView(value: progress).tint(progress >= 1 ? ScreenKit.amber : ScreenKit.mint) }
+                                Button("Record completion") { completing = item }.buttonStyle(.bordered)
                             }
                         }
                     }
-                    Text("Service history")
-                        .font(.system(size: 11, weight: .semibold)).tracking(1.5).textCase(.uppercase)
-                        .foregroundStyle(ScreenKit.tertiary)
-                        .padding(.top, 14)
-                    if data.events.isEmpty { Text("No completions logged yet.").font(.system(size: 13, weight: .medium)).foregroundStyle(ScreenKit.secondary) }
+                    SectionLabel("Service history")
+                    if data.events.isEmpty { Text("No completions logged yet.").foregroundStyle(ScreenKit.secondary) }
                     ForEach(data.events) { event in
                         Card {
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {
-                                    Text(data.items.first { $0.id == event.itemId }?.name ?? "Service").font(.system(size: 16, weight: .semibold))
+                                    Text(data.items.first { $0.id == event.itemId }?.name ?? "Service").font(.headline)
                                     Spacer()
                                     Menu {
                                         Button("Correct completion") { editingEvent = event }
                                         Button("Delete completion", role: .destructive) { deletingEvent = event }
-                                    } label: {
-                                        Image(systemName: "ellipsis").font(.system(size: 14, weight: .semibold))
-                                            .foregroundStyle(ScreenKit.secondary).frame(width: 32, height: 32)
-                                    }.disabled(mutating)
+                                    } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
                                 }
                                 Text(event.completedAt.formatted(date: .abbreviated, time: .omitted))
                                 Text(event.odometerKm.map { units.formatDistance($0, fractionDigits: 0) } ?? "Odometer not recorded").foregroundStyle(ScreenKit.secondary)
@@ -120,7 +98,6 @@ struct MaintenanceView: View {
             }.padding(.horizontal, ScreenKit.horizontalPadding).padding(.bottom, ScreenKit.bottomBarClearance)
         }
         .screenKitPage("Maintenance")
-        .voltaArrivalScope(isReady: state.isSettled)
         .task(id: vehicleID) { await load() }
         .refreshable { await load() }
         .onChange(of: vehicleID) { _, _ in adding = false; completing = nil; editingItem = nil; editingEvent = nil; deletingItem = nil; deletingEvent = nil }

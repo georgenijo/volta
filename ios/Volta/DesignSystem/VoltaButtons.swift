@@ -28,78 +28,44 @@ struct PillButton: View {
         self.action = action
     }
 
-    private var radius: CGFloat { size == .wide ? 18 : VoltaRadius.control + 4 }
-
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 7) {
+            HStack(spacing: 6) {
                 if isBusy {
                     ProgressView().controlSize(.small).tint(.white)
                 } else if let systemImage {
                     Image(systemName: systemImage)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(style == .accent ? Color.white : Color.voltaTextSecondary)
                 }
                 Text(title)
             }
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Color.voltaTextPrimary)
-            .frame(minWidth: size == .compact ? 76 : nil, maxWidth: size == .wide ? .infinity : nil)
+            .font(.system(.callout, weight: .medium))
+            .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
+            .frame(minWidth: size == .compact ? 84 : nil, maxWidth: size == .wide ? .infinity : nil)
             .padding(.horizontal, VoltaSpacing.lg)
-            .padding(.vertical, size == .wide ? 15 : 9)
-            .background { PillButtonSurface(style: style, radius: radius) }
-            .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .padding(.vertical, size == .wide ? 15 : 10)
+            .background {
+                RoundedRectangle(cornerRadius: size == .wide ? VoltaRadius.wideButton : VoltaRadius.control,
+                                 style: .continuous)
+                    .fill(style == .accent ? Color.voltaBlue : Color.voltaRaised)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: size == .wide ? VoltaRadius.wideButton : VoltaRadius.control,
+                                         style: .continuous)
+                            .strokeBorder(Color.voltaHairline, lineWidth: 1)
+                    }
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(VoltaPressStyle())
     }
 }
 
-/// Lit surface behind `PillButton`: neutral is a faint raised fill with a
-/// top-bright hairline; accent is blue light (tinted fill, luminous edge, glow)
-/// rather than a flat filled block.
-private struct PillButtonSurface: View {
-    var style: PillButton.Style
-    var radius: CGFloat
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        switch style {
-        case .neutral:
-            shape
-                .fill(LinearGradient(colors: [Color.white.opacity(0.07), Color.white.opacity(0.035)], startPoint: .top, endPoint: .bottom))
-                .overlay {
-                    shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.14), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
-                }
-        case .accent:
-            shape
-                .fill(LinearGradient(colors: [Color.voltaBlue.opacity(0.34), Color.voltaBlue.opacity(0.16)], startPoint: .top, endPoint: .bottom))
-                .overlay {
-                    shape.strokeBorder(LinearGradient(colors: [Color(hex: 0x93C5FD).opacity(0.75), Color.voltaBlue.opacity(0.25)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
-                }
-                .shadow(color: Color.voltaBlue.opacity(isEnabled ? 0.3 : 0), radius: 16, y: 2)
-        }
-    }
-}
-
-/// Press feedback for Volta buttons, cards and tiles: a soft spring to 0.97 with a
-/// slight dim. With Reduce Motion (or motion disabled) only the dim remains.
+/// Subtle press feedback (dim + slight scale) used by Volta buttons.
 struct VoltaPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        PressBody(label: configuration.label, isPressed: configuration.isPressed)
-    }
-
-    private struct PressBody: View {
-        var label: Configuration.Label
-        var isPressed: Bool
-        @VoltaMotionAllowed private var motionAllowed
-
-        var body: some View {
-            label
-                .opacity(isPressed ? 0.78 : 1)
-                .scaleEffect(isPressed && motionAllowed ? 0.97 : 1)
-                .animation(motionAllowed ? VoltaMotion.press : .easeOut(duration: 0.12), value: isPressed)
-        }
+        configuration.label
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 
@@ -129,16 +95,14 @@ struct SegmentedRangePicker<Option: Hashable>: View {
                     withAnimation(.snappy(duration: 0.25)) { selection = option }
                 } label: {
                     Text(label(option).uppercased())
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(.footnote, weight: .semibold))
                         .tracking(1.2)
-                        .monospacedDigit()
                         .foregroundStyle(selected ? Color.voltaTextPrimary : Color.voltaTextSecondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
                         .background {
                             if selected {
-                                Capsule().fill(Color.white.opacity(0.09))
-                                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                                Capsule().fill(Color.voltaRaised)
                                     .matchedGeometryEffect(id: "sel", in: ns)
                             }
                         }
@@ -185,7 +149,7 @@ struct GlassCircleButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: size * 0.36, weight: .medium))
+                .font(.system(size: size * 0.38, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: size, height: size)
                 .contentShape(Circle())
@@ -194,9 +158,8 @@ struct GlassCircleButton: View {
         .glassEffect(.regular.interactive(), in: .circle)
         .overlay(alignment: .topTrailing) {
             if badge {
-                Circle().fill(Color.voltaRed)
-                    .frame(width: size * 0.16, height: size * 0.16)
-                    .shadow(color: Color.voltaRed.opacity(0.8), radius: 4)
+                Circle().fill(Color.voltaRed.opacity(0.9))
+                    .frame(width: size * 0.2, height: size * 0.2)
                     .offset(x: -size * 0.12, y: size * 0.1)
             }
         }
@@ -212,8 +175,8 @@ struct GlassPill<Content: View>: View {
     var height: CGFloat = 50
     @ViewBuilder var content: Content
     var body: some View {
-        HStack(spacing: VoltaSpacing.xl - 2) { content }
-            .font(.system(size: 18, weight: .medium))
+        HStack(spacing: VoltaSpacing.xl) { content }
+            .font(.system(size: 19, weight: .medium))
             .foregroundStyle(Color.voltaTextPrimary)
             .buttonStyle(.plain)
             .padding(.horizontal, VoltaSpacing.lg + 2)
@@ -230,11 +193,14 @@ struct GlassPill<Content: View>: View {
 ///     VoltaHeader("Charging") { GlassPill { ... } } trailing: { GlassCircleButton(...) }
 struct VoltaHeader<Leading: View, Trailing: View>: View {
     var title: String
+    /// Optional `screen.<name>` accessibility identifier on the title text.
+    var identifier: String?
     var leading: Leading
     var trailing: Trailing
 
-    init(_ title: String, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing) {
+    init(_ title: String, identifier: String? = nil, @ViewBuilder leading: () -> Leading, @ViewBuilder trailing: () -> Trailing) {
         self.title = title
+        self.identifier = identifier
         self.leading = leading()
         self.trailing = trailing()
     }
@@ -245,6 +211,7 @@ struct VoltaHeader<Leading: View, Trailing: View>: View {
                 .font(.voltaScreenTitle)
                 .foregroundStyle(Color.voltaTextPrimary)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier(identifier ?? "")
             HStack {
                 leading
                 Spacer()

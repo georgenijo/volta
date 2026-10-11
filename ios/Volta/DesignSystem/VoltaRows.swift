@@ -31,22 +31,23 @@ struct ListRow<Trailing: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: VoltaSpacing.lg) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: 17, weight: .medium))
-                    .symbolRenderingMode(.monochrome)
+                    .resizable()
+                    .scaledToFit()
+                    .fontWeight(.regular)
                     .foregroundStyle(iconColor)
-                    .frame(width: iconWidth * 0.8, height: iconWidth * 0.8)
+                    .frame(width: iconWidth * 0.86, height: iconWidth * 0.72)
                     .frame(width: iconWidth)
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.voltaRowTitle)
                     .foregroundStyle(Color.voltaTextPrimary)
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.voltaRowSubtitle)
                         .foregroundStyle(subtitleColor)
                 }
             }
@@ -54,11 +55,11 @@ struct ListRow<Trailing: View>: View {
             trailing
             if showsChevron {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(Color.voltaTextTertiary)
             }
         }
-        .padding(.vertical, VoltaSpacing.md + 1)
+        .padding(.vertical, VoltaSpacing.md + 2)
         .contentShape(Rectangle())
     }
 }
@@ -74,8 +75,8 @@ extension ListRow where Trailing == EmptyView {
 
 // MARK: - ToggleRow
 
-/// ListRow with a lit status word and a mint switch ("● Locked ◉").
-/// When `isOn` is true the icon and status (with a glowing dot) turn `onColor`.
+/// ListRow with a status word and a green switch ("Locked ◉").
+/// When `isOn` is true the icon, subtitle, and status text turn `onColor`.
 ///
 ///     ToggleRow(systemImage: "lock.fill", title: "Doors", subtitle: "Lock & unlock",
 ///               status: "Locked", isOn: $locked)
@@ -85,27 +86,23 @@ struct ToggleRow: View {
     var subtitle: String?
     var status: String?
     @Binding var isOn: Bool
-    var onColor: Color = .voltaMint
+    var onColor: Color = .voltaGreen
     /// Visually de-emphasized and non-interactive (e.g. commands unavailable).
     var isEnabled: Bool = true
 
     var body: some View {
         ListRow(systemImage: systemImage,
-                iconColor: isOn ? onColor : .voltaTextSecondary,
-                title: title, subtitle: subtitle) {
+                iconColor: isOn ? onColor : .voltaTextPrimary.opacity(0.85),
+                title: title, subtitle: subtitle,
+                subtitleColor: isOn ? onColor : .voltaTextSecondary) {
             if let status {
-                HStack(spacing: 6) {
-                    Circle().fill(isOn ? onColor : Color.voltaTextTertiary)
-                        .frame(width: 5, height: 5)
-                        .shadow(color: isOn ? onColor.opacity(0.9) : .clear, radius: 3)
-                    Text(status)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(isOn ? onColor : Color.voltaTextSecondary)
-                }
+                Text(status)
+                    .font(.system(.body, weight: .medium))
+                    .foregroundStyle(isOn ? onColor : Color.voltaTextSecondary)
             }
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
-                .tint(onColor.opacity(0.85))
+                .tint(onColor)
                 .disabled(!isEnabled)
         }
     }

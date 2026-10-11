@@ -6,18 +6,18 @@ final class DriveInsightsTests: XCTestCase {
         DriveSummary(id: id, start: Date(timeIntervalSince1970: start), end: end.map { Date(timeIntervalSince1970: $0) }, startAddress: nil, endAddress: nil, distanceKm: km, durationMin: 60, startBatteryLevel: nil, endBatteryLevel: nil, energyUsedKwh: kwh, efficiencyWhPerKm: kwh.map { $0 * 1000 / km }, maxSpeedKph: nil, avgSpeedKph: nil, outsideTempAvgC: nil)
     }
     func testCostPrecedenceUnknownFreeAndCurrency() {
-        XCTAssertNil(DrivePricing.cost(drive(kwh: 0), fallback: 0.20))
-        XCTAssertEqual(DrivePricing.cost(drive(kwh: 10), fallback: 0), 0)
+        XCTAssertNil(DrivePricing.cost(drive(kwh: 0), home: .usd(0.20)))
+        XCTAssertEqual(DrivePricing.cost(drive(kwh: 10), home: .usd(0)), 0)
         var d = drive()
-        XCTAssertEqual(DrivePricing.cost(d, fallback: 0.20), 2)
+        XCTAssertEqual(DrivePricing.cost(d, home: .usd(0.20)), 2)
         d.electricityRatePerKwh = 0.30; d.rateCurrency = "EUR"
-        XCTAssertEqual(DrivePricing.cost(d, fallback: 0.20), 3)
-        XCTAssertEqual(DrivePricing.rate(d, fallback: 0.20).currency, "EUR")
+        XCTAssertEqual(DrivePricing.cost(d, home: .usd(0.20)), 3)
+        XCTAssertEqual(DrivePricing.rate(d, home: .usd(0.20))?.currency, "EUR")
         d.electricityRatePerKwh = 0
-        XCTAssertEqual(DrivePricing.cost(d, fallback: 0.20), 0)
+        XCTAssertEqual(DrivePricing.cost(d, home: .usd(0.20)), 0)
         d.energyUsedKwh = nil
-        XCTAssertNil(DrivePricing.cost(d, fallback: 0.20))
-        let total = DrivePricing.total([drive(), d], fallback: 0.20)
+        XCTAssertNil(DrivePricing.cost(d, home: .usd(0.20)))
+        let total = DrivePricing.total([drive(), d], home: .usd(0.20))
         XCTAssertEqual(total.note, "Cost available for 1 of 2 drives")
     }
     func testScoreUsesServerCompositeAndPreservesMissing() {
@@ -184,10 +184,10 @@ final class DriveInsightsTests: XCTestCase {
     }
     func testCardCostUsesDriveRateThenSettingsRate() {
         var d = drive(km: 31.5, kwh: 6.0)
-        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(d, fallback: 0.22)), 1.32, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(d, home: .usd(0.22))), 1.32, accuracy: 1e-9)
         d.electricityRatePerKwh = 0.25; d.rateCurrency = "USD"
-        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(d, fallback: 0.22)), 1.50, accuracy: 1e-9)
-        XCTAssertEqual(VoltaFormat.money(DrivePricing.cost(d, fallback: 0.22), currency: "USD"), "$1.50")
+        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(d, home: .usd(0.22))), 1.50, accuracy: 1e-9)
+        XCTAssertEqual(VoltaFormat.money(DrivePricing.cost(d, home: .usd(0.22)), currency: "USD"), "$1.50")
     }
     func testHeroTotalsCoverDistanceScoreEnergyEfficiencyAndCost() {
         var a = drive(1, km: 30, kwh: 6); a.driveScore = 90
@@ -199,20 +199,78 @@ final class DriveInsightsTests: XCTestCase {
         XCTAssertEqual(totals.energyUsedKwh.value, 9)
         XCTAssertEqual(try XCTUnwrap(totals.efficiencyWhPerKm), 225, accuracy: 1e-9)
         XCTAssertTrue(totals.notes.isEmpty)
-        let cost = DrivePricing.total([a, b], fallback: 0.20)
+        let cost = DrivePricing.total([a, b], home: .usd(0.20))
         XCTAssertEqual(cost.display, "$1.80")
         XCTAssertNil(cost.note)
-        XCTAssertEqual(DrivePricing.total([], fallback: 0.20).display, "—")
+        XCTAssertEqual(DrivePricing.total([], home: .usd(0.20)).display, "—")
     }
-    @MainActor func testRateSettingsPersistenceAndDefault() {
+    func testDriveCostWithoutAnyRateIsUnknown() {
+        var d = drive()
+        XCTAssertNil(DrivePricing.rate(d, home: nil))
+        XCTAssertNil(DrivePricing.cost(d, home: nil))
+        XCTAssertEqual(DrivePricing.total([d], home: nil).display, "—")
+        XCTAssertNil(DrivePricing.total([d], home: nil).note, "no rate at all is not partial coverage")
+        d.electricityRatePerKwh = 0.30; d.rateCurrency = "USD"
+        XCTAssertEqual(try XCTUnwrap(DrivePricing.cost(d, home: nil)), 3, accuracy: 1e-9, "the server price needs no local rate")
+    }
+    @MainActor func testRateSettingsPersistenceAndMigration() {
         let defaults = UserDefaults(suiteName: "DriveInsightsTests")!
         defaults.removePersistentDomain(forName: "DriveInsightsTests")
         defer { defaults.removePersistentDomain(forName: "DriveInsightsTests") }
         let settings = UserSettings(defaults: defaults)
-        XCTAssertEqual(settings.electricityRate, 0.20)
+        XCTAssertNil(settings.electricityRate, "a rate never saved is unknown, not the old 0.20 assumption")
+        XCTAssertNil(settings.dcFastRate)
         settings.electricityRate = 0
-        XCTAssertEqual(UserSettings(defaults: defaults).electricityRate, 0)
+        XCTAssertEqual(UserSettings(defaults: defaults).electricityRate, 0, "free is a real rate")
+        settings.dcFastRate = 0.48
+        XCTAssertEqual(UserSettings(defaults: defaults).dcFastRate, 0.48)
+        settings.dcFastRate = nil
+        XCTAssertNil(UserSettings(defaults: defaults).dcFastRate)
         defaults.set(-1.0, forKey: "electricityRate")
+        XCTAssertNil(UserSettings(defaults: defaults).electricityRate)
+        defaults.set(Double.infinity, forKey: "electricityRate")
+        XCTAssertNil(UserSettings(defaults: defaults).electricityRate)
+    }
+    @MainActor func testExplicitlySavedLegacyRateSurvives() {
+        let defaults = UserDefaults(suiteName: "DriveInsightsTests.legacy")!
+        defaults.removePersistentDomain(forName: "DriveInsightsTests.legacy")
+        defer { defaults.removePersistentDomain(forName: "DriveInsightsTests.legacy") }
+        // Builds with the 0.20 default stored the rate only when the user saved one.
+        defaults.set(0.20, forKey: "electricityRate")
         XCTAssertEqual(UserSettings(defaults: defaults).electricityRate, 0.20)
     }
+    func testRateValidation() {
+        XCTAssertEqual(ElectricityRates.validated(0.31), 0.31)
+        XCTAssertEqual(ElectricityRates.validated(0), 0)
+        XCTAssertNil(ElectricityRates.validated(-0.01))
+        XCTAssertNil(ElectricityRates.validated(.nan))
+        XCTAssertNil(ElectricityRates.validated(ElectricityRates.maximum + 0.01))
+        XCTAssertNil(ElectricityRates.validated(nil))
+    }
+    func testRateInput() {
+        XCTAssertEqual(ElectricityRates.input(""), .empty)
+        XCTAssertEqual(ElectricityRates.input("  "), .empty)
+        XCTAssertEqual(ElectricityRates.input("0.15"), .valid(0.15))
+        XCTAssertEqual(ElectricityRates.input("0,15"), .valid(0.15), "either decimal separator")
+        XCTAssertEqual(ElectricityRates.input("$0.48"), .valid(0.48), "a typed symbol is ignored")
+        XCTAssertEqual(ElectricityRates.input("0"), .valid(0), "free charging is a rate")
+        XCTAssertEqual(ElectricityRates.input("-0.1"), .invalid)
+        XCTAssertEqual(ElectricityRates.input("12"), .invalid, "above the maximum")
+        XCTAssertEqual(ElectricityRates.input("1.2.3"), .invalid)
+        XCTAssertEqual(ElectricityRates.input("abc"), .invalid)
+        XCTAssertEqual(ElectricityRates.symbol(for: "USD"), "$")
+        XCTAssertEqual(ElectricityRates.symbol(for: "EUR"), "€")
+    }
+    func testRatesPerSession() {
+        let rates = ElectricityRates(home: 0.2, dcFast: 0.5, currency: "USD")
+        XCTAssertEqual(rates.perKwh(fastCharger: false), 0.2)
+        XCTAssertEqual(rates.perKwh(fastCharger: true), 0.5)
+        XCTAssertEqual(ElectricityRates(home: 0.2, dcFast: nil, currency: "USD").perKwh(fastCharger: true), 0.2, "DC falls back to home")
+        XCTAssertNil(ElectricityRates(home: nil, dcFast: 0.5, currency: "USD").perKwh(fastCharger: false), "home never uses the DC rate")
+        XCTAssertNil(ElectricityRates(home: nil, dcFast: nil, currency: "USD").homeTripRate)
+    }
+}
+
+private extension TripRate {
+    static func usd(_ perKwh: Double) -> TripRate { TripRate(perKwh: perKwh, currency: "USD", source: .manual) }
 }

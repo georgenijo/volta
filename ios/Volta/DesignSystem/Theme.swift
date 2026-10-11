@@ -17,25 +17,21 @@ extension Color {
         )
     }
 
-    /// App background, near-black charcoal.
-    static let voltaBackground = Color(hex: 0x0E0F11)
-    /// Card surface (bottom of the lit gradient), one step lighter than the background.
-    static let voltaCard = Color(hex: 0x141518)
-    /// Top of the card's lit gradient.
-    static let voltaCardTop = Color(hex: 0x1A1C20)
-    /// Soft mint for route starts, high scores and positive accents.
-    static let voltaMint = Color(hex: 0x34D399)
+    /// App background, flat dark charcoal (sampled from the Wattly references).
+    static let voltaBackground = Color(hex: 0x171717)
+    /// Card surface, one step lighter than the background.
+    static let voltaCard = Color(hex: 0x202020)
     /// Raised control surface (pill buttons, steppers) on top of a card or background.
-    static let voltaRaised = Color(hex: 0x23262B)
+    static let voltaRaised = Color(hex: 0x2C2C2C)
     /// 1px hairline borders and dividers.
     static let voltaHairline = Color.white.opacity(0.08)
 
     static let voltaTextPrimary = Color.white
-    static let voltaTextSecondary = Color(hex: 0x8A8F98)
-    static let voltaTextTertiary = Color(hex: 0x5C6068)
+    static let voltaTextSecondary = Color(hex: 0x8E8E8E)
+    static let voltaTextTertiary = Color(hex: 0x5E5E5E)
 
     static let voltaBlue = Color(hex: 0x3B82F6)
-    static let voltaGreen = Color(hex: 0x22C55E)
+    static let voltaGreen = Color(hex: 0x5ECB93)
     static let voltaAmber = Color(hex: 0xF59E0B)
     static let voltaRed = Color(hex: 0xEF4444)
 }
@@ -72,7 +68,7 @@ enum VoltaSpacing {
 
 enum VoltaRadius {
     /// Metric cards and grouped surfaces.
-    static let card: CGFloat = 24
+    static let card: CGFloat = 20
     /// Pill buttons and steppers.
     static let control: CGFloat = 12
     /// Wide action buttons (charge port Open/Close).

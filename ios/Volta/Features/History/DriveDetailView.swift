@@ -18,8 +18,7 @@ struct DriveDetailView: View {
     @State private var replayMinute: Double?
     @State private var replayTask: Task<Void, Never>?
     @State private var shareImage: Image?
-    /// Scroll offset; fades the header scrim in once content rises past the map.
-    @State private var scrollY: CGFloat = 0
+    @State private var editingRate = false
 
     /// Identity of what's on screen. A change drops the old state and any in-flight result.
     struct LoadKey: Hashable {
@@ -39,16 +38,16 @@ struct DriveDetailView: View {
                 routeMap
                 VStack(alignment: .leading, spacing: 0) {
                     TripHero(summary: summary, units: units)
-                        .padding(.bottom, 26)
+                        .padding(.top, 6).padding(.bottom, 26)
                     TripStatsRow(summary: summary, units: units, regen: snapshot?.regen, maxSpeed: snapshot?.maxSpeed)
                         .padding(.bottom, 28)
                     VStack(spacing: 12) {
                         if let timeline = snapshot?.timeline, timeline.quality != .dense {
                             TripSamplingNote(timeline: timeline)
                         }
-                        TripCostCard(energyKwh: summary.costableEnergyKwh, rate: DrivePricing.rate(summary, fallback: model?.settings.electricityRate ?? 0.20),
-                                     lookup: nil, editable: false,
-                                     note: summary.costableEnergyKwh != nil ? summary.energyProvenance : nil) {}
+                        TripCostCard(energyKwh: summary.costableEnergyKwh, rate: DrivePricing.rate(summary, home: model?.settings.rates.homeTripRate),
+                                     lookup: nil, editable: model != nil && DrivePricing.rate(summary, home: nil) == nil,
+                                     note: summary.costableEnergyKwh != nil ? summary.energyProvenance : nil) { editingRate = true }
                     }
                     .padding(.bottom, 32)
                     TripSectionHeader(title: "Drive score", trailing: scoreTrailing)
@@ -70,26 +69,16 @@ struct DriveDetailView: View {
                     TripDetailsList(rows: detailRows)
                 }
                 .padding(.horizontal, HistoryTheme.gutter)
-                // The hero rises into the map's fade.
-                .padding(.top, -64)
             }
         }
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.drive-detail")
-        .voltaArrivalScope()
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrollY = y }
         .ignoresSafeArea(edges: .top)
         .overlay(alignment: .top) { header }
-        .background(alignment: .top) {
-            RadialGradient(colors: [HistoryTheme.blue.opacity(0.14), HistoryTheme.mint.opacity(0.035), .clear],
-                           center: .init(x: 0.85, y: 0.5), startRadius: 0, endRadius: 380)
-                .frame(height: Self.mapHeight + 260)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-        }
         .historyScreenBackground()
         .toolbar(.hidden, for: .navigationBar)
+        .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
         .task(id: key) { await load(key) }
         .onChange(of: units) { rebuild() }
         .onDisappear { stopReplay() }
@@ -198,15 +187,9 @@ struct DriveDetailView: View {
                         Button { mode = m } label: {
                             Image(systemName: m.systemImage)
                                 .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(mode == m ? HistoryTheme.mint : .white.opacity(0.75))
-                                .shadow(color: mode == m ? HistoryTheme.mint.opacity(0.6) : .clear, radius: 5)
+                                .foregroundStyle(mode == m ? Color.black : .white)
                                 .frame(width: 38, height: 38)
-                                .background {
-                                    if mode == m {
-                                        Circle().fill(.white.opacity(0.1))
-                                            .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 1))
-                                    }
-                                }
+                                .background(Circle().fill(mode == m ? HistoryTheme.green : .clear))
                                 .contentShape(Circle())
                         }
                         .accessibilityLabel("Color route by \(m.title.lowercased())")
@@ -236,10 +219,6 @@ struct DriveDetailView: View {
                 }
             }
             .padding(.horizontal, HistoryTheme.gutter)
-            .padding(.bottom, 8)
-            // The map shows through at rest; the scrim fades in as the hero
-            // scrolls up toward the buttons.
-            .voltaTopScrim(opacity: min(max((scrollY - 120) / 70, 0), 1), glow: false)
         }
     }
 
@@ -281,16 +260,11 @@ struct DriveDetailView: View {
                     mapPlaceholder(message, retry: true)
                 }
             }
-            // The map dissolves into the screen instead of ending at an edge.
-            .mask {
-                LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5),
-                                       .init(color: .black.opacity(0.45), location: 0.7), .init(color: .black.opacity(0.1), location: 0.82),
-                                       .init(color: .clear, location: 0.9)],
-                               startPoint: .top, endPoint: .bottom)
-            }
+            LinearGradient(colors: [.clear, HistoryTheme.background], startPoint: .init(x: 0.5, y: 0.72), endPoint: .bottom)
+                .allowsHitTesting(false)
             if let snapshot, case .route = state {
                 mapCaption(snapshot)
-                    .padding(.bottom, 104)
+                    .padding(.bottom, 10)
             }
         }
         .frame(height: Self.mapHeight)
@@ -298,9 +272,9 @@ struct DriveDetailView: View {
 
     private func mapPlaceholder(_ message: String?, loading: Bool = false, retry: Bool = false) -> some View {
         ZStack {
-            HistoryTheme.card.opacity(0.6)
+            HistoryTheme.card
             RouteWatermark(points: summary.drawableRoute, opacity: 0.35)
-                .padding(.horizontal, 60).padding(.top, 110).padding(.bottom, 120)
+                .padding(.horizontal, 60).padding(.top, 110).padding(.bottom, 80)
             VStack(spacing: 10) {
                 if loading { ProgressView().tint(HistoryTheme.secondary) }
                 if let message {
@@ -326,8 +300,8 @@ struct DriveDetailView: View {
             text = mode.title
         }
         return Text(text)
-            .font(.system(size: 11, weight: .semibold)).tracking(0.4)
-            .foregroundStyle(.white.opacity(0.8))
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 12).padding(.vertical, 6)
             .glassEffect(.regular, in: .capsule)
             .accessibilityIdentifier("trip.map.caption")
@@ -340,11 +314,11 @@ struct DriveDetailView: View {
         let heightUnit = units.distance == .miles ? "ft" : "m"
         chartCard("Speed", "speedometer", HistoryTheme.blue, speedUnit, series: snapshot?.speed,
                   accessory: snapshot?.speed.values.max().map { "\(sampledPrefix(snapshot?.speed))MAX \(VoltaFormat.number($0, digits: 0))" + (summary.avgSpeedKph.map { " · AVG \(VoltaFormat.number(units.distanceValue(km: $0), digits: 0))" } ?? "") },
-                  gradient: [HistoryTheme.mint, HistoryTheme.blue], domain: { TripChartDomain.zeroBased($0) })
+                  gradient: [HistoryTheme.green, HistoryTheme.amber, HistoryTheme.red], domain: { TripChartDomain.zeroBased($0) })
         chartCard("Power", "bolt.fill", HistoryTheme.amber, "kW", series: snapshot?.power,
                   accessory: snapshot?.power.values.max().map { "\(sampledPrefix(snapshot?.power))PEAK \(VoltaFormat.number($0, digits: 0)) kW" },
                   digits: 1, showsZero: true, domain: { TripChartDomain.zeroBased($0) })
-        chartCard("Battery", "battery.75percent", HistoryTheme.mint, "%", series: snapshot?.battery,
+        chartCard("Battery", "battery.75percent", HistoryTheme.green, "%", series: snapshot?.battery,
                   accessory: batteryAccessory, step: true, domain: { TripChartDomain.padded($0) })
         chartCard("Elevation", "mountain.2.fill", HistoryTheme.purple, heightUnit, series: snapshot?.elevation,
                   accessory: snapshot.flatMap { rangeAccessory($0.elevation.values, unit: heightUnit) },
@@ -353,14 +327,14 @@ struct DriveDetailView: View {
             let values = snapshot.longitudinalAcceleration.values + snapshot.lateralAcceleration.values
             telemetryChartCard("Acceleration", "gyroscope", "m/s²",
                                traces: [
-                                .init(label: "Longitudinal", color: HistoryTheme.mint, series: snapshot.longitudinalAcceleration),
+                                .init(label: "Longitudinal", color: HistoryTheme.green, series: snapshot.longitudinalAcceleration),
                                 .init(label: "Lateral", color: HistoryTheme.blue, series: snapshot.lateralAcceleration),
                                ], accessory: "LONG / LAT", digits: 2, domain: TelemetryAcceleration.domain(values),
                                showsZero: true, height: 110)
         }
         if let snapshot, !snapshot.energyRemaining.isEmpty {
             telemetryChartCard("Energy remaining", "bolt.batteryblock.fill", "kWh",
-                               traces: [.init(label: "Energy", color: HistoryTheme.mint, series: snapshot.energyRemaining)],
+                               traces: [.init(label: "Energy", color: HistoryTheme.green, series: snapshot.energyRemaining)],
                                accessory: energyAccessory(snapshot), digits: 1, domain: TripChartDomain.padded(snapshot.energyRemaining.values, minPad: 0.5))
         }
         if let snapshot, !snapshot.batteryTempMin.isEmpty || !snapshot.batteryTempMax.isEmpty {
@@ -515,8 +489,8 @@ private struct BackButton: View {
     }
 }
 
-/// One trip chart on the lit surface: a glowing key dot, the title, a quiet
-/// summary on the right, then the plot.
+/// One trip chart card: a key dot, the title, a quiet summary on the right,
+/// then the plot.
 private struct TripChartPanel<Plot: View>: View {
     var title: String
     var color: Color

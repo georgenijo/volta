@@ -28,24 +28,29 @@ struct MoreView: View {
                         .init(symbol: "mappin.and.ellipse", tint: ScreenKit.blue, title: "Charger Map", slug: "charger-map", route: .chargerMap),
                     ])
 
-                    ScreenKit.SectionHeader(title: "Garage")
-                    switchVehicle
+                    switchVehicle.padding(.top, 36)
                     footer
                 }
-                .padding(.top, 0)
+                .padding(.top, 8)
                 .padding(.bottom, ScreenKit.bottomBarClearance)
             }
             .accessibilityIdentifier("scroll.more")
             .scrollContentBackground(.hidden)
             .safeAreaInset(edge: .top, spacing: 0) {
-                VoltaHeader("More") {
+                HStack {
+                    Spacer()
                     GlassCircleButton(systemImage: "gearshape", accessibilityLabel: "Settings") { path.append(.settings) }
                         .accessibilityIdentifier("button.settings")
                 }
+                .padding(.horizontal, VoltaSpacing.screen - 4)
+                .frame(minHeight: 56)
                 .padding(.bottom, VoltaSpacing.sm)
-                .voltaTopScrim()
+                .background {
+                    LinearGradient(colors: [Color.voltaBackground, Color.voltaBackground.opacity(0.85), Color.voltaBackground.opacity(0)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .ignoresSafeArea(edges: .top)
+                }
             }
-            .background(alignment: .top) { ScreenKit.TopGlow() }
             .voltaScreenBackground()
             .toolbar(.hidden, for: .navigationBar)
             .moreDestinations()
@@ -67,26 +72,24 @@ struct MoreView: View {
 
     private func section(_ title: String, dot: Color, identifier: String? = nil, rows: [Item]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScreenKit.SectionHeader(title: title, dot: dot, identifier: identifier,
-                                    trailing: rows.count > 1 ? "\(rows.count)" : nil)
-            ScreenKit.ListCard {
-                ForEach(Array(rows.enumerated()), id: \.offset) { index, item in
-                    NavigationLink(value: item.route) {
-                        ScreenKit.NavRow(symbol: item.symbol, tint: item.tint, title: item.title,
-                                         showsDivider: index < rows.count - 1)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("row.more.\(item.slug)")
+            ScreenKit.SectionHeader(title: title, dot: dot, identifier: identifier)
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, item in
+                NavigationLink(value: item.route) {
+                    ScreenKit.NavRow(symbol: item.symbol, tint: item.tint, title: item.title,
+                                     showsDivider: index < rows.count - 1)
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("row.more.\(item.slug)")
             }
         }
     }
 
     private var switchVehicle: some View {
-        ScreenKit.ListCard {
+        VStack(spacing: 0) {
+            Rectangle().fill(ScreenKit.hairline).frame(height: 1)
             NavigationLink(value: MoreRoute.switchVehicle) {
                 ScreenKit.CapsRow(symbol: "car.2.fill", tint: ScreenKit.mint, title: "Switch Vehicle",
-                                  subtitle: vehicleName ?? "—", showsDivider: false)
+                                  subtitle: vehicleName ?? "—")
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("row.more.switch-vehicle")
@@ -95,10 +98,10 @@ struct MoreView: View {
 
     private var footer: some View {
         Text("Volta · v\(AppInfo.version) · private")
-            .font(.system(size: 11, weight: .semibold)).tracking(1.3).textCase(.uppercase)
-            .foregroundStyle(ScreenKit.tertiary.opacity(0.8))
+            .font(.system(size: 12, weight: .medium)).tracking(1)
+            .foregroundStyle(ScreenKit.secondary.opacity(0.5))
             .frame(maxWidth: .infinity)
-            .padding(.top, 36)
+            .padding(.top, 40)
     }
 }
 

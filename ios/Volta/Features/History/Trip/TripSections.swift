@@ -22,7 +22,7 @@ struct TripSectionHeader: View {
 }
 
 extension View {
-    /// Grouped trip data on the lit drive surface.
+    /// Grouped trip data on a flat drive card.
     func tripPanel(padding: CGFloat = 18) -> some View {
         self.padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -35,13 +35,12 @@ extension View {
     }
 }
 
-/// Small glowing dot used as a light accent beside titles and endpoints.
+/// Small solid dot used beside titles and itinerary endpoints.
 struct TripGlowDot: View {
     var color: Color
     var size: CGFloat = 8
     var body: some View {
         Circle().fill(color).frame(width: size, height: size)
-            .shadow(color: color.opacity(0.7), radius: size * 0.6)
     }
 }
 
@@ -59,9 +58,9 @@ struct TripHero: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(eyebrow).voltaLabelStyle(color: HistoryTheme.tertiary).lineLimit(1).minimumScaleFactor(0.8)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        CountUpNumber(text: VoltaFormat.number(units.distanceValue(km: summary.distanceKm)))
+                        Text(VoltaFormat.number(units.distanceValue(km: summary.distanceKm)))
                             .font(.system(size: 84, weight: .bold)).fontWidth(.expanded).tracking(-2)
-                            .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+                            .foregroundStyle(.white)
                             .monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
                         Text(units.distanceUnit).font(.system(size: 20, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                     }
@@ -70,7 +69,7 @@ struct TripHero: View {
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("screen.drive-detail")
                 Spacer(minLength: 0)
-                ScoreDial(score: summary.efficiencyScore, size: 86, caption: "Score").padding(.trailing, 4)
+                ScoreDial(score: summary.efficiencyScore, size: 86, gradient: true).padding(.trailing, 4)
             }
             itinerary
         }
@@ -84,9 +83,8 @@ struct TripHero: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 14) {
                 VStack(spacing: 0) {
-                    TripGlowDot(color: HistoryTheme.mint).padding(.top, 7)
-                    Rectangle()
-                        .fill(LinearGradient(colors: [HistoryTheme.mint.opacity(0.6), HistoryTheme.blue.opacity(0.35)], startPoint: .top, endPoint: .bottom))
+                    TripGlowDot(color: HistoryTheme.green).padding(.top, 7)
+                    Rectangle().fill(.white.opacity(0.18))
                         .frame(width: 1.5).frame(maxHeight: .infinity).padding(.top, 5)
                 }
                 .frame(width: 8)
@@ -96,7 +94,7 @@ struct TripHero: View {
             .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 14) {
                 VStack(spacing: 0) {
-                    Rectangle().fill(HistoryTheme.blue.opacity(0.35)).frame(width: 1.5, height: 2)
+                    Rectangle().fill(.white.opacity(0.18)).frame(width: 1.5, height: 2)
                     TripGlowDot(color: HistoryTheme.blue).padding(.top, 5)
                 }
                 .frame(width: 8)
@@ -171,16 +169,12 @@ struct TripStatsRow: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 0) {
                 stat(VoltaFormat.duration(summary.durationMin), "Driving", first: true)
-                    .voltaArrival(delay: VoltaMotion.statDelay(0))
                 divider
                 stat(summary.energyUsedKwh.map { VoltaFormat.number($0) } ?? "—", "kWh")
-                    .voltaArrival(delay: VoltaMotion.statDelay(1))
                 divider
                 stat(summary.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit)
-                    .voltaArrival(delay: VoltaMotion.statDelay(2))
                 divider
                 stat(summary.avgSpeedKph.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", "\(speedUnit) avg")
-                    .voltaArrival(delay: VoltaMotion.statDelay(3))
             }
             HStack(spacing: 8) {
                 metric("arrow.triangle.2.circlepath", "Regen " + regenLine)
@@ -265,7 +259,6 @@ struct TripSamplingNote: View {
             Image(systemName: timeline.quality == .partial ? "waveform.path.ecg" : "exclamationmark.triangle")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(HistoryTheme.amber)
-                .shadow(color: HistoryTheme.amber.opacity(0.5), radius: 4)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 5) {
                 Text(TripSamplingNote.title(timeline))
@@ -391,7 +384,7 @@ struct TripCostCard: View {
     private func sourceText(_ rate: TripRate) -> String {
         switch rate.source {
         case .manual:
-            return "Estimated · energy used × Settings electricity rate (USD)."
+            return "Estimated · energy used × your home electricity rate (Settings)."
         case .chargeAverage:
             return "Estimated · energy used × energy-weighted average of priced TeslaMate charges before this drive."
         case .previousCharge(let place, let date):
@@ -400,56 +393,6 @@ struct TripCostCard: View {
             if rate.perKwh == 0 { return "The last charge before this trip\(where_), \(day), was free." }
             return "Energy used × rate of the last priced charge\(where_), \(day)."
         }
-    }
-}
-
-/// Sheet for the device-local manual rate.
-struct TripRateEditor: View {
-    var initial: TripRate?
-    var defaultCurrency: String
-    var onSave: (TripRate?) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var rateText = ""
-    @State private var currency = ""
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("Price per kWh", text: $rateText)
-                        .keyboardType(.decimalPad)
-                        .accessibilityIdentifier("trip.rate.value")
-                    TextField("Currency (e.g. USD)", text: $currency)
-                        .accessibilityIdentifier("trip.rate.currency")
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                } footer: {
-                    Text("Enter 0 if your charging is free. Stored only on this device for this server and vehicle; used instead of the previous charge's price.")
-                }
-                if initial?.source == .manual {
-                    Section {
-                        Button("Remove rate", role: .destructive) { onSave(nil); dismiss() }
-                    }
-                }
-            }
-            .navigationTitle("Electricity rate")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { onSave(parsed); dismiss() }.disabled(parsed == nil)
-                        .accessibilityIdentifier("trip.rate.save")
-                }
-            }
-        }
-        .onAppear {
-            if let initial { rateText = String(initial.perKwh); currency = initial.currency } else { currency = defaultCurrency }
-        }
-    }
-
-    private var parsed: TripRate? {
-        let normalized = rateText.replacingOccurrences(of: ",", with: ".")
-        return TripRate(stored: "\(normalized)|\(currency.trimmingCharacters(in: .whitespaces))")
     }
 }
 
@@ -474,7 +417,7 @@ extension DriveScoreBreakdown {
     }
 }
 
-/// One component: name and value over a thin lit bar.
+/// One component: name and value over a thin bar.
 struct ScoreBreakdownRow: View {
     var title: String
     var value: Int?
@@ -493,10 +436,8 @@ struct ScoreBreakdownRow: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(.white.opacity(0.07))
                     if let value, value > 0 {
-                        Capsule()
-                            .fill(LinearGradient(colors: [tint.opacity(0.35), tint], startPoint: .leading, endPoint: .trailing))
+                        Capsule().fill(tint)
                             .frame(width: max(3, geo.size.width * Double(value) / 100))
-                            .shadow(color: tint.opacity(0.55), radius: 3)
                     }
                 }
             }
@@ -548,7 +489,6 @@ struct TripScoreCard: View {
                     Text("On-device smoothness · Volta v1").tripCaption()
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(s.score)").font(.system(size: 24, weight: .bold)).fontWidth(.expanded).monospacedDigit().foregroundStyle(.white)
-                            .voltaRollingNumber(Double(s.score))
                         Text(s.label).font(.system(size: 13, weight: .semibold)).foregroundStyle(DriveScoreBand.tint(s.score))
                     }
                 }

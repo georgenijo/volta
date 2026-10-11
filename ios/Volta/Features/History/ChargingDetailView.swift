@@ -45,14 +45,13 @@ struct ChargingDetailView: View {
     @State private var places = HistoryPlaces()
     @State private var electrical: Electrical = .voltage
     @State private var showingMap = false
-    /// Scroll offset; fades the header scrim in once content rises past the map.
-    @State private var scrollY: CGFloat = 0
+    @State private var editingRate = false
 
     enum Electrical: String, CaseIterable, Hashable {
         case voltage = "Volts", current = "Amps"
     }
 
-    private static let mapHeight: CGFloat = 320
+    private static let mapHeight: CGFloat = 210
 
     /// The detail's summary when loaded (it may carry fields the list row lacks).
     private var summary: ChargeSummary { loader.detail?.summary ?? charge }
@@ -63,36 +62,33 @@ struct ChargingDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     mapBackdrop
                     VStack(alignment: .leading, spacing: 0) {
-                        hero.padding(.bottom, 24)
-                        VStack(spacing: 12) {
-                            costCard.voltaCascade(index: 0)
-                            energyCard.voltaCascade(index: 1)
-                            curveCard
-                                .background(alignment: .top) { Color.clear.frame(height: 0).id(ScrollTarget.curve) }
-                                .voltaCascade(index: 2)
-                            temperatureCard.voltaCascade(index: 3)
-                            telemetryCards.voltaCascade(index: 4)
-                            electricalCard.voltaCascade(index: 5)
+                        hero
+                        VStack(alignment: .leading, spacing: 56) {
+                            energySection
+                            curveSection
+                                .background(alignment: .top) { Color.clear.frame(height: 0).offset(y: -24).id(ScrollTarget.curve) }
+                            temperatureSection
+                            telemetrySections
+                            electricalSection
+                            detailsSection
                         }
+                        .padding(.top, 52)
                         Color.clear.frame(height: 1).id(ScrollTarget.bottom)
                     }
                     .padding(.horizontal, HistoryTheme.gutter)
-                    // The hero rises into the map's fade.
-                    .padding(.top, -56)
+                    // The title sits on the map's fade.
+                    .padding(.top, -48)
                 }
             }
             .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("scroll.charge-detail")
-            .voltaArrivalScope()
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrollY = y }
             .ignoresSafeArea(edges: .top)
             .overlay(alignment: .top) { header }
             #if DEBUG
             .task(id: loader.detail != nil) { await debugScroll(proxy) }
             #endif
         }
-        .historyGlow(charge.fastCharger ? HistoryTheme.blue : HistoryTheme.mint, charge.fastCharger ? HistoryTheme.mint : HistoryTheme.blue, strength: 0.14)
         .historyScreenBackground()
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showingMap) {
@@ -101,6 +97,7 @@ struct ChargingDetailView: View {
                                   systemImage: summary.kindIcon, tint: summary.kindTint)
             }
         }
+        .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
         .task { await load() }
         .task { if charge.needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) } }
     }
@@ -131,8 +128,7 @@ struct ChargingDetailView: View {
     private var sessionStart: Date { summary.start }
     private var sessionEnd: Date { summary.end ?? summary.start.addingTimeInterval(summary.durationMin * 60) }
     private var location: HistoryLocation { summary.location(places.state) }
-    private var rate: Double { model?.settings.electricityRate ?? 0.20 }
-    private var accent: Color { summary.fastCharger ? HistoryTheme.blue : HistoryTheme.mint }
+    private var rates: ElectricityRates { model?.settings.rates ?? ElectricityRates(home: nil, dcFast: nil, currency: units.currency) }
 
     // MARK: Header
 
@@ -142,29 +138,41 @@ struct ChargingDetailView: View {
                                    .init(color: HistoryTheme.background.opacity(0.75), location: 0.55),
                                    .init(color: HistoryTheme.background.opacity(0), location: 1)],
                            startPoint: .top, endPoint: .bottom)
-                .frame(height: 150)
+                .frame(height: 130)
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
             HStack(spacing: 10) {
                 ChargeBackButton()
                 Spacer(minLength: 0)
+                Button { editingRate = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "tag").font(.system(size: 17, weight: .medium))
+                        Text("Price").font(.system(size: 17, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).frame(height: 52)
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .accessibilityLabel("Electricity rate")
+                .accessibilityIdentifier("charge.price")
                 if location.coordinate != nil {
-                    GlassCircleButton(systemImage: "arrow.up.left.and.arrow.down.right", size: 48, accessibilityLabel: "Expand map") {
+                    GlassCircleButton(systemImage: "arrow.up.left.and.arrow.down.right", size: 52, accessibilityLabel: "Expand map") {
                         showingMap = true
                     }
                     .accessibilityIdentifier("charge.map.expand")
                 }
             }
-            .padding(.horizontal, HistoryTheme.gutter)
+            .padding(.horizontal, HistoryTheme.gutter - 6)
             .padding(.bottom, 8)
-            .voltaTopScrim(opacity: min(max((scrollY - 110) / 70, 0), 1), glow: false)
         }
     }
 
     // MARK: Map backdrop
 
-    /// Private MapKit tiles centred on the recorded or geofence coordinate.
-    /// Nothing is geocoded or searched.
+    /// Private MapKit tiles centred on the recorded or geofence coordinate,
+    /// dimmed behind the header. Nothing is geocoded or searched.
     private var mapBackdrop: some View {
         Group {
             switch location {
@@ -177,6 +185,7 @@ struct ChargingDetailView: View {
                     .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
                     .environment(\.colorScheme, .dark)
                     .allowsHitTesting(false)
+                    .overlay(HistoryTheme.background.opacity(0.55))
                     .overlay {
                         // The whole backdrop opens the full-screen map.
                         Color.clear.contentShape(.rect).onTapGesture { showingMap = true }
@@ -188,26 +197,21 @@ struct ChargingDetailView: View {
             case .placesUnavailable:
                 mapPlaceholder("Saved places couldn't load, so this location isn't mapped.", retry: true)
             case .unmapped:
-                mapPlaceholder(summary.address == nil ? "Location not recorded." : nil)
+                mapPlaceholder(nil)
             }
         }
-        // The map dissolves into the screen instead of ending at an edge.
-        .mask {
-            LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.5),
-                                   .init(color: .black.opacity(0.45), location: 0.7), .init(color: .black.opacity(0.1), location: 0.84),
-                                   .init(color: .clear, location: 0.94)],
+        .overlay {
+            LinearGradient(colors: [HistoryTheme.background.opacity(0.4), .clear, HistoryTheme.background],
                            startPoint: .top, endPoint: .bottom)
+                .allowsHitTesting(false)
         }
         .frame(height: Self.mapHeight)
+        .clipped()
     }
 
     private func mapPlaceholder(_ message: String?, loading: Bool = false, retry: Bool = false) -> some View {
         ZStack {
-            HistoryTheme.card.opacity(0.6)
-            Image(systemName: summary.kindIcon)
-                .font(.system(size: 96, weight: .regular))
-                .foregroundStyle(summary.kindTint.opacity(0.08))
-                .offset(y: -20)
+            HistoryTheme.background
             VStack(spacing: 10) {
                 if loading { ProgressView().tint(HistoryTheme.secondary) }
                 if let message {
@@ -220,82 +224,102 @@ struct ChargingDetailView: View {
                     }
                 }
             }
-            .padding(.bottom, 60)
+            .padding(.top, 40)
         }
     }
 
     // MARK: Hero
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .center, spacing: 8) {
-                    Text(ChargePlace.title(summary))
-                        .font(.system(size: 26, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(2).minimumScaleFactor(0.75)
-                        .accessibilityAddTraits(.isHeader)
-                        .accessibilityIdentifier("screen.charge-detail")
-                    currentChip
+        VStack(alignment: .leading, spacing: 0) {
+            Text(ChargePlace.title(summary))
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(2).minimumScaleFactor(0.75)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("screen.charge-detail")
+            HStack(spacing: 8) {
+                Image(systemName: summary.kindIcon)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(summary.kindTint.opacity(0.9)))
+                Text(ChargePlace.subtitle(summary) ?? summary.currentLabel)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(HistoryTheme.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .padding(.top, 8)
+
+            HStack(alignment: .top, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(summary.energyAddedKwh.map { "+" + VoltaFormat.number($0) } ?? "—")
+                        .font(.system(size: 64, weight: .bold)).tracking(-1.5)
+                        .monospacedDigit().foregroundStyle(.white)
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                    Text("kWh").font(.system(size: 22, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                 }
-                if let subtitle = ChargePlace.subtitle(summary) {
-                    Text(subtitle)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(HistoryTheme.secondary)
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                }
-                HStack(spacing: 6) {
-                    Image(systemName: "calendar").font(.system(size: 11, weight: .semibold))
-                    Text(dateLine).monospacedDigit()
-                }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(HistoryTheme.tertiary)
-                .lineLimit(1).minimumScaleFactor(0.8)
-                .padding(.top, 2)
                 .accessibilityElement(children: .combine)
-            }
-            HStack(alignment: .lastTextBaseline, spacing: 12) {
-                HistoryHeroNumeral(value: summary.energyAddedKwh.map { VoltaFormat.number($0) } ?? "—", unit: "kWh", size: 64)
                 Spacer(minLength: 0)
-                if let cost = costEstimate {
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text(VoltaFormat.money(cost.amount, currency: cost.currency))
-                            .font(.system(size: 22, weight: .bold)).fontWidth(.expanded).monospacedDigit().foregroundStyle(.white)
-                        Text(cost.isEstimated ? "Est. cost" : "Cost")
-                            .font(.system(size: 10, weight: .semibold)).tracking(1).textCase(.uppercase)
-                            .foregroundStyle(cost.isEstimated ? HistoryTheme.amber : HistoryTheme.tertiary)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
+                costBlock.padding(.top, 2)
             }
+            .padding(.top, 36)
+
             if let bar = ChargeSocBar(start: summary.startBatteryLevel, end: summary.endBatteryLevel) {
-                ChargeSocBarView(bar: bar, colors: summary.fastCharger ? [HistoryTheme.mint, HistoryTheme.blue]
-                                                                       : [HistoryTheme.mint.opacity(0.6), HistoryTheme.mint])
+                ChargeSocBarView(bar: bar).padding(.top, 26)
             }
-            stats
+            if let km = rangeAddedKm {
+                Text("\(km < 0 ? "−" : "+")\(VoltaFormat.number(units.distanceValue(km: abs(km)), digits: 0)) \(units.distanceUnit) of range")
+                    .font(.system(size: 16, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(HistoryTheme.secondary)
+                    .padding(.top, 10)
+            }
+            dateLine
+                .padding(.top, 38)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 26)
         }
     }
 
-    private var currentChip: some View {
-        HStack(spacing: 4) {
-            Image(systemName: summary.fastCharger ? "bolt.fill" : "powerplug.portrait.fill").font(.system(size: 9, weight: .bold))
-            Text(summary.fastCharger ? "DC FAST" : "AC").font(.system(size: 10, weight: .bold)).tracking(1)
+    /// Cost on the right of the energy numeral: the amount over its rate, or
+    /// "—" with a way to add the missing rate.
+    @ViewBuilder private var costBlock: some View {
+        if let cost = costEstimate {
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(VoltaFormat.money(cost.amount, currency: cost.currency))
+                    .font(.system(size: 30, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                    .accessibilityIdentifier("charge.cost")
+                HStack(spacing: 5) {
+                    if cost.isEstimated { Text("Est.").foregroundStyle(HistoryTheme.amber) }
+                    if let rate = cost.pricePerKwh {
+                        Text(VoltaFormat.money(rate, currency: cost.currency) + "/kWh").foregroundStyle(HistoryTheme.secondary)
+                    }
+                }
+                .font(.system(size: 17, weight: .medium)).monospacedDigit()
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            VStack(alignment: .trailing, spacing: 8) {
+                Text("—")
+                    .font(.system(size: 30, weight: .bold)).foregroundStyle(HistoryTheme.secondary)
+                    .accessibilityLabel("Cost unknown")
+                    .accessibilityIdentifier("charge.cost")
+                if summary.energyAddedKwh != nil { SetRateButton(settings: model?.settings, size: 14) }
+            }
         }
-        .foregroundStyle(summary.currentTint)
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(summary.currentTint.opacity(0.1), in: .capsule)
-        .overlay(Capsule().strokeBorder(summary.currentTint.opacity(0.3), lineWidth: 1))
-        .fixedSize()
     }
 
-    /// "Sat, Oct 4 · 10:12 – 10:39 · 27m" in the app's time format.
-    private var dateLine: String {
-        let day = summary.start.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
-        let end = summary.end.map { " – " + $0.historyTime } ?? " – now"
-        return "\(day) · \(summary.start.historyTime)\(end) · \(VoltaFormat.duration(summary.durationMin))"
+    /// "Saturday, October 10 · 00:05 → 00:33 · 28 min" in the app's time format.
+    private var dateLine: some View {
+        let dot = Text("  ·  ").foregroundStyle(HistoryTheme.tertiary)
+        let day = Text(summary.start.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+        let end = summary.end?.historyTime ?? "now"
+        return Text("\(day)\(dot)\(summary.start.historyTime) → \(end)\(dot)\(VoltaFormat.duration(summary.durationMin))")
+            .font(.system(size: 15, weight: .medium)).monospacedDigit()
+            .foregroundStyle(HistoryTheme.secondary)
+            .lineLimit(1).minimumScaleFactor(0.75)
     }
 
-    // MARK: Stats
+    // MARK: Power
 
     private var averagePowerKw: Double? {
         if let avg = summary.avgPowerKw, avg.isFinite, avg > 0 { return avg }
@@ -304,122 +328,121 @@ struct ChargingDetailView: View {
         return summary.energyAddedKwh.map { $0 / max(summary.durationMin / 60, 0.01) }
     }
 
-    private var stats: some View {
-        let rangeAdded = rangeAddedKm
-        let kw = { (v: Double) in VoltaFormat.number(v, digits: v >= 20 ? 0 : 1) }
-        return HistoryStatStrip(items: [
-            .init(value: VoltaFormat.duration(summary.durationMin), caption: "Duration"),
-            .init(value: peakPowerKw.map(kw) ?? "—", caption: "Peak kW", accent: accent),
-            .init(value: averagePowerKw.map(kw) ?? "—", caption: "Avg kW"),
-            .init(value: rangeAdded.map { ($0 < 0 ? "−" : "+") + VoltaFormat.number(units.distanceValue(km: abs($0)), digits: 0) } ?? "—",
-                  caption: "Range \(units.distanceUnit)"),
-        ])
-    }
-
     private var peakPowerKw: Double? {
         [summary.maxPowerKw, ChargeCurve.peak(powerCurve.points)?.value].compactMap { $0 }.filter(\.isFinite).max()
     }
 
+    private func kw(_ value: Double) -> String { VoltaFormat.number(value, digits: value >= 20 ? 0 : 1) }
+
     // MARK: Cost
 
-    private var costEstimate: ChargeCost? {
-        ChargeCost.resolve(summary, fallbackRate: rate, fallbackCurrency: units.currency)
-    }
-
-    private var costCard: some View {
-        let cost = costEstimate
-        let currency = cost?.currency ?? units.currency
-        let perDistance: String? = {
-            guard let cost, let km = rangeAddedKm, km > 1 else { return nil }
-            return VoltaFormat.money(cost.amount / units.distanceValue(km: km) * 100, currency: currency) + " / 100 \(units.distanceUnit)"
-        }()
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Cost").voltaLabelStyle(color: HistoryTheme.tertiary)
-                Spacer()
-                if cost?.isEstimated == true { HistoryBadge(title: "Estimated", tint: HistoryTheme.amber) }
-            }
-            HStack(alignment: .firstTextBaseline) {
-                Text(cost?.pricePerKwh.map { VoltaFormat.money($0, currency: currency) + " / kWh" } ?? "Rate unknown")
-                    .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
-                Spacer()
-                Text(VoltaFormat.money(cost?.amount, currency: currency))
-                    .font(.system(size: 30, weight: .bold)).fontWidth(.expanded).tracking(-0.8).monospacedDigit()
-                    .foregroundStyle(.white)
-                    .accessibilityIdentifier("charge.cost")
-            }
-            .padding(.top, 10).padding(.bottom, cost?.isEstimated == true ? 8 : 14)
-            if let cost, cost.isEstimated {
-                Text(estimateNote(cost))
-                    .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 14)
-            }
-            if let perDistance {
-                Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
-                row("Cost per distance", perDistance, secondary: true)
-            }
-        }
-        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, perDistance == nil ? 4 : 6)
-        .driveSurface()
-    }
+    private var costEstimate: ChargeCost? { ChargeCost.resolve(summary, rates: rates) }
 
     private func estimateNote(_ cost: ChargeCost) -> String {
         let rateText = VoltaFormat.money(cost.pricePerKwh, currency: cost.currency) + "/kWh"
-        return summary.fastCharger
-            ? "No price was recorded for this fast charge. Estimated at your electricity rate of \(rateText); network pricing is usually higher."
-            : "No price was recorded. Estimated from energy added at your electricity rate of \(rateText)."
+        guard summary.fastCharger else {
+            return "No price was recorded. Estimated from energy added at your home rate of \(rateText)."
+        }
+        return rates.dcFast != nil
+            ? "No price was recorded for this fast charge. Estimated at your Supercharger / DC fast rate of \(rateText)."
+            : "No price was recorded for this fast charge. Estimated at your home rate of \(rateText); network pricing is usually higher."
     }
 
     // MARK: Energy flow
 
-    @ViewBuilder private var energyCard: some View {
+    @ViewBuilder private var energySection: some View {
         if let flow = ChargeEnergyFlow.resolve(summary) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Energy flow").voltaLabelStyle(color: HistoryTheme.tertiary)
-                    Spacer()
-                    if flow.isEstimated { HistoryBadge(title: "Estimated", tint: HistoryTheme.amber) }
+                DetailSectionHeader(title: Text("ENERGY FLOW")) {
+                    if flow.isEstimated {
+                        Text("Estimated")
+                            .font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.amber)
+                            .padding(.horizontal, 14).padding(.vertical, 6)
+                            .overlay(Capsule().strokeBorder(HistoryTheme.amber.opacity(0.55), lineWidth: 1))
+                    }
                 }
-                .padding(.bottom, 14)
-                ChargeEnergyBars(flow: flow, accent: accent)
-                    .padding(.bottom, 12)
-                Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
-                row("From grid", VoltaFormat.energy(flow.gridKwh) + (flow.isEstimated ? " est." : ""))
-                HairlineDivider()
-                row("Added to battery", VoltaFormat.energy(flow.addedKwh))
-                HairlineDivider()
-                row("Charging losses", VoltaFormat.energy(flow.lossKwh)
-                    + (flow.lossFraction.map { " · \(VoltaFormat.number($0 * 100, digits: 0))%" } ?? ""), secondary: true)
-                HairlineDivider()
-                row("Efficiency", flow.efficiency.map { VoltaFormat.number($0 * 100, digits: 0) + "%" } ?? "—", secondary: true)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("From grid").font(.system(size: 16, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    Spacer()
+                    energyValue(flow.gridKwh, size: 24)
+                }
+                .padding(.top, 26)
+                ChargeEnergyBar(flow: flow).padding(.top, 12)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        energyValue(flow.addedKwh, size: 20)
+                        Text("Added to battery").font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 4) {
+                        energyValue(flow.lossKwh, size: 20, dim: true)
+                        Text("Lost").font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    }
+                }
+                .padding(.top, 16)
                 if flow.isEstimated {
                     Text("Grid energy wasn't measured for this session; it assumes \(Int(ChargeEnergyFlow.assumedEfficiency * 100))% charging efficiency.")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 4).padding(.bottom, 10)
+                        .padding(.top, 14)
                 }
             }
-            .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 6)
-            .driveSurface()
         }
     }
 
-    private func row(_ label: String, _ value: String, secondary: Bool = false) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(secondary ? HistoryTheme.secondary : .white.opacity(0.88))
-            Spacer()
-            Text(value)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(secondary ? HistoryTheme.secondary : .white)
-                .monospacedDigit()
+    private func energyValue(_ kwh: Double, size: CGFloat, dim: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(VoltaFormat.number(kwh)).font(.system(size: size, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(dim ? HistoryTheme.secondary : .white)
+            Text("kWh").font(.system(size: size * 0.7, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
         }
-        .padding(.vertical, 12)
     }
 
     private var rangeAddedKm: Double? { ChargeMath.rangeAddedKm(samples) }
+
+    // MARK: Details
+
+    private var detailsSection: some View {
+        let cost = costEstimate
+        let flow = ChargeEnergyFlow.resolve(summary)
+        let perDistance: String? = {
+            guard let cost, let km = rangeAddedKm, km > 1 else { return nil }
+            return VoltaFormat.money(cost.amount / units.distanceValue(km: km) * 100, currency: cost.currency) + " / 100 \(units.distanceUnit)"
+        }()
+        let peak: String = peakPowerKw.map { kw($0) + " kW" } ?? "—"
+        let average: String = averagePowerKw.map { kw($0) + " kW" } ?? "—"
+        var efficiency = "—"
+        if let flow, let value = flow.efficiency {
+            efficiency = VoltaFormat.number(value * 100, digits: 0) + "%" + (flow.isEstimated ? " est." : "")
+        }
+        var rows: [(String, String)] = [
+            ("Duration", VoltaFormat.duration(summary.durationMin)),
+            ("Peak power", peak),
+            ("Average power", average),
+            ("Charger", summary.currentLabel),
+            ("Efficiency", efficiency),
+        ]
+        if let perDistance { rows.append(("Cost per distance", perDistance)) }
+        return VStack(alignment: .leading, spacing: 0) {
+            DetailSectionHeader(title: Text("DETAILS")) { EmptyView() }
+                .padding(.bottom, 8)
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                HStack {
+                    Text(row.0).font(.system(size: 16, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    Spacer()
+                    Text(row.1).font(.system(size: 16, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                }
+                .padding(.vertical, 14)
+                if index < rows.count - 1 { Rectangle().fill(HistoryTheme.hairline).frame(height: 1) }
+            }
+            if let cost, cost.isEstimated {
+                Text(estimateNote(cost))
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 12)
+            }
+        }
+    }
 
     // MARK: Curves (one source per chart)
 
@@ -446,39 +469,55 @@ struct ChargingDetailView: View {
         curve(field: "BatteryLevel", telemetryValue: { $0.batteryLevel }, sampleValue: { $0.batteryLevel.map(Double.init) })
     }
 
-    private var curveCard: some View {
+    private var curveSection: some View {
         let power = powerCurve, soc = socCurve
-        return HistoryChartCard(title: "Charge curve", systemImage: "bolt.fill") {
-            HStack(spacing: 10) {
-                legend("kW", color: accent, dashed: false)
-                if soc.points.count >= 2 { legend("SoC", color: HistoryTheme.blue.opacity(0.9), dashed: true) }
-            }
-        } chart: {
-            VStack(alignment: .leading, spacing: 10) {
-                if let error = loader.error {
-                    HistoryChartPlaceholder(message: error) { Task { await load() } }
-                } else if loader.detail == nil {
-                    HistoryChartPlaceholder()
-                } else if power.points.count < 2 {
-                    HistoryChartPlaceholder(message: "Power wasn't recorded for this session.")
-                } else {
-                    ChargeCurveChart(power: power.points, soc: soc.points.count >= 2 ? soc.points : [],
-                                     sessionStart: sessionStart, sessionEnd: sessionEnd,
-                                     powerColor: accent, socColor: HistoryTheme.blue.opacity(0.9),
-                                     summaryPeak: summary.maxPowerKw,
-                                     gradient: summary.fastCharger ? [HistoryTheme.mint, HistoryTheme.blue] : nil)
-                        .accessibilityIdentifier("charge.curve")
-                    sourceNote(power)
+        let peak = ChargeCurve.peak(power.points)
+        let socAtPeak = peak.flatMap { p in soc.points.min { abs($0.t.timeIntervalSince(p.t)) < abs($1.t.timeIntervalSince(p.t)) } }
+        let title = unitTitle("Charge curve", [("kW", HistoryTheme.green)] + (soc.points.count >= 2 ? [("%", HistoryTheme.blue)] : []))
+        return VStack(alignment: .leading, spacing: 14) {
+            DetailSectionHeader(title: title) {
+                if let peakPowerKw, power.points.count >= 2 {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        peakValue(kw(peakPowerKw), color: HistoryTheme.green)
+                        if let socAtPeak { peakValue("\(Int(socAtPeak.value.rounded()))%", color: HistoryTheme.blue) }
+                        Text("peak").font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    }
                 }
+            }
+            if let error = loader.error {
+                HistoryChartPlaceholder(message: error) { Task { await load() } }
+            } else if loader.detail == nil {
+                HistoryChartPlaceholder()
+            } else if power.points.count < 2 {
+                HistoryChartPlaceholder(message: "Power wasn't recorded for this session.")
+            } else {
+                ChargeCurveChart(power: power.points, soc: soc.points.count >= 2 ? soc.points : [],
+                                 sessionStart: sessionStart, sessionEnd: sessionEnd,
+                                 powerColor: HistoryTheme.green, socColor: HistoryTheme.blue,
+                                 summaryPeak: summary.maxPowerKw, height: 230)
+                    .accessibilityIdentifier("charge.curve")
+                sourceNote(power)
             }
         }
     }
 
-    private func legend(_ title: String, color: Color, dashed: Bool) -> some View {
+    /// "Charge curve · kW · %": the section name, then each unit in its series color.
+    private func unitTitle(_ title: String, _ parts: [(unit: String, color: Color)]) -> Text {
+        parts.reduce(Text(title.uppercased())) { text, part in
+            Text("\(text)\(Text("  ·  ").foregroundStyle(HistoryTheme.tertiary))\(Text(part.unit).foregroundStyle(part.color).tracking(0))")
+        }
+    }
+
+    private func peakValue(_ text: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(text).font(.system(size: 20, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+        }
+    }
+
+    private func legend(_ title: String, color: Color) -> some View {
         HStack(spacing: 5) {
-            Capsule().fill(color).frame(width: dashed ? 6 : 12, height: 2)
-                .overlay(alignment: .trailing) { if dashed { Capsule().fill(color).frame(width: 4, height: 2).offset(x: 7) } }
-                .padding(.trailing, dashed ? 6 : 0)
+            Capsule().fill(color).frame(width: 12, height: 2)
             Text(title).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(HistoryTheme.tertiary)
         }
     }
@@ -494,7 +533,7 @@ struct ChargingDetailView: View {
 
     // MARK: Battery temperature
 
-    @ViewBuilder private var temperatureCard: some View {
+    @ViewBuilder private var temperatureSection: some View {
         let minimum = ChargeCurve.points(TelemetryMetricSeries(telemetry, field: "ModuleTempMin") {
             $0.batteryTempMinC.map { units.temperatureValue(celsius: $0) }
         }, start: sessionStart, end: sessionEnd)
@@ -502,22 +541,23 @@ struct ChargingDetailView: View {
             $0.batteryTempMaxC.map { units.temperatureValue(celsius: $0) }
         }, start: sessionStart, end: sessionEnd)
         if minimum.count >= 2 || maximum.count >= 2 {
-            let values = (minimum + maximum).map(\.value)
-            let range = values.min().flatMap { lo in values.max().map { hi in
-                "\(VoltaFormat.number(lo, digits: 0))–\(VoltaFormat.number(hi, digits: 0))\(units.temperatureUnit)"
-            } }
-            HistoryChartCard(title: "Battery temperature", systemImage: "thermometer.medium") {
-                if let range {
-                    Text(range).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+            let peak = (maximum.count >= 2 ? maximum : minimum).map(\.value).max()
+            let title = unitTitle("Battery temperature", [(units.temperatureUnit, HistoryTheme.amber)])
+            VStack(alignment: .leading, spacing: 14) {
+                DetailSectionHeader(title: title) {
+                    if let peak {
+                        Text("Peak \(VoltaFormat.number(peak, digits: 0))°")
+                            .font(.system(size: 14, weight: .semibold)).tracking(2.4).textCase(.uppercase).monospacedDigit()
+                            .foregroundStyle(HistoryTheme.amber)
+                    }
                 }
-            } chart: {
-                VStack(alignment: .leading, spacing: 10) {
-                    ChargeTemperatureChart(minimum: ChargeCurve.reduced(minimum), maximum: ChargeCurve.reduced(maximum),
-                                           unit: units.temperatureUnit, sessionStart: sessionStart, sessionEnd: sessionEnd)
-                        .accessibilityIdentifier("charge.battery-temperature")
+                ChargeTemperatureChart(minimum: ChargeCurve.reduced(minimum), maximum: ChargeCurve.reduced(maximum),
+                                       unit: units.temperatureUnit, sessionStart: sessionStart, sessionEnd: sessionEnd)
+                    .accessibilityIdentifier("charge.battery-temperature")
+                if minimum.count >= 2 && maximum.count >= 2 {
                     HStack(spacing: 12) {
-                        legend("MIN", color: HistoryTheme.blue, dashed: false)
-                        legend("MAX", color: HistoryTheme.red, dashed: false)
+                        legend("WARMEST MODULE", color: HistoryTheme.amber)
+                        legend("COOLEST", color: HistoryTheme.amber.opacity(0.45))
                     }
                 }
             }
@@ -526,21 +566,21 @@ struct ChargingDetailView: View {
 
     // MARK: Other telemetry
 
-    @ViewBuilder private var telemetryCards: some View {
+    @ViewBuilder private var telemetrySections: some View {
         let energy = clippedTelemetry("EnergyRemaining") { $0.energyRemainingKwh }
         if energy.points.count >= 2 {
-            traceCard("Energy remaining", "bolt.batteryblock.fill", unit: "kWh", digits: 1, minPad: 0.5,
-                      traces: [.init(label: "Energy", color: HistoryTheme.mint, points: ChargeCurve.reduced(energy.points))],
-                      telemetry: [energy.series])
+            traceSection("Energy remaining", unit: "kWh", digits: 1, minPad: 0.5,
+                         traces: [.init(label: "Energy", color: HistoryTheme.green, points: ChargeCurve.reduced(energy.points))],
+                         telemetry: [energy.series])
         }
         let inside = clippedTelemetry("InsideTemp") { $0.insideTempC.map { units.temperatureValue(celsius: $0) } }
         let outside = clippedTelemetry("OutsideTemp") { $0.outsideTempC.map { units.temperatureValue(celsius: $0) } }
         if inside.points.count >= 2 || outside.points.count >= 2 {
-            traceCard("Cabin & outside", "thermometer.sun.fill", unit: units.temperatureUnit, digits: 0, minPad: 2,
-                      traces: [.init(label: "Inside", color: HistoryTheme.amber, points: ChargeCurve.reduced(inside.points)),
-                               .init(label: "Outside", color: HistoryTheme.blue, points: ChargeCurve.reduced(outside.points))]
-                          .filter { $0.points.count >= 2 },
-                      telemetry: [inside.series, outside.series], legend: true)
+            traceSection("Cabin & outside", unit: units.temperatureUnit, digits: 0, minPad: 2,
+                         traces: [.init(label: "Inside", color: HistoryTheme.amber, points: ChargeCurve.reduced(inside.points)),
+                                  .init(label: "Outside", color: HistoryTheme.blue, points: ChargeCurve.reduced(outside.points))]
+                             .filter { $0.points.count >= 2 },
+                         telemetry: [inside.series, outside.series], legend: true)
         }
     }
 
@@ -551,20 +591,19 @@ struct ChargingDetailView: View {
         return (series, ChargeCurve.points(series, start: sessionStart, end: sessionEnd))
     }
 
-    private func traceCard(_ title: String, _ icon: String, unit: String, digits: Int, minPad: Double,
-                           traces: [ChargeTrace], telemetry: [TelemetryMetricSeries], legend showsLegend: Bool = false) -> some View {
-        HistoryChartCard(title: title, systemImage: icon) {
-            if showsLegend {
-                HStack(spacing: 12) {
-                    ForEach(traces) { legend($0.label.uppercased(), color: $0.color, dashed: false) }
+    private func traceSection(_ title: String, unit: String, digits: Int, minPad: Double,
+                              traces: [ChargeTrace], telemetry: [TelemetryMetricSeries], legend showsLegend: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            DetailSectionHeader(title: unitTitle(title, [(unit, traces.first?.color ?? HistoryTheme.secondary)])) {
+                if showsLegend {
+                    HStack(spacing: 12) {
+                        ForEach(traces) { legend($0.label.uppercased(), color: $0.color) }
+                    }
                 }
             }
-        } chart: {
-            VStack(alignment: .leading, spacing: 8) {
-                ChargeTraceChart(traces: traces, unit: unit, digits: digits, minPad: minPad,
-                                 sessionStart: sessionStart, sessionEnd: sessionEnd)
-                telemetryNote(telemetry)
-            }
+            ChargeTraceChart(traces: traces, unit: unit, digits: digits, minPad: minPad,
+                             sessionStart: sessionStart, sessionEnd: sessionEnd, height: 140)
+            telemetryNote(telemetry)
         }
     }
 
@@ -572,7 +611,7 @@ struct ChargingDetailView: View {
 
     /// Shown only when the signal actually moved during the session; DC
     /// sessions often report a stale AC reading or nothing at all.
-    @ViewBuilder private var electricalCard: some View {
+    @ViewBuilder private var electricalSection: some View {
         let voltage = curve(field: "ChargerVoltage", telemetryValue: { $0.voltage }, sampleValue: { $0.voltage })
         let current = curve(field: "ChargeAmps", telemetryValue: { $0.currentA }, sampleValue: { $0.currentA })
         let available = [
@@ -582,16 +621,15 @@ struct ChargingDetailView: View {
         if let first = available.first {
             let shown = available.contains(electrical) ? electrical : first
             let curve = shown == .voltage ? voltage : current
-            HistoryChartCard(title: "Charger", systemImage: "powerplug.fill") {
-                VStack(alignment: .leading, spacing: 12) {
-                    if available.count > 1 {
-                        SegmentedRangePicker(selection: $electrical, options: available) { $0.rawValue }
-                    }
-                    ChargeTraceChart(traces: [.init(label: shown.rawValue, color: shown == .voltage ? HistoryTheme.blue : HistoryTheme.amber,
-                                                    points: curve.points)],
-                                     unit: shown == .voltage ? "V" : "A", sessionStart: sessionStart, sessionEnd: sessionEnd)
-                    sourceNote(curve)
+            let tint = shown == .voltage ? HistoryTheme.blue : HistoryTheme.amber
+            VStack(alignment: .leading, spacing: 14) {
+                DetailSectionHeader(title: unitTitle("Charger", [(shown == .voltage ? "V" : "A", tint)])) { EmptyView() }
+                if available.count > 1 {
+                    SegmentedRangePicker(selection: $electrical, options: available) { $0.rawValue }
                 }
+                ChargeTraceChart(traces: [.init(label: shown.rawValue, color: tint, points: curve.points)],
+                                 unit: shown == .voltage ? "V" : "A", sessionStart: sessionStart, sessionEnd: sessionEnd, height: 140)
+                sourceNote(curve)
             }
         }
     }
@@ -632,7 +670,6 @@ private struct ChargePin: View {
         ZStack {
             Circle().fill(tint.opacity(0.22)).frame(width: 50, height: 50)
             Circle().fill(tint).frame(width: 26, height: 26)
-                .shadow(color: tint.opacity(0.6), radius: 8)
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(.black.opacity(0.75))
@@ -640,41 +677,52 @@ private struct ChargePin: View {
     }
 }
 
-/// Grid energy and battery energy as two proportional bars; the gap between
-/// them is the loss.
-private struct ChargeEnergyBars: View {
-    var flow: ChargeEnergyFlow
-    var accent: Color
+/// Tracked section title with an optional trailing accessory. Callers pass the
+/// name uppercased so units like "kW" keep their case.
+private struct DetailSectionHeader<Trailing: View>: View {
+    var title: Text
+    @ViewBuilder var trailing: Trailing
 
     var body: some View {
-        let top = max(flow.gridKwh, flow.addedKwh, 0.001)
-        VStack(alignment: .leading, spacing: 8) {
-            bar("Grid", value: flow.gridKwh, fraction: flow.gridKwh / top, color: HistoryTheme.amber, dimmed: flow.isEstimated)
-            bar("Battery", value: flow.addedKwh, fraction: flow.addedKwh / top, color: accent, dimmed: false)
+        HStack(alignment: .center) {
+            title
+                .font(.system(size: 15, weight: .semibold)).tracking(3)
+                .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            trailing
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(VoltaFormat.energy(flow.gridKwh)) from the grid, \(VoltaFormat.energy(flow.addedKwh)) added to the battery")
     }
+}
 
-    private func bar(_ label: String, value: Double, fraction: Double, color: Color, dimmed: Bool) -> some View {
-        HStack(spacing: 10) {
-            Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold)).tracking(1)
-                .foregroundStyle(HistoryTheme.tertiary)
-                .frame(width: 56, alignment: .leading)
-            GeometryReader { geo in
-                SweepIn { p in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(HistoryTheme.track)
-                        Capsule()
-                            .fill(LinearGradient(colors: [color.opacity(dimmed ? 0.35 : 0.55), color.opacity(dimmed ? 0.6 : 1)],
-                                                 startPoint: .leading, endPoint: .trailing))
-                            .frame(width: max(6, geo.size.width * min(1, fraction) * p))
+/// Grid energy as one bar: the share that reached the battery, labelled with
+/// its percentage, then the loss as a grey remainder.
+private struct ChargeEnergyBar: View {
+    var flow: ChargeEnergyFlow
+
+    var body: some View {
+        let share = min(1, max(0, flow.efficiency ?? 1))
+        GeometryReader { geo in
+            let gap: CGFloat = share < 1 ? 6 : 0
+            let filled = max(44, (geo.size.width - gap) * share)
+            HStack(spacing: gap) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(HistoryTheme.green)
+                    .frame(width: filled)
+                    .overlay(alignment: .leading) {
+                        Text("\(Int((share * 100).rounded()))%")
+                            .font(.system(size: 14, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(.black.opacity(0.8))
+                            .padding(.leading, 16)
                     }
+                if share < 1 {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.2))
                 }
             }
-            .frame(height: 8)
         }
+        .frame(height: 28)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(VoltaFormat.energy(flow.gridKwh)) from the grid, \(VoltaFormat.energy(flow.addedKwh)) added to the battery")
     }
 }
 

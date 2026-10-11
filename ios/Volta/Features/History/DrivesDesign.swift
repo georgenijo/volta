@@ -1,32 +1,34 @@
 import SwiftUI
 
-// Drives tab visual language: quiet surfaces, one hero numeral, routes as light.
-// Everything here is pure drawing from the row payload; no tiles, no lookups.
+// Drives tab in the Wattly language: flat charcoal cards, one big distance,
+// open score dials, routes as a faint grey watermark. Pure drawing from the
+// row payload; no tiles, no lookups.
 
 enum DriveScoreBand {
     static func tint(_ score: Int?) -> Color {
         guard let score else { return HistoryTheme.secondary }
-        return score >= 85 ? HistoryTheme.mint : score >= 70 ? HistoryTheme.blue : HistoryTheme.amber
+        return score >= 85 ? HistoryTheme.green : score >= 70 ? HistoryTheme.blue : HistoryTheme.amber
     }
 }
 
 extension HistoryTheme {
-    /// Softer than `green`; route starts and high scores.
-    static let mint = Color.voltaMint
-    static let routeGradient = LinearGradient(colors: [mint, blue], startPoint: .leading, endPoint: .trailing)
+    /// The hero score dial runs blue into teal, as in the references.
+    static let dialTeal = Color(hex: 0x4FA3B5)
+    /// Route light on the drives map.
+    static let route = Color(hex: 0x56B6DE)
 }
 
 // MARK: - Surface
 
 extension View {
-    /// Card fill lit from above: a faint top highlight instead of a flat hairline.
+    /// Flat card fill with a faint edge.
     func driveSurface(radius: CGFloat = 24) -> some View {
         background {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(LinearGradient(colors: [Color.voltaCardTop, Color.voltaCard], startPoint: .top, endPoint: .bottom))
+                .fill(HistoryTheme.card)
                 .overlay {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.11), .white.opacity(0.03)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                        .strokeBorder(.white.opacity(0.05), lineWidth: 1)
                 }
         }
         .clipShape(.rect(cornerRadius: radius, style: .continuous))
@@ -35,33 +37,34 @@ extension View {
 
 // MARK: - Score
 
-/// Open 270° dial; the arc brightens toward its tip.
+/// Open 270° dial with the score inside. Cards tint by band; the hero runs blue to teal.
 struct ScoreDial: View {
     var score: Int?
     var size: CGFloat = 40
     var caption: String? = nil
+    /// Hero style: a blue-to-teal arc instead of the band tint.
+    var gradient = false
     private var value: Int? { score.flatMap { (0...100).contains($0) ? $0 : nil } }
-    private var line: CGFloat { max(2.5, size * 0.055) }
+    private var line: CGFloat { max(2.5, size * 0.06) }
 
     var body: some View {
         let tint = DriveScoreBand.tint(value)
         ZStack {
             Circle().trim(from: 0, to: 0.75)
-                .stroke(.white.opacity(0.07), style: StrokeStyle(lineWidth: line, lineCap: .round))
+                .stroke(.white.opacity(0.1), style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if let value {
-                SweepIn { p in
-                    let fraction = min(Double(value) / 100 * p, 1.02)
-                    Circle().trim(from: 0, to: 0.75 * fraction)
-                        .stroke(AngularGradient(colors: [tint.opacity(0.35), tint], center: .center, startAngle: .degrees(0), endAngle: .degrees(max(1, 270 * fraction))),
-                                style: StrokeStyle(lineWidth: line, lineCap: .round))
-                        .rotationEffect(.degrees(135))
-                        .shadow(color: tint.opacity((size > 60 ? 0.45 : 0.25) + 0.3 * VoltaMotion.bloom(p)), radius: (size > 60 ? 8 : 3) + 6 * VoltaMotion.bloom(p))
-                }
+                let fraction = Double(value) / 100
+                Circle().trim(from: 0, to: 0.75 * fraction)
+                    .stroke(gradient ? AnyShapeStyle(AngularGradient(colors: [HistoryTheme.blue, HistoryTheme.dialTeal], center: .center,
+                                                                     startAngle: .degrees(0), endAngle: .degrees(max(1, 270 * fraction))))
+                                     : AnyShapeStyle(tint),
+                            style: StrokeStyle(lineWidth: line, lineCap: .round))
+                    .rotationEffect(.degrees(135))
             }
             VStack(spacing: size * 0.02) {
-                CountUpNumber(value.map(Double.init), placeholder: "–", alignment: .center) { String(Int($0.rounded())) }
-                    .font(.system(size: size * (caption == nil ? 0.36 : 0.34), weight: .semibold, design: .rounded))
+                Text(value.map(String.init) ?? "–")
+                    .font(.system(size: size * (caption == nil ? 0.36 : 0.32), weight: .semibold))
                     .monospacedDigit().foregroundStyle(.white)
                 if let caption {
                     Text(caption).font(.system(size: max(8, size * 0.1), weight: .semibold)).tracking(1.2)
@@ -77,43 +80,22 @@ struct ScoreDial: View {
 
 // MARK: - Route
 
-/// The drive's own path, drawn as a faint luminous watermark.
+/// The drive's own path as a thin grey watermark behind the card.
 struct RouteWatermark: View {
     var points: [DriveRoutePoint]
-    var opacity: Double = 0.5
-    /// A soft comet glides along the route (newest drive card only).
-    var comet = false
+    var opacity: Double = 0.3
 
     var body: some View {
         GeometryReader { geometry in
             // Lines only: single-point runs would read as scattered dots.
             let runs = DriveRouteSegments.normalized(points, in: geometry.size, inset: 16).filter { $0.count > 1 }
-            let path = Path { path in
+            Path { path in
                 for run in runs {
                     path.move(to: run[0]); run.dropFirst().forEach { path.addLine(to: $0) }
                 }
             }
-            if !runs.isEmpty {
-                ZStack {
-                    // The route draws itself on arrival; the trim is a shape animation, no per-frame body.
-                    VoltaArrivalReader(animation: VoltaMotion.routeDraw) { p in
-                        ZStack {
-                            path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                                .blur(radius: 7).opacity(0.45)
-                            path.trim(from: 0, to: p).stroke(HistoryTheme.routeGradient, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-                        }
-                    }
-                    if let start = runs.first?.first {
-                        Circle().fill(HistoryTheme.mint).frame(width: 5, height: 5).position(start)
-                    }
-                    if let end = runs.last?.last {
-                        Circle().fill(HistoryTheme.blue).frame(width: 5, height: 5).position(end)
-                            .shadow(color: HistoryTheme.blue, radius: 4)
-                        if comet { CometPath(path: path, isActive: true) }
-                    }
-                }
-                .opacity(opacity)
-            }
+            .stroke(.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            .opacity(opacity)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -123,72 +105,70 @@ struct RouteWatermark: View {
 // MARK: - Hero
 
 struct DrivesHero: View {
+    /// What the totals cover, e.g. "Loaded drives · partial"; read aloud with the hero.
     var scope: String
     var totals: DriveTotals
     var durationMin: Double
     /// Estimated cost (`DrivePricing.total`): display string and coverage note.
     var cost: (display: String, note: String?) = ("—", nil)
     var partial: Bool
-    /// One entry per day of `dailyLabel`'s window; empty when no window fits.
-    var daily: [DailyDistance]
-    var dailyLabel: String
     @Environment(\.units) private var units
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(scope).voltaLabelStyle(color: HistoryTheme.tertiary)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        CountUpNumber(text: VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0))
-                            .font(.system(size: 84, weight: .bold)).fontWidth(.expanded).tracking(-2)
-                            .foregroundStyle(LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .top, endPoint: .bottom))
-                            .monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
-                        Text(units.distanceUnit).font(.system(size: 20, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
-                    }
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0))
+                        .font(.system(size: 92, weight: .bold)).fontWidth(.expanded).tracking(-2)
+                        .foregroundStyle(.white).monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
+                    Text(units.distanceUnit).font(.system(size: 22, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 Spacer(minLength: 0)
-                ScoreDial(score: totals.score, size: 86, caption: "Score").padding(.trailing, 4)
+                ScoreDial(score: totals.score, size: 100, gradient: true).padding(.trailing, 6)
             }
-            .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader).accessibilityIdentifier("screen.drives")
+            .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
+            .accessibilityLabel(scope)
+            .accessibilityIdentifier("screen.drives")
 
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 0) {
-                    stat(VoltaFormat.duration(durationMin), "Driving", index: 0)
-                    divider
-                    stat("\(totals.drives)\(partial ? "+" : "")", totals.drives == 1 && !partial ? "Drive" : "Drives", index: 1)
-                    divider
-                    stat(totals.energyUsedKwh.value.map { VoltaFormat.number($0) } ?? "—", "kWh", index: 2)
-                    divider
-                    stat(totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit, index: 3)
-                    divider
-                    stat(cost.display, "Cost", index: 4)
-                }
+            VStack(alignment: .leading, spacing: 14) {
+                HistoryFlowStats(items: [
+                    ("clock", VoltaFormat.duration(durationMin)),
+                    ("road.lanes", "\(totals.drives)\(partial ? "+" : "") \(totals.drives == 1 && !partial ? "drive" : "drives")"),
+                ])
+                HistoryFlowStats(items: [
+                    ("bolt.fill", totals.energyUsedKwh.value.map { VoltaFormat.energy($0) } ?? "— kWh"),
+                    ("leaf.fill", units.formatEfficiency(totals.efficiencyWhPerKm)),
+                ] + (cost.display == "—" ? [] : [("creditcard.fill", cost.display)]))
                 // Coverage disclosures hold whether or not more pages remain.
                 HistoryHeroNotes(notes: totals.notes + [cost.note].compactMap { $0 })
             }
-            if daily.count >= 2, daily.contains(where: { $0.km > 0 }) { DailyRhythm(days: daily, label: dailyLabel) }
         }
     }
+}
 
-    private var divider: some View { Rectangle().fill(HistoryTheme.hairline).frame(width: 1, height: 28) }
+/// One row of hero stats: green icon, white value, dot separators.
+struct HistoryFlowStats: View {
+    var items: [(icon: String, text: String)]
 
-    private func stat(_ value: String, _ caption: String, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(value).font(.system(size: 17, weight: .semibold)).monospacedDigit().foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
-            Text(caption).font(.system(size: 10, weight: .semibold)).tracking(1).textCase(.uppercase).foregroundStyle(HistoryTheme.tertiary)
+    var body: some View {
+        HStack(spacing: 12) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                if index > 0 { Circle().fill(HistoryTheme.tertiary).frame(width: 3, height: 3) }
+                HStack(spacing: 10) {
+                    Image(systemName: item.icon).font(.system(size: 16, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+                    Text(item.text).font(.system(size: 20, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                }
+                .accessibilityElement(children: .combine)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, caption == "Driving" ? 0 : 12)
-        .accessibilityElement(children: .combine)
-        .voltaArrival(delay: VoltaMotion.statDelay(index))
     }
 }
 
 struct DailyDistance: Hashable {
     var day: Date
     var km: Double
-    /// Today, drawn lit.
+    /// Today.
     var isToday = false
 
     /// One entry per day in `window`, oldest first. A day inside the window
@@ -199,44 +179,6 @@ struct DailyDistance: Hashable {
     }
 }
 
-/// Day bar strip over a `HistoryDayWindow`; today is lit.
-struct DailyRhythm: View {
-    var days: [DailyDistance]
-    /// The window's label, e.g. "Last 7 days".
-    var label: String
-    @Environment(\.units) private var units
-
-    var body: some View {
-        let peak = max(days.map(\.km).max() ?? 0, 0.1)
-        let driven = days.filter { $0.km > 0 }
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .bottom, spacing: 0) {
-                ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    let isToday = day.isToday
-                    if index > 0 { Spacer(minLength: 2) }
-                    Capsule()
-                        .fill(day.km == 0 ? AnyShapeStyle(.white.opacity(0.1))
-                              : isToday ? AnyShapeStyle(LinearGradient(colors: [HistoryTheme.mint, HistoryTheme.blue], startPoint: .top, endPoint: .bottom))
-                              : AnyShapeStyle(LinearGradient(colors: [.white.opacity(0.42), .white.opacity(0.16)], startPoint: .top, endPoint: .bottom)))
-                        .frame(width: day.km == 0 ? 4 : 7, height: day.km == 0 ? 4 : max(7, 34 * day.km / peak))
-                        .shadow(color: isToday && day.km > 0 ? HistoryTheme.mint.opacity(0.5) : .clear, radius: 5)
-                        .voltaBreathingGlow(color: HistoryTheme.mint, isActive: isToday && day.km > 0)
-                        .voltaGrow(index: index)
-                }
-            }
-            .frame(height: 34, alignment: .bottom)
-            HStack {
-                Text(label)
-                Spacer()
-                Text("\(units.formatDistance(driven.reduce(0) { $0 + $1.km } / Double(max(driven.count, 1)))) per driving day")
-            }
-            .font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Distance per day, \(label)")
-    }
-}
-
 // MARK: - Day header
 
 struct DriveDayHeader: View {
@@ -244,28 +186,8 @@ struct DriveDayHeader: View {
     @Environment(\.units) private var units
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(group.day.formatted(.dateTime.day()))
-                .font(.system(size: 11, weight: .bold)).monospacedDigit()
-                .frame(width: 24, height: 24)
-                .background(.white.opacity(0.05), in: .rect(cornerRadius: 7, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 1))
-                .foregroundStyle(HistoryTheme.secondary)
-            Text(group.title).font(.system(size: 19, weight: .semibold)).foregroundStyle(.white)
-            Spacer(minLength: 8)
-            Text("\(group.items.count) \(group.items.count == 1 ? "drive" : "drives") · \(units.formatDistance(group.items.reduce(0) { $0 + $1.distanceKm }))")
-                .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
-        }
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity)
-        .background(alignment: .top) {
-            VStack(spacing: 0) {
-                HistoryTheme.background
-                LinearGradient(colors: [HistoryTheme.background, HistoryTheme.background.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 14)
-            }
-            .padding(.horizontal, -HistoryTheme.gutter).padding(.bottom, -14)
-        }
-        .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
+        SessionDayHeader(day: group.day, title: group.title,
+                         trailing: "\(group.items.count) \(group.items.count == 1 ? "drive" : "drives") · \(units.formatDistance(group.items.reduce(0) { $0 + $1.distanceKm }))")
     }
 }
 
@@ -274,14 +196,12 @@ struct DriveDayHeader: View {
 struct DriveCard: View {
     var drive: DriveSummary
     var showsDate = false
-    /// The newest card carries the route comet.
-    var isNewest = false
     @Environment(\.units) private var units
     @Environment(AppModel.self) private var model: AppModel?
 
-    private var rate: Double { model?.settings.electricityRate ?? 0.20 }
     private var cost: String? {
-        DrivePricing.cost(drive, fallback: rate).map { VoltaFormat.money($0, currency: DrivePricing.rate(drive, fallback: rate).currency) }
+        let rate = DrivePricing.rate(drive, home: model?.settings.rates.homeTripRate)
+        return rate.flatMap { rate in rate.cost(energyKwh: drive.costableEnergyKwh).map { VoltaFormat.money($0, currency: rate.currency) } }
     }
 
     var body: some View {
@@ -289,25 +209,25 @@ struct DriveCard: View {
             HStack(alignment: .top, spacing: 12) {
                 itinerary
                 Spacer(minLength: 0)
-                VStack(alignment: .trailing, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                VStack(alignment: .trailing, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: drive.distanceKm)))
-                            .font(.system(size: 30, weight: .bold)).fontWidth(.expanded).tracking(-0.8).monospacedDigit()
-                        Text(units.distanceUnit.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                        Text(units.distanceUnit.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.white)
                     HStack(spacing: 5) {
                         Text(drive.start.historyTime)
-                        Image(systemName: "arrow.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(HistoryTheme.tertiary)
+                        Image(systemName: "arrow.right").font(.system(size: 10, weight: .medium))
                         Text(drive.end?.historyTime ?? "Now")
                     }
-                    .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                    .font(.system(size: 16, weight: .regular)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                     if showsDate {
-                        Text(drive.start.formatted(.dateTime.month(.abbreviated).day().year())).font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+                        Text(drive.start.formatted(.dateTime.month(.abbreviated).day().year())).font(.system(size: 12)).foregroundStyle(HistoryTheme.tertiary)
                     }
                 }
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, 18)
             Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
             HStack(spacing: 0) {
                 ViewThatFits(in: .horizontal) {
@@ -315,34 +235,33 @@ struct DriveCard: View {
                     metrics(compact: true)
                 }
                 Spacer(minLength: 8)
-                ScoreDial(score: drive.efficiencyScore, size: 38)
+                ScoreDial(score: drive.efficiencyScore, size: 46)
             }
             .padding(.top, 12)
         }
-        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 14)
+        .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 14)
         .background {
-            RouteWatermark(points: drive.drawableRoute, opacity: 0.42, comet: isNewest)
-                .padding(.leading, 130).padding(.trailing, 90).padding(.top, 4).padding(.bottom, 44)
-                .mask(RadialGradient(colors: [.black, .black.opacity(0.6), .clear], center: .center, startRadius: 10, endRadius: 120))
+            RouteWatermark(points: drive.drawableRoute, opacity: 0.22)
+                .padding(.leading, 150).padding(.trailing, 100).padding(.vertical, 6)
         }
         .driveSurface()
         .accessibilityElement(children: .combine)
     }
 
     private var itinerary: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 0) {
-                Circle().fill(HistoryTheme.mint).frame(width: 8, height: 8).padding(.top, 7)
-                Rectangle().fill(LinearGradient(colors: [HistoryTheme.mint.opacity(0.6), HistoryTheme.blue.opacity(0.6)], startPoint: .top, endPoint: .bottom))
-                    .frame(width: 1.5).frame(maxHeight: .infinity).padding(.vertical, 4)
-                Circle().fill(HistoryTheme.blue).frame(width: 8, height: 8).padding(.bottom, 7)
+                Circle().fill(HistoryTheme.green).frame(width: 9, height: 9).padding(.top, 9)
+                Rectangle().fill(HistoryTheme.tertiary.opacity(0.6))
+                    .frame(width: 1).frame(maxHeight: .infinity).padding(.vertical, 7)
+                Circle().fill(HistoryTheme.blue).frame(width: 9, height: 9).padding(.bottom, 9)
             }
             VStack(alignment: .leading, spacing: 14) {
                 Text(drive.startPlace)
                 Text(drive.endPlace)
             }
-            .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-            .lineLimit(1).minimumScaleFactor(0.75)
+            .font(.system(size: 22, weight: .medium)).foregroundStyle(.white)
+            .lineLimit(1).minimumScaleFactor(0.7)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -350,19 +269,22 @@ struct DriveCard: View {
     private func metrics(compact: Bool) -> some View {
         HStack(spacing: 8) {
             metric("clock", VoltaFormat.duration(drive.durationMin))
-            dot
-            metric("leaf", drive.displayEfficiencyWhPerKm.map { compact ? VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) : units.formatEfficiency($0) } ?? "—")
-            if let cost { dot; metric("creditcard", cost) }
+            if let efficiency = drive.displayEfficiencyWhPerKm {
+                dot
+                metric("leaf.fill", compact ? VoltaFormat.number(units.efficiencyValue(whPerKm: efficiency), digits: 0) : units.formatEfficiency(efficiency))
+            }
+            if let cost { dot; metric("creditcard.fill", cost) }
         }
     }
 
-    private var dot: some View { Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5) }
+    private var dot: some View { Circle().fill(HistoryTheme.tertiary).frame(width: 3, height: 3) }
 
     private func metric(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
-            Text(text).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.78))
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 13, weight: .medium))
+            Text(text).font(.system(size: 16)).monospacedDigit()
         }
+        .foregroundStyle(HistoryTheme.secondary)
         .lineLimit(1).fixedSize()
     }
 }
@@ -373,14 +295,14 @@ struct DriveShortcut: View {
     var title: String
     var systemImage: String
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage).font(.system(size: 13, weight: .semibold)).foregroundStyle(HistoryTheme.mint)
-            Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+        HStack(spacing: 12) {
+            Image(systemName: systemImage).font(.system(size: 20, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+            Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
             Spacer(minLength: 0)
-            Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .bold)).foregroundStyle(HistoryTheme.tertiary)
+            Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
         }
-        .padding(.horizontal, 16).padding(.vertical, 14)
-        .background(.white.opacity(0.035), in: .capsule)
-        .overlay(Capsule().strokeBorder(.white.opacity(0.08), lineWidth: 1))
+        .padding(.horizontal, 22).padding(.vertical, 22)
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 1))
+        .contentShape(.rect(cornerRadius: 22))
     }
 }

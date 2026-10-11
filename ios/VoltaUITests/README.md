@@ -48,12 +48,15 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | Settings (C) | `screen.settings`, `scroll.settings` | Heading and main scroll view |
 | Controls (A) | `screen.controls`, `scroll.controls` | Sheet heading and scroll view |
 | Settings (C) | `button.account` | Pushes Account from Settings |
+| Settings (C) | `row.settings.charging`, `screen.settings-charging`, `button.electricity-rate` | Charging settings row, its page, and the rate card that opens the form |
+| Settings (C) | `screen.electricity-rate`, `field.rate.home`, `field.rate.dc`, `button.rate.save`, `button.rate.cancel` | Electricity rate sheet |
+| History (B) | `button.rate.set`, `card.rate-prompt` | "Set rate" next to an unknown cost; one-time Charging prompt |
 | Tesla | `button.teslaSignIn`, `button.teslaDisconnect`, `row.teslaStatus` | Sign in with Tesla (no-vehicle screen and Account) |
 
 Demo lists must have at least one visible tappable drive row and charge row.
 The tests use identifier prefixes, so they do not couple to mock IDs or text.
-They wait for readiness and hittability instead of sleeping. Each of the eleven
-tests starts a fresh app, so a missing detail screen does not prevent the other
+They wait for readiness and hittability instead of sleeping. Each test
+starts a fresh app, so a missing detail screen does not prevent the other
 tests from attaching their screenshots. Missing screens **fail**; there are no
 silent skips or translated-label selectors.
 
@@ -73,7 +76,7 @@ Named PNGs and the attachment manifest land in `docs/screens/latest/`:
 `dashboard-map`, `dashboard-mid`, `dashboard-scrolled`, `charging`, `drives`,
 `idles`, `more-top`, `more-bottom`, `settings-top`, `settings-bottom`,
 `drive-detail`, `charge-detail`, `controls-top`, `controls-bottom`,
-`tesla-no-vehicle`, `settings-account`. The no-vehicle capture launches with the
+`tesla-no-vehicle`, `settings-account`, `settings-charging`, `electricity-rate`. The no-vehicle capture launches with the
 debug-only `-demoNoVehicles YES` argument.
 Names are derived from XCTest attachments, with Xcode's UUID suffix removed.
 PNG export also runs after failed UI tests; `screenshots.json` records the test

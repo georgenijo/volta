@@ -2,27 +2,28 @@ import Foundation
 
 /// One pricing policy for cards, totals and detail. Never sum different currencies.
 enum DrivePricing {
-    static func rate(_ drive: DriveSummary, fallback: Double) -> TripRate {
+    /// The drive's server rate (average of its priced charges), else the
+    /// user's home rate. nil when neither exists: the cost is unknown.
+    static func rate(_ drive: DriveSummary, home: TripRate?) -> TripRate? {
         if let value = drive.electricityRatePerKwh, value.isFinite, value >= 0,
            let currency = TripRate.isoCurrency(drive.rateCurrency) {
             return TripRate(perKwh: value, currency: currency, source: .chargeAverage)
         }
-        return TripRate(perKwh: fallback.isFinite && fallback >= 0 ? fallback : 0.20, currency: "USD", source: .manual)
+        return home
     }
-    static func cost(_ drive: DriveSummary, fallback: Double) -> Double? {
-        rate(drive, fallback: fallback).cost(energyKwh: drive.costableEnergyKwh)
+    static func cost(_ drive: DriveSummary, home: TripRate?) -> Double? {
+        rate(drive, home: home)?.cost(energyKwh: drive.costableEnergyKwh)
     }
-    static func total(_ drives: [DriveSummary], fallback: Double) -> (display: String, note: String?) {
+    static func total(_ drives: [DriveSummary], home: TripRate?) -> (display: String, note: String?) {
         var sums: [String: Double] = [:]
         var known = 0
         for drive in drives {
-            let rate = rate(drive, fallback: fallback)
-            guard let cost = rate.cost(energyKwh: drive.costableEnergyKwh) else { continue }
+            guard let rate = rate(drive, home: home), let cost = rate.cost(energyKwh: drive.costableEnergyKwh) else { continue }
             sums[rate.currency, default: 0] += cost
             known += 1
         }
         let display = sums.sorted { $0.key < $1.key }.map { VoltaFormat.money($0.value, currency: $0.key) }.joined(separator: " + ")
-        return (display.isEmpty ? "—" : display, known < drives.count ? "Cost available for \(known) of \(drives.count) drives" : nil)
+        return (display.isEmpty ? "—" : display, known < drives.count && known > 0 ? "Cost available for \(known) of \(drives.count) drives" : nil)
     }
 }
 

@@ -49,9 +49,6 @@ private struct VoltaRootView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(alignment: .top) {
-                    VoltaTopGlow.gradient.frame(height: VoltaTopGlow.height).ignoresSafeArea().allowsHitTesting(false)
-                }
                 .voltaScreenBackground()
                 .task(id: model.tesla.state == .connected) {
                     // Just connected: the collector needs a moment to discover the vehicle.

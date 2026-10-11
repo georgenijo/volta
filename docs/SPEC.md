@@ -83,8 +83,8 @@ The API binds only to the tailnet; it is never exposed publicly.
 
 ## Visual language (from the references)
 
-- Near-black charcoal background (`#0E0F11`), cards one step lighter
-  (`#17191C`) with 1px hairline borders (`white @ 8%`), 18–22pt corner radius.
+- Near-black charcoal background (`#171717`), cards one step lighter
+  (`#202020`) with 1px hairline borders (`white @ 8%`), 18–22pt corner radius.
 - Large white numerals (SF Pro Rounded is not used; SF Pro Display, heavy,
   tight tracking) with small unit suffixes (`%`, `°F`, `mi`) in secondary gray.
 - Small-caps section labels: 11pt semibold, +1.5 tracking, gray (`#8A8F98`).

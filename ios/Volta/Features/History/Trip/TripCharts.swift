@@ -144,30 +144,17 @@ struct TripChart: View {
         Chart {
             ForEach(Array(series.gaps.enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Gap start", gap.lowerBound), xEnd: .value("Gap end", gap.upperBound))
-                    .foregroundStyle(Color.white.opacity(0.035))
+                    .foregroundStyle(Color.white.opacity(0.045))
             }
             ForEach(series.points) { p in
                 AreaMark(x: .value("Minute", p.minute), yStart: .value("Base", base), yEnd: .value(unit, p.value),
-                         series: .value("Segment", "a\(p.segment)"))
+                         series: .value("Segment", p.segment))
                     .interpolationMethod(interpolation)
-                    .foregroundStyle(LinearGradient(colors: [color.opacity(0.14), color.opacity(0)], startPoint: .top, endPoint: .bottom))
-            }
-            // Soft glow underlay: two wide, faint strokes beneath the line.
-            ForEach(series.points) { p in
-                LineMark(x: .value("Minute", p.minute), y: .value(unit, p.value), series: .value("Segment", "h\(p.segment)"))
+                    .foregroundStyle(LinearGradient(colors: [color.opacity(0.28), color.opacity(0)], startPoint: .top, endPoint: .bottom))
+                LineMark(x: .value("Minute", p.minute), y: .value(unit, p.value), series: .value("Segment", p.segment))
                     .interpolationMethod(interpolation)
                     .foregroundStyle(lineStyle)
-                    .lineStyle(StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
-                    .opacity(0.07)
-                LineMark(x: .value("Minute", p.minute), y: .value(unit, p.value), series: .value("Segment", "g\(p.segment)"))
-                    .interpolationMethod(interpolation)
-                    .foregroundStyle(lineStyle)
-                    .lineStyle(StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-                    .opacity(0.16)
-                LineMark(x: .value("Minute", p.minute), y: .value(unit, p.value), series: .value("Segment", "s\(p.segment)"))
-                    .interpolationMethod(interpolation)
-                    .foregroundStyle(lineStyle)
-                    .lineStyle(StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
+                    .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
             }
             // Lone samples (a segment of one) would otherwise be invisible.
             ForEach(loneSamples) { p in
@@ -177,24 +164,20 @@ struct TripChart: View {
             }
             if showsZero, yDomain.lowerBound < 0 {
                 RuleMark(y: .value("Zero", 0))
-                    .foregroundStyle(Color.white.opacity(0.14))
+                    .foregroundStyle(Color.white.opacity(0.18))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
             if let selection {
                 let minute = series.sampleMinute(at: selection) ?? selection.minute
                 RuleMark(x: .value("Selected", minute))
-                    .foregroundStyle(Color.white.opacity(0.22))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .foregroundStyle(Color.white.opacity(0.3))
                     .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         tooltip(value, selection: selection)
                     }
                 if let value {
                     PointMark(x: .value("Selected", minute), y: .value(unit, value))
-                        .foregroundStyle(color.opacity(0.25))
-                        .symbolSize(220)
-                    PointMark(x: .value("Selected", minute), y: .value(unit, value))
-                        .foregroundStyle(.white)
-                        .symbolSize(40)
+                        .foregroundStyle(color)
+                        .symbolSize(60)
                 }
             }
         }
@@ -209,15 +192,15 @@ struct TripChart: View {
                     }
                 }
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(HistoryTheme.tertiary)
+                .foregroundStyle(HistoryTheme.secondary)
             }
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.white.opacity(0.05))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(HistoryTheme.hairline)
                 AxisValueLabel()
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(HistoryTheme.tertiary)
+                    .foregroundStyle(HistoryTheme.secondary)
             }
         }
         .frame(height: height)
@@ -247,9 +230,8 @@ struct TripChart: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(HistoryTheme.secondary)
         }
-        .padding(.horizontal, 9).padding(.vertical, 5)
-        .background(HistoryTheme.cardRaised.opacity(0.92), in: .rect(cornerRadius: 9, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(HistoryTheme.cardRaised, in: .rect(cornerRadius: 8))
     }
 }
 

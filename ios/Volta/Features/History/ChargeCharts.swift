@@ -1,8 +1,8 @@
 import Charts
 import SwiftUI
 
-/// The charge curve: power (line + soft fill, left axis) and state of charge
-/// (line, right axis) over the session, with the peak labelled. Both series
+/// The charge curve: power (line + dark fill, left axis) and state of charge
+/// (stepped line, right axis) over the session. Both series
 /// come from one source each and are already sorted, clipped and segmented
 /// (`ChargeCurve.points`); every mark is keyed by segment so nothing joins
 /// across a gap or folds back in time.
@@ -22,7 +22,6 @@ struct ChargeCurveChart: View {
     private var domain: ClosedRange<Double> { ChargeCurve.powerDomain(power.map(\.value), summaryPeak: summaryPeak) }
     private var top: Double { domain.upperBound }
     private var xDomain: ClosedRange<Date> { TelemetryChartDomain.range(sessionStart: sessionStart, sessionEnd: sessionEnd) }
-    private var peak: ChargeCurvePoint? { ChargeCurve.peak(power) }
 
     private func socY(_ percent: Double) -> Double { min(100, max(0, percent)) / 100 * top }
 
@@ -51,7 +50,7 @@ struct ChargeCurveChart: View {
                 AreaMark(x: .value("Time", p.t), y: .value("kW", p.value),
                          series: .value("Series", "power-fill-\(p.segment)"), stacking: .unstacked)
                     .interpolationMethod(.monotone)
-                    .foregroundStyle(LinearGradient(colors: [powerColor.opacity(0.22), powerColor.opacity(0.0)],
+                    .foregroundStyle(LinearGradient(colors: [powerColor.opacity(0.2), powerColor.opacity(0.06)],
                                                     startPoint: .top, endPoint: .bottom))
                 LineMark(x: .value("Time", p.t), y: .value("kW", p.value), series: .value("Series", "power-\(p.segment)"))
                     .interpolationMethod(.monotone)
@@ -60,23 +59,9 @@ struct ChargeCurveChart: View {
             }
             ForEach(soc) { p in
                 LineMark(x: .value("Time", p.t), y: .value("kW", socY(p.value)), series: .value("Series", "soc-\(p.segment)"))
-                    .interpolationMethod(.monotone)
+                    .interpolationMethod(.stepEnd)
                     .foregroundStyle(socColor)
-                    .lineStyle(StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round, dash: [4, 3]))
-            }
-            if let peak, selected == nil {
-                PointMark(x: .value("Time", peak.t), y: .value("kW", peak.value))
-                    .foregroundStyle(powerColor)
-                    .symbolSize(46)
-                    .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                        Text("\(VoltaFormat.number(peak.value, digits: peak.value >= 20 ? 0 : 1)) kW peak")
-                            .font(.system(size: 11, weight: .bold)).monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(HistoryTheme.cardRaised, in: .capsule)
-                    }
-                    .accessibilityLabel("Peak power")
-                    .accessibilityValue("\(VoltaFormat.number(peak.value, digits: 0)) kilowatts at \(peak.t.historyTime)")
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
             }
             if let selected, selectedPower != nil || selectedSoc != nil {
                 RuleMark(x: .value("Selected", (selectedPower ?? selectedSoc)?.t ?? selected))
@@ -109,22 +94,20 @@ struct ChargeCurveChart: View {
         .chartYScale(domain: domain)
         .chartXScale(domain: xDomain)
         .chartXSelection(value: $selected)
-        .chartXAxis {
-            ChargeTimeAxis.marks(start: sessionStart, end: sessionEnd)
-        }
+        .chartXAxis(.hidden)
         .chartYAxis {
             AxisMarks(position: .leading, values: powerTicks) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [2, 4])).foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.white.opacity(0.06))
                 AxisValueLabel {
                     if let v = value.as(Double.self) { Text(VoltaFormat.number(v, digits: 0)) }
                 }
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(powerColor.opacity(0.85))
             }
             AxisMarks(position: .trailing, values: socTicks) { value in
                 AxisValueLabel {
-                    if let v = value.as(Double.self), top > 0 { Text("\(Int((v / top * 100).rounded()))%") }
+                    if let v = value.as(Double.self), top > 0 { Text("\(Int((v / top * 100).rounded()))") }
                 }
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(socColor.opacity(0.8))
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(socColor.opacity(0.85))
             }
         }
         .frame(height: height)
@@ -133,16 +116,18 @@ struct ChargeCurveChart: View {
     }
 }
 
-/// Battery temperature as step lines (min and max module temperature) with the
-/// band between them. Telemetry reports module temperatures as discrete steps,
-/// so the line holds each value until the next reading.
+/// Battery temperature as an amber step line (max module temperature, with a
+/// fill underneath) and a dim line for the minimum. Telemetry reports module
+/// temperatures as discrete steps, so the line holds each value until the
+/// next reading.
 struct ChargeTemperatureChart: View {
     var minimum: [ChargeCurvePoint]
     var maximum: [ChargeCurvePoint]
     var unit: String
     var sessionStart: Date
     var sessionEnd: Date
-    var height: CGFloat = 130
+    var tint: Color = HistoryTheme.amber
+    var height: CGFloat = 180
 
     @State private var selected: Date?
 
@@ -167,28 +152,28 @@ struct ChargeTemperatureChart: View {
     }
 
     private var domain: ClosedRange<Double> { TripChartDomain.padded((minimum + maximum).map(\.value), minPad: 2) }
+    /// The filled line: max when recorded, otherwise min.
+    private var primary: [ChargeCurvePoint] { maximum.count >= 2 ? maximum : minimum }
+    private var secondary: [ChargeCurvePoint] { maximum.count >= 2 && minimum.count >= 2 ? minimum : [] }
 
     var body: some View {
-        let band = Self.band(minimum: minimum, maximum: maximum)
+        let floor = domain.lowerBound
         Chart {
-            ForEach(band) { p in
-                AreaMark(x: .value("Time", p.t), yStart: .value(unit, p.low), yEnd: .value(unit, p.high),
-                         series: .value("Series", "band-\(p.segment)"))
+            ForEach(primary) { p in
+                AreaMark(x: .value("Time", p.t), yStart: .value(unit, floor), yEnd: .value(unit, p.value),
+                         series: .value("Series", "fill-\(p.segment)"))
                     .interpolationMethod(.stepEnd)
-                    .foregroundStyle(LinearGradient(colors: [HistoryTheme.red.opacity(0.14), HistoryTheme.blue.opacity(0.14)],
-                                                    startPoint: .top, endPoint: .bottom))
-            }
-            ForEach(maximum) { p in
+                    .foregroundStyle(LinearGradient(colors: [tint.opacity(0.42), tint.opacity(0.08)], startPoint: .top, endPoint: .bottom))
                 LineMark(x: .value("Time", p.t), y: .value(unit, p.value), series: .value("Series", "max-\(p.segment)"))
                     .interpolationMethod(.stepEnd)
-                    .foregroundStyle(HistoryTheme.red)
-                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .foregroundStyle(tint)
+                    .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
             }
-            ForEach(minimum) { p in
+            ForEach(secondary) { p in
                 LineMark(x: .value("Time", p.t), y: .value(unit, p.value), series: .value("Series", "min-\(p.segment)"))
                     .interpolationMethod(.stepEnd)
-                    .foregroundStyle(HistoryTheme.blue)
-                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    .foregroundStyle(tint.opacity(0.45))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
             }
             if let selected, let reading = reading(at: selected) {
                 RuleMark(x: .value("Selected", reading.t))
@@ -210,9 +195,9 @@ struct ChargeTemperatureChart: View {
             ChargeTimeAxis.marks(start: sessionStart, end: sessionEnd)
         }
         .chartYAxis {
-            AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [2, 4])).foregroundStyle(Color.white.opacity(0.06))
-                AxisValueLabel().font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.white.opacity(0.06))
+                AxisValueLabel().font(.system(size: 12, weight: .medium)).foregroundStyle(tint.opacity(0.85))
             }
         }
         .frame(height: height)
@@ -297,7 +282,7 @@ struct ChargeTraceChart: View {
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [2, 4])).foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.white.opacity(0.06))
                 AxisValueLabel().font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
             }
         }
@@ -305,48 +290,44 @@ struct ChargeTraceChart: View {
     }
 }
 
-/// Start→end state-of-charge bar: a faint track to the start level, the added
-/// charge as a lit segment, percent labels at both ends.
+/// Start→end state-of-charge row: battery and percent at each end, a grey
+/// track with the added charge as a solid segment between them.
 struct ChargeSocBarView: View {
     var bar: ChargeSocBar
-    var colors: [Color]
+    var tint: Color = HistoryTheme.green
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                label("\(bar.start)%", caption: "Start")
-                Spacer()
-                Text(bar.delta >= 0 ? "+\(bar.delta)%" : "\(bar.delta)%")
-                    .font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                    .foregroundStyle(colors.last ?? HistoryTheme.blue)
-                Spacer()
-                label("\(bar.end)%", caption: "End", trailing: true)
-            }
+        HStack(spacing: 12) {
+            level(bar.start, color: .white)
             GeometryReader { geo in
                 let w = geo.size.width
-                SweepIn { p in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(HistoryTheme.track)
-                        Capsule().fill(Color.white.opacity(0.16)).frame(width: max(0, w * bar.lower))
-                        Capsule()
-                            .fill(LinearGradient(colors: bar.delta >= 0 ? colors : colors.reversed(), startPoint: .leading, endPoint: .trailing))
-                            .frame(width: max(8, w * (bar.upper - bar.lower) * p))
-                            .offset(x: w * bar.lower)
-                            .shadow(color: (colors.last ?? HistoryTheme.blue).opacity(0.5), radius: 6)
-                    }
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.14))
+                    Capsule().fill(tint)
+                        .frame(width: max(6, w * (bar.upper - bar.lower)))
+                        .offset(x: w * bar.lower)
                 }
             }
-            .frame(height: 10)
+            .frame(height: 8)
+            level(bar.end, color: tint)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery \(bar.start)% to \(bar.end)%")
     }
 
-    private func label(_ value: String, caption: String, trailing: Bool = false) -> some View {
-        VStack(alignment: trailing ? .trailing : .leading, spacing: 2) {
-            Text(value).font(.system(size: 22, weight: .bold)).fontWidth(.expanded).monospacedDigit().foregroundStyle(.white)
-            Text(caption).font(.system(size: 10, weight: .semibold)).tracking(1).textCase(.uppercase).foregroundStyle(HistoryTheme.tertiary)
+    private func level(_ value: Int, color: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: value >= 50 ? "battery.75percent" : "battery.25percent")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(color)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
+                Text("\(value)").font(.system(size: 20, weight: .semibold)).monospacedDigit()
+                Text("%").font(.system(size: 13, weight: .medium)).opacity(0.7)
+            }
+            .foregroundStyle(color)
         }
+        .fixedSize()
     }
 }
 

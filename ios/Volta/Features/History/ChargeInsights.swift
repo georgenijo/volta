@@ -73,22 +73,23 @@ struct ChargeSocBar: Equatable {
 // MARK: - Cost
 
 /// Recorded session cost, or an estimate from the energy added and the user's
-/// electricity rate. Price per kWh is always per kWh added to the battery, so a
-/// recorded cost and an estimate compare like for like.
+/// electricity rate (the DC fast rate for DC fast sessions). Price per kWh is
+/// always per kWh added to the battery, so a recorded cost and an estimate
+/// compare like for like. No recorded cost and no rate means unknown.
 struct ChargeCost: Equatable {
     var amount: Double
     var currency: String
     var isEstimated: Bool
     var pricePerKwh: Double?
 
-    static func resolve(_ charge: ChargeSummary, fallbackRate: Double, fallbackCurrency: String) -> ChargeCost? {
+    static func resolve(_ charge: ChargeSummary, rates: ElectricityRates) -> ChargeCost? {
         let added = charge.energyAddedKwh.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         if let cost = charge.cost, cost.isFinite, cost >= 0 {
-            return ChargeCost(amount: cost, currency: charge.currency ?? fallbackCurrency, isEstimated: false,
+            return ChargeCost(amount: cost, currency: charge.currency ?? rates.currency, isEstimated: false,
                               pricePerKwh: added.map { cost / $0 })
         }
-        guard let added, fallbackRate.isFinite, fallbackRate > 0 else { return nil }
-        return ChargeCost(amount: added * fallbackRate, currency: fallbackCurrency, isEstimated: true, pricePerKwh: fallbackRate)
+        guard let added, let rate = ElectricityRates.validated(rates.perKwh(fastCharger: charge.fastCharger)) else { return nil }
+        return ChargeCost(amount: added * rate, currency: rates.currency, isEstimated: true, pricePerKwh: rate)
     }
 }
 

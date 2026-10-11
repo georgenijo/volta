@@ -1,29 +1,11 @@
 import MapKit
 import SwiftUI
 
+/// Small open score dial tinted by band; the card-sized `ScoreDial`.
 struct DriveScoreRing: View {
     var score: Int?
     var size: CGFloat = 44
-    private var value: Int? { score.flatMap { (0...100).contains($0) ? $0 : nil } }
-    private var tint: Color {
-        guard let value else { return HistoryTheme.secondary }
-        return value >= 85 ? HistoryTheme.green : value >= 70 ? HistoryTheme.blue : HistoryTheme.amber
-    }
-    var body: some View {
-        ZStack {
-            Circle().trim(from: 0.12, to: 0.88).stroke(HistoryTheme.track, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
-            if let value {
-                SweepIn { p in
-                    Circle().trim(from: 0.12, to: 0.12 + min(0.76 * Double(value) / 100 * p, 0.776))
-                        .stroke(tint, style: StrokeStyle(lineWidth: size * 0.075, lineCap: .round)).rotationEffect(.degrees(90))
-                        .shadow(color: tint.opacity(0.6 * VoltaMotion.bloom(p)), radius: 4)
-                }
-            }
-            CountUpNumber(value.map(Double.init), placeholder: "–", alignment: .center) { String(Int($0.rounded())) }
-                .font(.system(size: size * 0.30, weight: .bold, design: .rounded)).foregroundStyle(.white)
-        }.frame(width: size, height: size)
-            .accessibilityLabel(value.map { "Drive score \($0) of 100" } ?? "Drive score unavailable")
-    }
+    var body: some View { ScoreDial(score: score, size: size) }
 }
 
 enum DriveRouteSegments {
@@ -87,13 +69,13 @@ enum DriveRouteSegments {
 }
 
 /// Coordinate-only overview; no geocoding or directions, no joins across recording gaps.
-/// Routes draw as light over a dimmed, desaturated map: each color is one combined
-/// path, blurred for a halo under a thin bright core, so busy roads glow without
-/// stacking into a solid band. Edges fade into the page.
+/// Routes draw as cyan light over a dimmed, desaturated map, as in the
+/// references: each color is one combined path, softly haloed under a thin
+/// core, so busy roads glow without stacking into a solid band. Edges fade into the page.
 struct DrivesRouteMap: View {
     var drives: [DriveSummary]
     var height: CGFloat = 240
-    /// nil: mint→blue route light. Otherwise each drive takes its own color.
+    /// nil: cyan route light. Otherwise each drive takes its own color.
     var tint: ((DriveSummary) -> Color)? = nil
     @State private var visible: MKMapRect?
 
@@ -159,9 +141,7 @@ struct DrivesRouteMap: View {
                 let m = MKMapPoint(c)
                 return CGPoint(x: (m.x - rect.minX) / rect.width * size.width, y: (m.y - rect.minY) / rect.height * size.height)
             }
-            let defaultShading = GraphicsContext.Shading.linearGradient(
-                Gradient(colors: [HistoryTheme.mint, HistoryTheme.blue]),
-                startPoint: CGPoint(x: 0, y: size.height), endPoint: CGPoint(x: size.width, y: 0))
+            let defaultShading = GraphicsContext.Shading.color(HistoryTheme.route)
             // One path per color: overlapping drives brighten the halo, not thicken it.
             var groups: [(color: Color?, path: Path, dots: [CGPoint])] = []
             for run in runs {
@@ -178,21 +158,18 @@ struct DrivesRouteMap: View {
             for group in groups {
                 let shading = group.color.map { GraphicsContext.Shading.color($0) } ?? defaultShading
                 var halo = context
-                halo.addFilter(.blur(radius: 7))
-                halo.opacity = 0.75
+                halo.addFilter(.blur(radius: 5))
+                halo.opacity = 0.45
                 halo.stroke(group.path, with: shading, style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
                 context.stroke(group.path, with: shading, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                 for dot in group.dots {
                     context.fill(Path(ellipseIn: CGRect(x: dot.x - 3, y: dot.y - 3, width: 6, height: 6)), with: shading)
                 }
             }
-            // A single chain reads as a journey: mint where it starts, blue where it ends.
+            // A single chain reads as a journey: green where it starts, blue where it ends.
             if tint == nil, let first = runs.first?.coordinates.first, let last = runs.last?.coordinates.last {
-                for (coordinate, color) in [(first, HistoryTheme.mint), (last, HistoryTheme.blue)] {
+                for (coordinate, color) in [(first, HistoryTheme.green), (last, HistoryTheme.blue)] {
                     let p = point(coordinate)
-                    var glow = context
-                    glow.addFilter(.blur(radius: 5))
-                    glow.fill(Path(ellipseIn: CGRect(x: p.x - 7, y: p.y - 7, width: 14, height: 14)), with: .color(color.opacity(0.8)))
                     context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(color))
                 }
             }
@@ -270,24 +247,23 @@ struct RoadtripsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 hero(trips)
-                AnalyticsFootnote("Drives linked by stops of up to 2 hours, covering at least \(units.formatDistance(100)). Closed drives only.")
+                OverviewFootnote("Drives linked by stops of up to 2 hours, covering at least \(units.formatDistance(100)). Closed drives only.")
                     .padding(.top, 18)
                 if partial {
                     Text("Loaded drives only · groups may change when more history is loaded")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(AnalyticsStyle.amber).padding(.top, 6)
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 6)
                 }
                 if trips.isEmpty {
                     HistoryEmptyState(systemImage: "road.lanes", title: "No roadtrips in loaded drives",
                                       message: "Long drives and multi-stop chains covering at least \(units.formatDistance(100)) appear here.")
-                        .padding(.top, AnalyticsStyle.sectionGap)
+                        .padding(.top, 30)
                 } else {
-                    AnalyticsSectionHeader("Trips", trailing: trips.count == 1 ? "1 trip" : "\(trips.count) trips")
-                        .padding(.top, AnalyticsStyle.sectionGap)
-                    LazyVStack(spacing: AnalyticsStyle.cardGap) {
+                    OverviewSectionHeader(title: "Trips", trailing: trips.count == 1 ? "1 trip" : "\(trips.count) trips")
+                        .padding(.top, 30)
+                    LazyVStack(spacing: 14) {
                         ForEach(trips) { trip in
                             NavigationLink { RoadtripDetailView(trip: trip, partial: partial) } label: { RoadtripCard(trip: trip) }
                                 .buttonStyle(VoltaPressStyle())
-                                .voltaCascade()
                         }
                     }
                 }
@@ -298,28 +274,29 @@ struct RoadtripsView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.roadtrips")
-        .voltaArrivalScope()
         .screenKitPage("Roadtrips")
     }
 
     private func hero(_ trips: [Roadtrip]) -> some View {
         let distance = trips.reduce(0) { $0 + $1.distanceKm }
         let longest = trips.map(\.distanceKm).max()
-        return VStack(alignment: .leading, spacing: 22) {
-            AnalyticsHero(eyebrow: partial ? "Roadtrip distance · loaded" : "Roadtrip distance",
-                          value: VoltaFormat.number(units.distanceValue(km: distance), digits: 0),
-                          unit: units.distanceUnit, identifier: "screen.roadtrips")
-            AnalyticsStatStrip(items: [
-                ("\(trips.count)\(partial ? "+" : "")", trips.count == 1 && !partial ? "Trip" : "Trips"),
-                ("\(trips.reduce(0) { $0 + $1.drives.count })", "Drives"),
-                (VoltaFormat.duration(trips.reduce(0) { $0 + $1.durationMin }), "Driving"),
-                (longest.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", "Longest"),
+        return VStack(alignment: .leading, spacing: 20) {
+            OverviewHero(eyebrow: partial ? "Roadtrip distance · loaded" : "Roadtrip distance",
+                         value: VoltaFormat.number(units.distanceValue(km: distance), digits: 0),
+                         unit: units.distanceUnit, identifier: "screen.roadtrips")
+            HistoryFlowStats(items: [
+                ("point.topleft.down.to.point.bottomright.curvepath", "\(trips.count)\(partial ? "+" : "") \(trips.count == 1 && !partial ? "trip" : "trips")"),
+                ("road.lanes", "\(trips.reduce(0) { $0 + $1.drives.count }) drives"),
+            ])
+            HistoryFlowStats(items: [
+                ("clock", VoltaFormat.duration(trips.reduce(0) { $0 + $1.durationMin })),
+                ("arrow.up.right", "\(longest.map { units.formatDistance($0, fractionDigits: 0) } ?? "—") longest"),
             ])
         }
     }
 }
 
-/// DriveCard's voice for a chain of drives: itinerary, expanded distance, route watermark.
+/// DriveCard's voice for a chain of drives: itinerary, distance, route watermark.
 private struct RoadtripCard: View {
     var trip: Roadtrip
     @Environment(\.units) private var units
@@ -331,67 +308,67 @@ private struct RoadtripCard: View {
                 itinerary(from: first.startPlace, to: last.endPlace)
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: trip.distanceKm), digits: 0))
-                            .font(.system(size: 30, weight: .bold)).fontWidth(.expanded).tracking(-0.8).monospacedDigit()
-                        Text(units.distanceUnit.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
+                        Text(units.distanceUnit.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.white)
                     Text(first.start.formatted(.dateTime.month(.abbreviated).day().year()))
-                        .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                        .font(.system(size: 15)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                     Text(first.start.historyTime)
-                        .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
+                        .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
                 }
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, 18)
             Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
             HStack(spacing: 8) {
                 metric("clock", VoltaFormat.duration(trip.durationMin))
                 dot
-                metric("bolt", trip.energyKwh.map { "\(VoltaFormat.number($0)) kWh" } ?? "—")
+                metric("bolt.fill", trip.energyKwh.map { "\(VoltaFormat.number($0)) kWh" } ?? "—")
                 dot
-                metric("leaf", trip.efficiencyWhPerKm.map { units.formatEfficiency($0) } ?? "—")
+                metric("leaf.fill", trip.efficiencyWhPerKm.map { units.formatEfficiency($0) } ?? "—")
                 Spacer(minLength: 0)
             }
-            .padding(.top, 12)
+            .padding(.vertical, 12)
         }
-        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 14)
+        .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 6)
         .background {
-            RouteWatermark(points: trip.routePoints, opacity: 0.42)
-                .padding(.leading, 130).padding(.trailing, 90).padding(.top, 4).padding(.bottom, 44)
-                .mask(RadialGradient(colors: [.black, .black.opacity(0.6), .clear], center: .center, startRadius: 10, endRadius: 120))
+            RouteWatermark(points: trip.routePoints, opacity: 0.22)
+                .padding(.leading, 150).padding(.trailing, 100).padding(.vertical, 6)
         }
         .driveSurface()
         .accessibilityElement(children: .combine)
     }
 
     private func itinerary(from start: String, to end: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 0) {
-                Circle().fill(HistoryTheme.mint).frame(width: 8, height: 8).padding(.top, 7)
-                Rectangle().fill(LinearGradient(colors: [HistoryTheme.mint.opacity(0.6), HistoryTheme.blue.opacity(0.6)], startPoint: .top, endPoint: .bottom))
-                    .frame(width: 1.5).frame(maxHeight: .infinity).padding(.vertical, 4)
-                Circle().fill(HistoryTheme.blue).frame(width: 8, height: 8).padding(.bottom, 7)
+                Circle().fill(HistoryTheme.green).frame(width: 9, height: 9).padding(.top, 8)
+                Rectangle().fill(HistoryTheme.tertiary.opacity(0.6))
+                    .frame(width: 1).frame(maxHeight: .infinity).padding(.vertical, 6)
+                Circle().fill(HistoryTheme.blue).frame(width: 9, height: 9).padding(.bottom, 8)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text(start).font(.system(size: 18, weight: .semibold))
+                Text(start).font(.system(size: 22, weight: .medium))
                 Text(trip.stops == 0 ? "NONSTOP" : trip.stops == 1 ? "1 STOP" : "\(trip.stops) STOPS")
-                    .font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(HistoryTheme.tertiary)
-                Text(end).font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold)).tracking(1.2).foregroundStyle(HistoryTheme.tertiary)
+                Text(end).font(.system(size: 22, weight: .medium))
             }
             .foregroundStyle(.white)
-            .lineLimit(1).minimumScaleFactor(0.75)
+            .lineLimit(1).minimumScaleFactor(0.7)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var dot: some View { Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5) }
+    private var dot: some View { Circle().fill(HistoryTheme.tertiary).frame(width: 3, height: 3) }
 
     private func metric(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
-            Text(text).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.78))
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 13, weight: .medium))
+            Text(text).font(.system(size: 16)).monospacedDigit()
         }
+        .foregroundStyle(HistoryTheme.secondary)
         .lineLimit(1).fixedSize()
     }
 }
@@ -407,28 +384,31 @@ struct RoadtripDetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 DrivesRouteMap(drives: trip.drives, height: 250)
                     .padding(.horizontal, -ScreenKit.horizontalPadding)
-                AnalyticsHero(eyebrow: "\(first.startPlace) → \(last.endPlace)",
-                              value: VoltaFormat.number(units.distanceValue(km: trip.distanceKm)),
-                              unit: units.distanceUnit, size: 72, identifier: "screen.roadtrip")
+                OverviewHero(eyebrow: "\(first.startPlace) → \(last.endPlace)",
+                             value: VoltaFormat.number(units.distanceValue(km: trip.distanceKm)),
+                             unit: units.distanceUnit, size: 72, identifier: "screen.roadtrip")
                     .padding(.top, 4)
-                AnalyticsStatStrip(items: [
-                    ("\(trip.drives.count)", trip.drives.count == 1 ? "Drive" : "Drives"),
-                    (VoltaFormat.duration(trip.durationMin), "Driving"),
-                    (trip.energyKwh.map { VoltaFormat.number($0) } ?? "—", "kWh"),
-                    (trip.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—", units.efficiencyUnit),
-                ])
-                .padding(.top, 22)
+                VStack(alignment: .leading, spacing: 14) {
+                    HistoryFlowStats(items: [
+                        ("clock", VoltaFormat.duration(trip.durationMin)),
+                        ("road.lanes", "\(trip.drives.count) \(trip.drives.count == 1 ? "drive" : "drives")"),
+                    ])
+                    HistoryFlowStats(items: [
+                        ("bolt.fill", trip.energyKwh.map { VoltaFormat.energy($0) } ?? "— kWh"),
+                        ("leaf.fill", units.formatEfficiency(trip.efficiencyWhPerKm)),
+                    ])
+                }
+                .padding(.top, 20)
                 if partial {
                     Text("Loaded history · this chain may be incomplete")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(AnalyticsStyle.amber).padding(.top, 14)
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 14)
                 }
-                AnalyticsSectionHeader("Legs", trailing: first.start.formatted(.dateTime.month(.abbreviated).day().year()))
-                    .padding(.top, AnalyticsStyle.sectionGap)
-                LazyVStack(spacing: AnalyticsStyle.cardGap) {
+                OverviewSectionHeader(title: "Legs", trailing: first.start.formatted(.dateTime.month(.abbreviated).day().year()))
+                    .padding(.top, 30)
+                LazyVStack(spacing: 14) {
                     ForEach(trip.drives) { drive in
                         NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive, showsDate: true) }
                             .buttonStyle(VoltaPressStyle())
-                            .voltaCascade()
                     }
                 }
             }
@@ -437,17 +417,76 @@ struct RoadtripDetailView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.roadtrip")
-        .voltaArrivalScope()
         .screenKitPage("Roadtrip")
+    }
+}
+
+// MARK: - Overview chrome
+
+/// Eyebrow over a big white numeral, carrying the screen's `screen.<name>` identifier.
+private struct OverviewHero: View {
+    var eyebrow: String
+    var value: String
+    var unit: String?
+    var size: CGFloat = 84
+    var identifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(eyebrow).voltaLabelStyle().lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(value).font(.system(size: size, weight: .bold)).fontWidth(.expanded).tracking(-size / 42)
+                    .foregroundStyle(.white).monospacedDigit().lineLimit(1).minimumScaleFactor(0.4)
+                if let unit {
+                    Text(unit).font(.system(size: max(15, size * 0.24))).foregroundStyle(HistoryTheme.secondary).fixedSize()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// Section title with a quiet trailing note and a hairline below, like a drive day header.
+private struct OverviewSectionHeader: View {
+    var title: String
+    var trailing: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title).font(.system(size: 22, weight: .medium)).foregroundStyle(.white)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                if let trailing {
+                    Text(trailing).font(.system(size: 15)).monospacedDigit().foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+                }
+            }
+            .padding(.bottom, 14)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
+                .padding(.horizontal, -ScreenKit.horizontalPadding)
+        }
+        .padding(.bottom, 18)
+    }
+}
+
+private struct OverviewFootnote: View {
+    var text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text).font(.system(size: 13)).foregroundStyle(HistoryTheme.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 // MARK: - Heatmap
 
-/// Absolute efficiency bands for route light; shared by the map and its legend.
+/// Absolute efficiency bands for route color; shared by the map and its legend.
 private enum EfficiencyLight {
     static let bounds: [Double] = [130, 170, 210]  // Wh/km
-    static let colors: [Color] = [AnalyticsStyle.mint, AnalyticsStyle.blue, AnalyticsStyle.amber, AnalyticsStyle.red]
+    static let colors: [Color] = [HistoryTheme.green, HistoryTheme.blue, HistoryTheme.amber, HistoryTheme.red]
 
     static func color(_ whPerKm: Double?) -> Color {
         guard let whPerKm else { return .white.opacity(0.45) }
@@ -473,15 +512,15 @@ struct DrivesHeatmapView: View {
                         .padding(.top, 12)
                     legend.padding(.top, 8)
                 }
-                AnalyticsSectionHeader("Calendar", trailing: "Distance per day")
-                    .padding(.top, AnalyticsStyle.sectionGap)
-                VStack(spacing: AnalyticsStyle.cardGap) {
+                OverviewSectionHeader(title: "Calendar", trailing: "Distance per day")
+                    .padding(.top, 30)
+                VStack(spacing: 14) {
                     ForEach(months, id: \.self) { month in monthGrid(month, days: days) }
                 }
                 if days.isEmpty {
-                    Text("No drives to show in this selection").font(.system(size: 13, weight: .medium)).foregroundStyle(AnalyticsStyle.secondary)
+                    Text("No drives to show in this selection").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                 }
-                AnalyticsFootnote(partial ? "Loaded drives only · blank dates may have unloaded history" : "Distance per day · blank dates have no drives in this selection")
+                OverviewFootnote(partial ? "Loaded drives only · blank dates may have unloaded history" : "Distance per day · blank dates have no drives in this selection")
                     .padding(.top, 14)
             }
             .padding(.horizontal, ScreenKit.horizontalPadding)
@@ -490,39 +529,39 @@ struct DrivesHeatmapView: View {
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.heatmap")
-        .voltaArrivalScope()
         .screenKitPage("Heatmap")
     }
 
     private func hero(_ days: [DriveDay]) -> some View {
         let distance = days.reduce(0) { $0 + $1.distanceKm }
         let busiest = days.map(\.distanceKm).max()
-        return VStack(alignment: .leading, spacing: 22) {
-            AnalyticsHero(eyebrow: partial ? "Driving days · loaded" : "Driving days",
-                          value: "\(days.count)", unit: days.count == 1 ? "day" : "days", identifier: "screen.heatmap")
-            AnalyticsStatStrip(items: [
-                ("\(drives.count)\(partial ? "+" : "")", drives.count == 1 && !partial ? "Drive" : "Drives"),
-                (VoltaFormat.number(units.distanceValue(km: distance), digits: 0), units.distanceUnit),
-                (days.isEmpty ? "—" : VoltaFormat.number(units.distanceValue(km: distance / Double(days.count)), digits: 0), "Per day"),
-                (busiest.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", "Busiest"),
+        return VStack(alignment: .leading, spacing: 20) {
+            OverviewHero(eyebrow: partial ? "Driving days · loaded" : "Driving days",
+                         value: "\(days.count)", unit: days.count == 1 ? "day" : "days", identifier: "screen.heatmap")
+            HistoryFlowStats(items: [
+                ("road.lanes", "\(drives.count)\(partial ? "+" : "") \(drives.count == 1 && !partial ? "drive" : "drives")"),
+                ("point.topleft.down.to.point.bottomright.curvepath", units.formatDistance(distance, fractionDigits: 0)),
+            ])
+            HistoryFlowStats(items: [
+                ("calendar", "\(days.isEmpty ? "—" : units.formatDistance(distance / Double(days.count), fractionDigits: 0)) per day"),
+                ("arrow.up.right", "\(busiest.map { units.formatDistance($0, fractionDigits: 0) } ?? "—") busiest"),
             ])
         }
     }
 
-    /// Thin glowing gradient bar; the labels mark the band edges in the user's unit.
+    /// Thin gradient bar; the labels mark the band edges in the user's unit.
     private var legend: some View {
         let edges = EfficiencyLight.bounds.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) }
         return VStack(alignment: .leading, spacing: 7) {
             Capsule()
                 .fill(LinearGradient(colors: EfficiencyLight.colors, startPoint: .leading, endPoint: .trailing))
                 .frame(height: 3)
-                .shadow(color: AnalyticsStyle.blue.opacity(0.5), radius: 4)
             HStack {
-                Text("Efficient").foregroundStyle(AnalyticsStyle.mint)
+                Text("Efficient").foregroundStyle(HistoryTheme.green)
                 Spacer()
-                Text("\(edges[0]) · \(edges[1]) · \(edges[2]) \(units.efficiencyUnit)").monospacedDigit().foregroundStyle(AnalyticsStyle.tertiary)
+                Text("\(edges[0]) · \(edges[1]) · \(edges[2]) \(units.efficiencyUnit)").monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
                 Spacer()
-                Text("Thirsty").foregroundStyle(AnalyticsStyle.red.opacity(0.9))
+                Text("Thirsty").foregroundStyle(HistoryTheme.red.opacity(0.9))
             }
             .font(.system(size: 10, weight: .semibold)).tracking(1).textCase(.uppercase)
         }
@@ -545,12 +584,12 @@ struct DrivesHeatmapView: View {
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text("\(monthDays.count) \(monthDays.count == 1 ? "day" : "days") · \(units.formatDistance(monthDistance, fractionDigits: 0))")
-                    .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(AnalyticsStyle.secondary)
+                    .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
             }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
                 ForEach(0..<7) { index in
                     Text(symbols[(calendar.firstWeekday - 1 + index) % 7])
-                        .font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(AnalyticsStyle.tertiary)
+                        .font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(HistoryTheme.tertiary)
                 }
                 ForEach(0..<(offset + count), id: \.self) { index in
                     if index < offset { Color.clear.frame(height: 38) } else {
@@ -569,23 +608,14 @@ struct DrivesHeatmapView: View {
         .voltaCardBackground()
     }
 
-    /// Driven days glow mint in proportion to distance; the brightest carry a halo.
+    /// Driven days fill green in proportion to distance.
     private func cell(number: Int, ratio: Double?) -> some View {
-        let lit = (ratio ?? 0) >= 0.66
-        return Text("\(number)")
+        Text("\(number)")
             .font(.system(size: 13, weight: ratio == nil ? .medium : .semibold)).monospacedDigit()
-            .foregroundStyle(ratio == nil ? AnalyticsStyle.tertiary : .white)
+            .foregroundStyle(ratio == nil ? HistoryTheme.tertiary : .white)
             .frame(maxWidth: .infinity).frame(height: 38)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(ratio.map { AnalyticsStyle.mint.opacity(0.1 + 0.42 * $0) } ?? Color.white.opacity(0.03))
-                    .overlay {
-                        if lit {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(AnalyticsStyle.mint.opacity(0.55), lineWidth: 1)
-                        }
-                    }
-                    .shadow(color: AnalyticsStyle.mint.opacity(lit ? 0.35 : 0), radius: 6)
-            }
+            .background(ratio.map { HistoryTheme.green.opacity(0.15 + 0.6 * $0) } ?? Color.white.opacity(0.03),
+                        in: .rect(cornerRadius: 10, style: .continuous))
             .contentShape(Rectangle())
     }
 }
@@ -599,23 +629,22 @@ private struct HeatmapDayView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                AnalyticsHero(eyebrow: date.formatted(.dateTime.weekday(.wide)) + (partial ? " · loaded" : ""),
-                              value: VoltaFormat.number(units.distanceValue(km: drives.reduce(0) { $0 + $1.distanceKm })),
-                              unit: units.distanceUnit, identifier: "screen.heatmap-day")
+                OverviewHero(eyebrow: date.formatted(.dateTime.weekday(.wide)) + (partial ? " · loaded" : ""),
+                             value: VoltaFormat.number(units.distanceValue(km: drives.reduce(0) { $0 + $1.distanceKm })),
+                             unit: units.distanceUnit, identifier: "screen.heatmap-day")
                 if partial {
-                    Text("Loaded history only").font(.system(size: 12, weight: .medium)).foregroundStyle(AnalyticsStyle.amber).padding(.top, 10)
+                    Text("Loaded history only").font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 10)
                 }
                 if drives.isEmpty {
                     Text("No drives loaded for this day in the current selection")
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(AnalyticsStyle.secondary).padding(.top, 18)
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary).padding(.top, 18)
                 } else {
-                    AnalyticsSectionHeader("Drives", trailing: drives.count == 1 ? "1 drive" : "\(drives.count) drives")
-                        .padding(.top, AnalyticsStyle.sectionGap)
-                    LazyVStack(spacing: AnalyticsStyle.cardGap) {
+                    OverviewSectionHeader(title: "Drives", trailing: drives.count == 1 ? "1 drive" : "\(drives.count) drives")
+                        .padding(.top, 30)
+                    LazyVStack(spacing: 14) {
                         ForEach(drives) { drive in
                             NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive) }
                                 .buttonStyle(VoltaPressStyle())
-                                .voltaCascade()
                         }
                     }
                 }

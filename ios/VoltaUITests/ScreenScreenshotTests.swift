@@ -80,6 +80,22 @@ final class ScreenScreenshotTests: XCTestCase {
         try scroll("settings", screenshot: "settings-bottom")
     }
 
+    func testElectricityRate() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try openMore()
+        try tap("button.settings")
+        try waitForScreen("settings")
+        let row = element("row.settings.charging")
+        for _ in 0..<4 where !(row.exists && row.isHittable) { element("scroll.settings").swipeUp() }
+        try tap("row.settings.charging")
+        try waitForScreen("settings-charging")
+        capture("settings-charging")
+        try tap("button.electricity-rate")
+        try waitForScreen("electricity-rate")
+        capture("electricity-rate")
+    }
+
     func testDriveDetail() throws {
         defer { app.terminate() }
         try launchDemo()

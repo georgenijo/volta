@@ -14,25 +14,25 @@ struct AccountSettingsView: View {
                 if model.isDemoMode {
                     ScreenKit.GroupCard(title: "Mode", footer: "Synthetic history generated on this iPhone. Nothing is sent anywhere.") {
                         ScreenKit.ValueRow(title: "Data", showsDivider: false) {
-                            Text("Demo").font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                            Text("Demo").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                 } else {
                     ScreenKit.GroupCard(title: "Server", footer: "Reached privately over Tailscale. The API is never exposed to the public internet.") {
                         ScreenKit.ValueRow(title: "Server URL", subtitle: model.settings.serverURL.isEmpty ? "—" : model.settings.serverURL, showsDivider: true) {
-                            StatusDot(color: ScreenKit.mint)
+                            StatusDot(color: ScreenKit.green)
                         }
                         ScreenKit.ValueRow(title: "Connection", showsDivider: false) {
-                            Text("Tailnet · HTTPS").font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                            Text("Tailnet · HTTPS").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                     ScreenKit.GroupCard(title: "This device", footer: "This iPhone holds only a Volta device token in the Keychain — never your Tesla credentials.") {
                         ScreenKit.ValueRow(title: "Name") {
-                            Text(device?.name ?? UIDevice.current.name).font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                            Text(device?.name ?? UIDevice.current.name).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                         }
                         ScreenKit.ValueRow(title: "Paired", showsDivider: false) {
                             Text(device.map { $0.createdAt.formatted(date: .abbreviated, time: .omitted) } ?? "—")
-                                .font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                                .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                 }
@@ -45,15 +45,11 @@ struct AccountSettingsView: View {
                         if isUnpairing { ProgressView().tint(ScreenKit.red) } else { Image(systemName: "xmark.circle") }
                         Text(unpairTitle)
                     }
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(ScreenKit.red)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                    .background(ScreenKit.red.opacity(0.06), in: .rect(cornerRadius: 18, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(ScreenKit.red.opacity(0.22), lineWidth: 1)
-                    }
+                    .padding(.vertical, 16)
+                    .voltaCardBackground(radius: VoltaRadius.wideButton)
                 }
                 .buttonStyle(VoltaPressStyle())
                 .disabled(isUnpairing)
@@ -114,7 +110,7 @@ struct VehicleSettingsView: View {
                             ScreenKit.ValueRow(title: "Model") { secondary([vehicle.model, vehicle.trim].compactMap { $0 }.joined(separator: " ")) }
                             ScreenKit.ValueRow(title: "Status") {
                                 HStack(spacing: 6) {
-                                    StatusDot(color: status?.state == .offline ? ScreenKit.red : status?.state == .asleep ? ScreenKit.secondary : ScreenKit.mint)
+                                    StatusDot(color: status?.state == .offline ? ScreenKit.red : status?.state == .asleep ? ScreenKit.secondary : ScreenKit.green)
                                     secondary(status?.state.rawValue.capitalized ?? "—")
                                 }
                             }
@@ -141,7 +137,7 @@ struct VehicleSettingsView: View {
     }
 
     private func secondary(_ text: String) -> some View {
-        Text(text.isEmpty ? "—" : text).font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+        Text(text.isEmpty ? "—" : text).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
     }
 
     private func load() async {
@@ -156,37 +152,33 @@ struct VehicleSettingsView: View {
 }
 
 /// How sessions are priced. TeslaMate prices each charge from the cost per kWh on
-/// the geofence where it happened; Volta shows those costs as recorded and does
-/// not estimate missing ones.
+/// the geofence where it happened; sessions it couldn't price use the
+/// electricity rate set here, or show as "—" without one.
 struct ChargingSettingsView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    @Environment(AppModel.self) private var model
     @State private var state: Loadable<[Place]> = .loading
+    @State private var editingRate = false
 
     var body: some View {
         ScrollView {
-            LoadableContent(state: state, retry: load) { places in
-                VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 24) {
+                rateCard
+                LoadableContent(state: state, retry: load) { places in
                     let priced = places.filter { $0.costPerKwh != nil }
-                    ScreenKit.GroupCard(title: "Charging prices",
-                                        footer: "Set a cost per kWh on a geofence in TeslaMate to price sessions there. Sessions without a recorded cost show as \u{2014}.") {
+                    ScreenKit.GroupCard(title: "Server prices",
+                                        footer: "Set a cost per kWh on a geofence in TeslaMate to price sessions there. Recorded prices always win over your rate.") {
                         if priced.isEmpty {
                             ScreenKit.ValueRow(title: "No priced places", subtitle: "Costs come from TeslaMate geofences", showsDivider: false) { EmptyView() }
                         } else {
                             ForEach(Array(priced.enumerated()), id: \.element.id) { index, place in
                                 ScreenKit.ValueRow(title: place.name, showsDivider: index < priced.count - 1) {
                                     Text("\(VoltaFormat.money(place.costPerKwh, currency: units.currency))/kWh")
-                                        .font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
+                                        .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
                                 }
                             }
-                        }
-                    }
-                    Card(padding: 18) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            SectionLabel("Coming later")
-                            Text("A home-rate fallback for sessions TeslaMate couldn't price.")
-                                .font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                 }
@@ -195,8 +187,35 @@ struct ChargingSettingsView: View {
             .padding(.top, 8)
             .padding(.bottom, ScreenKit.bottomBarClearance)
         }
-        .screenKitPage("Charging")
+        .accessibilityIdentifier("scroll.settings-charging")
+        .screenKitPage("Charging", screen: "settings-charging")
+        .electricityRateSheet(isPresented: $editingRate, settings: model.settings)
         .task(id: vehicleID) { await load() }
+    }
+
+    private var rateCard: some View {
+        let rates = model.settings.rates
+        let perKwh = { (v: Double) in VoltaFormat.money(v, currency: rates.currency) + "/kWh" }
+        return ScreenKit.GroupCard(title: "Electricity rate",
+                                   footer: "Estimates the cost of sessions your server didn't price. Without a rate those costs show as \u{2014}.") {
+            Button { editingRate = true } label: {
+                VStack(spacing: 0) {
+                    ScreenKit.ValueRow(title: "Home") { rateValue(rates.home.map(perKwh) ?? "Not set", set: rates.home != nil) }
+                    ScreenKit.ValueRow(title: "Supercharger / DC fast", showsDivider: false) {
+                        rateValue(rates.dcFast.map(perKwh) ?? (rates.home == nil ? "Not set" : "Same as home"), set: rates.dcFast != nil)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("button.electricity-rate")
+        }
+    }
+
+    private func rateValue(_ text: String, set: Bool) -> some View {
+        HStack(spacing: 10) {
+            Text(text).font(.system(size: 15)).monospacedDigit().foregroundStyle(set ? .white : ScreenKit.secondary)
+            ScreenKit.Chevron()
+        }
     }
 
     private func load() async {

@@ -30,8 +30,6 @@ private struct TeslaSignInButton: View {
 }
 
 /// No-vehicle screen: connect a Tesla account, or wait for the collector.
-/// Presented as a quiet lit hero: a glowing emblem, a short title, the
-/// luminous sign-in button, and the scope disclosure.
 struct TeslaSignInPanel: View {
     /// One quiet secondary line about why there's no vehicle yet.
     var note: String? = nil
@@ -49,20 +47,18 @@ struct TeslaSignInPanel: View {
     var body: some View {
         let tesla = model.tesla
         let caption = Self.caption(state: tesla.state, note: note, error: error)
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             switch tesla.state {
             case .idle, .loading:
-                ProgressView().tint(Color.voltaTextSecondary)
+                ProgressView()
             case .notAvailable:
-                emblem(tint: .voltaTextTertiary, symbol: "car.side")
                 Text("Sign in with Tesla isn't set up on your server yet.")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                    .font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
                 noteLine(caption)
             case .connected:
-                emblem(tint: .voltaMint, symbol: "checkmark")
-                ProgressView().tint(Color.voltaMint)
+                ProgressView()
                 Text("Tesla account connected. Your server's collector is discovering your vehicle — this can take a few minutes.")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                    .font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
                 if tesla.status?.budget?.paused == true {
                     InlineBanner(systemImage: "pause.circle", message: "Data collection is paused: this month's Tesla API budget is used up.")
                 }
@@ -70,38 +66,16 @@ struct TeslaSignInPanel: View {
                     InlineBanner(systemImage: "exclamationmark.triangle", message: caption)
                 }
             default:
-                emblem(tint: .voltaBlue, symbol: "car.side")
-                    .padding(.bottom, 6)
-                VStack(spacing: 6) {
-                    Text("Tesla account")
-                        .font(.system(size: 10, weight: .semibold)).tracking(1.5).textCase(.uppercase)
-                        .foregroundStyle(Color.voltaTextTertiary)
-                    Text("Connect your Tesla")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.voltaTextPrimary)
-                    noteLine(caption)
-                        .padding(.top, 2)
-                }
+                noteLine(caption)
                 if let message = tesla.failureMessage {
                     InlineBanner(systemImage: "exclamationmark.triangle", message: message)
                 }
                 TeslaSignInButton(tesla: tesla)
-                    .padding(.top, 4)
                 Text(TeslaLinkModel.scopeDisclosure)
-                    .font(.system(size: 12, weight: .medium)).foregroundStyle(Color.voltaTextTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .font(.footnote).foregroundStyle(Color.voltaTextSecondary)
             }
         }
         .multilineTextAlignment(.center)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 24)
-        .frame(maxWidth: .infinity)
-        .background {
-            RadialGradient(colors: [Color.voltaBlue.opacity(0.22), Color.voltaMint.opacity(0.05), .clear],
-                           center: .init(x: 0.5, y: 0.12), startRadius: 0, endRadius: 240)
-                .allowsHitTesting(false)
-        }
-        .voltaCardBackground(radius: 22)
         .padding(.horizontal, VoltaSpacing.screen)
         .task { await model.refreshTesla() }
     }
@@ -109,26 +83,9 @@ struct TeslaSignInPanel: View {
     @ViewBuilder private func noteLine(_ text: String?) -> some View {
         if let text {
             Text(text)
-                .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                .font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func emblem(tint: Color, symbol: String) -> some View {
-        ZStack {
-            Circle().fill(tint.opacity(0.4)).blur(radius: 24).frame(width: 88, height: 88)
-            Circle()
-                .fill(LinearGradient(colors: [Color.voltaCardTop, Color.voltaCard], startPoint: .top, endPoint: .bottom))
-            Circle()
-                .strokeBorder(LinearGradient(colors: [tint.opacity(0.75), tint.opacity(0.08)], startPoint: .top, endPoint: .bottom),
-                              lineWidth: 1)
-            Image(systemName: symbol)
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(.white)
-                .shadow(color: tint.opacity(0.7), radius: 8)
-        }
-        .frame(width: 60, height: 60)
-        .accessibilityHidden(true)
     }
 }
 
@@ -143,17 +100,15 @@ struct TeslaAccountSection: View {
             ScreenKit.GroupCard(title: "Tesla account", footer: footer(tesla)) {
                 ScreenKit.ValueRow(title: "Status", showsDivider: showsCollection(tesla)) {
                     HStack(spacing: 6) {
-                        Circle().fill(statusColor(tesla)).frame(width: 6, height: 6)
-                            .shadow(color: statusColor(tesla).opacity(0.85), radius: 3)
-                        Text(statusText(tesla)).font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(statusColor(tesla) == ScreenKit.secondary ? ScreenKit.secondary : statusColor(tesla))
+                        StatusDot(color: statusColor(tesla))
+                        Text(statusText(tesla)).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                     }
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("row.teslaStatus")
                 if showsCollection(tesla), let status = tesla.status {
                     ScreenKit.ValueRow(title: "Data collection", subtitle: budgetText(status), showsDivider: false) {
-                        Text(collectionText(status)).font(.system(size: 14, weight: .semibold))
+                        Text(collectionText(status)).font(.system(size: 15))
                             .foregroundStyle(status.budget?.paused == true ? ScreenKit.amber : ScreenKit.secondary)
                     }
                 }
@@ -170,15 +125,11 @@ struct TeslaAccountSection: View {
                         if tesla.isDisconnecting { ProgressView().tint(ScreenKit.red) } else { Image(systemName: "link.badge.minus") }
                         Text("Disconnect Tesla")
                     }
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(ScreenKit.red)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
-                    .background(ScreenKit.red.opacity(0.06), in: .rect(cornerRadius: 18, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(ScreenKit.red.opacity(0.22), lineWidth: 1)
-                    }
+                    .padding(.vertical, 16)
+                    .voltaCardBackground(radius: VoltaRadius.wideButton)
                 }
                 .buttonStyle(VoltaPressStyle())
                 .disabled(tesla.isDisconnecting)
@@ -208,7 +159,7 @@ struct TeslaAccountSection: View {
     }
     private func statusColor(_ tesla: TeslaLinkModel) -> Color {
         switch tesla.state {
-        case .connected: tesla.status?.budget?.paused == true ? ScreenKit.amber : ScreenKit.mint
+        case .connected: tesla.status?.budget?.paused == true ? ScreenKit.amber : ScreenKit.green
         case .needsReauth: ScreenKit.amber
         default: ScreenKit.secondary
         }
