@@ -179,10 +179,13 @@ same car ID and permanently binds it to a digest; numeric ID equality alone
 never authorizes access. History before/after telemetry coverage and within
 known receiver/gear gaps retains TeslaMate drives. A fully covered TeslaMate
 span without a telemetry trip is suppressed. No remote geocoder is used:
-labels come from a containing local geofence, then a local address within 150m.
+labels come from a containing local geofence, then a local address within 150m;
+otherwise only the city of the nearest local address within 3 km.
 
-Observed Park stops under three minutes join adjacent sessions. Stops of three
-minutes or longer, invalid gear, silence and disconnects split them. Isolated
+A stop under ten minutes after an observed Park joins adjacent sessions, also
+when the resume is `first_observed` (gear forgotten across a short unrecorded
+break). Stops of ten minutes or longer, invalid gear and real loss (silence or
+disconnects of at least 90s) split them. Isolated
 manoeuvres shorter than two minutes and 0.1 miles are dropped. IDs are negative
 safe integers `-(floor(startEpochSeconds) * 2097152 + carId)`; car IDs occupy 21
 bits and timestamps 32 bits (through 2106). TeslaMate IDs stay positive. Only
@@ -190,12 +193,22 @@ drive detail IDs and drive cursors accept negative IDs. Both sources share the
 existing descending `(start, id)` pagination and UTC microsecond cursor format.
 
 List rows retain the existing fields and add `source` (`fleet_telemetry` or
-`teslamate`). `route` has at most 64 points, preserves endpoints and carries
-hidden route breaks. Telemetry detail has the same flat summary plus `path`,
+`teslamate`). `route` is simplified per continuous run with Ramer–Douglas–Peucker (5 m, at most 300
+points), preserves endpoints and never connects across a route break. Telemetry detail has the same flat summary plus `path`,
 `telemetry.samples`, per-metric coverage and gaps; detail series are bounded to
-2000 points. Elevation is unknown. Fleet distances use already converted km
+2000 points. Drive detail (not lists) also adds forward-filled step `charts`
+(seeded from the last value up to 12 h before the start, change-only points,
+a final point at the end, never broken by gaps; speed, power and elevation
+bounded to 600 points keeping extremes) and `elevationGainM`/`elevationLossM`
+from an optional offline DEM: set `ELEVATION_DEM_DIR` to SRTM/Skadi `.hgt`
+tiles fetched beforehand with `scripts/fetch-elevation-tiles.sh <dir>
+<min-lat> <min-lon> <max-lat> <max-lon>` (required bounding box, no default
+region). Without it elevation stays null; the API never downloads tiles.
+TeslaMate detail returns `charts: null`. Fleet distances use already converted km
 from `payload_points`/`drive_points` (raw Odometer is miles); partial-session endpoints must be within two minutes of trip boundaries. Closed observed gear-to-gear sessions retain change-only readings across stationary boundary time when no continuity gap exists. GPS distance is a fallback only without
-unsupported route spans. Energy uses valid boundary EnergyRemaining readings,
+unsupported route spans. Distance starts from the latest change-only odometer reading at
+or before the start (30 min lookback, not before the previous trip's start, not across real
+loss) and, only after an observed Park end, may end on a report up to 120s after the end. Energy uses valid boundary EnergyRemaining readings,
 then continuous calibrated pack-power integration. Unknown energy stays null.
 Summary and mileage totals use the same merged history.
 

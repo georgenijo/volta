@@ -6,10 +6,11 @@ import { Auth } from './auth';
 import { Telemetry } from './telemetry';
 import { TeslaLink, unavailableStatus } from './tesla';
 import type { ChargingHistory } from './history';
+import type { DriveDetail } from './drive-detail';
 import { choice, driveId, integer, listInput, page, timeZone } from './validation';
 
 type Device = Awaited<ReturnType<Auth['authenticate']>>;
-export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object) => void = entry => console.log(JSON.stringify(entry)), tesla: TeslaLink | null = null, history: ChargingHistory | null = null, service: ServiceLog | null = null) {
+export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object) => void = entry => console.log(JSON.stringify(entry)), tesla: TeslaLink | null = null, history: ChargingHistory | null = null, service: ServiceLog | null = null, driveDetail: DriveDetail | null = null) {
   const app = new Hono<{ Variables: { device: Device } }>();
   app.use('*', async (c, next) => {
     const started = performance.now();
@@ -58,7 +59,7 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
       return c.json(page(rows, q, scope));
     });
   }
-  app.get('/v1/drives/:id', async c => c.json(await telemetry.drive(driveId(c.req.param('id')))));
+  app.get('/v1/drives/:id', async c => { const detail = await telemetry.drive(driveId(c.req.param('id'))); return c.json(driveDetail ? await driveDetail.extend(detail) : detail); });
   app.get('/v1/charges/:id', async c => c.json(await telemetry.charge(driveId(c.req.param('id')))));
   app.get('/v1/vehicles/:id/battery', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.battery(id)); });
   app.get('/v1/vehicles/:id/mileage', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.mileage(id, choice(c.req.query('bucket'), ['day','week','month'], 'month'))); });

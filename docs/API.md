@@ -37,8 +37,9 @@ power. Known gaps forbid interpolation. A receiver gap is real data loss: a
 disconnected/silence span of at least 90s (shorter cadence rows are ignored,
 seams <=1s coalesced); invalid gear/charge spans pass through. Drive
 `interrupted`, route breaks (>120s or real loss) and energy nulling use only
-real loss. Telemetry drives join across a Park stop <180s, or a <60s seam with
-speed >5 km/h within 15s on both sides, never across real loss. At most 2,000 samples cover the complete
+real loss. Telemetry drives join across a stop <10 min that follows an observed
+Park (the resume may start `gear`, `first_observed` or `speed`), or a <60s seam with
+speed >5 km/h within 15s on both sides, never across real loss or invalid gear. At most 2,000 samples cover the complete
 session: each metric's first, last, minimum and maximum valid observations are
 retained. Explicit invalid observations and the neighboring metric observations
 that delimit their unknown spans take priority. Time buckets retain one row per
@@ -69,8 +70,9 @@ power; zero is reported only when both inputs are known zero. Invalid/null DC
 paired with zero/unavailable AC stays unknown. An invalid unused input keeps its
 raw field flag without erasing valid power; `Power` flags an unknown chosen power
 when an electrical input is invalid.
-Elevation reuses only nearby private TeslaMate
-SRTM observations (same drive, 60 seconds, 50 metres), otherwise null. Module
+Telemetry sample/path `elevationM` reuses only nearby private TeslaMate
+SRTM observations (same drive, 60 seconds, 50 metres), otherwise null; drive
+detail charts use the optional DEM described under drive rows. Module
 temperature units are inferred and need live confirmation. See
 [capture](TELEMETRY_CAPTURE.md) and [runbook](TELEMETRY_RUNBOOK.md).
 
@@ -128,8 +130,13 @@ ActivitySummary{ range, distanceKm, driveCount, chargeCount, energyUsedKwh,
 TimelineSegment{ kind: drive|charge|idle|asleep|offline, start, end }
 DriveSummary   { id, start, end, startAddress, endAddress, distanceKm, durationMin,
                  startBatteryLevel, endBatteryLevel, energyUsedKwh, efficiencyWhPerKm,
-                 maxSpeedKph, avgSpeedKph, outsideTempAvgC }
-DriveDetail    DriveSummary + { path: [DrivePoint], elevationGainM }
+                 maxSpeedKph, avgSpeedKph, outsideTempAvgC, regenKwh?, drivingMin? }
+DriveDetail    DriveSummary + { path: [DrivePoint], elevationGainM, elevationLossM?,
+                 charts?: DriveCharts | null }
+DriveCharts    { start, end, series: { energyRemainingKwh?, batteryLevel?,
+                 batteryTempMinC?, batteryTempMaxC?, insideTempC?, outsideTempC?,
+                 ratedRangeKm?, speedKph?, elevationM?, powerKw?: [ChartPoint] } }
+ChartPoint     { t, v }
 DrivePoint     { t, latitude, longitude, speedKph, powerKw, elevationM, batteryLevel }
 ChargeSummary  { id, start, end, address, placeName, energyAddedKwh, energyUsedKwh,
                  startBatteryLevel, endBatteryLevel, durationMin, maxPowerKw,
@@ -148,6 +155,92 @@ MileageBucket  { start, distanceKm, driveCount, energyUsedKwh }
 FirmwareUpdate { version, installedAt, previousVersion }
 Place          { id, name, latitude, longitude, radiusM, costPerKwh }
 ```
+
+Telemetry drive rows (`source:"fleet_telemetry"`, list and detail) follow these
+rules. A joined trip spans its first start to its last end, stop included:
+`durationMin` and `avgSpeedKph` (= distance / full duration) include the stop;
+energy, battery levels, score and efficiency are computed across the whole
+window, falling back to the sum of each joined session's measurement when the
+whole window cannot be measured. `distanceKm` = end odometer minus the latest
+odometer reading at or before the start (change-only: no earlier than 30 min
+before the start or the previous trip's start, never across real loss), else
+the first reading inside the trip; when the trip (or a joined session) ended in
+an observed Park, the end may use a delayed report up to 120s after the end
+(before the next trip or session, never across real loss); an open or
+gap-ended trip never borrows a later reading. GPS distance remains the fallback; it sums only consecutive positions at most
+120s apart that one joined session contains entirely (touching sessions share
+their boundary instant), so it never bridges a parked stop (however short) or
+other position gap; with no such pair it is unknown, never 0 km. A joined trip whose positions have a gap
+at the stop is measured per session, each with its own coverage rules, in list,
+detail, summary and mileage alike. List,
+summary and mileage use the same distance and energy rules (energy: whole-window
+EnergyRemaining, then whole-window pack power, then the sum over joined sessions). `route` is a preview simplified with
+Ramer–Douglas–Peucker (5 m tolerance, at most 300 points; the tolerance doubles
+over the cap, and even thinning is the last resort); each continuous run is
+simplified separately, endpoints are kept and the first point after a break
+keeps `routeBreakBefore`, so a parked stop without positions is a break.
+`startCity`/`endCity` fall back to the city of the nearest local TeslaMate
+address within 3 km when no geofence or address within 150 m matches (the
+address stays null). `regenKwh` (number|null, positive kWh) integrates the
+negative part of calibrated pack power (positive = discharge) between
+consecutive samples at most 30s apart, clipped to the joined sessions (a parked
+stop, where the car may even charge, never counts; clipped edges are linearly
+interpolated); it is null unless those intervals cover
+>=80% of the trip's moving time, with no real loss or invalid pack
+voltage/current. TeslaMate rows omit `regenKwh`; clients treat a missing key as unknown.
+`drivingMin` (telemetry rows) is the time inside the joined drive sessions,
+i.e. `durationMin` minus joined parked stops.
+
+Drive detail adds `charts`, `elevationGainM` and `elevationLossM` (detail only,
+never in lists). TeslaMate drives return `charts:null`, `elevationGainM` from
+`drives.ascent` and `elevationLossM` from `drives.descent` (null when absent).
+For telemetry drives `charts` covers exactly the drive's (joined) window,
+`start`..`end` equal to the detail's (an open drive's window may advance while
+the detail is built; the charts still cover the detail's own span), and each series is a forward-filled step
+line for the client to draw without breaks:
+- the first point is at `start` holding the last value observed at or before
+  it, looked up to 12 h back (change-only signals such as temperatures or
+  range may hold for hours; a newer value always supersedes an older one, so
+  bounding the lookup by the previous drive would only lose seeds). A seed is
+  discarded when that observation was reported invalid or a real data loss
+  separates it from the start (the car resends every field when the stream
+  resumes). Without a seed the series starts at the first observation inside
+  the drive;
+- one point per change (values are rounded first: kWh to 0.01, everything else
+  to 0.1), then a final point at `end` holding the last value;
+- gaps, data loss and parked stops never break or end a series; observations
+  reported invalid are skipped (the step holds), and `powerKw` is unknown
+  while PackVoltage/PackCurrent is invalid;
+- a metric with no values is omitted entirely; `series` may be `{}`;
+- `speedKph`, `powerKw` and `elevationM` are bounded to 600 points: first and
+  last points plus the minimum and maximum of each of 299 equal-time buckets.
+`ratedRangeKm` is Fleet Telemetry `RatedRange` (miles x 1.609344), the only
+range field exposed to the API's read-only views (EstBatteryRange and
+IdealBatteryRange are recorded by the normal profile but not exposed; the
+economy profile records no range). `batteryLevel` is `BatteryLevel`;
+`batteryTempMinC`/`MaxC` are `ModuleTempMin`/`ModuleTempMax`; `powerKw` is
+calibrated pack power (positive = discharge).
+
+Fleet Telemetry has no elevation field, and TeslaMate `positions.elevation`
+is too sparse to reuse for a profile (positions arrive minutes apart when
+TeslaMate is not streaming). Telemetry elevation therefore
+comes from an optional offline DEM: set `ELEVATION_DEM_DIR` to a directory of
+SRTM/Skadi `.hgt` tiles (`N37/N37W123.hgt` or flat `N37W123.hgt`, `.hgt.gz`
+accepted; 1201x1201 or 3601x3601 big-endian int16, -32768 = void, bilinear
+interpolation, void posts dropped). The path is sampled every 50 m within
+continuous runs (never across a route break; a position jump implying more than
+70 m/s is treated as a break; longitude interpolation takes the short way across
+the antimeridian) to fill `series.elevationM`; a drive that would need more than
+100000 samples (counted exactly, before sampling) gets no `elevationM` and null gain/loss;
+`elevationGainM`/`elevationLossM` come from a 5-point median followed by 2 m
+hysteresis (the final residual is settled), computed separately for each
+continuous run (split at route breaks and terrain voids, so a level change
+across a break or void is never counted) and summed, rounded to 0.1 m, and are null unless at least 80% of samples have terrain
+data. Without `ELEVATION_DEM_DIR` (or tiles) they are null and `elevationM`
+is omitted. The API never downloads tiles; `server/scripts/fetch-elevation-tiles.sh
+<dir> <min-lat> <min-lon> <max-lat> <max-lon>` fetches public Skadi tiles from
+the AWS Open Data `elevation-tiles-prod` bucket for a bounding box (no default
+region, at most 400 tiles per run).
 
 With Fleet Telemetry enabled and bound, charge lists merge derived telemetry
 charge sessions (`source:"fleet_telemetry"`, negative `id`, accepted by
