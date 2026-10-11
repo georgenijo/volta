@@ -341,7 +341,7 @@ struct ChargingDetailView: View {
     private func estimateNote(_ cost: ChargeCost) -> String {
         let rateText = VoltaFormat.money(cost.pricePerKwh, currency: cost.currency) + "/kWh"
         guard summary.fastCharger else {
-            return "No price was recorded. Estimated from energy added at your home rate of \(rateText)."
+            return "No price was recorded. Estimated from energy drawn from the grid at your home rate of \(rateText)."
         }
         return rates.dcFast != nil
             ? "No price was recorded for this fast charge. Estimated at your Supercharger / DC fast rate of \(rateText)."

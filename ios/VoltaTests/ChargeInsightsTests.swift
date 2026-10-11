@@ -35,24 +35,37 @@ final class ChargeInsightsTests: XCTestCase {
     }
 
     func testMissingCostIsEstimatedFromTheElectricityRate() throws {
+        // Estimates price the energy drawn from the grid, not the energy added.
         let cost = try XCTUnwrap(ChargeCost.resolve(charge(added: 40), rates: rates(home: 0.25)))
         XCTAssertTrue(cost.isEstimated)
-        XCTAssertEqual(cost.amount, 10, accuracy: 1e-9)
+        XCTAssertEqual(cost.amount, 40 / ChargeEnergyFlow.assumedEfficiency * 0.25, accuracy: 1e-9)
         XCTAssertEqual(cost.pricePerKwh, 0.25)
         XCTAssertEqual(cost.currency, "USD")
+        // Measured or recorded grid energy wins over the efficiency estimate.
+        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(added: 40, grid: 42), rates: rates(home: 0.25))).amount, 10.5, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(ChargeCost.resolve(charge(added: 40, used: 44), rates: rates(home: 0.25))).amount, 11, accuracy: 1e-9)
+    }
+
+    func testSuperchargerEstimateMatchesTheGridEnergyShown() throws {
+        // 43.3 kWh added at $0.30: priced on the 47.6 kWh drawn, as the energy flow shows.
+        let charge = charge(added: 43.3, fast: true)
+        let cost = try XCTUnwrap(ChargeCost.resolve(charge, rates: rates(home: 0.3)))
+        let flow = try XCTUnwrap(ChargeEnergyFlow.resolve(charge))
+        XCTAssertEqual(cost.amount, flow.gridKwh * 0.3, accuracy: 1e-9)
+        XCTAssertEqual(cost.amount, 14.27, accuracy: 0.01)
     }
 
     func testFastChargeUsesTheDCRateAndHomeChargeTheHomeRate() throws {
         let fast = try XCTUnwrap(ChargeCost.resolve(charge(added: 40, fast: true), rates: rates(home: 0.2, dc: 0.5)))
         XCTAssertTrue(fast.isEstimated)
-        XCTAssertEqual(fast.amount, 20, accuracy: 1e-9)
+        XCTAssertEqual(fast.amount, 40 / ChargeEnergyFlow.assumedEfficiency * 0.5, accuracy: 1e-9)
         XCTAssertEqual(fast.pricePerKwh, 0.5)
         let home = try XCTUnwrap(ChargeCost.resolve(charge(added: 40), rates: rates(home: 0.2, dc: 0.5)))
-        XCTAssertEqual(home.amount, 8, accuracy: 1e-9)
+        XCTAssertEqual(home.amount, 40 / ChargeEnergyFlow.assumedEfficiency * 0.2, accuracy: 1e-9)
         // DC fast with no DC rate falls back to the home rate, labelled as an estimate.
         let fallback = try XCTUnwrap(ChargeCost.resolve(charge(added: 43.2, fast: true), rates: rates()))
         XCTAssertTrue(fallback.isEstimated)
-        XCTAssertEqual(fallback.amount, 8.64, accuracy: 1e-9)
+        XCTAssertEqual(fallback.amount, 43.2 / ChargeEnergyFlow.assumedEfficiency * 0.2, accuracy: 1e-9)
         // A DC rate alone never prices a home session.
         XCTAssertNil(ChargeCost.resolve(charge(added: 40), rates: rates(home: nil, dc: 0.5)))
     }
