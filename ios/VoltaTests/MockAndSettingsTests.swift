@@ -64,6 +64,7 @@ import XCTest
         XCTAssertEqual(units.efficiencyValue(whPerKm: 100), 160.9344, accuracy: 0.0001)
         XCTAssertEqual(VoltaFormat.distance(nil), "—"); XCTAssertEqual(VoltaFormat.energy(nil), "—")
         XCTAssertEqual(VoltaFormat.duration(minutes: 90), "1h 30m")
+        XCTAssertEqual(VoltaFormat.longDuration(28), "28 min"); XCTAssertEqual(VoltaFormat.longDuration(65), "1 h 5 min")
         let metric = UnitPreferences(distance: .kilometers, temperature: .celsius, currency: "EUR")
         XCTAssertEqual(metric.distanceValue(km: 10), 10)
         XCTAssertEqual(metric.temperatureValue(celsius: 10), 10)

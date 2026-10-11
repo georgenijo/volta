@@ -50,7 +50,8 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | Settings (C) | `button.account` | Pushes Account from Settings |
 | Settings (C) | `row.settings.charging`, `screen.settings-charging`, `button.electricity-rate` | Charging settings row, its page, and the rate card that opens the form |
 | Settings (C) | `screen.electricity-rate`, `field.rate.home`, `field.rate.dc`, `button.rate.save`, `button.rate.cancel` | Electricity rate sheet |
-| History (B) | `button.rate.set`, `card.rate-prompt` | "Set rate" next to an unknown cost; one-time Charging prompt |
+| History (B) | `button.rate.set` | "Set rate" next to an unknown cost |
+| History (B) | `button.charging.costs`, `button.charging.energy-mix` | Charging shortcut pills |
 | Tesla | `button.teslaSignIn`, `button.teslaDisconnect`, `row.teslaStatus` | Sign in with Tesla (no-vehicle screen and Account) |
 
 Demo lists must have at least one visible tappable drive row and charge row.

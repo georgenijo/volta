@@ -420,12 +420,13 @@ export class Telemetry {
       cp.charge_energy_added AS "energyAddedKwh", cp.charge_energy_used AS "energyUsedKwh", cp.start_battery_level AS "startBatteryLevel", cp.end_battery_level AS "endBatteryLevel",
       COALESCE(p.latitude, a.latitude) AS latitude, COALESCE(p.longitude, a.longitude) AS longitude,
       COALESCE(cp.duration_min, extract(epoch FROM (COALESCE(cp.end_date, now() AT TIME ZONE 'UTC') - cp.start_date))/60) AS "durationMin",
-      stats.max_power AS "maxPowerKw", COALESCE(stats.fast, false) AS "fastCharger", cp.cost, ${this.currency}::text AS currency, cp.outside_temp_avg AS "outsideTempAvgC",
+      stats.max_power AS "maxPowerKw", COALESCE(stats.fast, false) AS "fastCharger", stats.brand AS "fastChargerBrand", cp.cost, ${this.currency}::text AS currency, cp.outside_temp_avg AS "outsideTempAvgC",
       'teslamate'::text AS source, pw.avg_power AS "avgPowerKw", COALESCE(NULLIF(a.city,''), NULLIF(a.neighbourhood,''), NULLIF(a.name,'')) AS city,
       CASE WHEN NULLIF(a.road,'') IS NULL THEN NULL ELSE concat_ws(' ', NULLIF(a.house_number,''), a.road) END AS street, NULL::double precision AS "energyFromGridKwh"
       FROM public.charging_processes cp LEFT JOIN public.addresses a ON a.id = cp.address_id LEFT JOIN public.geofences g ON g.id = cp.geofence_id
       LEFT JOIN public.positions p ON p.id = cp.position_id
-      LEFT JOIN LATERAL (SELECT max(charger_power) AS max_power, bool_or(fast_charger_present) AS fast FROM public.charges WHERE charging_process_id = cp.id) stats ON true
+      LEFT JOIN LATERAL (SELECT max(charger_power) AS max_power, bool_or(fast_charger_present) AS fast,
+        max(fast_charger_brand) FILTER (WHERE fast_charger_present AND NULLIF(fast_charger_brand, '') IS NOT NULL) AS brand FROM public.charges WHERE charging_process_id = cp.id) stats ON true
       -- Energy-weighted mean of held charger power (sum P^2 dt / sum P dt).
       LEFT JOIN LATERAL (SELECT sum(power*power*dt)/NULLIF(sum(power*dt),0) AS avg_power FROM (SELECT charger_power AS power,
         extract(epoch FROM lead(date) OVER (ORDER BY date, id)-date) AS dt FROM public.charges WHERE charging_process_id = cp.id) held WHERE power>0 AND dt>0) pw ON true`;

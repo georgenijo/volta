@@ -142,7 +142,7 @@ ChargeSummary  { id, start, end, address, placeName, energyAddedKwh, energyUsedK
                  startBatteryLevel, endBatteryLevel, durationMin, maxPowerKw,
                  fastCharger, cost, currency, outsideTempAvgC,
                  latitude?, longitude?, source?, avgPowerKw?, city?, street?,
-                 energyFromGridKwh? }
+                 energyFromGridKwh?, fastChargerBrand? }
 ChargeDetail   ChargeSummary + { samples: [ChargeSample], efficiency }
 ChargeSample   { t, batteryLevel, powerKw, voltage, currentA, ratedRangeKm }
 IdleSummary    { id, start, end, address, placeName, durationMin, startBatteryLevel,

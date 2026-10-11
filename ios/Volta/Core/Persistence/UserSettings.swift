@@ -18,8 +18,6 @@ final class UserSettings {
     /// Supercharger / DC fast price per kWh for unpriced DC fast sessions. nil
     /// falls back to the home rate.
     var dcFastRate: Double? { didSet { store(dcFastRate, forKey: "dcFastRate") } }
-    /// The Charging tab's "add your rate" card was dismissed.
-    var ratePromptDismissed: Bool { didSet { defaults?.set(ratePromptDismissed, forKey: "ratePromptDismissed") } }
     var emptyDemo: Bool { didSet { defaults?.set(emptyDemo, forKey: "emptyDemo") } }
     var demoMode: Bool { didSet { defaults?.set(demoMode, forKey: "demoMode") } }
     /// Show a Live Activity while the car is being driven (charging always shows one).
@@ -38,7 +36,6 @@ final class UserSettings {
         // assumed 0.20 without storing it, and that assumption is dropped.
         electricityRate = ElectricityRates.stored(defaults?.object(forKey: "electricityRate") as? Double)
         dcFastRate = ElectricityRates.stored(defaults?.object(forKey: "dcFastRate") as? Double)
-        ratePromptDismissed = defaults?.bool(forKey: "ratePromptDismissed") ?? false
         emptyDemo = defaults?.bool(forKey: "emptyDemo") ?? false
         drivingLiveActivity = defaults?.bool(forKey: "drivingLiveActivity") ?? false
     }

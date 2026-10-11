@@ -32,6 +32,6 @@ extension MockDataSource {
                       maxPowerKw: fast ? 176 : 7.7, fastCharger: fast, cost: fast ? 17.71 : 5.20,
                       currency: "USD", outsideTempAvgC: 16, source: "teslamate", avgPowerKw: fast ? 96 : 7.1,
                       city: fast ? "Mountain View" : "Palo Alto", street: fast ? "250 Sample Blvd" : "100 Example Ave",
-                      energyFromGridKwh: fast ? nil : 25.1)
+                      energyFromGridKwh: fast ? nil : 25.1, fastChargerBrand: fast ? "Tesla" : nil)
     }
 }

@@ -15,11 +15,15 @@ enum ChargePlace {
         return "Unknown location"
     }
 
-    /// "Brand or place · city", without repeating the title.
+    /// "Network or place · city", without repeating the title.
     static func subtitle(_ charge: ChargeSummary) -> String? {
         let title = title(charge)
         var parts: [String] = []
-        if let place = nonEmpty(charge.placeName), !same(place, title) { parts.append(place) }
+        if let network = network(charge) {
+            parts.append(network)
+        } else if let place = nonEmpty(charge.placeName), !same(place, title) {
+            parts.append(place)
+        }
         if let city = nonEmpty(charge.city) {
             if !same(city, title), !parts.contains(where: { same($0, city) }) { parts.append(city) }
         } else if let address = nonEmpty(charge.address) {
@@ -34,6 +38,14 @@ enum ChargePlace {
         }
         if parts.isEmpty, charge.kind == .home { parts.append("Home charger") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "Tesla Supercharger" when TeslaMate recorded a Tesla DC stall. Other
+    /// brands aren't named: the car reports them unreliably.
+    static func network(_ charge: ChargeSummary) -> String? {
+        guard charge.fastCharger, let brand = nonEmpty(charge.fastChargerBrand),
+              brand.caseInsensitiveCompare("Tesla") == .orderedSame else { return nil }
+        return "Tesla Supercharger"
     }
 
     static func firstComponent(_ address: String) -> String {

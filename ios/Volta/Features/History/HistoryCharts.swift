@@ -424,54 +424,6 @@ struct SessionDayHeader: View {
     }
 }
 
-/// Open 270° battery dial: faint arc up to the lower level, a solid arc
-/// between the two levels, the end level in the middle.
-struct SocDial: View {
-    var from: Int?
-    var to: Int?
-    var size: CGFloat = 40
-    var caption: String? = nil
-    var colors: [Color] = [HistoryTheme.green, HistoryTheme.green]
-    private var line: CGFloat { max(2.5, size * 0.055) }
-    private func clamp(_ v: Int) -> Double { Double(min(100, max(0, v))) / 100 }
-
-    var body: some View {
-        ZStack {
-            Circle().trim(from: 0, to: 0.75)
-                .stroke(.white.opacity(0.08), style: StrokeStyle(lineWidth: line, lineCap: .round))
-                .rotationEffect(.degrees(135))
-            if let from, let to {
-                let lo = clamp(min(from, to)), hi = clamp(max(from, to))
-                Circle().trim(from: 0, to: 0.75 * lo)
-                    .stroke(.white.opacity(0.18), style: StrokeStyle(lineWidth: line, lineCap: .round))
-                    .rotationEffect(.degrees(135))
-                Circle().trim(from: 0.75 * lo, to: 0.75 * min(max(hi, lo + 0.01), 1.01))
-                    .stroke(AngularGradient(colors: to >= from ? colors : colors.reversed(), center: .center,
-                                            startAngle: .degrees(270 * lo), endAngle: .degrees(270 * hi)),
-                            style: StrokeStyle(lineWidth: line, lineCap: .round))
-                    .rotationEffect(.degrees(135))
-            }
-            VStack(spacing: size * 0.02) {
-                HStack(alignment: .firstTextBaseline, spacing: 1) {
-                    Text(to.map(String.init) ?? "–")
-                        .font(.system(size: size * (caption == nil ? 0.34 : 0.32), weight: .semibold, design: .rounded))
-                    if to != nil, size >= 60 {
-                        Text("%").font(.system(size: size * 0.15, weight: .semibold, design: .rounded)).foregroundStyle(HistoryTheme.secondary)
-                    }
-                }
-                .monospacedDigit().foregroundStyle(.white)
-                if let caption {
-                    Text(caption).font(.system(size: max(8, size * 0.1), weight: .semibold)).tracking(1.2)
-                        .textCase(.uppercase).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
-                }
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(from.flatMap { f in to.map { "Battery \(f)% to \($0)%" } } ?? "Battery levels unavailable")
-    }
-}
-
 /// Open 270° dial split into weighted segments (e.g. home vs public energy).
 struct SegmentDial: View {
     struct Segment: Identifiable {
