@@ -209,7 +209,7 @@ struct ChargingHistoryView: View {
         let needsPlaces = visible.contains { $0.needsPlaces }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ChargingMapHero(coordinates: visible.compactMap { $0.location(places.state).coordinate },
+                SessionsMapHero(coordinates: visible.compactMap { $0.location(places.state).coordinate },
                                 height: Self.mapHeight) {
                     withAnimation(.snappy) { showMap = true }
                 }
@@ -302,12 +302,12 @@ struct ChargingHistoryView: View {
 
 /// Dim private MapKit tiles framing the listed sessions, fading into the
 /// totals. Nothing is geocoded or searched; with no coordinates it stays blank.
-private struct ChargingMapHero: View {
+struct SessionsMapHero: View {
     var coordinates: [CLLocationCoordinate2D]
     var height: CGFloat
+    var fade: CGFloat = 80
+    var pin: Color = HistoryTheme.pin
     var expand: () -> Void
-
-    private static let fade: CGFloat = 80
 
     /// One pin per spot, to roughly 100 m.
     private var spots: [CLLocationCoordinate2D] {
@@ -331,8 +331,8 @@ private struct ChargingMapHero: View {
                 let spots = spots
                 // Framed below the header; the Maps logo and Legal link stay above the fade.
                 GreyTileMap(framing: .region(region, pins: spots),
-                            insets: EdgeInsets(top: 110, leading: 0, bottom: Self.fade, trailing: 0), dim: 0.65) {
-                    Circle().fill(HistoryTheme.pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
+                            insets: EdgeInsets(top: 110, leading: 0, bottom: fade, trailing: 0), dim: 0.65) {
+                    Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
                 }
                 .allowsHitTesting(false)
                 .id(spots.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ";"))
@@ -352,7 +352,7 @@ private struct ChargingMapHero: View {
         .overlay(alignment: .bottom) {
             LinearGradient(colors: [HistoryTheme.background.opacity(0), HistoryTheme.background],
                            startPoint: .top, endPoint: .bottom)
-                .frame(height: Self.fade)
+                .frame(height: fade)
                 .allowsHitTesting(false)
         }
         .frame(height: height)
@@ -516,18 +516,19 @@ private struct EnergyMixGlyph: View {
 
 // MARK: - Day header
 
-/// Blue calendar badge and day, the day's totals on the right, then a
-/// full-width hairline.
-private struct ChargeDayHeader: View {
+/// Calendar badge and day (blue for charges), the day's totals on the right,
+/// then a full-width hairline.
+struct ChargeDayHeader: View {
     var day: Date
     var title: String
     var trailing: String
+    var tint: Color = HistoryTheme.blue
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 9) {
-                CalendarDayBadge(day: day)
-                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(HistoryTheme.blue).lineLimit(1)
+                CalendarDayBadge(day: day, tint: tint)
+                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(tint).lineLimit(1)
                 Spacer(minLength: 8)
                 Text(trailing)
                     .font(.system(size: 11, weight: .regular)).monospacedDigit()
@@ -543,8 +544,9 @@ private struct ChargeDayHeader: View {
 }
 
 /// Small outlined calendar page with the day of the month.
-private struct CalendarDayBadge: View {
+struct CalendarDayBadge: View {
     var day: Date
+    var tint: Color = HistoryTheme.blue
 
     var body: some View {
         Text(day.formatted(.dateTime.day()))
@@ -554,7 +556,7 @@ private struct CalendarDayBadge: View {
             .overlay(alignment: .top) { Rectangle().frame(height: 2) }
             .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous).strokeBorder(lineWidth: 1.2))
             .clipShape(.rect(cornerRadius: 2, style: .continuous))
-            .foregroundStyle(HistoryTheme.blue)
+            .foregroundStyle(tint)
     }
 }
 

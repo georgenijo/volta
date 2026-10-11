@@ -581,6 +581,9 @@ struct IdleSummary: Codable, Hashable, Sendable, Identifiable {
     /// Optional; added by a server follow-up. Absent means "not sent", not 0,0.
     var latitude: Double? = nil
     var longitude: Double? = nil
+    /// Town and "123 Main St" from the recorded address; optional server follow-up.
+    var city: String? = nil
+    var street: String? = nil
 }
 
 struct BatteryHealthPoint: Codable, Hashable, Sendable {

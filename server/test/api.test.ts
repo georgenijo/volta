@@ -391,11 +391,30 @@ describe('metric telemetry contract', () => {
     const d = await json('/v1/drives/1'); const p = await json(`/v1/vehicles/1/drives?from=${d.start}&to=${d.end}`); expect(p.items.map((r:any) => r.id)).toEqual([1]);
   });
   test('idles merge overlapping drives, derive observed loss and state overlap', async () => {
-    const p = await json('/v1/vehicles/1/idles'); expect(p.items).toHaveLength(3);
+    const p = await json('/v1/vehicles/1/idles'); expect(p.items).toHaveLength(4);
     const idle = p.items.find((r:any) => r.id === 2); expect(idle.durationMin).toBe(120); expect(idle.startBatteryLevel).toBe(72); expect(idle.endBatteryLevel).toBe(70);
     expect(idle.rangeLostKm).toBe(10); expect(idle.energyLostKwh).toBeCloseTo(1.5); expect(idle.asleepMinutes).toBe(60); expect(p.items.find((r:any) => r.id===4).asleepMinutes).toBe(0); expect(idle.climateMinutes).toBe(5); expect(idle.sentryMinutes).toBeNull(); expect(p.items.find((r:any)=>r.id===4).climateMinutes).toBe(0);
     const exact = await json('/v1/vehicles/1/idles?minMinutes=120'); expect(exact.items.some((r:any) => r.id===2)).toBe(false);
     const first = await json('/v1/vehicles/1/idles?limit=1'); const next = await json(`/v1/vehicles/1/idles?limit=1&cursor=${first.nextCursor}`); expect(next.items[0].id).not.toBe(first.items[0].id);
+  });
+  test('idles name the town and street, and the parked session runs live to now', async () => {
+    await owner`UPDATE addresses SET city='Synthetic City', road='Synthetic Street', house_number='2' WHERE id=2`;
+    const first = await json('/v1/vehicles/1/idles');
+    const live = first.items[0];
+    expect(live).toMatchObject({id:6,end:null,city:'Synthetic City',street:'2 Synthetic Street',startBatteryLevel:84,endBatteryLevel:84,rangeLostKm:0});
+    expect(live.durationMin).toBeGreaterThan(14*60);
+    for (const key of ['_finish','_kwhPerKm','_startRange']) expect(live[key]).toBeUndefined();
+    expect(first.items.find((r:any)=>r.id===2)).toMatchObject({city:'Synthetic City',street:'2 Synthetic Street'});
+    // A later poll while parked is the live end reading.
+    await owner`INSERT INTO positions(id,car_id,date,latitude,longitude,battery_level,usable_battery_level,rated_battery_range_km,ideal_battery_range_km)
+      VALUES(30,1,now() AT TIME ZONE 'UTC' - interval '1 minute',40.01,-74.01,80,80,400,400)`;
+    expect((await json('/v1/vehicles/1/idles')).items[0]).toMatchObject({id:6,endBatteryLevel:80,rangeLostKm:20});
+    expect((await json('/v1/vehicles/1/idles')).items[0].energyLostKwh).toBeCloseTo(3);
+    // Live readings never feed the average drain.
+    const battery = await json('/v1/vehicles/1/battery'); expect(battery.avgIdleDrainPctPerDay).toBeGreaterThan(0);
+    // Driving again ends the parked session.
+    await owner`UPDATE drives SET end_date=NULL WHERE id=3`;
+    expect((await json('/v1/vehicles/1/idles')).items.some((r:any)=>r.end==null)).toBe(false);
   });
   test('partial logger-state coverage cannot fabricate a complete asleep total', async () => {
     await owner`DELETE FROM states WHERE id IN (3,4)`;

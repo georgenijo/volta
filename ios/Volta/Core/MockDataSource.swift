@@ -245,8 +245,15 @@ struct MockDataSource: VoltaDataSource {
         if !empty && now.timeIntervalSince(position) >= 600 { gaps.append((position, now)) }
         let items = gaps.reversed().enumerated().map { i, gap in
             let minutes = gap.1.timeIntervalSince(gap.0) / 60
-            let loss = minutes / 1440 * 0.8
-            return IdleSummary(id: i + 1, start: gap.0, end: gap.1, address: home, placeName: "Home", durationMin: minutes, startBatteryLevel: 74, endBatteryLevel: 74 - Int(loss.rounded()), rangeLostKm: loss * 4.9, energyLostKwh: loss * 0.735, sentryMinutes: min(80, minutes), climateMinutes: 0, asleepMinutes: max(0, minutes - 80))
+            let sentry = i % 3 == 2 ? 0 : min(80, minutes)
+            // Sentry draws ~250 W; sleep almost nothing.
+            let kwh = sentry / 60 * 0.25 + max(0, minutes - sentry) / 60 * 0.012
+            let away = i % 4 == 1
+            return IdleSummary(id: i + 1, start: gap.0, end: gap.1 >= now ? nil : gap.1, address: away ? "Union City, CA" : home, placeName: away ? nil : "Home", durationMin: minutes,
+                               startBatteryLevel: 74, endBatteryLevel: 74 - Int((kwh / 0.735).rounded()), rangeLostKm: kwh / 0.15, energyLostKwh: kwh,
+                               sentryMinutes: sentry, climateMinutes: 0, asleepMinutes: max(0, minutes - sentry),
+                               latitude: away ? 37.5934 : 37.4419, longitude: away ? -122.0439 : -122.1430,
+                               city: away ? "Union City" : "Palo Alto", street: away ? "1 Synthetic Way" : "100 Synthetic Ave")
         }
         return try page(items.filter { within($0.start, range) }, cursor: cursor)
     }

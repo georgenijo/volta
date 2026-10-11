@@ -524,7 +524,8 @@ export class Telemetry {
         (array_agg(key ORDER BY start, key))[1] AS first_key,
         (array_agg(key ORDER BY finish DESC, key DESC))[1] AS id FROM grouped GROUP BY grp
     ), gaps AS (
-      SELECT id, finish AS start, lead(start) OVER (ORDER BY start, id) AS finish,
+      -- The gap after the last finished activity runs to now: the car is parked.
+      SELECT id, finish AS start, COALESCE(lead(start) OVER (ORDER BY start, id), now() AT TIME ZONE 'UTC') AS finish,
         lead(first_key) OVER (ORDER BY start, id) AS next_key FROM islands
     ), boundaries AS (
       SELECT gap.*, prev.address_id, prev.geofence_id, prev.end_position_id AS location_position_id,
@@ -532,7 +533,7 @@ export class Telemetry {
         CASE WHEN upcoming.charge_id IS NOT NULL THEN first_charge.battery_level ELSE COALESCE(sp.battery_level, live_start.battery_level) END AS end_battery,
         CASE WHEN prev.charge_id IS NOT NULL THEN last_charge.rated_battery_range_km ELSE ep.rated_battery_range_km END AS start_range,
         CASE WHEN upcoming.charge_id IS NOT NULL THEN first_charge.rated_battery_range_km ELSE COALESCE(upcoming.start_rated_range_km, first_poll.rated_battery_range_km) END AS end_range
-      FROM gaps gap JOIN activities prev ON prev.key = gap.id JOIN activities upcoming ON upcoming.key = gap.next_key
+      FROM gaps gap JOIN activities prev ON prev.key = gap.id LEFT JOIN activities upcoming ON upcoming.key = gap.next_key
       LEFT JOIN public.positions ep ON ep.id = prev.end_position_id AND ep.date BETWEEN gap.start - interval '15 minutes' AND gap.start
       LEFT JOIN public.positions sp ON sp.id = upcoming.start_position_id AND sp.date BETWEEN gap.finish - interval '15 minutes' AND gap.finish + interval '15 minutes'
       LEFT JOIN LATERAL (SELECT battery_level, rated_battery_range_km FROM public.positions
@@ -546,10 +547,13 @@ export class Telemetry {
         AND date BETWEEN gap.start - interval '15 minutes' AND gap.start ORDER BY date DESC, id DESC LIMIT 1) last_charge ON true
       LEFT JOIN LATERAL (SELECT battery_level, rated_battery_range_km FROM public.charges WHERE upcoming.charge_id IS NOT NULL AND charging_process_id = upcoming.charge_id
         AND date BETWEEN gap.finish AND gap.finish + interval '15 minutes' ORDER BY date, id LIMIT 1) first_charge ON true
-      WHERE gap.finish IS NOT NULL AND gap.finish > gap.start
+      WHERE gap.finish > gap.start
     ), idles AS (
-      SELECT gap.id::float8 AS id, to_char(gap.start, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart", gap.start, gap.finish AS end,
+      SELECT gap.id::float8 AS id, to_char(gap.start, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart", gap.start,
+        CASE WHEN gap.next_key IS NULL THEN NULL ELSE gap.finish END AS end, gap.finish AS "_finish", rates.value AS "_kwhPerKm", gap.start_range AS "_startRange",
         a.display_name AS address, geo.name AS "placeName", extract(epoch FROM (gap.finish-gap.start))/60 AS "durationMin",
+        COALESCE(NULLIF(a.city,''), NULLIF(a.neighbourhood,''), NULLIF(a.name,'')) AS city,
+        CASE WHEN NULLIF(a.road,'') IS NULL THEN NULL ELSE concat_ws(' ', NULLIF(a.house_number,''), a.road) END AS street,
         gap.location_position_id AS "_locationPositionId",
         gap.start_battery AS "startBatteryLevel", gap.end_battery AS "endBatteryLevel",
         CASE WHEN gap.start_range IS NULL OR gap.end_range IS NULL THEN NULL ELSE greatest(gap.start_range-gap.end_range,0) END AS "rangeLostKm",
@@ -589,8 +593,8 @@ export class Telemetry {
       row.latitude = location?.latitude ?? null; row.longitude = location?.longitude ?? null;
       delete row._locationPositionId;
     }
-    const from = new Date(Math.min(...selected.map(r => +r.start))-300000), to = new Date(Math.max(...selected.map(r => +r.end)));
-    const gaps = selected.map(r => ({ id: r.id, start: r._cursorStart, end: new Date(r.end).toISOString() }));
+    const from = new Date(Math.min(...selected.map(r => +r.start))-300000), to = new Date(Math.max(...selected.map(r => +r._finish)));
+    const gaps = selected.map(r => ({ id: r.id, start: r._cursorStart, end: new Date(r._finish).toISOString() }));
     const sleep = await this.sql`WITH gaps AS (SELECT * FROM jsonb_to_recordset(${this.sql.json(gaps)}) AS g(id float8, start timestamp, "end" timestamp)),
       coverage AS (SELECT g.id, g.start, g.end, st.state, extract(epoch FROM(least(COALESCE(st.end_date,now() AT TIME ZONE 'UTC'),g.end)-greatest(st.start_date,g.start))) AS seconds
         FROM gaps g LEFT JOIN public.states st ON st.car_id = ${id} AND st.start_date < g.end AND COALESCE(st.end_date,now() AT TIME ZONE 'UTC') > g.start)
@@ -612,7 +616,22 @@ export class Telemetry {
       SELECT gaps.id, minutes.value FROM gaps LEFT JOIN minutes USING(seq)`;
     const byId = new Map(climate.map(r => [r.id, r.value]));
     for (const row of selected) row.climateMinutes = byId.get(row.id) ?? null;
+    const live = selected.find(r => r.end == null);
+    if (live) await this.closeLiveIdle(id, live);
+    for (const row of rows) { delete row._finish; delete row._kwhPerKm; delete row._startRange; }
     return rows;
+  }
+  /** The ongoing idle ends at the car's current battery reading, when one exists after it parked. */
+  private async closeLiveIdle(id: number, row: Row) {
+    let now: Awaited<ReturnType<Telemetry['status']>> | null = null;
+    try { now = await this.status(id); } catch { return; }
+    if (!now.updatedAt || +new Date(now.updatedAt) < +new Date(row.start)) return;
+    row.endBatteryLevel = now.batteryLevel ?? null;
+    const startRange = row._startRange, endRange = now.ratedRangeKm;
+    if (startRange != null && endRange != null) {
+      row.rangeLostKm = Math.max(startRange - endRange, 0);
+      row.energyLostKwh = row._kwhPerKm == null ? null : row.rangeLostKm * row._kwhPerKm;
+    }
   }
   async summary(id: number, range: 'today' | '7d' | '30d', timeZone = 'UTC') {
     const s = this.sql;
