@@ -275,6 +275,15 @@ test('a complete drive without any eligible GPS edge has unknown distance everyw
   const summary=await get('/v1/vehicles/1/summary?range=today');expect(summary.driveCount).toBe(1);expect(summary.distanceKm).toBe(5);
   const mileage=await get('/v1/vehicles/1/mileage?bucket=day');expect(mileage[0].driveCount).toBe(1);expect(mileage[0].distanceKm).toBe(5);
 });
+test('a recorded charge inside a short stop keeps the drives around it separate',async()=>{
+  await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES
+    (1,'drive',${at(0)},${at(600)},'gear','gear','complete',100),(1,'drive',${at(900)},${at(1500)},'gear','gear','complete',100)`;
+  const fleet=new FleetDrives(reader);
+  expect((await fleet.catalog(1))!.windows).toHaveLength(1);
+  await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES
+    (1,'charge',${at(630)},${at(870)},'charging','charging','complete',10)`;
+  expect((await fleet.catalog(1))!.windows).toHaveLength(2);
+});
 for (const end of ['gear','open','gap']) test(`touching joined sessions keep the edge from their shared instant (second ends ${end}), with full parity`,async()=>{
   await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES
     (1,'drive',${at(0)},${at(600)},'gear','gear','complete',100),(1,'drive',${at(600)},${at(1200)},'gear',${end},'complete',100)`;

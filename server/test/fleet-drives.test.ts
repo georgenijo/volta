@@ -7,6 +7,15 @@ const session=(start:number,end:number,startReason='gear',endReason='gear')=>({s
 const window: Window={id:telemetryDriveId(2,at(0)),start:at(0),end:at(600),_cursorStart:at(0).toISOString(),endReason:'gear'};
 const points=[0,60,120,180,240,300,360,420,480,540,600].map((s,i)=>({source_ts:at(s),latitude:37.7+i*.001,longitude:-122.4,speed_kph:60,power_kw:6,odometer_km:100+i,battery_level_pct:80-i,soc_pct:80-i}));
 const samples=points.map((p,i)=>({...p,battery_level:80-i,energy_remaining_kwh:50-i*.2,invalid_fields:[]}));
+test('a short stop containing a known charge never joins the drives around it',()=>{
+  const parked=[session(0,600),session(900,1500)];
+  expect(mergeSessions(2,parked,[])).toHaveLength(1);
+  // Four-minute charge inside the five-minute stop: two drives, energy not netted against the charge.
+  expect(mergeSessions(2,parked,[],undefined,[{start:at(630),end:at(870)}])).toHaveLength(2);
+  // Rolling seams are blocked too; charges outside the stop do not block.
+  expect(mergeSessions(2,[session(0,600),session(630,900)],[],()=>true,[{start:at(605),end:at(625)}])).toHaveLength(2);
+  expect(mergeSessions(2,parked,[],undefined,[{start:at(-900),end:at(-60)},{start:at(1600),end:at(2000)}])).toHaveLength(1);
+});
 test('a stop under ten minutes joins trips, observed or first_observed resume; exactly ten minutes, gaps and unknown gear do not',()=>{
   const merged=mergeSessions(2,[session(0,60),session(659,1000),session(1010,1040)],[]);
   expect(merged).toHaveLength(1);expect(merged[0]!.start).toEqual(at(0));expect(merged[0]!.end).toEqual(at(1040));

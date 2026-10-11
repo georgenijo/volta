@@ -36,8 +36,9 @@ export function telemetryDriveId(vehicle: number, start: Date) {
 }
 export function telemetryDriveVehicle(id: number) { return Number.isSafeInteger(id) && id < 0 ? -id % idBase : 0; }
 const resumeReasons = ['gear','first_observed','speed'];
-/** `moving(end,start)`: speed >5 km/h within 15s on both sides of a boundary. */
-export function mergeSessions(vehicle: number, sessions: Row[], gaps: Gap[], moving: (end: Date, start: Date) => boolean = () => false): Window[] {
+/** `moving(end,start)`: speed >5 km/h within 15s on both sides of a boundary.
+ * `charges`: known charging intervals; a stop containing one never joins. */
+export function mergeSessions(vehicle: number, sessions: Row[], gaps: Gap[], moving: (end: Date, start: Date) => boolean = () => false, charges: Row[] = []): Window[] {
   const out: Window[] = [];
   gaps=realGaps(gaps);
   for (const s of sessions) {
@@ -50,8 +51,9 @@ export function mergeSessions(vehicle: number, sessions: Row[], gaps: Gap[], mov
     const parked = previous && previous.endReason === 'gear' && resumeReasons.includes(s.startReason) && +start - +previous.end < parkJoinMs
       && !gaps.some(g => coverageGap(g) && +g.start < +start && +g.end > +previous.end);
     const rolling = previous && +start - +previous.end < 60000 && !lostBetween(gaps,previous.end,start) && moving(previous.end,start);
+    const charged = previous && charges.some(c => +new Date(c.start) < +start && +new Date(c.end) > +previous.end);
     const part: Part = {start,end,startReason:s.startReason,endReason:s.endReason,membership:s.membership};
-    if (previous && +start >= +previous.end && (parked || rolling)) {
+    if (previous && +start >= +previous.end && (parked || rolling) && !charged) {
       previous.end = end; previous.endReason = s.endReason; if (s.membership==='partial') previous.membership='partial'; previous.parts!.push(part);
     } else out.push({id:telemetryDriveId(vehicle,start),start,end,_cursorStart:s._cursorStart ?? start.toISOString(),endReason:s.endReason,startReason:s.startReason,membership:s.membership,parts:[part]});
   }
@@ -296,14 +298,18 @@ export class FleetDrives {
   async catalog(id: number): Promise<Catalog | null> {
     const [binding]=await this.sql`SELECT b.vin_digest,c.vin FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!binding?.vin || binding.vin_digest!==createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(binding.vin).digest('hex')) return null;
-    const [sessions,gaps,bounds]=await Promise.all([
+    const [sessions,gaps,bounds,charges]=await Promise.all([
       this.sql`SELECT start_ts AS start,end_ts AS end,start_reason AS "startReason",end_reason AS "endReason",membership,
         to_char(start_ts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "_cursorStart"
         FROM volta_telemetry.sessions WHERE vehicle_id=${id} AND kind='drive' ORDER BY start_ts`,
       this.sql`SELECT start_ts AS start,end_ts AS end,reason FROM volta_telemetry.gaps WHERE vehicle_id=${id} AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '90 seconds') ORDER BY start_ts`,
       this.sql`SELECT
         (SELECT source_ts FROM volta_telemetry.connectivity WHERE vehicle_id=${id} AND status='CONNECTED' ORDER BY source_ts LIMIT 1) AS connected,
-        (SELECT max(source_ts) FROM volta_telemetry.latest_samples WHERE vehicle_id=${id}) AS latest`
+        (SELECT max(source_ts) FROM volta_telemetry.latest_samples WHERE vehicle_id=${id}) AS latest`,
+      // Known charges (telemetry and TeslaMate) block joining the drives around them.
+      // An open charge counts as its start instant (stale open TeslaMate rows must not block every later join).
+      this.sql`SELECT start_ts AS start,COALESCE(end_ts,start_ts) AS end FROM volta_telemetry.sessions WHERE vehicle_id=${id} AND kind='charge'
+        UNION ALL SELECT start_date AT TIME ZONE 'UTC',COALESCE(end_date,start_date) AT TIME ZONE 'UTC' FROM public.charging_processes WHERE car_id=${id}`
     ]);
     const spans=realGaps(gaps);
     // Speed evidence only for <60s seams; one query per catalog.
@@ -316,7 +322,7 @@ export class FleetDrives {
           AND p.source_ts BETWEEN b.start AND b.start+interval '15 seconds')` : []).map(r=>+new Date(r.start)));
     const starts=[sessions[0]?.start,bounds[0]?.connected].filter(Boolean).map(t=>new Date(t));
     const ends=[sessions.at(-1)?.end,bounds[0]?.latest].filter(Boolean).map(t=>new Date(t));
-    return {windows:mergeSessions(id,sessions,spans,(_,start)=>rolling.has(+start)),gaps:spans,
+    return {windows:mergeSessions(id,sessions,spans,(_,start)=>rolling.has(+start),charges),gaps:spans,
       start:starts.length ? starts.reduce((a,b)=>+a<+b?a:b) : null,end:ends.length ? ends.reduce((a,b)=>+a>+b?a:b) : null};
   }
   /** Mileage needs totals, not GPS/chart arrays. Aggregate dense route and
