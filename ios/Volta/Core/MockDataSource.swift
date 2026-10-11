@@ -117,17 +117,21 @@ struct MockDataSource: VoltaDataSource {
             return (drive.start.addingTimeInterval(drive.durationMin * 60 * f), a.lat + (b.lat - a.lat) * u + bend, a.lon + (b.lon - a.lon) * u - bend)
         }
     }
-    /// Synthetic Bay Area sessions. The newest fast charge is a Fleet Telemetry
-    /// session (negative id, 196 kW peak, no recorded price) so the detail shows
-    /// an estimated cost, an auto-scaled power axis and 1 Hz-derived curves.
+    /// Synthetic Bay Area sessions. The newest is a priced Tesla Supercharger
+    /// visit from Fleet Telemetry (negative id, 196 kW peak, 1 Hz-derived
+    /// curves); the next telemetry fast charge has no recorded price so its
+    /// detail shows an estimated cost. The last fast charge has no network brand.
     private var allCharges: [ChargeSummary] {
         guard !empty else { return [] }
         return (0..<15).map { i in
-            let fast = i % 5 == 4; let energy = fast ? 43.2 : 22.6
+            let fast = i % 5 == 0; let energy = fast ? 43.2 : 22.6
             let start = ago(Double(i) * 48 + 15)
             let duration = fast ? 27.0 : 190.0
-            let telemetry = i == 4
-            var charge = ChargeSummary(id: telemetry ? -(i + 1) : i + 1, start: start, end: start.addingTimeInterval(duration * 60), address: fast ? "Mountain View, CA" : home, placeName: fast ? "Mountain View Supercharger" : "Home", energyAddedKwh: energy, energyUsedKwh: energy / 0.92, startBatteryLevel: fast ? 22 : 49, endBatteryLevel: 80, durationMin: duration, maxPowerKw: telemetry ? 196 : fast ? 176 : 7.7, fastCharger: fast, cost: telemetry ? nil : energy * (fast ? 0.41 : 0.23), currency: "USD", outsideTempAvgC: 16)
+            let telemetry = fast && i < 10
+            var charge = ChargeSummary(id: telemetry ? -(i + 1) : i + 1, start: start, end: start.addingTimeInterval(duration * 60), address: fast ? "Mountain View, CA" : home, placeName: fast ? "Mountain View Supercharger" : "Home", energyAddedKwh: energy, energyUsedKwh: energy / 0.92, startBatteryLevel: fast ? 22 : 49, endBatteryLevel: 80, durationMin: duration, maxPowerKw: telemetry ? 196 : fast ? 176 : 7.7, fastCharger: fast, cost: i == 5 ? nil : energy * (fast ? 0.33 : 0.23), currency: "USD", outsideTempAvgC: 16)
+            charge.latitude = fast ? 37.4148 : 37.4419
+            charge.longitude = fast ? -122.0782 : -122.1430
+            charge.fastChargerBrand = fast && i < 10 ? "Tesla" : nil
             charge.source = telemetry || i < 3 ? "fleet_telemetry" : "teslamate"
             charge.city = fast ? "Mountain View" : "Palo Alto"
             charge.street = fast ? "250 Sample Blvd" : "100 Example Ave"

@@ -451,6 +451,8 @@ struct ChargeSummary: Codable, Hashable, Sendable, Identifiable {
     var street: String? = nil
     /// Measured energy drawn from the charger. Absent means "not measured".
     var energyFromGridKwh: Double? = nil
+    /// DC network brand TeslaMate recorded (e.g. "Tesla"); newer servers only.
+    var fastChargerBrand: String? = nil
 }
 
 struct ChargeSample: Codable, Hashable, Sendable {

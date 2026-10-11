@@ -62,6 +62,12 @@ enum VoltaFormat {
         return total >= 60 ? "\(total / 60)h \(total % 60)m" : "\(total)m"
     }
     static func duration(_ minutes: Double?) -> String { duration(minutes: minutes) }
+    /// Spelled-out duration for detail lines: "28 min", "1 h 5 min".
+    static func longDuration(_ minutes: Double?) -> String {
+        guard let minutes else { return "—" }
+        let total = Int(max(0, minutes).rounded())
+        return total >= 60 ? "\(total / 60) h \(total % 60) min" : "\(total) min"
+    }
     static func relativeDate(_ date: Date, now: Date = .now) -> String {
         let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: now)

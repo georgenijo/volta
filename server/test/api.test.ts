@@ -307,6 +307,15 @@ describe('metric telemetry contract', () => {
     expect(ch.currency).toBe('USD'); expect(ch.maxPowerKw).toBe(11); expect(ch.fastCharger).toBe(false); expect(ch.efficiency).toBeCloseTo(0.875);
     expect(ch.samples).toHaveLength(2); expect(ch.samples[0].powerKw).toBe(11); expect(ch.samples[0].ratedRangeKm).toBe(325);
     expect(ch.source).toBe('teslamate'); expect(ch.avgPowerKw).toBe(11); expect(ch.energyFromGridKwh).toBeNull(); expect(ch.street).toBeNull(); expect(ch.city).toBeNull();
+    expect(ch.fastChargerBrand).toBeNull();
+  });
+  test('charge network brand comes from DC charger reports only', async () => {
+    expect((await json('/v1/charges/2')).fastChargerBrand).toBeNull();
+    await owner`UPDATE charges SET fast_charger_brand = 'Tesla' WHERE id = 3`;
+    await owner`UPDATE charges SET fast_charger_brand = 'Other' WHERE id = 1`;
+    expect((await json('/v1/charges/2')).fastChargerBrand).toBe('Tesla');
+    expect((await json('/v1/charges/1')).fastChargerBrand).toBeNull();
+    expect((await json('/v1/vehicles/3/charges')).items[0].fastChargerBrand).toBe('Tesla');
   });
   test('cursor pagination is deterministic for equal timestamps and scoped to filters', async () => {
     const seen: number[] = []; let cursor: string | null = null;

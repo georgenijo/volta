@@ -61,9 +61,8 @@ extension ChargeSummary {
         }
     }
 
-    /// "AC" / "DC" plus where, for the card's kind line.
+    /// "AC" / "DC", where the place is unknown.
     var currentLabel: String { fastCharger ? "DC" : "AC" }
-    var currentTint: Color { fastCharger ? HistoryTheme.blue : HistoryTheme.green }
 
     func matches(query: String) -> Bool {
         guard !query.isEmpty else { return true }
@@ -71,7 +70,8 @@ extension ChargeSummary {
     }
 }
 
-/// Charging tab: range pill + filter, search, map toggle, day-grouped sessions.
+/// Charging tab: map hero under the floating header, totals, shortcuts and
+/// day-grouped session cards.
 struct ChargingHistoryView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
@@ -88,6 +88,12 @@ struct ChargingHistoryView: View {
     @State private var places = HistoryPlaces()
     @State private var path: [ChargeSummary] = []
     @State private var selectedCluster: HistoryClusterSelection?
+    @State private var insight: MoreRoute?
+    @State private var headerHeight: CGFloat = 60
+
+    /// Totals and shortcuts share the detail screen's side margin.
+    private static let margin = ChargingDetailView.margin
+    private static let mapHeight: CGFloat = 296
 
     init(range: HistoryRange = .thirtyDays) {
         _range = State(initialValue: range)
@@ -97,35 +103,48 @@ struct ChargingHistoryView: View {
         feed.items.filter { filter.matches($0) && $0.matches(query: query) }
     }
 
+    private var rates: ElectricityRates {
+        model?.settings.rates ?? ElectricityRates(home: nil, dcFast: nil, currency: units.currency)
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
-            VStack(spacing: 0) {
-                HistoryHeader(title: "Charging", range: $range, filterActive: filter != .all) {
-                    Picker("Location", selection: $filter) {
-                        ForEach(ChargeFilter.allCases) { f in
-                            Label(f.title, systemImage: f.systemImage).tag(f)
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .top) {
+                    VStack(spacing: 0) {
+                        HistoryHeader(title: "Charging", range: $range, filterActive: filter != .all) {
+                            Picker("Location", selection: $filter) {
+                                ForEach(ChargeFilter.allCases) { f in
+                                    Label(f.title, systemImage: f.systemImage).tag(f)
+                                }
+                            }
+                        } trailing: {
+                            HistoryHeaderButton(systemImage: "magnifyingglass", label: "Search", isOn: searching) {
+                                withAnimation(.snappy) { searching.toggle(); if !searching { query = "" } }
+                            }
+                            HistoryHeaderButton(systemImage: showMap ? "list.bullet" : "map", label: showMap ? "List" : "Map") {
+                                withAnimation(.snappy) { showMap.toggle() }
+                            }
+                        }
+                        if searching {
+                            HistorySearchField(text: $query, prompt: "Search locations") {
+                                withAnimation(.snappy) { searching = false }
+                            }
+                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
-                } trailing: {
-                    HistoryHeaderButton(systemImage: "magnifyingglass", label: "Search", isOn: searching) {
-                        withAnimation(.snappy) { searching.toggle(); if !searching { query = "" } }
-                    }
-                    HistoryHeaderButton(systemImage: showMap ? "list.bullet" : "map", label: showMap ? "List" : "Map") {
-                        withAnimation(.snappy) { showMap.toggle() }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+                }
+                .historyScreenBackground()
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: ChargeSummary.self) { ChargingDetailView(charge: $0) }
+                .navigationDestination(item: $insight) { route in
+                    switch route {
+                    case .chargerMap: ChargerMapView()
+                    default: StatsView()
                     }
                 }
-                if searching {
-                    HistorySearchField(text: $query, prompt: "Search locations") {
-                        withAnimation(.snappy) { searching = false }
-                    }
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                }
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .historyScreenBackground()
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: ChargeSummary.self) { ChargingDetailView(charge: $0) }
         }
         .task(id: range) {
             await reload(skeleton: true)
@@ -161,22 +180,25 @@ struct ChargingHistoryView: View {
     @ViewBuilder private var content: some View {
         switch feed.phase {
         case .loading:
-            HistorySkeletonList()
+            HistorySkeletonList().padding(.top, headerHeight)
         case .failed(let message):
             HistoryErrorState(title: "Couldn't load charges", message: message) {
                 Task { await reload(skeleton: true) }
             }
+            .padding(.top, headerHeight)
         case .loaded:
             if feed.items.isEmpty {
                 HistoryEmptyState(systemImage: "bolt.slash",
                                   title: range.emptyPhrase.map { "No charges \($0)" } ?? "No charges yet",
                                   message: "Try a different range or wait for your next charge.")
+                    .padding(.top, headerHeight)
             } else if visible.isEmpty && !feed.hasMore {
                 HistoryEmptyState(systemImage: "line.3.horizontal.decrease",
                                   title: "No matching charges",
                                   message: "Try a different search or location filter.")
+                    .padding(.top, headerHeight)
             } else if showMap {
-                mapView
+                mapView.padding(.top, headerHeight)
             } else {
                 list
             }
@@ -184,42 +206,53 @@ struct ChargingHistoryView: View {
     }
 
     private var list: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                if let settings = model?.settings, settings.electricityRate == nil, !settings.ratePromptDismissed {
-                    RatePromptCard(settings: settings).padding(.top, 4).padding(.bottom, 22)
+        let needsPlaces = visible.contains { $0.needsPlaces }
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ChargingMapHero(coordinates: visible.compactMap { $0.location(places.state).coordinate },
+                                height: Self.mapHeight) {
+                    withAnimation(.snappy) { showMap = true }
                 }
-                totals.padding(.top, 8).padding(.bottom, 30)
+                ChargingHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
+                             charges: visible, partial: feed.hasMore) { insight = $0 }
+                    .padding(.horizontal, Self.margin)
+                    .padding(.bottom, 29)
                 ForEach(DayGroup.group(visible, by: \.start)) { group in
-                    Section {
-                        VStack(spacing: 12) {
-                            ForEach(group.items) { charge in
-                                NavigationLink(value: charge) { ChargeRow(charge: charge) }
-                                    .buttonStyle(VoltaPressStyle())
-                                    .accessibilityIdentifier("row.charge.\(charge.id)")
-                            }
+                    ChargeDayHeader(day: group.day, title: group.title, trailing: dayTrailing(group.items))
+                    VStack(spacing: 12) {
+                        ForEach(group.items) { charge in
+                            NavigationLink(value: charge) { ChargeRow(charge: charge) }
+                                .buttonStyle(VoltaPressStyle())
+                                .accessibilityIdentifier("row.charge.\(charge.id)")
                         }
-                        .padding(.bottom, 10)
-                    } header: {
-                        SessionDayHeader(day: group.day, title: group.title, trailing: dayTrailing(group.items))
                     }
+                    .padding(.horizontal, HistoryTheme.gutter)
+                    .padding(.top, 14).padding(.bottom, 26)
                 }
                 HistoryPageFooter(feed: feed) { await reload() }
+                    .padding(.horizontal, HistoryTheme.gutter)
             }
-            .padding(.horizontal, HistoryTheme.gutter)
         }
+        .ignoresSafeArea(edges: .top)
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .refreshable { await reload() }
+        .task(id: needsPlaces) {
+            if needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) }
+        }
     }
 
-    private var totals: some View {
-        ChargingHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
-                     charges: visible, partial: feed.hasMore)
-    }
-
+    /// "1 session • +47.6 kWh • $14.28". The cost shows only when every
+    /// session resolves in one currency, with "~" if any is estimated.
     private func dayTrailing(_ items: [ChargeSummary]) -> String {
-        "\(items.count) \(items.count == 1 ? "session" : "sessions") · " + VoltaFormat.energy(PartialSum(items.map(\.energyAddedKwh)).value)
+        var parts = ["\(items.count) \(items.count == 1 ? "session" : "sessions")"]
+        if let kwh = PartialSum(items.map(\.energyAddedKwh)).value { parts.append("+" + VoltaFormat.energy(kwh)) }
+        let costs = items.map { ChargeCost.resolve($0, rates: rates) }
+        if let first = costs.first ?? nil, costs.allSatisfy({ $0?.currency == first.currency }) {
+            let total = costs.reduce(0) { $0 + ($1?.amount ?? 0) }
+            parts.append((costs.contains { $0?.isEstimated == true } ? "~" : "") + VoltaFormat.money(total, currency: first.currency))
+        }
+        return parts.joined(separator: " • ")
     }
 
     // MARK: Map
@@ -265,112 +298,263 @@ struct ChargingHistoryView: View {
     }
 }
 
+// MARK: - Map hero
+
+/// Dim private MapKit tiles framing the listed sessions, fading into the
+/// totals. Nothing is geocoded or searched; with no coordinates it stays blank.
+private struct ChargingMapHero: View {
+    var coordinates: [CLLocationCoordinate2D]
+    var height: CGFloat
+    var expand: () -> Void
+
+    private static let fade: CGFloat = 80
+
+    /// One pin per spot, to roughly 100 m.
+    private var spots: [CLLocationCoordinate2D] {
+        var seen = Set<String>()
+        return coordinates.filter { seen.insert(String(format: "%.3f,%.3f", $0.latitude, $0.longitude)).inserted }
+    }
+
+    private var region: MKCoordinateRegion? {
+        let spots = spots
+        guard let minLat = spots.map(\.latitude).min(), let maxLat = spots.map(\.latitude).max(),
+              let minLon = spots.map(\.longitude).min(), let maxLon = spots.map(\.longitude).max() else { return nil }
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2),
+            span: MKCoordinateSpan(latitudeDelta: max(0.04, (maxLat - minLat) * 1.8), longitudeDelta: max(0.04, (maxLon - minLon) * 1.8)))
+    }
+
+    var body: some View {
+        ZStack {
+            HistoryTheme.background
+            if let region {
+                let spots = spots
+                // Framed below the header; the Maps logo and Legal link stay above the fade.
+                GreyTileMap(framing: .region(region, pins: spots),
+                            insets: EdgeInsets(top: 110, leading: 0, bottom: Self.fade, trailing: 0), dim: 0.65) {
+                    Circle().fill(HistoryTheme.pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
+                }
+                .allowsHitTesting(false)
+                .id(spots.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ";"))
+                .overlay {
+                    Color.clear.contentShape(.rect).onTapGesture(perform: expand)
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+        .overlay(alignment: .top) {
+            // Keeps the floating header legible over the tiles.
+            LinearGradient(colors: [HistoryTheme.background.opacity(0.6), HistoryTheme.background.opacity(0)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: 130)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottom) {
+            LinearGradient(colors: [HistoryTheme.background.opacity(0), HistoryTheme.background],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: Self.fade)
+                .allowsHitTesting(false)
+        }
+        .frame(height: height)
+        .clipped()
+        .accessibilityHidden(true)
+    }
+}
+
+/// Fixed private MapKit tiles drained to grey, with pins drawn over the map
+/// so they keep their color. Nothing is geocoded or searched.
+struct GreyTileMap<Pin: View>: View {
+    enum Framing {
+        /// One pin at the camera's centre.
+        case camera(CLLocationCoordinate2D, distance: Double)
+        /// The region fitted into the map, a pin per coordinate.
+        case region(MKCoordinateRegion, pins: [CLLocationCoordinate2D])
+    }
+
+    var framing: Framing
+    /// Area the camera frames; the Maps logo and Legal link sit above the bottom inset.
+    var insets: EdgeInsets
+    var dim: Double = 0
+    @ViewBuilder var pin: Pin
+
+    var body: some View {
+        map
+            .mapStyle(.standard(emphasis: .muted, pointsOfInterest: .excludingAll))
+            .environment(\.colorScheme, .dark)
+            .safeAreaPadding(insets)
+            .saturation(0)
+            .overlay { Color.black.opacity(dim).allowsHitTesting(false) }
+            .overlay {
+                GeometryReader { geo in
+                    ForEach(Array(points(in: geo.size).enumerated()), id: \.offset) { _, point in
+                        pin.position(point)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+    }
+
+    @ViewBuilder private var map: some View {
+        switch framing {
+        case .camera(let center, let distance):
+            Map(initialPosition: .camera(MapCamera(centerCoordinate: center, distance: distance, heading: 0, pitch: 0)), interactionModes: [])
+        case .region(let region, _):
+            Map(initialPosition: .region(region), interactionModes: [])
+        }
+    }
+
+    /// Flat camera: the centre of the framed area, or a Web Mercator projection
+    /// of each pin into the region MapKit fits to that area.
+    private func points(in size: CGSize) -> [CGPoint] {
+        let w = size.width - insets.leading - insets.trailing, h = size.height - insets.top - insets.bottom
+        let mid = CGPoint(x: insets.leading + w / 2, y: insets.top + h / 2)
+        switch framing {
+        case .camera:
+            return [mid]
+        case .region(let region, let pins):
+            let c = region.center
+            let dy = Self.mercatorY(c.latitude + region.span.latitudeDelta / 2) - Self.mercatorY(c.latitude - region.span.latitudeDelta / 2)
+            guard region.span.longitudeDelta > 0, dy > 0, w > 0, h > 0 else { return [] }
+            let scale = min(w / region.span.longitudeDelta, h / dy)
+            return pins.map {
+                CGPoint(x: mid.x + ($0.longitude - c.longitude) * scale,
+                        y: mid.y - (Self.mercatorY($0.latitude) - Self.mercatorY(c.latitude)) * scale)
+            }
+        }
+    }
+
+    private static func mercatorY(_ latitude: Double) -> Double {
+        log(tan(.pi / 4 + latitude * .pi / 360)) * 180 / .pi
+    }
+}
+
 // MARK: - Hero
 
-/// Open hero: energy added, home/public split dial, flow stats.
+/// Period and session count, total energy added, then shortcuts to the
+/// cost map and energy statistics.
 struct ChargingHero: View {
     var scope: String
     var charges: [ChargeSummary]
     var partial: Bool
+    var open: (MoreRoute) -> Void
     @Environment(\.units) private var units
 
     var body: some View {
         let totals = ChargingTotals(charges, fallbackCurrency: units.currency)
         let energy = totals.energyAddedKwh.value
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(alignment: .center, spacing: 12) {
-                HistoryHeroNumeral(value: energy.map { VoltaFormat.number($0, digits: $0 >= 100 ? 0 : 1) } ?? "—", unit: "kWh", size: 92)
-                Spacer(minLength: 0)
-                splitDial.padding(.trailing, 6)
+        let count = "\(charges.count)\(partial ? "+" : "") \(charges.count == 1 && !partial ? "session" : "sessions")"
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 15) {
+                Text("\(scope) • \(count)".uppercased())
+                    .font(.system(size: 9, weight: .medium)).tracking(1.8)
+                    .foregroundStyle(HistoryTheme.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    Text(energy.map { VoltaFormat.number($0, digits: $0 >= 100 ? 0 : 1) } ?? "—")
+                        .font(.system(size: 47, weight: .heavy)).monospacedDigit()
+                        .foregroundStyle(.white)
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                    Text("kWh").font(.system(size: 13, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                }
             }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isHeader)
-            .accessibilityLabel(scope)
             .accessibilityIdentifier("screen.charging")
-
-            VStack(alignment: .leading, spacing: 14) {
-                HistoryFlowStats(items: [
-                    ("clock", VoltaFormat.duration(charges.reduce(0) { $0 + $1.durationMin })),
-                    ("bolt.fill", "\(charges.count)\(partial ? "+" : "") \(charges.count == 1 && !partial ? "session" : "sessions")"),
-                ])
-                HistoryFlowStats(items: [("creditcard.fill", totals.cost.display)]
-                                 + (averageRate(totals).map { [("tag.fill", $0 + "/kWh")] } ?? []))
-                HistoryHeroNotes(notes: totals.notes)
+            HistoryHeroNotes(notes: totals.notes).padding(.top, 8)
+            HStack(spacing: 13) {
+                ChargingShortcut(title: "Costs & Locations") {
+                    Text("$").font(.system(size: 16, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+                } action: { open(.chargerMap) }
+                .accessibilityIdentifier("button.charging.costs")
+                ChargingShortcut(title: "Energy Mix") {
+                    EnergyMixGlyph()
+                } action: { open(.stats) }
+                .accessibilityIdentifier("button.charging.energy-mix")
             }
+            .padding(.top, 33)
         }
-    }
-
-    private var splitDial: some View {
-        let home = charges.filter { $0.kind == .home }.reduce(0) { $0 + ($1.energyAddedKwh ?? 0) }
-        let publicKwh = charges.filter { $0.kind != .home }.reduce(0) { $0 + ($1.energyAddedKwh ?? 0) }
-        let total = home + publicKwh
-        let share = total > 0 ? Int((home / total * 100).rounded()) : nil
-        return SegmentDial(segments: [.init(label: "Home", value: home, color: HistoryTheme.green),
-                                      .init(label: "Public", value: publicKwh, color: HistoryTheme.blue)],
-                           center: share.map { "\($0)%" } ?? "–", caption: "Home", size: 100,
-                           accessibility: share.map { "Home charging \($0)% of energy, public \(100 - $0)%" } ?? "Home share unavailable")
-    }
-
-    /// Blended price per kWh added over sessions that recorded both cost and
-    /// energy (as on the detail screen), single currency only. Estimates are
-    /// left out so the total reflects what was actually paid.
-    private func averageRate(_ totals: ChargingTotals) -> String? {
-        guard case .single(_, let currency) = totals.cost else { return nil }
-        let priced = charges.compactMap { c -> (Double, Double)? in
-            guard let cost = c.cost, let kwh = c.energyAddedKwh, kwh > 0 else { return nil }
-            return (cost, kwh)
-        }
-        let kwh = priced.reduce(0) { $0 + $1.1 }
-        guard kwh > 0 else { return nil }
-        return VoltaFormat.money(priced.reduce(0) { $0 + $1.0 } / kwh, currency: currency)
     }
 }
 
-// MARK: - Charge curve
-
-/// The session's state-of-charge climb drawn as a faint curve behind the row.
-/// AC rises steadily; DC tapers as the pack fills.
-struct ChargeCurveWatermark: View {
-    var from: Int?
-    var to: Int?
-    var fast: Bool
-    var opacity: Double = 0.5
+/// Outlined shortcut pill: glyph, title, and a trailing "↗".
+private struct ChargingShortcut<Icon: View>: View {
+    var title: String
+    @ViewBuilder var icon: Icon
+    var action: () -> Void
 
     var body: some View {
-        GeometryReader { geometry in
-            if let from, let to {
-                let points = Self.curve(from: from, to: to, fast: fast, in: geometry.size, inset: 12)
-                let path = Path { p in
-                    p.move(to: points[0]); points.dropFirst().forEach { p.addLine(to: $0) }
-                }
-                let tint = fast ? HistoryTheme.blue : HistoryTheme.green
-                let area = Path { p in
-                    p.addPath(path)
-                    p.addLine(to: CGPoint(x: points[points.count - 1].x, y: geometry.size.height))
-                    p.addLine(to: CGPoint(x: points[0].x, y: geometry.size.height))
-                    p.closeSubpath()
-                }
-                ZStack {
-                    area.fill(LinearGradient(colors: [tint.opacity(0.12), tint.opacity(0)], startPoint: .top, endPoint: .bottom))
-                    path.stroke(tint, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-                }
-                .opacity(opacity)
+        Button(action: action) {
+            HStack(spacing: 10) {
+                icon
+                Text(title).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 12, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
             }
+            .padding(.leading, 12.5).padding(.trailing, 14)
+            .frame(maxWidth: .infinity, minHeight: 45)
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 1))
+            .contentShape(.rect(cornerRadius: 20))
         }
-        .allowsHitTesting(false)
+        .buttonStyle(VoltaPressStyle())
+    }
+}
+
+/// Three stacked bars, brightest on top.
+private struct EnergyMixGlyph: View {
+    var body: some View {
+        VStack(spacing: 2.3) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous).fill(HistoryTheme.green).frame(height: 8.7)
+            RoundedRectangle(cornerRadius: 2, style: .continuous).fill(HistoryTheme.green.opacity(0.6)).frame(height: 4.7)
+            RoundedRectangle(cornerRadius: 2, style: .continuous).fill(HistoryTheme.green.opacity(0.4)).frame(height: 4.3)
+        }
+        .frame(width: 14)
         .accessibilityHidden(true)
     }
+}
 
-    /// Larger sessions climb higher; the shape is the AC/DC taper.
-    static func curve(from: Int, to: Int, fast: Bool, in size: CGSize, inset: CGFloat) -> [CGPoint] {
-        let w = max(1, size.width - inset * 2), h = max(1, size.height - inset * 2)
-        let rise = min(1, max(0.35, Double(abs(to - from)) / 60)) * (to >= from ? 1 : -1)
-        let baseY = to >= from ? inset + h : inset
-        return (0...32).map { i in
-            let t = Double(i) / 32
-            let f = fast ? 1 - pow(1 - t, 2.4) : t * t * (3 - 2 * t)
-            return CGPoint(x: inset + w * t, y: baseY - h * rise * f)
+// MARK: - Day header
+
+/// Blue calendar badge and day, the day's totals on the right, then a
+/// full-width hairline.
+private struct ChargeDayHeader: View {
+    var day: Date
+    var title: String
+    var trailing: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 9) {
+                CalendarDayBadge(day: day)
+                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(HistoryTheme.blue).lineLimit(1)
+                Spacer(minLength: 8)
+                Text(trailing)
+                    .font(.system(size: 11, weight: .regular)).monospacedDigit()
+                    .foregroundStyle(HistoryTheme.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .padding(.horizontal, 29)
+            .padding(.bottom, 11)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
         }
+        .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Small outlined calendar page with the day of the month.
+private struct CalendarDayBadge: View {
+    var day: Date
+
+    var body: some View {
+        Text(day.formatted(.dateTime.day()))
+            .font(.system(size: 6.5, weight: .bold)).monospacedDigit()
+            .padding(.top, 1.5)
+            .frame(width: 13, height: 11)
+            .overlay(alignment: .top) { Rectangle().frame(height: 2) }
+            .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous).strokeBorder(lineWidth: 1.2))
+            .clipShape(.rect(cornerRadius: 2, style: .continuous))
+            .foregroundStyle(HistoryTheme.blue)
     }
 }
 
@@ -388,82 +572,63 @@ struct ChargeRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(charge.title)
-                        .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                        .lineLimit(1).minimumScaleFactor(0.75)
-                    kindLine
-                }
-                Spacer(minLength: 0)
-                VStack(alignment: .trailing, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text(charge.energyAddedKwh.map { "+" + VoltaFormat.number($0) } ?? "—")
-                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
-                        Text("KWH").font(.system(size: 10, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6.2) {
+                    HStack(alignment: .center, spacing: 8.3) {
+                        Circle().fill(HistoryTheme.green).frame(width: 7.7, height: 7.7).frame(width: 16)
+                        Text(charge.city ?? charge.title)
+                            .font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
+                            .lineLimit(1).minimumScaleFactor(0.75)
                     }
-                    .foregroundStyle(.white)
-                    HStack(spacing: 5) {
+                    HStack(spacing: 4) {
                         Text(charge.start.historyTime)
-                        Image(systemName: "arrow.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(HistoryTheme.tertiary)
+                        Text("→").foregroundStyle(HistoryTheme.tertiary)
                         Text(charge.end?.historyTime ?? "Now")
                     }
-                    .font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                    .font(.system(size: 10.5, weight: .regular)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(charge.energyAddedKwh.map { "+" + VoltaFormat.energy($0) } ?? "—")
+                        .font(.system(size: 14.5, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                    if let kw = averagePowerKw {
+                        Text("\(VoltaFormat.number(kw)) kW")
+                            .font(.system(size: 10, weight: .regular)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                    }
                 }
                 .fixedSize()
             }
-            .padding(.bottom, 16)
-            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
-            HStack(spacing: 0) {
-                ViewThatFits(in: .horizontal) {
-                    metrics(compact: false)
-                    metrics(compact: true)
-                }
-                Spacer(minLength: 8)
-                SocDial(from: charge.startBatteryLevel, to: charge.endBatteryLevel, size: 44)
+            if let bar = ChargeSocBar(start: charge.startBatteryLevel, end: charge.endBatteryLevel) {
+                ChargeSocBarView(bar: bar, numberSize: 13.5).padding(.top, 13.6)
             }
-            .padding(.top, 12)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 14)
+            HStack(spacing: 8) {
+                metric("clock", VoltaFormat.duration(charge.durationMin))
+                Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5)
+                metric("creditcard.fill", costText)
+                if needsRate { SetRateButton(settings: model?.settings, size: 10.5, link: true) }
+                Spacer(minLength: 8)
+                Text(place).font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+                ChargePlaceBadge(charge: charge, size: 16)
+            }
+            .padding(.top, 14)
         }
-        .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 14)
-        .background {
-            ChargeCurveWatermark(from: charge.startBatteryLevel, to: charge.endBatteryLevel, fast: charge.fastCharger, opacity: 0.5)
-                .padding(.leading, 150).padding(.trailing, 110).padding(.top, 6).padding(.bottom, 56)
-        }
-        .driveSurface()
+        .padding(.leading, 14).padding(.trailing, 14.3)
+        .padding(.top, 15).padding(.bottom, 12.7)
+        .driveSurface(radius: 22)
         .accessibilityElement(children: .combine)
     }
 
-    /// Small colored glyph for AC/DC, then where.
-    private var kindLine: some View {
-        HStack(spacing: 6) {
-            if charge.fastCharger {
-                Image(systemName: "bolt.fill").font(.system(size: 9, weight: .bold)).foregroundStyle(HistoryTheme.blue)
-            } else {
-                Circle().fill(HistoryTheme.green).frame(width: 6, height: 6)
-            }
-            Text(charge.fastCharger ? "DC FAST" : "AC").font(.system(size: 10, weight: .bold)).tracking(1)
-                .foregroundStyle(charge.currentTint)
-            if let place = subtitle {
-                Text(place).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
-            }
-        }
+    /// Recorded average, else energy over time. Unknown stays hidden.
+    private var averagePowerKw: Double? {
+        if let avg = charge.avgPowerKw, avg.isFinite, avg > 0 { return avg }
+        guard let kwh = charge.energyAddedKwh, charge.durationMin >= 1 else { return nil }
+        return kwh / (charge.durationMin / 60)
     }
 
-    /// Place and city, matching the detail subtitle.
-    private var subtitle: String? { ChargePlace.subtitle(charge) }
-
-    private func metrics(compact: Bool) -> some View {
-        HStack(spacing: 8) {
-            metric("clock", VoltaFormat.duration(charge.durationMin))
-            if !compact {
-                dot
-                metric("bolt", charge.maxPowerKw.map { "\(VoltaFormat.number($0, digits: $0 >= 20 ? 0 : 1)) kW" } ?? "—")
-            }
-            dot
-            metric("creditcard", costText, tint: HistoryTheme.amber)
-            if needsRate { SetRateButton(settings: model?.settings, size: 12) }
-            if let soc = socText, !needsRate || !compact { dot; metric("battery.75percent", soc) }
-        }
+    /// Network, else the place name, else the current type.
+    private var place: String {
+        ChargePlace.network(charge) ?? charge.placeName.flatMap { $0.isEmpty ? nil : $0 } ?? (charge.fastCharger ? "DC fast" : "AC")
     }
 
     /// Recorded cost, or "~$4.52" when estimated from the electricity rate.
@@ -476,68 +641,44 @@ struct ChargeRow: View {
     /// Energy is known but no rate applies, so the cost can't be estimated.
     private var needsRate: Bool { cost == nil && charge.energyAddedKwh != nil && model != nil }
 
-    private var socText: String? {
-        ChargeSocBar(start: charge.startBatteryLevel, end: charge.endBatteryLevel).map { "\($0.start)→\($0.end)%" }
-    }
-
-    private var dot: some View { Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5) }
-
-    private func metric(_ icon: String?, _ text: String, tint: Color = HistoryTheme.tertiary) -> some View {
+    private func metric(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 5) {
-            if let icon { Image(systemName: icon).font(.system(size: 11, weight: .medium)).foregroundStyle(tint) }
-            Text(text).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(.white.opacity(0.78))
+            Image(systemName: icon).font(.system(size: 10, weight: .medium))
+            Text(text).font(.system(size: 10.5, weight: .regular)).monospacedDigit()
         }
+        .foregroundStyle(HistoryTheme.secondary)
         .lineLimit(1).fixedSize()
     }
 }
 
-// MARK: - Rate prompt
+// MARK: - Place badge
 
-/// One-time card asking for a home rate; hidden once a rate is saved or the
-/// card is dismissed.
-private struct RatePromptCard: View {
-    var settings: UserSettings
-    @State private var editing = false
+/// The Tesla network's red "T" badge, otherwise the place kind's icon.
+struct ChargePlaceBadge: View {
+    var charge: ChargeSummary
+    var size: CGFloat
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Image(systemName: "tag.fill")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(HistoryTheme.green)
-                .frame(width: 40, height: 40)
-                .background(HistoryTheme.green.opacity(0.14), in: .circle)
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Add your electricity rate for accurate charging costs")
-                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button { editing = true } label: {
-                    Text("Set rate")
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.black)
-                        .padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(HistoryTheme.green, in: .capsule)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("button.rate-prompt.set")
+        Group {
+            if ChargePlace.network(charge) != nil {
+                Circle().fill(HistoryTheme.teslaRed)
+                    .overlay(Text("T").font(.system(size: size * 0.55, weight: .heavy)).foregroundStyle(.white))
+                    .overlay(Circle().strokeBorder(.white, lineWidth: max(0.7, size * 0.05)))
+            } else {
+                Circle().fill(charge.kindTint.opacity(0.18))
+                    .overlay(Image(systemName: charge.kindIcon).font(.system(size: size * 0.5, weight: .semibold)).foregroundStyle(charge.kindTint))
             }
-            Spacer(minLength: 0)
         }
-        .padding(18)
-        .padding(.trailing, 22)
-        .driveSurface(radius: 20)
-        .overlay(alignment: .topTrailing) {
-            Button { withAnimation(.snappy) { settings.ratePromptDismissed = true } } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold)).foregroundStyle(HistoryTheme.secondary)
-                    .frame(width: 36, height: 36).contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .padding(6)
-            .accessibilityLabel("Dismiss")
-            .accessibilityIdentifier("button.rate-prompt.dismiss")
-        }
-        .accessibilityIdentifier("card.rate-prompt")
-        .electricityRateSheet(isPresented: $editing, settings: settings)
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
+}
+
+extension HistoryTheme {
+    /// Session location dot on maps.
+    static let pin = Color(hex: 0xD9604C)
+    /// Tesla Supercharger badge.
+    static let teslaRed = Color(hex: 0xE0453A)
 }
 
 #Preview("Charging") {

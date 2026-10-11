@@ -41,16 +41,18 @@ async function tm(id:number,start:number,end:number,cost:number|null=null){
 }
 test('telemetry charge replaces the overlapping TeslaMate process, paginates across sources, and serves negative-id detail',async()=>{
   await tm(10,420,2000,9.5);await tm(11,-7200,-3600);
+  await owner`INSERT INTO charges(charging_process_id,date,battery_level,charge_energy_added,charger_power,ideal_battery_range_km,fast_charger_present,fast_charger_brand)
+    VALUES (10,${at(600)},60,10,150,300,true,'Tesla'),(11,${at(-5000)},50,5,11,250,false,'Other')`;
   const first=await get('/v1/vehicles/1/charges?limit=1');const c=first.items[0];
   expect(c.id).toBeLessThan(0);expect(c.source).toBe('fleet_telemetry');
   expect(c.start).toBe(at(2).toISOString());expect(c.end).toBe(at(1680).toISOString());
   expect(c.startBatteryLevel).toBe(24);expect(c.endBatteryLevel).toBe(80);expect(c.energyAddedKwh).toBeCloseTo(43.26);
-  expect(c.maxPowerKw).toBe(196);expect(c.fastCharger).toBe(true);expect(c.cost).toBe(9.5);expect(c.currency).toBe('USD');
+  expect(c.maxPowerKw).toBe(196);expect(c.fastCharger).toBe(true);expect(c.cost).toBe(9.5);expect(c.currency).toBe('USD');expect(c.fastChargerBrand).toBe('Tesla');
   expect(c.placeName).toBe('Synthetic Home');expect(c.address).toBe('1 Synthetic Street');expect(c.city).toBe('Synthetic Bay City');expect(c.street).toBe('1 Synthetic Road');
   expect(c.latitude).toBe(37.7001);expect(c.energyFromGridKwh).toBeNull();expect(c.energyUsedKwh).toBeNull();expect(c.avgPowerKw).toBeGreaterThan(150);
   // Negative cursor id; TeslaMate 10 is replaced, uncovered 11 remains.
   const second=await get(`/v1/vehicles/1/charges?limit=1&cursor=${first.nextCursor}`);
-  expect(second.items.map((r:any)=>r.id)).toEqual([11]);expect(second.items[0].source).toBe('teslamate');expect(second.nextCursor).toBeNull();
+  expect(second.items.map((r:any)=>r.id)).toEqual([11]);expect(second.items[0].source).toBe('teslamate');expect(second.items[0].fastChargerBrand).toBeNull();expect(second.nextCursor).toBeNull();
   const filtered=await get(`/v1/vehicles/1/charges?from=${at(-60).toISOString()}&to=${at(60).toISOString()}`);expect(filtered.items.map((r:any)=>r.id)).toEqual([c.id]);
   const detail=await get(`/v1/charges/${c.id}`);
   expect(detail.energyAddedKwh).toBe(c.energyAddedKwh);expect(detail.efficiency).toBeNull();expect(detail._cursorStart).toBeUndefined();

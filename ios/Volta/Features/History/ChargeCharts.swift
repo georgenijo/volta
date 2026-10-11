@@ -295,20 +295,21 @@ struct ChargeTraceChart: View {
 struct ChargeSocBarView: View {
     var bar: ChargeSocBar
     var tint: Color = HistoryTheme.green
+    var numberSize: CGFloat = 14
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 13) {
             level(bar.start, color: .white)
             GeometryReader { geo in
                 let w = geo.size.width
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.14))
                     Capsule().fill(tint)
-                        .frame(width: max(6, w * (bar.upper - bar.lower)))
+                        .frame(width: max(5, w * (bar.upper - bar.lower)))
                         .offset(x: w * bar.lower)
                 }
             }
-            .frame(height: 8)
+            .frame(height: 5)
             level(bar.end, color: tint)
         }
         .accessibilityElement(children: .ignore)
@@ -318,12 +319,12 @@ struct ChargeSocBarView: View {
     private func level(_ value: Int, color: Color) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: value >= 50 ? "battery.75percent" : "battery.25percent")
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(color)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
             HStack(alignment: .firstTextBaseline, spacing: 1) {
-                Text("\(value)").font(.system(size: 20, weight: .semibold)).monospacedDigit()
-                Text("%").font(.system(size: 13, weight: .medium)).opacity(0.7)
+                Text("\(value)").font(.system(size: numberSize, weight: .semibold)).monospacedDigit()
+                Text("%").font(.system(size: numberSize * 0.7, weight: .medium)).opacity(0.7)
             }
             .foregroundStyle(color)
         }

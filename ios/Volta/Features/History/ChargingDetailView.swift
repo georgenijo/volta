@@ -51,7 +51,11 @@ struct ChargingDetailView: View {
         case voltage = "Volts", current = "Amps"
     }
 
-    private static let mapHeight: CGFloat = 210
+    /// The map runs under the status bar and header to about 40% of the screen.
+    private static let mapHeight: CGFloat = 365
+    /// The bottom of the map that fades into the page; MapKit's attribution sits above it.
+    private static let mapFade: CGFloat = 56
+    static let margin: CGFloat = 28
 
     /// The detail's summary when loaded (it may carry fields the list row lacks).
     private var summary: ChargeSummary { loader.detail?.summary ?? charge }
@@ -63,7 +67,7 @@ struct ChargingDetailView: View {
                     mapBackdrop
                     VStack(alignment: .leading, spacing: 0) {
                         hero
-                        VStack(alignment: .leading, spacing: 56) {
+                        VStack(alignment: .leading, spacing: 52) {
                             energySection
                             curveSection
                                 .background(alignment: .top) { Color.clear.frame(height: 0).offset(y: -24).id(ScrollTarget.curve) }
@@ -72,12 +76,11 @@ struct ChargingDetailView: View {
                             electricalSection
                             detailsSection
                         }
-                        .padding(.top, 52)
+                        .padding(.top, 45)
                         Color.clear.frame(height: 1).id(ScrollTarget.bottom)
                     }
-                    .padding(.horizontal, HistoryTheme.gutter)
-                    // The title sits on the map's fade.
-                    .padding(.top, -48)
+                    .padding(.horizontal, Self.margin)
+                    .padding(.top, 10)
                 }
             }
             .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
@@ -93,8 +96,7 @@ struct ChargingDetailView: View {
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showingMap) {
             if let coordinate = location.coordinate {
-                ChargeLocationMap(coordinate: coordinate, title: ChargePlace.title(summary), subtitle: ChargePlace.subtitle(summary),
-                                  systemImage: summary.kindIcon, tint: summary.kindTint)
+                ChargeLocationMap(coordinate: coordinate, title: ChargePlace.title(summary), subtitle: ChargePlace.subtitle(summary))
             }
         }
         .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
@@ -134,11 +136,9 @@ struct ChargingDetailView: View {
 
     private var header: some View {
         ZStack(alignment: .top) {
-            LinearGradient(stops: [.init(color: HistoryTheme.background, location: 0),
-                                   .init(color: HistoryTheme.background.opacity(0.75), location: 0.55),
-                                   .init(color: HistoryTheme.background.opacity(0), location: 1)],
+            LinearGradient(colors: [HistoryTheme.background.opacity(0.55), HistoryTheme.background.opacity(0)],
                            startPoint: .top, endPoint: .bottom)
-                .frame(height: 130)
+                .frame(height: 120)
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
             HStack(spacing: 10) {
@@ -146,11 +146,11 @@ struct ChargingDetailView: View {
                 Spacer(minLength: 0)
                 Button { editingRate = true } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "tag").font(.system(size: 17, weight: .medium))
-                        Text("Price").font(.system(size: 17, weight: .semibold))
+                        Image(systemName: "tag").font(.system(size: 14, weight: .medium))
+                        Text("Price").font(.system(size: 14, weight: .semibold))
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 16).frame(height: 52)
+                    .padding(.horizontal, 14).frame(height: 44)
                     .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
@@ -158,7 +158,7 @@ struct ChargingDetailView: View {
                 .accessibilityLabel("Electricity rate")
                 .accessibilityIdentifier("charge.price")
                 if location.coordinate != nil {
-                    GlassCircleButton(systemImage: "arrow.up.left.and.arrow.down.right", size: 52, accessibilityLabel: "Expand map") {
+                    GlassCircleButton(systemImage: "arrow.up.left.and.arrow.down.right", size: 44, accessibilityLabel: "Expand map") {
                         showingMap = true
                     }
                     .accessibilityIdentifier("charge.map.expand")
@@ -172,20 +172,17 @@ struct ChargingDetailView: View {
     // MARK: Map backdrop
 
     /// Private MapKit tiles centred on the recorded or geofence coordinate,
-    /// dimmed behind the header. Nothing is geocoded or searched.
+    /// under the header. Nothing is geocoded or searched.
     private var mapBackdrop: some View {
         Group {
             switch location {
             case .known:
                 if let coordinate = location.coordinate {
-                    Map(initialPosition: .camera(MapCamera(centerCoordinate: coordinate, distance: 1400, heading: 0, pitch: 50)),
-                        interactionModes: []) {
-                        Annotation("", coordinate: coordinate) { ChargePin(systemImage: summary.kindIcon, tint: summary.kindTint) }
-                    }
-                    .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
-                    .environment(\.colorScheme, .dark)
+                    // Centred below the header; the Maps logo and Legal link stay above the fade.
+                    GreyTileMap(framing: .camera(coordinate, distance: 1500),
+                                insets: EdgeInsets(top: 100, leading: 0, bottom: Self.mapFade, trailing: 0),
+                                dim: 0.1) { ChargePin() }
                     .allowsHitTesting(false)
-                    .overlay(HistoryTheme.background.opacity(0.55))
                     .overlay {
                         // The whole backdrop opens the full-screen map.
                         Color.clear.contentShape(.rect).onTapGesture { showingMap = true }
@@ -200,9 +197,10 @@ struct ChargingDetailView: View {
                 mapPlaceholder(nil)
             }
         }
-        .overlay {
-            LinearGradient(colors: [HistoryTheme.background.opacity(0.4), .clear, HistoryTheme.background],
+        .overlay(alignment: .bottom) {
+            LinearGradient(colors: [HistoryTheme.background.opacity(0), HistoryTheme.background],
                            startPoint: .top, endPoint: .bottom)
+                .frame(height: Self.mapFade)
                 .allowsHitTesting(false)
         }
         .frame(height: Self.mapHeight)
@@ -233,50 +231,46 @@ struct ChargingDetailView: View {
     private var hero: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(ChargePlace.title(summary))
-                .font(.system(size: 28, weight: .semibold))
+                .font(.system(size: 17.5, weight: .semibold))
                 .foregroundStyle(.white)
                 .lineLimit(2).minimumScaleFactor(0.75)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("screen.charge-detail")
             HStack(spacing: 8) {
-                Image(systemName: summary.kindIcon)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(summary.kindTint.opacity(0.9)))
+                ChargePlaceBadge(charge: summary, size: 16)
                 Text(ChargePlace.subtitle(summary) ?? summary.currentLabel)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 10.5, weight: .regular))
                     .foregroundStyle(HistoryTheme.secondary)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }
-            .padding(.top, 8)
+            .padding(.top, 5)
 
             HStack(alignment: .top, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(summary.energyAddedKwh.map { "+" + VoltaFormat.number($0) } ?? "—")
-                        .font(.system(size: 64, weight: .bold)).tracking(-1.5)
+                        .font(.system(size: 47, weight: .bold)).tracking(-0.5)
                         .monospacedDigit().foregroundStyle(.white)
                         .lineLimit(1).minimumScaleFactor(0.6)
-                    Text("kWh").font(.system(size: 22, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    Text("kWh").font(.system(size: 15, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 .accessibilityElement(children: .combine)
                 Spacer(minLength: 0)
-                costBlock.padding(.top, 2)
+                costBlock.padding(.top, 2.3)
             }
-            .padding(.top, 36)
+            .padding(.top, 28)
 
             if let bar = ChargeSocBar(start: summary.startBatteryLevel, end: summary.endBatteryLevel) {
-                ChargeSocBarView(bar: bar).padding(.top, 26)
+                ChargeSocBarView(bar: bar, numberSize: 13.5).padding(.top, 14.7)
             }
             if let km = rangeAddedKm {
                 Text("\(km < 0 ? "−" : "+")\(VoltaFormat.number(units.distanceValue(km: abs(km)), digits: 0)) \(units.distanceUnit) of range")
-                    .font(.system(size: 16, weight: .medium)).monospacedDigit()
+                    .font(.system(size: 10.5, weight: .regular)).monospacedDigit()
                     .foregroundStyle(HistoryTheme.secondary)
-                    .padding(.top, 10)
+                    .padding(.top, 5.3)
             }
             dateLine
-                .padding(.top, 38)
-            Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 26)
+                .padding(.top, 28)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 21)
         }
     }
 
@@ -284,37 +278,43 @@ struct ChargingDetailView: View {
     /// "—" with a way to add the missing rate.
     @ViewBuilder private var costBlock: some View {
         if let cost = costEstimate {
-            VStack(alignment: .trailing, spacing: 6) {
+            VStack(alignment: .trailing, spacing: 1.7) {
                 Text(VoltaFormat.money(cost.amount, currency: cost.currency))
-                    .font(.system(size: 30, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                    .font(.system(size: 27, weight: .bold)).monospacedDigit().foregroundStyle(.white)
                     .accessibilityIdentifier("charge.cost")
                 HStack(spacing: 5) {
                     if cost.isEstimated { Text("Est.").foregroundStyle(HistoryTheme.amber) }
                     if let rate = cost.pricePerKwh {
-                        Text(VoltaFormat.money(rate, currency: cost.currency) + "/kWh").foregroundStyle(HistoryTheme.secondary)
+                        Text(Self.rateText(rate, currency: cost.currency) + "/kWh").foregroundStyle(HistoryTheme.secondary)
                     }
                 }
-                .font(.system(size: 17, weight: .medium)).monospacedDigit()
+                .font(.system(size: 13.5, weight: .medium)).monospacedDigit()
             }
             .accessibilityElement(children: .combine)
         } else {
-            VStack(alignment: .trailing, spacing: 8) {
+            VStack(alignment: .trailing, spacing: 4) {
                 Text("—")
-                    .font(.system(size: 30, weight: .bold)).foregroundStyle(HistoryTheme.secondary)
+                    .font(.system(size: 27, weight: .bold)).foregroundStyle(HistoryTheme.secondary)
                     .accessibilityLabel("Cost unknown")
                     .accessibilityIdentifier("charge.cost")
-                if summary.energyAddedKwh != nil { SetRateButton(settings: model?.settings, size: 14) }
+                if summary.energyAddedKwh != nil { SetRateButton(settings: model?.settings, size: 13.5, link: true) }
             }
         }
+    }
+
+    /// Per-kWh prices read to a tenth of a cent, as "$0.300".
+    static func rateText(_ rate: Double, currency: String) -> String {
+        rate.formatted(.currency(code: currency).precision(.fractionLength(3)))
     }
 
     /// "Saturday, October 10 · 00:05 → 00:33 · 28 min" in the app's time format.
     private var dateLine: some View {
         let dot = Text("  ·  ").foregroundStyle(HistoryTheme.tertiary)
+        let arrow = Text(" → ").foregroundStyle(HistoryTheme.tertiary)
         let day = Text(summary.start.formatted(.dateTime.weekday(.wide).month(.wide).day()))
         let end = summary.end?.historyTime ?? "now"
-        return Text("\(day)\(dot)\(summary.start.historyTime) → \(end)\(dot)\(VoltaFormat.duration(summary.durationMin))")
-            .font(.system(size: 15, weight: .medium)).monospacedDigit()
+        return Text("\(day)\(dot)\(summary.start.historyTime)\(arrow)\(end)\(dot)\(VoltaFormat.longDuration(summary.durationMin))")
+            .font(.system(size: 10.5, weight: .regular)).monospacedDigit()
             .foregroundStyle(HistoryTheme.secondary)
             .lineLimit(1).minimumScaleFactor(0.75)
     }
@@ -356,45 +356,40 @@ struct ChargingDetailView: View {
                 DetailSectionHeader(title: Text("ENERGY FLOW")) {
                     if flow.isEstimated {
                         Text("Estimated")
-                            .font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.amber)
-                            .padding(.horizontal, 14).padding(.vertical, 6)
+                            .font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.amber)
+                            .padding(.horizontal, 8).padding(.vertical, 4.5)
                             .overlay(Capsule().strokeBorder(HistoryTheme.amber.opacity(0.55), lineWidth: 1))
+                            .accessibilityLabel("Estimated at \(Int(ChargeEnergyFlow.assumedEfficiency * 100))% charging efficiency")
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
-                    Text("From grid").font(.system(size: 16, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    Text("From grid").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                     Spacer()
-                    energyValue(flow.gridKwh, size: 24)
-                }
-                .padding(.top, 26)
-                ChargeEnergyBar(flow: flow).padding(.top, 12)
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        energyValue(flow.addedKwh, size: 20)
-                        Text("Added to battery").font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 4) {
-                        energyValue(flow.lossKwh, size: 20, dim: true)
-                        Text("Lost").font(.system(size: 15, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
-                    }
+                    energyValue(flow.gridKwh, size: 15)
                 }
                 .padding(.top, 16)
-                if flow.isEstimated {
-                    Text("Grid energy wasn't measured for this session; it assumes \(Int(ChargeEnergyFlow.assumedEfficiency * 100))% charging efficiency.")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 14)
+                ChargeEnergyBar(flow: flow).padding(.top, 9)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        energyValue(flow.addedKwh, size: 13)
+                        Text("Added to battery").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        energyValue(flow.lossKwh, size: 13, dim: true)
+                        Text("Lost").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                    }
                 }
+                .padding(.top, 12)
             }
         }
     }
 
     private func energyValue(_ kwh: Double, size: CGFloat, dim: Bool = false) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(VoltaFormat.number(kwh)).font(.system(size: size, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(dim ? HistoryTheme.secondary : .white)
-            Text("kWh").font(.system(size: size * 0.7, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+            Text("kWh").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
         }
     }
 
@@ -657,22 +652,17 @@ struct ChargingDetailView: View {
 private struct ChargeBackButton: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        GlassCircleButton(systemImage: "chevron.left", size: 48, accessibilityLabel: "Back") { dismiss() }
+        GlassCircleButton(systemImage: "chevron.left", size: 44, accessibilityLabel: "Back") { dismiss() }
     }
 }
 
+/// Plain red location dot with a white ring.
 private struct ChargePin: View {
-    var systemImage: String
-    var tint: Color
-
     var body: some View {
-        ZStack {
-            Circle().fill(tint.opacity(0.22)).frame(width: 50, height: 50)
-            Circle().fill(tint).frame(width: 26, height: 26)
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.black.opacity(0.75))
-        }
+        Circle().fill(HistoryTheme.pin)
+            .frame(width: 29, height: 29)
+            .overlay(Circle().strokeBorder(.white, lineWidth: 3))
+            .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
     }
 }
 
@@ -685,7 +675,7 @@ private struct DetailSectionHeader<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .center) {
             title
-                .font(.system(size: 15, weight: .semibold)).tracking(3)
+                .font(.system(size: 10, weight: .semibold)).tracking(2.5)
                 .foregroundStyle(.white.opacity(0.88))
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .accessibilityAddTraits(.isHeader)
@@ -706,20 +696,20 @@ private struct ChargeEnergyBar: View {
             let gap: CGFloat = share < 1 ? 6 : 0
             let filled = max(44, (geo.size.width - gap) * share)
             HStack(spacing: gap) {
-                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(HistoryTheme.green)
+                RoundedRectangle(cornerRadius: 4, style: .continuous).fill(HistoryTheme.green)
                     .frame(width: filled)
                     .overlay(alignment: .leading) {
                         Text("\(Int((share * 100).rounded()))%")
-                            .font(.system(size: 14, weight: .semibold)).monospacedDigit()
+                            .font(.system(size: 11, weight: .semibold)).monospacedDigit()
                             .foregroundStyle(.black.opacity(0.8))
-                            .padding(.leading, 16)
+                            .padding(.leading, 8)
                     }
                 if share < 1 {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.2))
+                    RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.white.opacity(0.2))
                 }
             }
         }
-        .frame(height: 28)
+        .frame(height: 16)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(VoltaFormat.energy(flow.gridKwh)) from the grid, \(VoltaFormat.energy(flow.addedKwh)) added to the battery")
     }
@@ -730,14 +720,12 @@ struct ChargeLocationMap: View {
     var coordinate: CLLocationCoordinate2D
     var title: String
     var subtitle: String?
-    var systemImage: String
-    var tint: Color
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Map(initialPosition: .camera(MapCamera(centerCoordinate: coordinate, distance: 1800, heading: 0, pitch: 45))) {
-            Annotation("", coordinate: coordinate) { ChargePin(systemImage: systemImage, tint: tint) }
+            Annotation("", coordinate: coordinate) { ChargePin() }
         }
         .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
         .mapControls { MapCompass(); MapPitchToggle() }

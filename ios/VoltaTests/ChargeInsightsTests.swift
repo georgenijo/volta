@@ -268,6 +268,17 @@ final class ChargeInsightsTests: XCTestCase {
         XCTAssertEqual(ChargePlace.title(charge()), "Unknown location")
         XCTAssertEqual(ChargePlace.subtitle(charge(place: "Home", city: "Palo Alto")), "Palo Alto")
         XCTAssertEqual(ChargePlace.subtitle(charge(place: "Home")), "Home charger")
+        var tesla = full
+        tesla.fastCharger = true; tesla.fastChargerBrand = "Tesla"
+        XCTAssertEqual(ChargePlace.network(tesla), "Tesla Supercharger")
+        XCTAssertEqual(ChargePlace.subtitle(tesla), "Tesla Supercharger · Mountain View")
+        // The brand only names a DC session; other brands fall back to the place.
+        var ac = tesla
+        ac.fastCharger = false
+        XCTAssertNil(ChargePlace.network(ac))
+        XCTAssertEqual(ChargePlace.subtitle(ac), "Downtown Supercharger · Mountain View")
+        tesla.fastChargerBrand = "Other"
+        XCTAssertNil(ChargePlace.network(tesla))
     }
 
     // MARK: Decoding
@@ -275,20 +286,21 @@ final class ChargeInsightsTests: XCTestCase {
     func testNewOptionalFieldsDecodeAndNegativeIdsAreAccepted() throws {
         let decoder = APIDataSource.makeDecoder()
         let base = #"{"id":-42,"start":"2026-10-06T12:00:00Z","end":"2026-10-06T12:27:00Z","address":null,"placeName":"Sample Supercharger","energyAddedKwh":43.2,"energyUsedKwh":null,"startBatteryLevel":22,"endBatteryLevel":80,"durationMin":27,"maxPowerKw":196,"fastCharger":true,"cost":null,"currency":null,"outsideTempAvgC":null"#
-        let rich = try decoder.decode(ChargeSummary.self, from: Data((base + #","source":"fleet_telemetry","avgPowerKw":96.5,"city":"Mountain View","street":"1 Sample Rd","energyFromGridKwh":47.1}"#).utf8))
+        let rich = try decoder.decode(ChargeSummary.self, from: Data((base + #","source":"fleet_telemetry","avgPowerKw":96.5,"city":"Mountain View","street":"1 Sample Rd","energyFromGridKwh":47.1,"fastChargerBrand":"Tesla"}"#).utf8))
         XCTAssertEqual(rich.id, -42)
         XCTAssertEqual(rich.source, "fleet_telemetry")
         XCTAssertEqual(rich.avgPowerKw, 96.5)
         XCTAssertEqual(rich.city, "Mountain View")
         XCTAssertEqual(rich.street, "1 Sample Rd")
         XCTAssertEqual(rich.energyFromGridKwh, 47.1)
+        XCTAssertEqual(rich.fastChargerBrand, "Tesla")
 
         let bare = try decoder.decode(ChargeSummary.self, from: Data((base + "}").utf8))
         XCTAssertEqual(bare.id, -42)
         XCTAssertNil(bare.source); XCTAssertNil(bare.avgPowerKw); XCTAssertNil(bare.city)
-        XCTAssertNil(bare.street); XCTAssertNil(bare.energyFromGridKwh)
+        XCTAssertNil(bare.street); XCTAssertNil(bare.energyFromGridKwh); XCTAssertNil(bare.fastChargerBrand)
 
-        let nulls = try decoder.decode(ChargeSummary.self, from: Data((base + #","source":null,"avgPowerKw":null,"city":null,"street":null,"energyFromGridKwh":null}"#).utf8))
+        let nulls = try decoder.decode(ChargeSummary.self, from: Data((base + #","source":null,"avgPowerKw":null,"city":null,"street":null,"energyFromGridKwh":null,"fastChargerBrand":null}"#).utf8))
         XCTAssertNil(nulls.source); XCTAssertNil(nulls.energyFromGridKwh)
 
         let detail = try decoder.decode(ChargeDetail.self, from: Data((base + #","street":"1 Sample Rd","samples":[{"t":"2026-10-06T12:01:00Z","batteryLevel":25,"powerKw":180,"voltage":null,"currentA":null,"ratedRangeKm":null}],"efficiency":null}"#).utf8))
@@ -344,12 +356,16 @@ final class ChargeInsightsTests: XCTestCase {
     func testDemoChargesExerciseTheNewFields() async throws {
         let source = MockDataSource()
         let page = try await source.charges(vehicleID: 1, range: .init(), cursor: nil)
-        let telemetry = try XCTUnwrap(page.items.first { $0.id < 0 })
+        let telemetry = try XCTUnwrap(page.items.first { $0.id < 0 && $0.cost == nil })
         XCTAssertTrue(telemetry.fastCharger)
         XCTAssertNil(telemetry.cost)
         XCTAssertGreaterThan(telemetry.maxPowerKw ?? 0, 150)
         XCTAssertTrue(page.items.contains { $0.energyFromGridKwh != nil })
         XCTAssertTrue(page.items.allSatisfy { $0.street != nil && $0.city != nil })
+        // The newest session is a priced Tesla Supercharger visit; home sessions are AC.
+        XCTAssertEqual(page.items.first.flatMap(ChargePlace.network), "Tesla Supercharger")
+        XCTAssertNotNil(page.items.first?.cost)
+        XCTAssertTrue(page.items.contains { $0.kind == .home && !$0.fastCharger })
         let detail = try await source.charge(id: telemetry.id)
         let power = ChargeCurve.points(TelemetryMetricSeries(detail.telemetry, field: "Power") { $0.powerKw },
                                        start: telemetry.start, end: try XCTUnwrap(telemetry.end))

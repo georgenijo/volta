@@ -128,15 +128,18 @@ extension View {
 struct SetRateButton: View {
     var settings: UserSettings?
     var size: CGFloat = 13
+    /// Plain blue text instead of a tinted capsule.
+    var link = false
     @State private var editing = false
 
     var body: some View {
         Button { editing = true } label: {
             Text("Set rate")
-                .font(.system(size: size, weight: .semibold))
+                .font(.system(size: size, weight: link ? .medium : .semibold))
                 .foregroundStyle(ScreenKit.blue)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(ScreenKit.blue.opacity(0.14), in: .capsule)
+                .padding(.horizontal, link ? 0 : 10).padding(.vertical, link ? 0 : 5)
+                .background(ScreenKit.blue.opacity(link ? 0 : 0.14), in: .capsule)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("button.rate.set")

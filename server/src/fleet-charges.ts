@@ -216,10 +216,13 @@ export class FleetCharges {
       FROM here LEFT JOIN LATERAL (SELECT a.*,6371000*2*asin(least(1.0,sqrt(power(sin(radians((a.latitude-lat)/2)),2)
           +cos(radians(lat))*cos(radians(a.latitude))*power(sin(radians((a.longitude-lon)/2)),2)))) AS m
         FROM public.addresses a WHERE a.latitude BETWEEN lat-.002 AND lat+.002 AND a.longitude BETWEEN lon-.003 AND lon+.003 ORDER BY m,a.id LIMIT 1) a ON a.m<=150`;
+    // Network brand from the overlapping TeslaMate processes' DC charger reports.
+    const [brand] = derived.fastCharger && overlap.length ? await this.sql`SELECT max(fast_charger_brand) FILTER (WHERE fast_charger_present
+      AND NULLIF(fast_charger_brand,'') IS NOT NULL) AS brand FROM public.charges WHERE charging_process_id=ANY(${overlap.map(r => r.id)}::integer[])` : [];
     const row: Row = {id:w.id,_cursorStart:w._cursorStart,start:derived.start,end:derived.end,address:place?.address ?? null,placeName:place?.placeName ?? null,
       energyAddedKwh:derived.energyAddedKwh,energyUsedKwh:null,startBatteryLevel:derived.startBatteryLevel,endBatteryLevel:derived.endBatteryLevel,
       latitude:derived.latitude,longitude:derived.longitude,durationMin:derived.durationMin,maxPowerKw:derived.maxPowerKw,fastCharger:derived.fastCharger,
-      cost:null,currency,outsideTempAvgC:derived.outsideTempAvgC,
+      fastChargerBrand:brand?.brand ?? null,cost:null,currency,outsideTempAvgC:derived.outsideTempAvgC,
       source:'fleet_telemetry',avgPowerKw:derived.avgPowerKw,city:place?.city ?? null,street:place?.street ?? null,energyFromGridKwh:null,_uncertain:derived._uncertain};
     if (withSamples) {
       const powers = chargePowers(samples), inside = samples.map((s,i) => ({s,p:powers[i]!})).filter(({s}) => +new Date(s.t) >= +derived.start && +new Date(s.t) <= +derived.end
