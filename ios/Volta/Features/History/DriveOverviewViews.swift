@@ -9,23 +9,31 @@ struct DriveScoreRing: View {
 }
 
 enum DriveRouteSegments {
-    /// Share of flagged points above which break flags are read as jitter.
-    static let noisyBreakShare = 0.5
+    /// A flagged break shorter than this, in time and in distance, is bridged.
+    static let jitterSeconds: TimeInterval = 300
+    static let jitterMeters = 1_000.0
 
-    /// Break flags on most of a route are collector gap jitter, not recording
-    /// gaps: honoring them shatters the line into isolated points. Above
-    /// `noisyBreakShare` the flags are dropped so the route draws continuously;
-    /// invalid positions still break it in `runs`. Short routes keep their flags.
+    /// Break flags mark a recording gap before a point. A short hop (both
+    /// close in time and close in space) bridges as one line: the straight
+    /// join is within the road's width at map scale. A long hop stays broken,
+    /// so sparse polling never draws a straight line across the map. Invalid
+    /// positions still break the line in `runs`.
     static func tolerant(_ points: [DriveRoutePoint]) -> [DriveRoutePoint] {
-        let candidates = points.dropFirst()
-        guard candidates.count >= 3 else { return points }
-        let flagged = candidates.reduce(0) { $0 + ($1.routeBreakBefore == true ? 1 : 0) }
-        guard Double(flagged) / Double(candidates.count) > noisyBreakShare else { return points }
-        return points.map { point in
-            var point = point
-            point.routeBreakBefore = nil
-            return point
+        var result = points
+        for index in result.indices.dropFirst() where result[index].routeBreakBefore == true {
+            let previous = result[index - 1], point = result[index]
+            if point.t.timeIntervalSince(previous.t) <= jitterSeconds,
+               meters(previous, point) <= jitterMeters { result[index].routeBreakBefore = nil }
         }
+        return result
+    }
+
+    static func meters(_ a: DriveRoutePoint, _ b: DriveRoutePoint) -> Double {
+        let rad = Double.pi / 180
+        let dLat = (b.latitude - a.latitude) * rad, dLon = (b.longitude - a.longitude) * rad
+        let h = sin(dLat / 2) * sin(dLat / 2) + cos(a.latitude * rad) * cos(b.latitude * rad) * sin(dLon / 2) * sin(dLon / 2)
+        let d = 2 * 6_371_000 * asin(min(1, sqrt(max(0, h))))
+        return d.isFinite ? d : .infinity
     }
 
     static func runs(_ points: [DriveRoutePoint]) -> [[DriveRoutePoint]] {
@@ -69,14 +77,21 @@ enum DriveRouteSegments {
 }
 
 /// Coordinate-only overview; no geocoding or directions, no joins across recording gaps.
-/// Routes draw as cyan light over a dimmed, desaturated map, as in the
-/// references: each color is one combined path, softly haloed under a thin
-/// core, so busy roads glow without stacking into a solid band. Edges fade into the page.
+/// Routes draw as thin cyan light over a dark, desaturated map: each color is
+/// one combined path, softly haloed under a thin core, so busy roads glow
+/// without stacking into a solid band. Single positions (sparse polling) are
+/// not drawn: a lone dot reads as a place, not a route. Edges fade into the page.
 struct DrivesRouteMap: View {
     var drives: [DriveSummary]
     var height: CGFloat = 240
     /// nil: cyan route light. Otherwise each drive takes its own color.
     var tint: ((DriveSummary) -> Color)? = nil
+    /// Full-bleed hero: the map runs under the status bar and header (`topInset`
+    /// keeps routes clear of the status bar) and fades out only at the bottom.
+    var fullBleed = false
+    var topInset: CGFloat = 0
+    /// Lifts MapKit's legal attribution above the bottom fade so it never sits under content.
+    var legalInset: CGFloat = 0
     @State private var visible: MKMapRect?
 
     private struct Run {
@@ -87,20 +102,29 @@ struct DrivesRouteMap: View {
     private var runs: [Run] {
         drives.flatMap { drive in
             let color = tint?(drive)
-            return DriveRouteSegments.runs(drive.drawableRoute).filter { !$0.isEmpty }.map { run in
+            return DriveRouteSegments.runs(drive.drawableRoute).filter { $0.count > 1 }.map { run in
                 Run(coordinates: run.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }, color: color)
             }
         }
     }
 
     /// Fit every recorded point with breathing room; computed locally, never looked up.
-    private static func fit(_ runs: [Run]) -> MKMapRect {
+    private static func fit(_ runs: [Run], padding: Double) -> MKMapRect {
         let points = runs.flatMap(\.coordinates).map(MKMapPoint.init)
         let minX = points.map(\.x).min()!, maxX = points.map(\.x).max()!
         let minY = points.map(\.y).min()!, maxY = points.map(\.y).max()!
         let side = max(maxX - minX, maxY - minY, 2_000)
-        let padX = max(maxX - minX, side * 0.6) * 0.35, padY = max(maxY - minY, side * 0.6) * 0.35
+        let padX = max(maxX - minX, side * 0.6) * padding, padY = max(maxY - minY, side * 0.6) * padding
         return MKMapRect(x: minX - padX, y: minY - padY, width: maxX - minX + padX * 2, height: maxY - minY + padY * 2)
+    }
+
+    private var fade: some View {
+        LinearGradient(stops: fullBleed
+                       ? [.init(color: .black.opacity(0.75), location: 0), .init(color: .black, location: 0.3),
+                          .init(color: .black, location: 0.62), .init(color: .clear, location: 1)]
+                       : [.init(color: .clear, location: 0), .init(color: .black, location: 0.2),
+                          .init(color: .black, location: 0.7), .init(color: .black.opacity(0.3), location: 1)],
+                       startPoint: .top, endPoint: .bottom)
     }
 
     var body: some View {
@@ -108,24 +132,30 @@ struct DrivesRouteMap: View {
         ZStack {
             if runs.isEmpty {
                 Text("Routes not recorded for these drives").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                    .padding(.top, topInset)
             } else {
-                Map(initialPosition: .rect(Self.fit(runs)), interactionModes: [])
+                MapReader { proxy in
+                Map(initialPosition: .rect(Self.fit(runs, padding: fullBleed ? 0.12 : 0.35)), interactionModes: [])
                     .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
                     .environment(\.colorScheme, .dark)
+                    .safeAreaPadding(.top, topInset)
+                    .safeAreaPadding(.bottom, legalInset)
                     .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
-                    .saturation(0.15)
-                    .opacity(0.62)
-                    .overlay { light(runs).allowsHitTesting(false) }
+                    // Dark and grey: roads read as texture, labels stay dim.
+                    .saturation(0)
+                    .opacity(fullBleed ? 0.4 : 0.5)
+                    // Project through MapKit itself so routes stay on the roads under any safe-area padding.
+                    .overlay { light(runs, proxy: proxy).allowsHitTesting(false) }
                     .mask {
-                        LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.2),
-                                               .init(color: .black, location: 0.7), .init(color: .black.opacity(0.3), location: 1)],
-                                       startPoint: .top, endPoint: .bottom)
-                            .mask {
+                        fade.mask {
+                            if fullBleed { Color.black } else {
                                 LinearGradient(stops: [.init(color: .black.opacity(0.55), location: 0), .init(color: .black, location: 0.14),
                                                        .init(color: .black, location: 0.86), .init(color: .black.opacity(0.55), location: 1)],
                                                startPoint: .leading, endPoint: .trailing)
                             }
+                        }
                     }
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -134,44 +164,29 @@ struct DrivesRouteMap: View {
         .accessibilityLabel("Recorded routes for loaded drives")
     }
 
-    private func light(_ runs: [Run]) -> some View {
+    private func light(_ runs: [Run], proxy: MapProxy) -> some View {
         Canvas { context, size in
-            guard let rect = visible, rect.width > 0, rect.height > 0 else { return }
-            func point(_ c: CLLocationCoordinate2D) -> CGPoint {
-                let m = MKMapPoint(c)
-                return CGPoint(x: (m.x - rect.minX) / rect.width * size.width, y: (m.y - rect.minY) / rect.height * size.height)
-            }
+            // `visible` changes with the camera and redraws the light.
+            guard visible != nil else { return }
+            func point(_ c: CLLocationCoordinate2D) -> CGPoint? { proxy.convert(c, to: .local) }
             let defaultShading = GraphicsContext.Shading.color(HistoryTheme.route)
             // One path per color: overlapping drives brighten the halo, not thicken it.
-            var groups: [(color: Color?, path: Path, dots: [CGPoint])] = []
+            var groups: [(color: Color?, path: Path)] = []
             for run in runs {
                 let index = groups.firstIndex { $0.color == run.color } ?? {
-                    groups.append((run.color, Path(), []))
+                    groups.append((run.color, Path()))
                     return groups.count - 1
                 }()
-                if run.coordinates.count == 1 {
-                    groups[index].dots.append(point(run.coordinates[0]))
-                } else {
-                    groups[index].path.addLines(run.coordinates.map(point))
-                }
+                let points = run.coordinates.compactMap(point)
+                if points.count == run.coordinates.count { groups[index].path.addLines(points) }
             }
             for group in groups {
                 let shading = group.color.map { GraphicsContext.Shading.color($0) } ?? defaultShading
                 var halo = context
-                halo.addFilter(.blur(radius: 5))
-                halo.opacity = 0.45
-                halo.stroke(group.path, with: shading, style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
-                context.stroke(group.path, with: shading, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                for dot in group.dots {
-                    context.fill(Path(ellipseIn: CGRect(x: dot.x - 3, y: dot.y - 3, width: 6, height: 6)), with: shading)
-                }
-            }
-            // A single chain reads as a journey: green where it starts, blue where it ends.
-            if tint == nil, let first = runs.first?.coordinates.first, let last = runs.last?.coordinates.last {
-                for (coordinate, color) in [(first, HistoryTheme.green), (last, HistoryTheme.blue)] {
-                    let p = point(coordinate)
-                    context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(color))
-                }
+                halo.addFilter(.blur(radius: 4))
+                halo.opacity = 0.4
+                halo.stroke(group.path, with: shading, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                context.stroke(group.path, with: shading, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
             }
         }
     }

@@ -72,8 +72,9 @@ struct MockDataSource: VoltaDataSource {
     }
     private func driveOverview(_ base: DriveSummary) -> DriveSummary {
         var drive = base
-        drive.startCity = "Palo Alto"
-        drive.endCity = "Mountain View"
+        let places = TripFixtures.detail(base) == nil ? DemoRoutes.places(for: drive.id) : DemoRoutes.places(for: 5)
+        drive.startCity = places.from
+        drive.endCity = places.to
         drive.ratedWhPerKm = 164
         let variant = (drive.id - 1) % 5
         drive.driveScore = [87, 71, 64, 92, 78][variant]
@@ -89,7 +90,7 @@ struct MockDataSource: VoltaDataSource {
             let stride = max(1, Int(ceil(Double(points.count) / 60)))
             return points.enumerated().filter { $0.offset % stride == 0 || $0.offset == points.count - 1 }
                 .map { DriveRoutePoint(t: $0.element.t, latitude: $0.element.latitude, longitude: $0.element.longitude, routeBreakBefore: $0.element.routeBreakBefore) }
-        } ?? Self.syntheticRoute(drive).map { DriveRoutePoint(t: $0.t, latitude: $0.latitude, longitude: $0.longitude) }
+        } ?? DemoRoutes.points(for: drive.id, start: drive.start, durationMin: drive.durationMin, spacingM: 250)
         return drive
     }
     /// Continuous synthetic polyline between two public town centres: street
@@ -157,7 +158,7 @@ struct MockDataSource: VoltaDataSource {
     func drive(id: Int) async throws -> DriveDetail {
         guard let drive = allDrives.first(where: { $0.id == id }) else { throw VoltaError.notFound }
         if let fixture = TripFixtures.detail(drive) { return fixture }
-        let route = Self.syntheticRoute(drive)
+        let route = DemoRoutes.points(for: drive.id, start: drive.start, durationMin: drive.durationMin)
         let path = route.enumerated().map { i, p in
             let fraction = Double(i) / Double(route.count - 1)
             return DrivePoint(t: p.t, latitude: p.latitude, longitude: p.longitude, speedKph: i == 0 || i == route.count - 1 ? 0 : 72, powerKw: 12.5, elevationM: 35 + sin(fraction * .pi) * 28, batteryLevel: 80 - Int(fraction * 8))

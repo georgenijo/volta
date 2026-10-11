@@ -265,10 +265,13 @@ enum TripFixtures {
 
     // MARK: Route shape
 
-    /// Smooth synthetic curve from Palo Alto centre towards Union City centre.
+    /// Along the first demo route (rail corridor), so fixture drives sit on roads.
     private static func coordinate(fraction f: Double) -> (lat: Double, lon: Double) {
-        let lat = 37.4419 + (37.6028 - 37.4419) * f + 0.012 * sin(f * .pi * 3)
-        let lon = -122.1430 + (-122.0040 + 122.1430) * f + 0.018 * sin(f * .pi * 2) * (1 - f)
-        return (lat, lon)
+        let route = demoPath
+        let position = min(max(f, 0), 1) * Double(route.count - 1)
+        let i = min(Int(position), route.count - 2), u = position - Double(i)
+        return (route[i].latitude + (route[i + 1].latitude - route[i].latitude) * u,
+                route[i].longitude + (route[i + 1].longitude - route[i].longitude) * u)
     }
+    private static let demoPath = DemoRoutes.points(for: 5, start: .distantPast, durationMin: 1, spacingM: 40)
 }

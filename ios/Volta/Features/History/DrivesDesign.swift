@@ -95,6 +95,16 @@ struct RouteWatermark: View {
                 }
             }
             .stroke(.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            .background {
+                // A soft shadow line, as the references draw the route.
+                Path { path in
+                    for run in runs {
+                        path.move(to: run[0]); run.dropFirst().forEach { path.addLine(to: $0) }
+                    }
+                }
+                .stroke(.white, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                .blur(radius: 2).opacity(0.35)
+            }
             .opacity(opacity)
         }
         .allowsHitTesting(false)
@@ -103,6 +113,22 @@ struct RouteWatermark: View {
 }
 
 // MARK: - Hero
+
+/// Wattly list metrics, in points on a 402 pt wide phone.
+enum DrivesLayout {
+    /// Text column inset from the screen edge.
+    static let margin: CGFloat = 28
+    /// Card inset from the screen edge.
+    static let cardInset: CGFloat = 16
+}
+
+extension UnitPreferences {
+    /// Efficiency with one decimal, as on the drives list ("204.8 Wh/mi").
+    func formatEfficiencyPrecise(_ whPerKm: Double?) -> String {
+        guard let whPerKm else { return "—" }
+        return "\(VoltaFormat.number(efficiencyValue(whPerKm: whPerKm), digits: 1)) \(efficiencyUnit)"
+    }
+}
 
 struct DrivesHero: View {
     /// What the totals cover, e.g. "Loaded drives · partial"; read aloud with the hero.
@@ -115,32 +141,33 @@ struct DrivesHero: View {
     @Environment(\.units) private var units
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .center, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0))
-                        .font(.system(size: 92, weight: .bold)).fontWidth(.expanded).tracking(-2)
-                        .foregroundStyle(.white).monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
-                    Text(units.distanceUnit).font(.system(size: 22, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                        .font(.system(size: 60, weight: .bold)).tracking(-1)
+                        .foregroundStyle(.white).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                    Text(units.distanceUnit).font(.system(size: 17, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 Spacer(minLength: 0)
-                ScoreDial(score: totals.score, size: 100, gradient: true).padding(.trailing, 6)
+                ScoreDial(score: totals.score, size: 61, gradient: true).padding(.trailing, -3)
             }
             .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
             .accessibilityLabel(scope)
             .accessibilityIdentifier("screen.drives")
 
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
                 HistoryFlowStats(items: [
                     ("clock", VoltaFormat.duration(durationMin)),
                     ("road.lanes", "\(totals.drives)\(partial ? "+" : "") \(totals.drives == 1 && !partial ? "drive" : "drives")"),
-                ])
+                ], textSize: 14, iconSize: 12.5, spacing: 11, iconSpacing: 8)
+                // Energy and efficiency come only from drives with recorded energy
+                // (DriveTotals); cost is "—" unless a known rate applies.
                 HistoryFlowStats(items: [
                     ("bolt.fill", totals.energyUsedKwh.value.map { VoltaFormat.energy($0) } ?? "— kWh"),
-                    ("leaf.fill", units.formatEfficiency(totals.efficiencyWhPerKm)),
-                ] + (cost.display == "—" ? [] : [("creditcard.fill", cost.display)]))
-                // Coverage disclosures hold whether or not more pages remain.
-                HistoryHeroNotes(notes: totals.notes + [cost.note].compactMap { $0 })
+                    ("leaf.fill", units.formatEfficiencyPrecise(totals.efficiencyWhPerKm)),
+                    ("creditcard.fill", cost.display),
+                ], textSize: 14, iconSize: 12.5, spacing: 11, iconSpacing: 8)
             }
         }
     }
@@ -149,14 +176,18 @@ struct DrivesHero: View {
 /// One row of hero stats: green icon, white value, dot separators.
 struct HistoryFlowStats: View {
     var items: [(icon: String, text: String)]
+    var textSize: CGFloat = 20
+    var iconSize: CGFloat = 16
+    var spacing: CGFloat = 12
+    var iconSpacing: CGFloat = 10
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: spacing) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 if index > 0 { Circle().fill(HistoryTheme.tertiary).frame(width: 3, height: 3) }
-                HStack(spacing: 10) {
-                    Image(systemName: item.icon).font(.system(size: 16, weight: .semibold)).foregroundStyle(HistoryTheme.green)
-                    Text(item.text).font(.system(size: 20, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                HStack(spacing: iconSpacing) {
+                    Image(systemName: item.icon).font(.system(size: iconSize, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+                    Text(item.text).font(.system(size: textSize, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
                         .lineLimit(1).minimumScaleFactor(0.7)
                 }
                 .accessibilityElement(children: .combine)
@@ -186,8 +217,28 @@ struct DriveDayHeader: View {
     @Environment(\.units) private var units
 
     var body: some View {
-        SessionDayHeader(day: group.day, title: group.title,
-                         trailing: "\(group.items.count) \(group.items.count == 1 ? "drive" : "drives") · \(units.formatDistance(group.items.reduce(0) { $0 + $1.distanceKm }))")
+        let count = group.items.count
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text(group.day.formatted(.dateTime.day()))
+                    .font(.system(size: 8, weight: .bold)).monospacedDigit()
+                    .frame(width: 13, height: 12, alignment: .bottom).padding(.bottom, 1)
+                    .overlay(alignment: .top) { Rectangle().frame(height: 1.5).padding(.horizontal, 1.5).padding(.top, 1.5) }
+                    .overlay(RoundedRectangle(cornerRadius: 2.5, style: .continuous).strokeBorder(lineWidth: 1.2))
+                    .foregroundStyle(.white.opacity(0.85))
+                Text(group.title).font(.system(size: 16, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                Spacer(minLength: 8)
+                Text("\(count) \(count == 1 ? "drive" : "drives") · \(units.formatDistance(group.items.reduce(0) { $0 + $1.distanceKm }))")
+                    .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+            }
+            .padding(.horizontal, DrivesLayout.margin)
+            .padding(.top, 14).padding(.bottom, 12)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
+        }
+        .frame(maxWidth: .infinity)
+        .background(HistoryTheme.background)
+        .padding(.bottom, 15)
+        .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -209,61 +260,64 @@ struct DriveCard: View {
             HStack(alignment: .top, spacing: 12) {
                 itinerary
                 Spacer(minLength: 0)
-                VStack(alignment: .trailing, spacing: 10) {
+                VStack(alignment: .trailing, spacing: 9) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: drive.distanceKm)))
-                            .font(.system(size: 30, weight: .bold)).monospacedDigit()
-                        Text(units.distanceUnit.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+                            .font(.system(size: 21, weight: .bold)).monospacedDigit()
+                        Text(units.distanceUnit.uppercased()).font(.system(size: 9, weight: .semibold)).tracking(1).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.white)
                     HStack(spacing: 5) {
                         Text(drive.start.historyTime)
-                        Image(systemName: "arrow.right").font(.system(size: 10, weight: .medium))
+                        Image(systemName: "arrow.right").font(.system(size: 9, weight: .medium))
                         Text(drive.end?.historyTime ?? "Now")
                     }
-                    .font(.system(size: 16, weight: .regular)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                    .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                     if showsDate {
-                        Text(drive.start.formatted(.dateTime.month(.abbreviated).day().year())).font(.system(size: 12)).foregroundStyle(HistoryTheme.tertiary)
+                        Text(drive.start.formatted(.dateTime.month(.abbreviated).day().year())).font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary)
                     }
                 }
+                .padding(.top, 1)
             }
-            .padding(.bottom, 18)
-            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
+            .padding(.leading, 18).padding(.trailing, 16)
+            .padding(.bottom, 16)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.horizontal, 13)
             HStack(spacing: 0) {
                 ViewThatFits(in: .horizontal) {
                     metrics(compact: false)
                     metrics(compact: true)
                 }
                 Spacer(minLength: 8)
-                ScoreDial(score: drive.efficiencyScore, size: 46)
+                ScoreDial(score: drive.efficiencyScore, size: 27)
             }
-            .padding(.top, 12)
+            .padding(.leading, 18).padding(.trailing, 16)
+            .padding(.top, 14)
         }
-        .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 14)
+        .padding(.top, 14).padding(.bottom, 13)
         .background {
-            RouteWatermark(points: drive.drawableRoute, opacity: 0.22)
-                .padding(.leading, 150).padding(.trailing, 100).padding(.vertical, 6)
+            RouteWatermark(points: drive.drawableRoute, opacity: 0.2)
+                .padding(.horizontal, 130).padding(.vertical, 8)
         }
-        .driveSurface()
+        .driveSurface(radius: 18)
         .accessibilityElement(children: .combine)
     }
 
     private var itinerary: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(spacing: 0) {
-                Circle().fill(HistoryTheme.green).frame(width: 9, height: 9).padding(.top, 9)
-                Rectangle().fill(HistoryTheme.tertiary.opacity(0.6))
-                    .frame(width: 1).frame(maxHeight: .infinity).padding(.vertical, 7)
-                Circle().fill(HistoryTheme.blue).frame(width: 9, height: 9).padding(.bottom, 9)
-            }
-            VStack(alignment: .leading, spacing: 14) {
-                Text(drive.startPlace)
-                Text(drive.endPlace)
-            }
-            .font(.system(size: 22, weight: .medium)).foregroundStyle(.white)
-            .lineLimit(1).minimumScaleFactor(0.7)
+        VStack(alignment: .leading, spacing: 0) {
+            place(drive.startPlace, color: HistoryTheme.green)
+            Rectangle().fill(HistoryTheme.tertiary.opacity(0.7)).frame(width: 1, height: 5)
+                .padding(.leading, 3.5).padding(.vertical, 0.5)
+            place(drive.endPlace, color: HistoryTheme.blue)
         }
-        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func place(_ name: String, color: Color) -> some View {
+        HStack(spacing: 13) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                .lineLimit(1).minimumScaleFactor(0.75)
+        }
+        .frame(height: 22)
     }
 
     private func metrics(compact: Bool) -> some View {
@@ -271,7 +325,7 @@ struct DriveCard: View {
             metric("clock", VoltaFormat.duration(drive.durationMin))
             if let efficiency = drive.displayEfficiencyWhPerKm {
                 dot
-                metric("leaf.fill", compact ? VoltaFormat.number(units.efficiencyValue(whPerKm: efficiency), digits: 0) : units.formatEfficiency(efficiency))
+                metric("leaf.fill", compact ? VoltaFormat.number(units.efficiencyValue(whPerKm: efficiency), digits: 0) : units.formatEfficiencyPrecise(efficiency))
             }
             if let cost { dot; metric("creditcard.fill", cost) }
         }
@@ -281,8 +335,8 @@ struct DriveCard: View {
 
     private func metric(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 13, weight: .medium))
-            Text(text).font(.system(size: 16)).monospacedDigit()
+            Image(systemName: icon).font(.system(size: 11, weight: .medium))
+            Text(text).font(.system(size: 13)).monospacedDigit()
         }
         .foregroundStyle(HistoryTheme.secondary)
         .lineLimit(1).fixedSize()
@@ -295,14 +349,16 @@ struct DriveShortcut: View {
     var title: String
     var systemImage: String
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage).font(.system(size: 20, weight: .semibold)).foregroundStyle(HistoryTheme.green)
-            Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
-            Spacer(minLength: 0)
-            Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+        HStack(spacing: 10) {
+            Image(systemName: systemImage).font(.system(size: 16, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+            Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                .lineLimit(1).fixedSize()
+            Spacer(minLength: 4)
+            Image(systemName: "arrow.up.right").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
         }
-        .padding(.horizontal, 22).padding(.vertical, 22)
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 1))
-        .contentShape(.rect(cornerRadius: 22))
+        .padding(.leading, 13).padding(.trailing, 14)
+        .frame(height: 42)
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 1))
+        .contentShape(.rect(cornerRadius: 17))
     }
 }

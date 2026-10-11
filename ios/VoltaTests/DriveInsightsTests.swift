@@ -138,28 +138,26 @@ final class DriveInsightsTests: XCTestCase {
         }
         XCTAssertEqual(VoltaClockFormat().format(afternoon), VoltaFormat.clock(afternoon))
     }
-    private func route(_ count: Int, breaks: Set<Int> = []) -> [DriveRoutePoint] {
+    private func route(_ count: Int, breaks: Set<Int> = [], seconds: Double = 10, step: Double = 0.001) -> [DriveRoutePoint] {
         (0..<count).map { i in
-            DriveRoutePoint(t: Date(timeIntervalSince1970: Double(i) * 10), latitude: 37.4 + Double(i) * 0.001,
-                            longitude: -122.1 + Double(i) * 0.001, routeBreakBefore: breaks.contains(i) ? true : nil)
+            DriveRoutePoint(t: Date(timeIntervalSince1970: Double(i) * seconds), latitude: 37.4 + Double(i) * step,
+                            longitude: -122.1 + Double(i) * step, routeBreakBefore: breaks.contains(i) ? true : nil)
         }
     }
     func testRouteBreakJitterDrawsContinuouslyButRealGapsStay() {
-        // Every point flagged (gap jitter): one continuous run.
+        // Flags on short hops (10 s, ~140 m) are jitter: one continuous run.
         let jitter = route(20, breaks: Set(0..<20))
         XCTAssertEqual(DriveRouteSegments.runs(jitter).map(\.count), Array(repeating: 1, count: 20), "raw flags shatter the line")
         XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(jitter)).map(\.count), [20])
-        // Just over half flagged still reads as jitter.
-        let majority = route(11, breaks: Set(1...6))
-        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(majority)).map(\.count), [11])
-        // Exactly half, or a few real gaps, keep their breaks.
-        let half = route(11, breaks: Set(1...5))
-        XCTAssertEqual(DriveRouteSegments.tolerant(half), half)
-        let gaps = route(20, breaks: [7, 14])
-        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(gaps)).map(\.count), [7, 7, 6])
-        // Too short to judge: flags are kept.
-        let short = route(3, breaks: [1, 2])
-        XCTAssertEqual(DriveRouteSegments.tolerant(short), short)
+        // Sparse polling (14 min apart): every flag is a real gap, never a straight line.
+        let sparse = route(5, breaks: Set(1..<5), seconds: 840, step: 0.03)
+        XCTAssertEqual(DriveRouteSegments.tolerant(sparse), sparse)
+        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(sparse)).map(\.count), [1, 1, 1, 1, 1])
+        // A quick hop that jumps far (lost GPS) stays broken, as does a slow one nearby.
+        var far = route(20, breaks: [7]); for i in 7..<20 { far[i].latitude += 0.05 }
+        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(far)).map(\.count), [7, 13])
+        var slow = route(20, breaks: [14]); for i in 14..<20 { slow[i].t += 600 }
+        XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(slow)).map(\.count), [14, 6])
         // Invalid positions still break even when flags are dropped.
         var invalid = jitter; invalid[10].latitude = .nan
         XCTAssertEqual(DriveRouteSegments.runs(DriveRouteSegments.tolerant(invalid)).map(\.count), [10, 9])
