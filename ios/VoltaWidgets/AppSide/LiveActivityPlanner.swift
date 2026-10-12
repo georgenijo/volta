@@ -111,7 +111,7 @@ enum LiveActivityPlanner {
               chargeLimit: status.chargeLimit,
               chargerPowerKw: status.chargerPowerKw,
               fullAt: status.chargeReadyAt ?? status.minutesToFull.map { status.updatedAt.addingTimeInterval(Double($0) * 60) },
-              energyAddedKwh: openCharge?.energyAddedKwh ?? previous?.energyAddedKwh,
+              energyAddedKwh: status.chargeEnergyAddedKwh ?? openCharge?.energyAddedKwh ?? previous?.energyAddedKwh,
               rangeKm: status.estRangeKm ?? status.ratedRangeKm,
               phase: .charging,
               updatedAt: status.updatedAt,

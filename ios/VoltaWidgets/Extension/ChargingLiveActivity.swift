@@ -20,7 +20,7 @@ struct ChargingLiveActivity: Widget {
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     VStack(alignment: .leading, spacing: 2) {
-                        WLabel(look.shortTitle, color: look.tint)
+                        ChargeVehicleLabel(look: look)
                         WNumber(value: "\(s.batteryLevel)", unit: "%", size: 30)
                             .opacity(look.dataOpacity)
                     }
@@ -28,27 +28,16 @@ struct ChargingLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 2) {
-                        WLabel(look.trailingLabel)
-                        ChargeTrailingValue(look: look, size: 22)
+                        ChargeStateLabel(look: look)
+                        ChargeReading(look: look, size: 22)
+                            .opacity(look.dataOpacity)
                     }
                     .padding(.trailing, 4)
                 }
-                DynamicIslandExpandedRegion(.center) {
-                    Group {
-                        if look.isStale {
-                            StaleNote(updatedAt: s.updatedAt)
-                        } else {
-                            Text(a.vehicleName + (a.placeName.map { " · \($0)" } ?? ""))
-                                .foregroundStyle(WTheme.label)
-                        }
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(spacing: 8) {
-                        ChargeProgressBar(state: s, tint: look.tint)
-                        ChargeMetricsRow(attributes: a, state: s, isStale: look.isStale)
+                    VStack(spacing: 6) {
+                        ChargeSegmentBar(state: s, tint: look.tint, height: 9)
+                        ChargeFooter(look: look)
                     }
                     .opacity(look.dataOpacity)
                     .padding(.horizontal, 4)
@@ -81,23 +70,21 @@ struct ChargeLook {
     var phase: ChargingActivityAttributes.Phase { state.phase }
     /// The countdown runs only while charging on fresh data.
     var showsCountdown: Bool { phase == .charging && !isStale }
+    var staleCharging: Bool { isStale && phase == .charging }
 
-    var title: String {
+    /// "Charging", "Supercharging", "Complete", "Stopped" or "Stale".
+    var stateTitle: String {
+        if staleCharging { return "Stale" }
         switch phase {
-        case .charging: attributes.fastCharger == true ? "Supercharging" : "Charging"
-        case .completed: "Charge complete"
-        case .stopped: "Charging stopped"
+        case .charging: return attributes.fastCharger == true ? "Supercharging" : "Charging"
+        case .completed: return "Complete"
+        case .stopped: return "Stopped"
         }
     }
-    var shortTitle: String {
-        switch phase {
-        case .charging: attributes.fastCharger == true ? "Supercharging" : "Charging"
-        case .completed: "Charged"
-        case .stopped: "Stopped"
-        }
-    }
+    /// "AC" or "DC"; nil when the charger type is unknown.
+    var current: String? { attributes.fastCharger.map { $0 ? "DC" : "AC" } }
     var symbol: String {
-        if isStale && phase == .charging { return "clock.badge.exclamationmark" }
+        if staleCharging { return "clock.badge.exclamationmark" }
         switch phase {
         case .charging: return "bolt.fill"
         case .completed: return "checkmark.circle.fill"
@@ -105,16 +92,89 @@ struct ChargeLook {
         }
     }
     var tint: Color {
-        if isStale && phase == .charging { return WTheme.amber }
+        if staleCharging { return WTheme.amber }
         return phase == .stopped ? WTheme.label : WTheme.green
     }
     /// Stale numbers are dimmed so they read as "last known".
-    var dataOpacity: Double { isStale && phase == .charging ? 0.6 : 1 }
-    var trailingLabel: String {
-        switch phase {
-        case .charging: isStale ? "Updated" : "To " + WidgetFormat.percent(state.chargeLimit)
-        case .completed: "Finished"
-        case .stopped: "Ended"
+    var dataOpacity: Double { staleCharging ? 0.6 : 1 }
+}
+
+/// "⚡ FRIDAY · AC"
+struct ChargeVehicleLabel: View {
+    var look: ChargeLook
+    var size: CGFloat = 12
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: look.symbol).foregroundStyle(look.tint)
+            Text(look.attributes.vehicleName.uppercased()).foregroundStyle(.white).tracking(1.6)
+            if let current = look.current {
+                Text("· " + current).foregroundStyle(WTheme.label).tracking(1.2)
+            }
+        }
+        .font(.system(size: size, weight: .semibold))
+        .lineLimit(1)
+    }
+}
+
+/// "● CHARGING" in the state's tint.
+struct ChargeStateLabel: View {
+    var look: ChargeLook
+    var size: CGFloat = 12
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(look.tint).frame(width: 6, height: 6)
+            Text(look.stateTitle.uppercased()).tracking(1.6)
+        }
+        .font(.system(size: size, weight: .semibold))
+        .foregroundStyle(look.tint)
+        .lineLimit(1)
+    }
+}
+
+/// Power while charging; the range once the session has ended.
+struct ChargeReading: View {
+    var look: ChargeLook
+    var size: CGFloat
+    var body: some View {
+        let s = look.state
+        if s.phase == .charging {
+            WNumber(value: s.chargerPowerKw.map { $0.formatted(.number.precision(.fractionLength($0 >= 20 ? 0 : 1))) } ?? "—",
+                    unit: "kW", size: size)
+        } else {
+            let u = WidgetUnits(miles: look.attributes.usesMiles)
+            WNumber(value: u.distance(s.rangeKm), unit: u.distanceUnit, size: size)
+        }
+    }
+}
+
+/// "+17.1 kWh" on the left; "2 hr, 26 min to 80%", "Updated 3:42 PM" or the end time on the right.
+struct ChargeFooter: View {
+    var look: ChargeLook
+    var body: some View {
+        HStack {
+            Text(look.state.energyAddedKwh.map { "+" + WidgetFormat.energy($0) } ?? "")
+                .foregroundStyle(WTheme.label)
+            Spacer(minLength: 8)
+            status
+        }
+        .font(.system(size: 14, weight: .medium))
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+
+    @ViewBuilder private var status: some View {
+        let s = look.state, limit = s.chargeLimit.map { " to \($0)%" } ?? ""
+        if look.staleCharging {
+            Text("Updated \(Text(s.updatedAt, style: .time))").foregroundStyle(WTheme.amber)
+        } else if s.phase == .charging {
+            if let fullAt = s.fullAt, fullAt > .now {
+                Text("\(Text(fullAt, style: .relative))\(limit)").foregroundStyle(.white).monospacedDigit()
+            } else {
+                Text("Charging\(limit)").foregroundStyle(.white)
+            }
+        } else if let endedAt = s.endedAt {
+            Text("\(s.phase == .completed ? "Finished" : "Ended") \(Text(endedAt, style: .time))")
+                .foregroundStyle(.white)
         }
     }
 }
@@ -180,13 +240,31 @@ struct StaleNote: View {
     }
 }
 
-/// Battery bar with the charge-limit tick (no tick when the limit is unknown).
-struct ChargeProgressBar: View {
+/// Battery as a row of separate cells: bright up to the level, dim up to the
+/// charge limit, dark beyond it. The cell holding the level is half-lit.
+struct ChargeSegmentBar: View {
     var state: ChargingActivityAttributes.ContentState
     var tint: Color = WTheme.green
+    var segments = 30
+    var height: CGFloat = 11
+
     var body: some View {
-        WBar(fraction: Double(state.batteryLevel) / 100, color: tint,
-             marker: state.chargeLimit.map { Double($0) / 100 }, height: 6)
+        HStack(spacing: 3) {
+            ForEach(0..<segments, id: \.self) { i in
+                RoundedRectangle(cornerRadius: min(3, height / 3), style: .continuous)
+                    .fill(color(i))
+            }
+        }
+        .frame(height: height)
+    }
+
+    private func color(_ i: Int) -> Color {
+        let start = Double(i) / Double(segments) * 100, end = Double(i + 1) / Double(segments) * 100
+        let level = Double(state.batteryLevel)
+        if level >= end { return tint }
+        if level > start { return tint.opacity(0.5) }
+        if let limit = state.chargeLimit, Double(limit) > start { return tint.opacity(0.2) }
+        return WTheme.track
     }
 }
 
@@ -208,29 +286,8 @@ struct ChargeRing: View {
     }
 }
 
-struct ChargeMetricsRow: View {
-    var attributes: ChargingActivityAttributes
-    var state: ChargingActivityAttributes.ContentState
-    var isStale = false
-    var body: some View {
-        let u = WidgetUnits(miles: attributes.usesMiles)
-        HStack(spacing: 0) {
-            // Power is a live reading: unknown once the session ended or the data is stale.
-            metric(state.phase == .charging && !isStale ? WidgetFormat.power(state.chargerPowerKw) : "—", "Power")
-            metric(state.energyAddedKwh.map { "+" + WidgetFormat.energy($0) } ?? "—", "Added")
-            metric(u.distanceWithUnit(state.rangeKm), "Range")
-        }
-    }
-    private func metric(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                .lineLimit(1).minimumScaleFactor(0.7)
-            WLabel(label)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
+/// Wattly-style card: vehicle and state, level and power, the cell bar, then
+/// energy added and time to the limit.
 struct ChargingLockScreenView: View {
     var attributes: ChargingActivityAttributes
     var state: ChargingActivityAttributes.ContentState
@@ -238,41 +295,25 @@ struct ChargingLockScreenView: View {
 
     var body: some View {
         let look = ChargeLook(attributes: attributes, state: state, isStale: isStale)
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
-                Image(systemName: look.symbol).foregroundStyle(look.tint)
-                WLabel(look.title, color: look.tint)
-                WLabel("· " + attributes.vehicleName, color: .white.opacity(0.8))
-                Spacer()
-                if isStale && state.phase == .charging {
-                    WLabel("Stale", color: WTheme.amber)
-                } else if let place = attributes.placeName {
-                    Text(place).font(.system(size: 11, weight: .medium)).foregroundStyle(WTheme.label).lineLimit(1)
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                ChargeVehicleLabel(look: look, size: 13)
+                Spacer(minLength: 8)
+                ChargeStateLabel(look: look, size: 13)
             }
             HStack(alignment: .lastTextBaseline) {
-                WNumber(value: "\(state.batteryLevel)", unit: "%", size: 44)
-                Text("of " + WidgetFormat.percent(state.chargeLimit))
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(WTheme.label)
+                WNumber(value: "\(state.batteryLevel)", unit: "%", size: 46)
                 Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    ChargeTrailingValue(look: look, size: 24)
-                    WLabel(lockScreenCaption(look))
-                }
+                ChargeReading(look: look, size: 28)
             }
             .opacity(look.dataOpacity)
-            ChargeProgressBar(state: state, tint: look.tint).opacity(look.dataOpacity)
-            ChargeMetricsRow(attributes: attributes, state: state, isStale: isStale).opacity(look.dataOpacity)
+            VStack(spacing: 8) {
+                ChargeSegmentBar(state: state, tint: look.tint)
+                ChargeFooter(look: look)
+            }
+            .opacity(look.dataOpacity)
         }
         .padding(16)
-    }
-
-    private func lockScreenCaption(_ look: ChargeLook) -> String {
-        switch look.phase {
-        case .charging: look.isStale ? "Last update" : "To limit"
-        case .completed: "Finished"
-        case .stopped: "Stopped"
-        }
     }
 }
 

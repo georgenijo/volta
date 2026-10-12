@@ -437,6 +437,20 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(plan.start)
     }
 
+    func testLiveSessionEnergyAndReadyTimeLeadTheSummary() {
+        var live = status(minutesToFull: 90)
+        live.chargeEnergyAddedKwh = 17.1
+        live.chargeReadyAt = t0.addingTimeInterval(146 * 60)
+        let plan = planCharging([running("a")], live, latest: charge(id: 10, added: 12.5))
+        guard case .update(let state) = plan.existing["a"] else { return XCTFail("expected update") }
+        XCTAssertEqual(state.energyAddedKwh, 17.1, "the live counter leads TeslaMate's lagging total")
+        XCTAssertEqual(state.fullAt, t0.addingTimeInterval(146 * 60), "the car's own ready time wins")
+        live.chargeEnergyAddedKwh = nil
+        guard case .update(let fallback) = planCharging([running("a")], live, latest: charge(id: 10, added: 12.5)).existing["a"]
+        else { return XCTFail("expected update") }
+        XCTAssertEqual(fallback.energyAddedKwh, 12.5)
+    }
+
     func testOtherVehicleIsDismissedAndReplaced() {
         let plan = planCharging([running("a", vehicle: 2)], status(), latest: charge(id: 10))
         XCTAssertEqual(plan.existing["a"], .dismiss)
