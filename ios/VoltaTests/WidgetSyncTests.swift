@@ -532,6 +532,29 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(start.attributes.chargeId, "charge 10's details belong to the previous session")
         XCTAssertEqual(start.state.energyAddedKwh, 0.3)
         XCTAssertEqual(start.state.statusSessionId, -902)
+
+        // Replugged two minutes after TeslaMate opened charge 10: its start is close to the new
+        // session's, but the previous session already claimed it.
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 + 120)
+        live.chargeEnergyAddedKwh = nil
+        let close = planCharging([tracked], live, latest: charge(id: 10, added: 8))
+        XCTAssertEqual(close.existing["a"], .dismiss)
+        let replaced = try XCTUnwrap(close.start)
+        XCTAssertNil(replaced.attributes.chargeId)
+        XCTAssertNil(replaced.state.energyAddedKwh, "not charge 10's 8 kWh")
+        XCTAssertEqual(replaced.state.statusSessionId, -902)
+    }
+
+    func testActivityWithoutIdentityIsReplacedOnceTheLiveSessionIsKnown() throws {
+        var live = status()
+        live.activeChargeId = -901
+        live.chargeStartedAt = t0.addingTimeInterval(-600)
+        live.chargeEnergyAddedKwh = 2.4
+        let plan = planCharging([running("a", chargeId: nil)], live, latest: nil)
+        XCTAssertEqual(plan.existing["a"], .dismiss)
+        let start = try XCTUnwrap(plan.start)
+        XCTAssertEqual(start.state.energyAddedKwh, 2.4)
+        XCTAssertEqual(start.state.statusSessionId, -901)
     }
 
     func testStatusFallingBackToTeslaMateKeepsTheTrackedActivity() throws {
@@ -542,9 +565,11 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let start = try XCTUnwrap(planCharging([], live, latest: nil).start)
         let tracked = LiveActivityPlanner.ChargingRunning(id: "a", attributes: start.attributes, state: start.state)
 
-        // Telemetry went quiet; the status now names TeslaMate's charge and has no live counter.
+        // Telemetry went quiet; the status now names TeslaMate's process and its start, with no counter.
         var fallback = status()
         fallback.activeChargeId = 10
+        fallback.chargeStartedAt = t0.addingTimeInterval(-600 + 27 * 60)
+        XCTAssertNil(LiveActivityPlanner.liveSession(fallback))
         guard case .update(let state) = planCharging([tracked], fallback, latest: nil).existing["a"]
         else { return XCTFail("expected update") }
         XCTAssertEqual(state.energyAddedKwh, 2.4)
@@ -565,6 +590,37 @@ final class ChargingActivityPlannerTests: XCTestCase {
         guard case .finish(let state) = plan.existing["a"] else { return XCTFail("expected finish") }
         XCTAssertEqual(state.energyAddedKwh, 3.1)
         XCTAssertEqual(state.endedAt, ended)
+    }
+
+    func testFinalStateFromEitherIdentityOrTheFinalCounter() throws {
+        var live = status()
+        live.activeChargeId = -901
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 - 10 * 60)
+        live.chargeEnergyAddedKwh = 2.4
+        let start = try XCTUnwrap(planCharging([], live, latest: charge(id: 10, added: 2)).start)
+        XCTAssertEqual(start.attributes.chargeId, 10)
+        let tracked = LiveActivityPlanner.ChargingRunning(id: "a", attributes: start.attributes, state: start.state)
+
+        // The closed charge is listed under the telemetry session that replaced TeslaMate's record.
+        let ended = t0.addingTimeInterval(-60)
+        var complete = status(state: .online, charging: .complete, battery: 80)
+        guard case .finish(let summary) = planCharging([tracked], complete,
+                                                       latest: charge(id: -901, end: ended, added: 3.3)).existing["a"]
+        else { return XCTFail("expected finish") }
+        XCTAssertEqual(summary.energyAddedKwh, 3.3)
+        XCTAssertEqual(summary.endedAt, ended)
+
+        // No closed summary yet: the session's own final counter, not the last value shown.
+        complete.activeChargeId = -901
+        complete.chargeStartedAt = live.chargeStartedAt
+        complete.chargeEnergyAddedKwh = 3.1
+        guard case .finish(let counted) = planCharging([tracked], complete, latest: charge(id: 10, added: 2)).existing["a"]
+        else { return XCTFail("expected finish") }
+        XCTAssertEqual(counted.energyAddedKwh, 3.1)
+        complete.activeChargeId = -902
+        guard case .finish(let other) = planCharging([tracked], complete, latest: nil).existing["a"]
+        else { return XCTFail("expected finish") }
+        XCTAssertEqual(other.energyAddedKwh, 2.4, "another session's counter is not this charge's")
     }
 
     func testOtherVehicleIsDismissedAndReplaced() {

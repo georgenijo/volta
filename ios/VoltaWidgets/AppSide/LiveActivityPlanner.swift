@@ -67,6 +67,7 @@ enum LiveActivityPlanner {
         let session = liveSession(status)
         // An open record of another session (TeslaMate not caught up yet) is not this charge's history.
         let openCharge = latestCharge.flatMap { $0.end == nil && matches(status, $0) ? $0 : nil }
+        var startCharge = openCharge
         var plan = ChargingPlan()
         var claimed = false
         for activity in existing {
@@ -84,6 +85,10 @@ enum LiveActivityPlanner {
                     let same: Bool
                     if let tracked, let session {
                         same = tracked == session
+                        // The record the previous session already claimed is not the new one's.
+                        if !same, let id = activity.attributes.chargeId, id == openCharge?.id { startCharge = nil }
+                    } else if session != nil, activity.attributes.chargeId == nil {
+                        same = false  // no identity at all: replaced once the live session is known
                     } else if let own = latestCharge, own.id == activity.attributes.chargeId, !matches(status, own) {
                         same = false
                     } else {
@@ -105,15 +110,15 @@ enum LiveActivityPlanner {
            now.timeIntervalSince(status.updatedAt) < VoltaLiveActivityTiming.chargingStaleAfter {
             let attributes = ChargingActivityAttributes(
                 vehicleId: status.vehicleId,
-                chargeId: openCharge?.id,
+                chargeId: startCharge?.id,
                 vehicleName: vehicleName,
-                placeName: openCharge?.placeName ?? status.location?.placeName,
-                startedAt: openCharge?.start,
-                startBatteryLevel: openCharge?.startBatteryLevel,
-                fastCharger: openCharge?.fastCharger,
+                placeName: startCharge?.placeName ?? status.location?.placeName,
+                startedAt: startCharge?.start,
+                startBatteryLevel: startCharge?.startBatteryLevel,
+                fastCharger: startCharge?.fastCharger,
                 usesMiles: usesMiles)
             plan.start = .init(attributes: attributes,
-                               state: chargingState(status: status, openCharge: openCharge, previous: nil))
+                               state: chargingState(status: status, openCharge: startCharge, previous: nil))
         }
         return plan
     }
@@ -143,9 +148,10 @@ enum LiveActivityPlanner {
     static let teslaMateStartLag: ClosedRange<TimeInterval> = -5 * 60 ... 60 * 60
 
     /// The status's live Fleet Telemetry session, whose counter `chargeEnergyAddedKwh` is.
-    /// Nil when the status comes from TeslaMate alone.
+    /// Telemetry sessions have negative ids; a positive one is TeslaMate's open process.
     static func liveSession(_ status: VehicleStatus) -> Int? {
-        status.chargeStartedAt == nil ? nil : status.activeChargeId
+        guard status.chargeStartedAt != nil, let id = status.activeChargeId, id < 0 else { return nil }
+        return id
     }
 
     /// Whether a history charge is the status's live session: the same id, or a TeslaMate
@@ -160,14 +166,17 @@ enum LiveActivityPlanner {
     static func finalChargingState(status: VehicleStatus, observation: ChargingObservation,
                                    attributes: ChargingActivityAttributes, latestCharge: ChargeSummary?,
                                    previous: ChargingActivityAttributes.ContentState) -> ChargingActivityAttributes.ContentState {
-        // The activity's charge, by its history id or else the live session it followed.
-        let id = attributes.chargeId ?? previous.statusSessionId
-        let closed = latestCharge.flatMap { charge in charge.end != nil && id != nil && charge.id == id ? charge : nil }
+        // The activity's charge, by its history id or the live session it followed.
+        let ids = [attributes.chargeId, previous.statusSessionId].compactMap { $0 }
+        let closed = latestCharge.flatMap { $0.end != nil && ids.contains($0.id) ? $0 : nil }
+        // Without a closed summary, the tracked session's own final counter.
+        let tracked = previous.statusSessionId
+        let counter = tracked != nil && tracked == liveSession(status) ? status.chargeEnergyAddedKwh : nil
         return .init(batteryLevel: closed?.endBatteryLevel ?? status.batteryLevel,
                      chargeLimit: status.chargeLimit ?? previous.chargeLimit,
                      chargerPowerKw: nil,
                      fullAt: nil,
-                     energyAddedKwh: closed?.energyAddedKwh ?? previous.energyAddedKwh,
+                     energyAddedKwh: closed?.energyAddedKwh ?? counter ?? previous.energyAddedKwh,
                      rangeKm: status.estRangeKm ?? status.ratedRangeKm ?? previous.rangeKm,
                      phase: observation == .completed ? .completed : .stopped,
                      updatedAt: status.updatedAt,
