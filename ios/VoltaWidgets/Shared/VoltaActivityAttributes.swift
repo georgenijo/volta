@@ -35,15 +35,12 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         var updatedAt: Date
         /// When the session ended. Set only for final phases.
         var endedAt: Date?
-        /// The status's live session (`VehicleStatus.activeChargeId`) this activity tracks,
-        /// once its live counter was matched to the activity's charge.
+        /// The ids the status named for this activity's charge, each with its start: the Fleet
+        /// Telemetry session (negative) and TeslaMate's process (positive, its charge id).
         var statusSessionId: Int? = nil
-        /// The history charge last matched to this activity, which may be learned after it started.
-        var historyChargeId: Int? = nil
-        /// History claimed by the session this activity replaced; never this activity's.
-        var supersededChargeId: Int? = nil
-        /// TeslaMate's open process (positive id) the status last named for this activity.
-        var teslaMateProcessId: Int? = nil
+        var sessionStartedAt: Date? = nil
+        var teslaMateChargeId: Int? = nil
+        var teslaMateStartedAt: Date? = nil
 
         /// Battery fraction toward the charge limit, or nil when the limit is unknown.
         var fractionOfLimit: Double? {
