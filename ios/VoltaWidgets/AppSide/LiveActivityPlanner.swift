@@ -95,8 +95,10 @@ enum LiveActivityPlanner {
                             : nil
                         action = .update(chargingState(status: status, identity: identity, recordedEnergy: recorded,
                                                        previous: activity.state))
-                    case .unrelated:
-                        action = .keep
+                    case .unrelated(let identity):
+                        // Keep the readings and their time; only remember what was learned.
+                        let kept = remembering(identity, in: activity.state)
+                        action = kept == activity.state ? .keep : .update(kept)
                     case .other(let identity):
                         replaced.formUnion([identity.session, identity.teslaMate, activity.attributes.chargeId].compactMap { $0 })
                         replaced.formUnion(identity.others)
@@ -170,8 +172,8 @@ enum LiveActivityPlanner {
         /// The status names another charge.
         case other(ChargeIdentity)
         /// The status describes a charge that isn't the current one (a replaced charge's process, or
-        /// an older one TeslaMate never closed): leave the activity as it is.
-        case unrelated
+        /// an older one TeslaMate never closed): leave the activity's readings as they are.
+        case unrelated(ChargeIdentity)
     }
 
     static func identity(of activity: ChargingRunning, latestCharge: ChargeSummary?) -> ChargeIdentity {
@@ -200,11 +202,11 @@ enum LiveActivityPlanner {
         let named = status.chargeStartedAt
         if liveSession(status) == nil, let process = namedProcess(status) {
             if identity.others.contains(process) {
-                return .unrelated
+                return .unrelated(identity)
             } else if let known = identity.teslaMate {
                 // Two TeslaMate ids compare without a start; a process older than this charge is
                 // one TeslaMate never closed.
-                if known != process { return startsBefore(named, identity) ? .unrelated : .other(identity) }
+                if known != process { return startsBefore(named, identity) ? .unrelated(identity) : .other(identity) }
                 if identity.teslaMateStart == nil { identity.teslaMateStart = named }
             } else if identity.session == nil, !identity.others.contains(process) {
                 // Nothing to check it against: the named process is this charge.
@@ -237,7 +239,7 @@ enum LiveActivityPlanner {
                 } else if lag > teslaMateStartLag.upperBound {
                     return .other(identity)
                 } else {
-                    return .unrelated
+                    return .unrelated(identity)
                 }
             } else {
                 identity.teslaMate = process; identity.teslaMateStart = named
@@ -284,6 +286,17 @@ enum LiveActivityPlanner {
     /// charge. Telemetry sees a start first (TeslaMate's poll trailed it by 7 and 27 minutes in
     /// practice); the small lead allows for clock differences.
     static let teslaMateStartLag: ClosedRange<TimeInterval> = -60 ... 60 * 60
+
+    static func remembering(_ identity: ChargeIdentity, in state: ChargingActivityAttributes.ContentState)
+        -> ChargingActivityAttributes.ContentState {
+        var state = state
+        state.statusSessionId = identity.session
+        state.sessionStartedAt = identity.sessionStart
+        state.teslaMateChargeId = identity.teslaMate
+        state.teslaMateStartedAt = identity.teslaMateStart
+        state.otherChargeIds = identity.others.isEmpty ? nil : identity.others.sorted()
+        return state
+    }
 
     /// Whether a TeslaMate process started before this activity's charge: before its own
     /// TeslaMate process (the same clock), else beyond clock differences before its session.

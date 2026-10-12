@@ -740,6 +740,16 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(enriched.state.teslaMateStartedAt, sessionStart)
         XCTAssertEqual(planCharging([enriched], teslaMate(7, startedAt: sessionStart.addingTimeInterval(-2 * 3600)),
                                     latest: nil).existing["p"], .keep)
+
+        // Without history at start, the start recovered from the closed record is kept while the
+        // status names an older process, so a later failed history fetch doesn't lose it.
+        let q = try started(planCharging([], unstarted, latest: nil), as: "q")
+        let older = teslaMate(11, startedAt: sessionStart.addingTimeInterval(-600))
+        let remembered = try update(planCharging([q], older, latest: charge(id: 12, start: sessionStart, end: t0)), "q")
+        XCTAssertEqual(remembered.teslaMateStartedAt, sessionStart)
+        XCTAssertEqual(remembered.updatedAt, q.state.updatedAt)
+        XCTAssertEqual(remembered.chargerPowerKw, q.state.chargerPowerKw)
+        XCTAssertEqual(planCharging([next(q, remembered)], older, latest: nil).existing["q"], .keep)
     }
 
     func testAnotherNamedProcessReplacesWithoutAStart() throws {
