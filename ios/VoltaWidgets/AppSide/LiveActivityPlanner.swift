@@ -164,6 +164,9 @@ enum LiveActivityPlanner {
                 usesMiles: usesMiles)
             var state = chargingState(status: status, identity: identity, recordedEnergy: recorded, previous: nil)
             state.counterKwh = state.counterKwh ?? enriched?.previous.counterKwh
+            // History records DC once any was drawn; its false may only mean none was seen yet.
+            state.fastCharger = state.fastCharger ?? enriched?.previous.fastCharger
+                ?? (history?.fastCharger == true ? true : nil)
             plan.start = .init(attributes: attributes, state: state)
         }
         return plan

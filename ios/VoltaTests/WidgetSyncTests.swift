@@ -810,6 +810,18 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(planCharging([home], dc, latest: nil).existing["h"], .dismiss)
         dc.fastCharger = false
         XCTAssertEqual(try update(planCharging([home], dc, latest: nil), "h").statusSessionId, -912)
+        // The kind survives enrichment while telemetry is quiet, and a DC record establishes it.
+        let homeRecord = charge(id: 20, start: sessionStart.addingTimeInterval(20 * 60))
+        let homeEnriched = try started(planCharging([home], teslaMate(20, startedAt: homeRecord.start), latest: homeRecord), as: "h2")
+        XCTAssertEqual(homeEnriched.state.fastCharger, false)
+        dc.fastCharger = true
+        XCTAssertEqual(planCharging([homeEnriched], dc, latest: nil).existing["h2"], .dismiss)
+        let dcRecord = ChargeSummary(id: 21, start: sessionStart, end: nil, address: nil, placeName: "Supercharger",
+                                     energyAddedKwh: 1, energyUsedKwh: nil, startBatteryLevel: 40, endBatteryLevel: nil,
+                                     durationMin: 10, maxPowerKw: nil, fastCharger: true, cost: nil, currency: nil,
+                                     outsideTempAvgC: nil)
+        let supercharging = try started(planCharging([], teslaMate(21, startedAt: sessionStart), latest: dcRecord), as: "s")
+        XCTAssertEqual(supercharging.state.fastCharger, true)
 
         // A session whose start was observed is a new charge (a replug).
         XCTAssertEqual(planCharging([a], telemetry(-902, startedAt: gapEnd, energy: 0.2), latest: nil).existing["a"], .dismiss)
