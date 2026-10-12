@@ -616,6 +616,40 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(start.state.energyAddedKwh, 0.1)
     }
 
+    func testARememberedProcessIsAnEstablishedAssociation() throws {
+        var live = status()
+        live.activeChargeId = -901
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 - 10 * 60)
+        live.chargeEnergyAddedKwh = 2.4
+        let first = try XCTUnwrap(planCharging([], live, latest: nil).start)
+        var fallback = status()
+        fallback.activeChargeId = 10
+        fallback.chargeStartedAt = t0.addingTimeInterval(-3600)
+        guard case .update(let fellBack) = planCharging([.init(id: "a", attributes: first.attributes, state: first.state)],
+                                                         fallback, latest: nil).existing["a"]
+        else { return XCTFail("expected update") }
+        XCTAssertEqual(fellBack.teslaMateProcessId, 10)
+
+        // Telemetry resumes on -901 while history already lists the next charge 11.
+        let running = LiveActivityPlanner.ChargingRunning(id: "a", attributes: first.attributes, state: fellBack)
+        guard case .update(let resumed) = planCharging([running], live,
+                                                       latest: charge(id: 11, start: t0.addingTimeInterval(-3600), added: 0.1)).existing["a"]
+        else { return XCTFail("expected update") }
+        XCTAssertNil(resumed.historyChargeId)
+        XCTAssertEqual(resumed.energyAddedKwh, 2.4)
+
+        live.activeChargeId = -902
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 - 60)
+        live.chargeEnergyAddedKwh = nil
+        let moved = planCharging([.init(id: "a", attributes: first.attributes, state: resumed)], live,
+                                 latest: charge(id: 11, start: t0.addingTimeInterval(-3600), added: 0.1))
+        XCTAssertEqual(moved.existing["a"], .dismiss)
+        let start = try XCTUnwrap(moved.start)
+        XCTAssertEqual(start.state.supersededChargeId, 10)
+        XCTAssertEqual(start.attributes.chargeId, 11)
+        XCTAssertEqual(start.state.energyAddedKwh, 0.1)
+    }
+
     func testHistoryArrivingForTheNamedProcessEnrichesTheActivity() throws {
         var teslaMate = status()
         teslaMate.activeChargeId = 10

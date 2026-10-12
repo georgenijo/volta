@@ -82,6 +82,7 @@ enum LiveActivityPlanner {
                     let previous = activity.state
                     let own = previous.historyChargeId ?? activity.attributes.chargeId
                     let history = openCharge.flatMap { $0.id == previous.supersededChargeId ? nil : $0 }
+                    let claimed = own ?? previous.teslaMateProcessId
                     // The live session decides when both are known, whatever history says. When
                     // another charge replaces this one, the history this one claimed is excluded
                     // from the replacement; a replacement that only learns this charge's identity
@@ -90,7 +91,7 @@ enum LiveActivityPlanner {
                     var excluded = previous.supersededChargeId
                     if let tracked = previous.statusSessionId, let session {
                         same = tracked == session
-                        if !same { excluded = own ?? previous.teslaMateProcessId ?? excluded }
+                        if !same { excluded = claimed ?? excluded }
                     } else if let known = own.flatMap({ $0 > 0 ? $0 : nil }) ?? previous.teslaMateProcessId,
                               let process, process != known {
                         same = false  // TeslaMate reports another process
@@ -107,7 +108,7 @@ enum LiveActivityPlanner {
                     if !same { superseded = excluded }
                     action = same
                         // A record matching only by start time doesn't replace an established one.
-                        ? .update(chargingState(status: status, openCharge: history.flatMap { own == nil || $0.id == own ? $0 : nil },
+                        ? .update(chargingState(status: status, openCharge: history.flatMap { claimed == nil || $0.id == claimed ? $0 : nil },
                                                 previous: previous))
                         : .dismiss
                 case .completed, .stopped:
