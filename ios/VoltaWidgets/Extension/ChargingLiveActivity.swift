@@ -147,7 +147,7 @@ struct ChargeReading: View {
     }
 }
 
-/// "+17.1 kWh" on the left; "2 hr, 26 min to 80%", "Updated 3:42 PM" or the end time on the right.
+/// "+17.1 kWh" on the left; "2:26 to 80%", "Updated 3:42 PM" or the end time on the right.
 struct ChargeFooter: View {
     var look: ChargeLook
     var body: some View {
@@ -168,7 +168,9 @@ struct ChargeFooter: View {
             Text("Updated \(Text(s.updatedAt, style: .time))").foregroundStyle(WTheme.amber)
         } else if s.phase == .charging {
             if let fullAt = s.fullAt, fullAt > .now {
-                Text("\(Text(fullAt, style: .relative))\(limit)").foregroundStyle(.white).monospacedDigit()
+                // Bounded: stops at zero instead of counting up past the estimate.
+                Text("\(Text(.currentDate, format: .timer(countingDownIn: Date.now..<fullAt, maxFieldCount: 2, maxPrecision: .seconds(60))))\(limit)")
+                    .foregroundStyle(.white).monospacedDigit()
             } else {
                 Text("Charging\(limit)").foregroundStyle(.white)
             }

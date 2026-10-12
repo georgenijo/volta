@@ -441,14 +441,37 @@ final class ChargingActivityPlannerTests: XCTestCase {
         var live = status(minutesToFull: 90)
         live.chargeEnergyAddedKwh = 17.1
         live.chargeReadyAt = t0.addingTimeInterval(146 * 60)
+        live.activeChargeId = -900
+        // Telemetry saw this charge 27 minutes before TeslaMate's poll opened charge 10.
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 - 27 * 60)
         let plan = planCharging([running("a")], live, latest: charge(id: 10, added: 12.5))
         guard case .update(let state) = plan.existing["a"] else { return XCTFail("expected update") }
         XCTAssertEqual(state.energyAddedKwh, 17.1, "the live counter leads TeslaMate's lagging total")
         XCTAssertEqual(state.fullAt, t0.addingTimeInterval(146 * 60), "the car's own ready time wins")
+        XCTAssertEqual(planCharging([], live, latest: charge(id: 10, added: 12.5)).start?.state.energyAddedKwh, 17.1)
         live.chargeEnergyAddedKwh = nil
         guard case .update(let fallback) = planCharging([running("a")], live, latest: charge(id: 10, added: 12.5)).existing["a"]
         else { return XCTFail("expected update") }
         XCTAssertEqual(fallback.energyAddedKwh, 12.5)
+    }
+
+    func testLiveEnergyFromAnotherSessionIsNotShown() {
+        var live = status()
+        live.chargeEnergyAddedKwh = 2.4
+        live.activeChargeId = -901
+        live.chargeStartedAt = t0.addingTimeInterval(-600)
+        // History unavailable: the activity's session is unconfirmed, so its last value stays.
+        guard case .update(let unfetched) = planCharging([running("a")], live, latest: nil).existing["a"]
+        else { return XCTFail("expected update") }
+        XCTAssertEqual(unfetched.energyAddedKwh, 5)
+        // The telemetry session began 50 minutes into TeslaMate's charge 10: a later session.
+        guard case .update(let later) = planCharging([running("a")], live, latest: charge(id: 10, added: 12.5)).existing["a"]
+        else { return XCTFail("expected update") }
+        XCTAssertEqual(later.energyAddedKwh, 12.5)
+        // Same id (a telemetry-only charge) needs no fetched history.
+        guard case .update(let same) = planCharging([running("b", chargeId: -901)], live, latest: nil).existing["b"]
+        else { return XCTFail("expected update") }
+        XCTAssertEqual(same.energyAddedKwh, 2.4)
     }
 
     func testOtherVehicleIsDismissedAndReplaced() {

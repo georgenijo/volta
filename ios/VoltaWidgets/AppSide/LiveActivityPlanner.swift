@@ -77,7 +77,8 @@ enum LiveActivityPlanner {
                     action = .keep
                 case .charging:
                     action = sameSession(activity.attributes.chargeId, openCharge?.id)
-                        ? .update(chargingState(status: status, openCharge: openCharge, previous: activity.state))
+                        ? .update(chargingState(status: status, chargeId: activity.attributes.chargeId,
+                                                openCharge: openCharge, previous: activity.state))
                         : .dismiss
                 case .completed, .stopped:
                     action = .finish(finalChargingState(status: status, observation: observation,
@@ -100,22 +101,39 @@ enum LiveActivityPlanner {
                 fastCharger: openCharge?.fastCharger,
                 usesMiles: usesMiles)
             plan.start = .init(attributes: attributes,
-                               state: chargingState(status: status, openCharge: openCharge, previous: nil))
+                               state: chargingState(status: status, chargeId: openCharge?.id,
+                                                  openCharge: openCharge, previous: nil))
         }
         return plan
     }
 
-    static func chargingState(status: VehicleStatus, openCharge: ChargeSummary?,
+    static func chargingState(status: VehicleStatus, chargeId: Int?, openCharge: ChargeSummary?,
                               previous: ChargingActivityAttributes.ContentState?) -> ChargingActivityAttributes.ContentState {
         .init(batteryLevel: status.batteryLevel,
               chargeLimit: status.chargeLimit,
               chargerPowerKw: status.chargerPowerKw,
               fullAt: status.chargeReadyAt ?? status.minutesToFull.map { status.updatedAt.addingTimeInterval(Double($0) * 60) },
-              energyAddedKwh: status.chargeEnergyAddedKwh ?? openCharge?.energyAddedKwh ?? previous?.energyAddedKwh,
+              energyAddedKwh: liveEnergy(status, chargeId: chargeId, openCharge: openCharge)
+                  ?? openCharge?.energyAddedKwh ?? previous?.energyAddedKwh,
               rangeKm: status.estRangeKm ?? status.ratedRangeKm,
               phase: .charging,
               updatedAt: status.updatedAt,
               endedAt: nil)
+    }
+
+    /// Telemetry sees a charge start first; TeslaMate's poll can trail it by half an hour.
+    /// A telemetry session starting more than this after the TeslaMate start is a later one.
+    static let telemetryStartLead: TimeInterval = 5 * 60
+
+    /// The live counter belongs to the status's own session. Use it only when that is the
+    /// activity's session: the same id, or the fetched open charge for this activity with a
+    /// telemetry session that did not start after it (the two number one charge differently).
+    static func liveEnergy(_ status: VehicleStatus, chargeId: Int?, openCharge: ChargeSummary?) -> Double? {
+        guard let energy = status.chargeEnergyAddedKwh, let chargeId else { return nil }
+        if status.activeChargeId == chargeId { return energy }
+        guard let openCharge, openCharge.id == chargeId, let started = status.chargeStartedAt,
+              started.timeIntervalSince(openCharge.start) <= telemetryStartLead else { return nil }
+        return energy
     }
 
     /// Final content: no power or countdown, the end time, and the last known totals.
