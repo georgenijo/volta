@@ -206,6 +206,20 @@ enum ChargeCurve {
 
     enum Source: Equatable { case telemetry, samples }
 
+    /// One chart's curve over a session window from one source: the clipped
+    /// Fleet Telemetry series when it covers the window, else the recorded
+    /// samples split at the telemetry's declared outages for `field`.
+    static func curve(telemetry: FleetTelemetrySeries?, samples: [ChargeSample], field: String, start: Date, end: Date,
+                      telemetryValue: (FleetTelemetrySample) -> Double?, sampleValue: (ChargeSample) -> Double?)
+        -> (points: [ChargeCurvePoint], source: Source, series: TelemetryMetricSeries) {
+        let series = TelemetryMetricSeries(telemetry, field: field, value: telemetryValue).clipped(start: start, end: end)
+        let fromTelemetry = points(series, start: start, end: end)
+        let fromSamples = points(samples.map { (t: $0.t, value: sampleValue($0)) }, start: start, end: end,
+                                 breaks: boundaries(telemetry, field: field))
+        let chosen = choose(telemetry: fromTelemetry, samples: fromSamples, start: start, end: end)
+        return (chosen.points, chosen.source, series)
+    }
+
     /// Receiver-declared outages, plus instants where the telemetry block
     /// flagged `field` invalid. Recorded samples are split at these so a
     /// fallback chart never draws a line across a known outage, however short.

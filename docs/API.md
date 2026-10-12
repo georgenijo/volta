@@ -121,18 +121,23 @@ VehicleStatus  { vehicleId, state: online|asleep|offline|driving|charging|updati
                  packTempMaxC, packTempMinC, energyRemainingKwh, chargePortDoorOpen,
                  chargePortLatch, tpms: { fl, fr, rl, rr }, telemetryFreshness,
                  chargeEnergyAddedKwh, chargerVoltage, chargerCurrentA, fastCharger,
-                 chargeCableType, chargeStartedAt, activeChargeId }
+                 chargeCableType, chargeStartedAt, activeChargeId, chargeReadyAt }
 TireReading    { pressureBar: number|null, updatedAt: timestamp|null }
 ```
 
 Live charging comes from Fleet Telemetry's `DetailedChargeState` while the
 stream is connected, or when that state is newer than every TeslaMate
 observation; otherwise from TeslaMate's open charging process. `minutesToFull`,
-`chargerVoltage` and `chargerCurrentA` are set only while charging.
+`chargeReadyAt`, `chargerVoltage` and `chargerCurrentA` are set only while
+charging. `chargeReadyAt` is the car's estimate counted from when it was made,
+and `minutesToFull` is what remains of it now; both are null once it has passed.
+Power and charger type come from the car's `FastChargerPresent` when reported,
+else from the newer positive AC or DC power observed in this session.
 `chargeEnergyAddedKwh` is the session's own counter (AC or DC), null when it
-predates the open telemetry session. `chargeCableType` is Tesla's raw value
-(`CableTypeSAE`, `CableTypeIEC`, `CableTypeGB_AC`, ...). `activeChargeId` is the
-open telemetry session's negative charge id, else the open TeslaMate process; use
+predates the session. A charging state belongs to the open telemetry session;
+Complete or Stopped keeps the newest one. `chargeCableType` is Tesla's raw value
+(`CableTypeSAE`, `CableTypeIEC`, `CableTypeGB_AC`, ...). `activeChargeId` is that
+telemetry session's negative charge id, else the open TeslaMate process; use
 it with `GET /v1/charges/{id}` for the session curve. `location.address` names the
 newest TeslaMate charge or drive end within 50 m of the car; nothing is geocoded.
 

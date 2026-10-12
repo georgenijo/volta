@@ -451,12 +451,9 @@ struct ChargingDetailView: View {
     /// samples. The two are never merged into one series.
     private func curve(field: String, telemetryValue: (FleetTelemetrySample) -> Double?,
                        sampleValue: (ChargeSample) -> Double?) -> Curve {
-        let series = TelemetryMetricSeries(telemetry, field: field, value: telemetryValue).clipped(start: sessionStart, end: sessionEnd)
-        let fromTelemetry = ChargeCurve.points(series, start: sessionStart, end: sessionEnd)
-        let fromSamples = ChargeCurve.points(samples.map { (t: $0.t, value: sampleValue($0)) }, start: sessionStart, end: sessionEnd,
-                                             breaks: ChargeCurve.boundaries(telemetry, field: field))
-        let chosen = ChargeCurve.choose(telemetry: fromTelemetry, samples: fromSamples, start: sessionStart, end: sessionEnd)
-        return Curve(points: ChargeCurve.reduced(chosen.points), source: chosen.source, telemetry: series)
+        let chosen = ChargeCurve.curve(telemetry: telemetry, samples: samples, field: field, start: sessionStart, end: sessionEnd,
+                                       telemetryValue: telemetryValue, sampleValue: sampleValue)
+        return Curve(points: ChargeCurve.reduced(chosen.points), source: chosen.source, telemetry: chosen.series)
     }
 
     private var powerCurve: Curve { curve(field: "Power", telemetryValue: { $0.powerKw }, sampleValue: { $0.powerKw }) }

@@ -129,7 +129,7 @@ export class Telemetry {
       estRangeKm: row.polled_est ?? null, chargeLimit: null, chargingState: row.charge_id ? 'charging' : null,
       chargerPowerKw: row.charge_id ? row.charger_power ?? null : null, minutesToFull: null,
       chargeEnergyAddedKwh: null as number | null, chargerVoltage: null as number | null, chargerCurrentA: null as number | null,
-      fastCharger: null as boolean | null, chargeCableType: null as string | null,
+      fastCharger: null as boolean | null, chargeCableType: null as string | null, chargeReadyAt: null as Date | null,
       chargeStartedAt: (row.charge_id ? row.charge_at : null) as Date | null, activeChargeId: (row.charge_id ?? null) as number | null,
       insideTempC: row.polled_inside ?? null, outsideTempC: row.polled_outside ?? null, climateOn: row.polled_climate ?? null,
       driverTempSettingC: row.polled_driver_temp ?? null, locked: null, sentryMode: null, odometerKm: row.odometer ?? null,
@@ -159,8 +159,12 @@ export class Telemetry {
       const charging = charge.state === 'charging', session = charging || charge.state === 'complete' || charge.state === 'stopped';
       if (charging && state !== 'updating' && state !== 'driving') result.state = 'charging';
       else if (!charging && state === 'charging') result.state = row.state && row.state !== 'charging' ? row.state : 'online';
+      // Time to full counts down from when the car estimated it; an estimate
+      // already past is no estimate.
+      const readyAt = charging && charge.readyAt && +charge.readyAt > +this.clock() ? charge.readyAt : null;
+      if (charge.observedAt && (!result.updatedAt || +charge.observedAt > +result.updatedAt)) result.updatedAt = charge.observedAt;
       Object.assign(result, { chargingState: charge.state, chargerPowerKw: charging ? charge.powerKw : null,
-        minutesToFull: charging && charge.minutesToFull != null ? Math.round(charge.minutesToFull) : null,
+        minutesToFull: readyAt ? Math.round((+readyAt - +this.clock()) / 60_000) : null, chargeReadyAt: readyAt,
         chargeEnergyAddedKwh: session ? charge.energyAddedKwh : null, chargerVoltage: charging ? charge.voltage : null,
         chargerCurrentA: charging ? charge.currentA : null, fastCharger: session ? charge.fast : null,
         chargeCableType: session ? charge.cableType : null, chargeStartedAt: session ? charge.startedAt : null,

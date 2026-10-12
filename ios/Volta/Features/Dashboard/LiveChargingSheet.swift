@@ -14,6 +14,9 @@ struct LiveChargingSheet: View {
 
     @State private var status: VehicleStatus
     @State private var detail: ChargeDetail?
+    /// The session whose detail is shown; it outlives the status's id so a
+    /// finished session keeps its final totals and curve.
+    @State private var shownChargeId: Int?
 
     init(initialStatus: VehicleStatus) {
         _status = State(initialValue: initialStatus)
@@ -51,15 +54,22 @@ struct LiveChargingSheet: View {
 
     private func refresh() async {
         if let fresh = try? await dataSource.status(vehicleID: vehicleID) { status = fresh }
-        guard let id = status.activeChargeId else { return }
+        // When charging ends the status may drop the id; the shown session is
+        // read once more for its final readings. A different session never
+        // shows another's detail, even while its own is not yet servable.
+        let id = status.activeChargeId ?? shownChargeId
+        if id != shownChargeId { detail = nil; shownChargeId = id }
+        guard let id else { return }
         if let fresh = try? await dataSource.charge(id: id) { detail = fresh }
     }
 
     private var charging: Bool { status.isCharging }
     private var target: Int? { status.chargeLimit }
+    /// The car's own estimate, counted from when it was made; none once past.
     private var readyAt: Date? {
-        guard charging, let minutes = status.minutesToFull else { return nil }
-        return Date.now.addingTimeInterval(Double(minutes) * 60)
+        guard charging, let at = status.chargeReadyAt
+                ?? status.minutesToFull.map({ status.updatedAt.addingTimeInterval(Double($0) * 60) }) else { return nil }
+        return at > .now ? at : nil
     }
 
     // MARK: Header
@@ -257,24 +267,36 @@ struct LiveChargingSheet: View {
         app?.settings.rates ?? ElectricityRates(home: nil, dcFast: nil, currency: units.currency)
     }
 
-    private var sessionSamples: [FleetTelemetrySample] {
-        let start = status.chargeStartedAt ?? detail?.summary.start ?? .distantPast
-        return (detail?.telemetry?.samples ?? []).filter { $0.t >= start }.sorted { $0.t < $1.t }
+    /// The shown session's window: from its start (the status's, while it is
+    /// the status's session) to its end, or now while open.
+    private var window: (start: Date, end: Date)? {
+        guard let detail else { return nil }
+        let statusStart = status.activeChargeId == shownChargeId ? status.chargeStartedAt : nil
+        return (min(statusStart ?? detail.summary.start, detail.summary.start), detail.summary.end ?? .now)
+    }
+
+    /// One source per curve, split at gaps and invalid readings, as on the
+    /// charge detail screen: Fleet Telemetry, else TeslaMate's samples.
+    private func curve(_ field: String, _ telemetryValue: (FleetTelemetrySample) -> Double?,
+                       _ sampleValue: (ChargeSample) -> Double?) -> [ChargeCurvePoint] {
+        guard let detail, let window else { return [] }
+        return ChargeCurve.reduced(ChargeCurve.curve(telemetry: detail.telemetry, samples: detail.samples, field: field,
+                                                     start: window.start, end: window.end,
+                                                     telemetryValue: telemetryValue, sampleValue: sampleValue).points)
     }
 
     /// Range added since the session began: the car's rated range now minus
     /// the first rated range recorded in the session.
     private var rangeAddedKm: Double? {
         guard let now = status.ratedRangeKm,
-              let first = sessionSamples.first(where: { $0.ratedRangeKm != nil })?.ratedRangeKm
-                ?? detail?.samples.first(where: { $0.ratedRangeKm != nil })?.ratedRangeKm else { return nil }
+              let first = curve("RatedRange", { $0.ratedRangeKm }, { $0.ratedRangeKm }).first?.value else { return nil }
         return max(0, now - first)
     }
 
     private var addedKwh: Double? { status.chargeEnergyAddedKwh ?? detail?.summary.energyAddedKwh }
 
     private var stats: some View {
-        let rate = status.fastCharger == true ? (rates.dcFast ?? rates.home) : rates.home
+        let rate = rates.perKwh(fastCharger: status.fastCharger ?? detail?.summary.fastCharger ?? false)
         return HStack(alignment: .top, spacing: 0) {
             stat("Added", addedKwh.map { "+\(VoltaFormat.number($0, digits: 1))" } ?? "—", unit: "kWh")
             stat("Range", rangeAddedKm.map { "+\(VoltaFormat.number(units.distanceValue(km: $0), digits: 0))" } ?? "—",
@@ -307,7 +329,8 @@ struct LiveChargingSheet: View {
 
     @ViewBuilder
     private var sessionChart: some View {
-        let points = sessionSamples
+        let power = curve("Power", { $0.powerKw }, { $0.powerKw })
+        let soc = curve("BatteryLevel", { $0.batteryLevel }, { $0.batteryLevel.map(Double.init) })
         VStack(alignment: .leading, spacing: VoltaSpacing.md) {
             HStack {
                 Text("Session").voltaLabelStyle()
@@ -317,11 +340,11 @@ struct LiveChargingSheet: View {
                     legend("%", .voltaBlue)
                 }
             }
-            if points.count >= 2 {
-                LiveSessionChart(samples: points, readyAt: readyAt, target: target.map(Double.init),
+            if power.count >= 2 || soc.count >= 2 {
+                LiveSessionChart(power: power, soc: soc, readyAt: readyAt, target: target.map(Double.init),
                                  currentLevel: Double(status.batteryLevel))
             } else {
-                Text(detail == nil && status.activeChargeId != nil ? "Loading the session…" : "The session curve appears once a few readings arrive.")
+                Text(detail == nil && shownChargeId != nil ? "Loading the session…" : "The session curve appears once a few readings arrive.")
                     .font(.footnote).foregroundStyle(Color.voltaTextSecondary)
                     .frame(maxWidth: .infinity, minHeight: 120)
             }
@@ -340,43 +363,44 @@ struct LiveChargingSheet: View {
 
 /// Power (green, left axis) and state of charge (blue, right axis 0–100 %)
 /// over the session, with the charge level projected (dashed) to the target
-/// at the car's ready time.
+/// at the car's ready time. Each series is keyed by segment so a line never
+/// bridges a gap or an invalid reading.
 struct LiveSessionChart: View {
-    var samples: [FleetTelemetrySample]
+    var power: [ChargeCurvePoint]
+    var soc: [ChargeCurvePoint]
     var readyAt: Date?
     var target: Double?
     var currentLevel: Double
 
     private var top: Double {
-        let peak = samples.compactMap(\.powerKw).max() ?? 0
+        let peak = power.map(\.value).max() ?? 0
         return max(1, (peak * 1.2).rounded(.up))
     }
     private func socY(_ percent: Double) -> Double { min(100, max(0, percent)) / 100 * top }
-    private var end: Date { max(readyAt ?? .now, samples.last?.t ?? .now) }
+    private var start: Date { min(power.first?.t ?? .distantFuture, soc.first?.t ?? .distantFuture) }
+    private var last: Date { max(power.last?.t ?? .distantPast, soc.last?.t ?? .distantPast) }
+    private var end: Date { max(readyAt ?? .now, last) }
 
     var body: some View {
-        let power = samples.filter { $0.powerKw != nil }
-        let soc = samples.filter { $0.batteryLevel != nil }
-        let last = soc.last
         Chart {
-            ForEach(power, id: \.t) { s in
-                AreaMark(x: .value("Time", s.t), y: .value("kW", s.powerKw!), series: .value("Series", "fill"), stacking: .unstacked)
+            ForEach(power) { p in
+                AreaMark(x: .value("Time", p.t), y: .value("kW", p.value), series: .value("Series", "fill-\(p.segment)"), stacking: .unstacked)
                     .interpolationMethod(.monotone)
                     .foregroundStyle(LinearGradient(colors: [Color.voltaGreen.opacity(0.25), Color.voltaGreen.opacity(0.04)],
                                                     startPoint: .top, endPoint: .bottom))
-                LineMark(x: .value("Time", s.t), y: .value("kW", s.powerKw!), series: .value("Series", "power"))
+                LineMark(x: .value("Time", p.t), y: .value("kW", p.value), series: .value("Series", "power-\(p.segment)"))
                     .interpolationMethod(.monotone)
                     .foregroundStyle(Color.voltaGreen)
                     .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
             }
-            ForEach(soc, id: \.t) { s in
-                LineMark(x: .value("Time", s.t), y: .value("kW", socY(s.batteryLevel!)), series: .value("Series", "soc"))
+            ForEach(soc) { p in
+                LineMark(x: .value("Time", p.t), y: .value("kW", socY(p.value)), series: .value("Series", "soc-\(p.segment)"))
                     .interpolationMethod(.monotone)
                     .foregroundStyle(Color.voltaBlue)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round))
             }
-            if let last, let readyAt, let target, readyAt > last.t {
-                LineMark(x: .value("Time", last.t), y: .value("kW", socY(max(last.batteryLevel!, currentLevel))), series: .value("Series", "projection"))
+            if let lastSoc = soc.last, let readyAt, let target, readyAt > lastSoc.t {
+                LineMark(x: .value("Time", lastSoc.t), y: .value("kW", socY(max(lastSoc.value, currentLevel))), series: .value("Series", "projection"))
                     .foregroundStyle(Color.voltaBlue.opacity(0.6))
                     .lineStyle(StrokeStyle(lineWidth: 1.6, lineCap: .round, dash: [4, 4]))
                 LineMark(x: .value("Time", readyAt), y: .value("kW", socY(target)), series: .value("Series", "projection"))
@@ -391,14 +415,14 @@ struct LiveSessionChart: View {
                             .foregroundStyle(Color.voltaTextSecondary)
                     }
             }
-            if let last = power.last {
-                PointMark(x: .value("Time", last.t), y: .value("kW", last.powerKw!))
+            if let lastPower = power.last {
+                PointMark(x: .value("Time", lastPower.t), y: .value("kW", lastPower.value))
                     .foregroundStyle(Color.voltaGreen)
                     .symbolSize(40)
             }
         }
         .chartYScale(domain: 0...top)
-        .chartXScale(domain: (samples.first?.t ?? .now)...end)
+        .chartXScale(domain: start...end)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
                 AxisValueLabel(format: .dateTime.hour().minute())

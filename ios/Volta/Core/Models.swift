@@ -91,6 +91,9 @@ struct VehicleStatus: Codable, Hashable, Sendable {
     var chargeCableType: String? = nil
     var chargeStartedAt: Date? = nil
     var activeChargeId: Int? = nil
+    /// When the car expects to reach its limit, dated from its own estimate
+    /// (newer servers); `minutesToFull` is what remains of it at `updatedAt`.
+    var chargeReadyAt: Date? = nil
 
     var isCharging: Bool { chargingState == .charging || (chargingState == nil && state == .charging) }
 }

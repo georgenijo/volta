@@ -453,8 +453,10 @@ test('live charging leads TeslaMate while connected; a disconnected stale state 
   await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
     VALUES(1,'fixture',${old},${now},${old},${now},0,${now})`;
   let status=await get('/v1/vehicles/1/status');
-  expect(status).toMatchObject({state:'charging',chargingState:'charging',chargerPowerKw:7.7,minutesToFull:192,chargeEnergyAddedKwh:2.9,
+  // The 3.2 h estimate was made when charging began, 40 minutes ago; fresh charging readings date the status.
+  expect(status).toMatchObject({state:'charging',chargingState:'charging',chargerPowerKw:7.7,minutesToFull:152,chargeEnergyAddedKwh:2.9,
     chargerVoltage:241,chargerCurrentA:32,fastCharger:false,chargeCableType:'CableTypeSAE'});
+  expect(Date.parse(status.chargeReadyAt)).toBe(+begun+192*60_000);expect(Date.parse(status.updatedAt)).toBe(+now-60_000);
   expect(Date.parse(status.chargeStartedAt)).toBe(+begun);expect(status.activeChargeId).toBeLessThan(0);
   // The open session is servable for the live sheet's curve.
   for (const [s,v] of [[0,1],[60,7.7],[1200,7.6]] as const) await datum('ACChargingPower',v,new Date(+begun+s*1000),'live-power-'+s);
@@ -465,10 +467,15 @@ test('live charging leads TeslaMate while connected; a disconnected stale state 
   await owner`UPDATE volta_telemetry.connectivity SET status='DISCONNECTED'`;
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${old},received_at=${old} WHERE field='DetailedChargeState'`;
   status=await get('/v1/vehicles/1/status');expect(status.state).toBe('asleep');expect(status.chargingState).toBeNull();expect(status.activeChargeId).toBeNull();
-  // A newer completed state ends TeslaMate's lagging open process and keeps the session's energy.
+  // A newer completed state, which closes the receiver's session, ends TeslaMate's lagging open
+  // process and keeps the finished session's energy and id so its final detail stays reachable.
+  const sessionId=session.id;
   await owner`UPDATE charging_processes SET end_date=NULL WHERE id=1`;
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${now},received_at=${now},value_text='DetailedChargeStateComplete' WHERE field='DetailedChargeState'`;
+  await owner`UPDATE volta_telemetry.sessions SET end_reason='charge_state',end_ts=${now}`;
   status=await get('/v1/vehicles/1/status');
-  expect(status).toMatchObject({state:'asleep',chargingState:'complete',chargerPowerKw:null,minutesToFull:null,chargeEnergyAddedKwh:2.9});
+  expect(status).toMatchObject({state:'asleep',chargingState:'complete',chargerPowerKw:null,minutesToFull:null,chargeReadyAt:null,
+    chargeEnergyAddedKwh:2.9,activeChargeId:sessionId});
+  expect((await get(`/v1/charges/${sessionId}`)).id).toBe(sessionId);
   await owner`TRUNCATE volta_telemetry.sessions`;
 });

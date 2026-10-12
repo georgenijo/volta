@@ -22,13 +22,14 @@ export class FleetLive {
           AND source_ts >= COALESCE((SELECT receiver_started_at FROM volta_telemetry.stream_health WHERE id=1),now()) - interval '1 second'
         ORDER BY connection_id,source_ts DESC,received_at DESC,status DESC) x) AS connections,
       (SELECT to_jsonb(h) FROM volta_telemetry.stream_health h WHERE id=1) AS health,
-      (SELECT s.start_ts FROM volta_telemetry.sessions s WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' AND s.end_reason='open' ORDER BY s.start_ts DESC LIMIT 1) AS open_charge
+      (SELECT jsonb_build_object('start',s.start_ts,'open',s.end_reason='open') FROM volta_telemetry.sessions s
+        WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(row.vin, 'utf8').digest('hex');
     if (row.vin_digest !== digest) return null;
     return { samples: row.samples as Row[], connections: (row.connections ?? []) as Row[], health: row.health as Row | null,
-      openCharge: row.open_charge ? new Date(row.open_charge) : null };
+      lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true } : null };
   }
 }
 
@@ -55,16 +56,26 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
   const sentry = text('SentryMode');
   const sentryMode = sentry === 'SentryModeStateOff' ? false :
     ['SentryModeStateIdle','SentryModeStateArmed','SentryModeStateAware','SentryModeStatePanic','SentryModeStateQuiet'].includes(sentry) ? true : null;
-  // Charging is reported separately so status merges it as one unit. Session
-  // counters count only from the open session's start; a held counter from a
-  // finished session is not this session's energy.
+  // Charging is reported separately so status merges it as one unit. Charging
+  // belongs to the open session; Complete or Stopped still describes the newest
+  // one (the receiver closes it on that state). Readings from before that
+  // session began are a previous session's: a held counter, or a positive
+  // power whose drop to zero was missed.
   const at = (f: string) => valid(f) ? new Date(by.get(f)!.source_ts) : null;
-  const ac = num('ACChargingPower',{kW:1}), dc = num('DCChargingPower',{kW:1}), fast = (dc ?? 0) > 0 || bool('FastChargerPresent') === true;
-  const counter = fast ? 'DCChargingEnergyIn' : 'ACChargingEnergyIn', counted = at(counter), open = live.openCharge ?? null;
-  const charge = { state: chargeStates[text('DetailedChargeState') ?? ''] ?? null, at: at('DetailedChargeState'),
-    powerKw: (dc ?? 0) > 0 ? dc : ac, fast, minutesToFull: num('TimeToFullCharge',{h:60}),
-    currentA: num('ChargeAmps',{A:1}), voltage: num('ChargerVoltage',{V:1}), cableType: text('ChargingCableType'), startedAt: open,
-    energyAddedKwh: open && counted && +counted >= +open - 60_000 ? num(counter,{kWh:1}) : null };
+  const state = chargeStates[text('DetailedChargeState') ?? ''] ?? null, last = live.lastCharge ?? null;
+  const session = last && (last.open || state === 'complete' || state === 'stopped') ? last.start : null;
+  const current = (v: number | null, t: Date | null) => v != null && v > 0 && t != null && (!session || +t >= +session);
+  const ac = num('ACChargingPower',{kW:1}), dc = num('DCChargingPower',{kW:1}), acAt = at('ACChargingPower'), dcAt = at('DCChargingPower');
+  const fast = bool('FastChargerPresent') ?? (current(dc, dcAt) && (!current(ac, acAt) || +dcAt! >= +acAt!));
+  const counter = fast ? 'DCChargingEnergyIn' : 'ACChargingEnergyIn', counted = at(counter);
+  const eta = num('TimeToFullCharge',{h:60}), etaAt = at('TimeToFullCharge');
+  const fields = ['DetailedChargeState', fast ? 'DCChargingPower' : 'ACChargingPower', 'TimeToFullCharge', counter, 'ChargeAmps', 'ChargerVoltage'];
+  const charge = { state, at: at('DetailedChargeState'), powerKw: fast ? dc : ac, fast, minutesToFull: eta,
+    // When the car expects to be full, anchored to the estimate's own observation.
+    readyAt: eta != null && etaAt ? new Date(+etaAt + eta * 60_000) : null,
+    observedAt: fields.map(at).filter(t => t != null).sort((a,b) => +b-+a)[0] ?? null,
+    currentA: num('ChargeAmps',{A:1}), voltage: num('ChargerVoltage',{V:1}), cableType: text('ChargingCableType'), startedAt: session,
+    energyAddedKwh: session && counted && +counted >= +session ? num(counter,{kWh:1}) : null };
   const tire = (suffix: string) => ({ pressureBar: num(`TpmsPressure${suffix}`, {bar:1,psi:1/14.5037738,kPa:.01}), updatedAt: times[`TpmsPressure${suffix}`] ?? null });
   return { values: {
     batteryLevel:num('BatteryLevel',{'%':1}), usableBatteryLevel:num('Soc',{'%':1}),
