@@ -29,6 +29,9 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         /// Absolute ETA so the countdown keeps ticking between pushes.
         var fullAt: Date?
         var energyAddedKwh: Double?
+        /// The car's charge counter as last read for this charge; `energyAddedKwh` may instead be
+        /// a recorded total.
+        var counterKwh: Double? = nil
         var rangeKm: Double?
         var phase: Phase = .charging
         /// When the vehicle data was recorded.

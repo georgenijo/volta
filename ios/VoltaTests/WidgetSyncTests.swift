@@ -728,6 +728,16 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(pagedEnd.statusSessionId)
         XCTAssertEqual(pagedEnd.energyAddedKwh, 9)
         XCTAssertEqual(pagedEnd.endedAt, processEnd)
+        // Nor does an activity that started with the resumed session's record finish with it.
+        let learnedLate = try update(planCharging([enriched], teslaMate(10, startedAt: sessionStart.addingTimeInterval(20 * 60)),
+                                                  latest: nil), "e")
+        XCTAssertEqual(learnedLate.teslaMateChargeId, 10)
+        let enrichedEnd = try finish(planCharging([next(enriched, learnedLate)], done, latest: closedFragment,
+                                                  charges: [closedFragment, charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60),
+                                                                                   end: processEnd, added: 9)]), "e")
+        XCTAssertNil(enrichedEnd.statusSessionId)
+        XCTAssertEqual(enrichedEnd.energyAddedKwh, 9)
+        XCTAssertEqual(enrichedEnd.endedAt, processEnd)
         // A counter well below this charge's own recorded total is a new charge; a little below,
         // the record was fetched after the status.
         let record = charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), added: 20)
@@ -841,6 +851,18 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(recorded.state.energyAddedKwh, 20)
         XCTAssertEqual(try update(planCharging([recorded], resumed(-901, startedAt: processStart.addingTimeInterval(90 * 60),
                                                                    energy: 19.2), latest: nil), "r").statusSessionId, -901)
+
+        // So may one shown for a session whose counter hadn't arrived yet.
+        let early10 = charge(id: 10, start: processStart, added: 20)
+        let unread = try started(planCharging([], resumed(-907, startedAt: processStart.addingTimeInterval(-600)),
+                                              latest: early10), as: "u")
+        XCTAssertEqual(unread.state.statusSessionId, -907)
+        XCTAssertEqual(unread.state.energyAddedKwh, 20)
+        XCTAssertNil(unread.state.counterKwh)
+        let firstRead = try update(planCharging([unread], resumed(-907, startedAt: processStart.addingTimeInterval(-600),
+                                                                  energy: 19.2), latest: early10), "u")
+        XCTAssertEqual(firstRead.energyAddedKwh, 19.2)
+        XCTAssertEqual(firstRead.counterKwh, 19.2)
 
         // An activity showing no total waits for the counter when history records the charge's.
         let bare = try started(planCharging([], teslaMate(10, startedAt: processStart), latest: nil), as: "n")

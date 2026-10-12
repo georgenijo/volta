@@ -162,9 +162,9 @@ enum LiveActivityPlanner {
                 startBatteryLevel: history?.startBatteryLevel,
                 fastCharger: history?.fastCharger,
                 usesMiles: usesMiles)
-            plan.start = .init(attributes: attributes,
-                               state: chargingState(status: status, identity: identity,
-                                                    recordedEnergy: recorded, previous: nil))
+            var state = chargingState(status: status, identity: identity, recordedEnergy: recorded, previous: nil)
+            state.counterKwh = state.counterKwh ?? enriched?.previous.counterKwh
+            plan.start = .init(attributes: attributes, state: state)
         }
         return plan
     }
@@ -248,7 +248,7 @@ enum LiveActivityPlanner {
                 if known != session {
                     guard resumed, !identity.others.contains(session),
                           continues(identity, from: named, status: status, records: records,
-                                    shown: activity.state.energyAddedKwh)
+                                    shown: activity.state.energyAddedKwh, read: activity.state.counterKwh)
                     else { return .other(identity) }
                     // Without the new session's counter a restart can't be ruled out yet.
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
@@ -260,7 +260,7 @@ enum LiveActivityPlanner {
                     // A session taken on as this charge part-way answers to history that arrives later.
                     if identity.sessionResumed || !identity.sessionStartObserved && identity.teslaMate != nil,
                        !continues(identity, from: named, status: status, records: records,
-                                  shown: activity.state.energyAddedKwh) {
+                                  shown: activity.state.energyAddedKwh, read: activity.state.counterKwh) {
                         identity.session = nil  // the session belongs to the charge replacing this one
                         return .other(identity)
                     }
@@ -275,7 +275,7 @@ enum LiveActivityPlanner {
                 if let start = identity.teslaMateStart, sameCharge(teslaMateStart: start, sessionStart: named) {
                     identity.sessionStartObserved = !resumed
                 } else if resumed, continues(identity, from: named, status: status, records: records,
-                                             shown: activity.state.energyAddedKwh) {
+                                             shown: activity.state.energyAddedKwh, read: activity.state.counterKwh) {
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
                                      records: records) { return .unrelated(identity) }
                     identity.sessionStartObserved = false
@@ -333,6 +333,7 @@ enum LiveActivityPlanner {
                      chargerPowerKw: status.chargerPowerKw,
                      fullAt: status.chargeReadyAt ?? status.minutesToFull.map { status.updatedAt.addingTimeInterval(Double($0) * 60) },
                      energyAddedKwh: live ?? recordedEnergy ?? previous?.energyAddedKwh,
+                     counterKwh: live ?? previous?.counterKwh,
                      rangeKm: status.estRangeKm ?? status.ratedRangeKm,
                      phase: .charging,
                      updatedAt: status.updatedAt,
@@ -372,15 +373,15 @@ enum LiveActivityPlanner {
 
     /// Whether a session that began mid-charge at `start` continues this activity's charge: it
     /// began after the charge did, the car's counter hasn't restarted below what the activity
-    /// shows, and no history record says the charge ended or another began.
+    /// read or shows, and no history record says the charge ended or another began.
     static func continues(_ identity: ChargeIdentity, from start: Date, status: VehicleStatus,
-                          records: [ChargeSummary], shown: Double?) -> Bool {
+                          records: [ChargeSummary], shown: Double?, read: Double?) -> Bool {
         let own = [identity.sessionStart, identity.teslaMateStart].compactMap { $0 }.min()
         if let own, start.timeIntervalSince(own) < teslaMateStartLag.lowerBound { return false }
-        // A counter the activity showed was read before this one; a TeslaMate total it showed may
-        // have been recorded after.
-        if let shown, identity.session != nil ? !reaches(status.chargeEnergyAddedKwh, shown)
-            : !counts(status.chargeEnergyAddedKwh, toward: shown) { return false }
+        // The counter the activity last read came before this reading; a recorded total it shows
+        // may have been fetched after.
+        guard reaches(status.chargeEnergyAddedKwh, read), counts(status.chargeEnergyAddedKwh, toward: shown)
+        else { return false }
         return records.allSatisfy { record in
             guard !identity.others.contains(record.id) else { return true }
             // This charge's record can't total much more than the car's counter for it.
@@ -509,17 +510,16 @@ enum LiveActivityPlanner {
         let bySession = partial ? nil : ownSession
         // The tracked session's own final counter outranks a TeslaMate record.
         let counter = identity.session != nil && identity.session == liveSession(status) ? status.chargeEnergyAddedKwh : nil
-        // An earlier session ended at the gap, not with the charge.
-        let byTeslaMate = closed.first {
-            ($0.id == identity.teslaMate || $0.id == attributes.chargeId) && !(partial && $0.id == identity.session)
-                && !identity.earlierSessions.contains($0.id)
-        }
+        // Only a TeslaMate process: a session the activity started with may since have proved to be
+        // an earlier part of the charge, or another charge.
+        let byTeslaMate = closed.first { $0.id > 0 && ($0.id == identity.teslaMate || $0.id == attributes.chargeId) }
         let summary = bySession ?? byTeslaMate ?? ownSession
         return .init(batteryLevel: summary?.endBatteryLevel ?? status.batteryLevel,
                      chargeLimit: status.chargeLimit ?? previous.chargeLimit,
                      chargerPowerKw: nil,
                      fullAt: nil,
                      energyAddedKwh: bySession?.energyAddedKwh ?? counter ?? byTeslaMate?.energyAddedKwh ?? previous.energyAddedKwh,
+                     counterKwh: counter ?? previous.counterKwh,
                      rangeKm: status.estRangeKm ?? status.ratedRangeKm ?? previous.rangeKm,
                      phase: observation == .completed ? .completed : .stopped,
                      updatedAt: status.updatedAt,
