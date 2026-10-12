@@ -57,10 +57,10 @@ private func drivingRunning(_ id: String, vehicle: Int = 1, driveId: Int? = 20) 
 }
 
 private func planCharging(_ existing: [LiveActivityPlanner.ChargingRunning], _ s: VehicleStatus,
-                          latest: ChargeSummary? = nil, canStart: Bool = true,
+                          latest: ChargeSummary? = nil, charges: [ChargeSummary]? = nil, canStart: Bool = true,
                           now: Date = t0.addingTimeInterval(60)) -> LiveActivityPlanner.ChargingPlan {
     LiveActivityPlanner.planCharging(existing: existing, status: s, vehicleName: "Friday", latestCharge: latest,
-                                     usesMiles: false, canStart: canStart, now: now)
+                                     charges: charges, usesMiles: false, canStart: canStart, now: now)
 }
 
 private func planDriving(_ existing: [LiveActivityPlanner.DrivingRunning], _ s: VehicleStatus,
@@ -721,6 +721,17 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(planCharging([blank], resumed(-902, startedAt: gapEnd),
                                     latest: charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), added: 20))
             .existing["z"], .keep)
+        // A continuation taken without history answers to history that arrives later.
+        let later = planCharging([next(a, fellBack)], resumed(-902, startedAt: gapEnd, energy: 12),
+                                 latest: charge(id: 11, start: gapEnd.addingTimeInterval(300)))
+        XCTAssertEqual(later.existing["a"], .dismiss)
+        XCTAssertEqual(later.start?.state.statusSessionId, -902)
+        XCTAssertEqual(later.start?.state.otherChargeIds, [10])
+        // An older row of the history page can show this charge's process ended before the session.
+        let fragment = charge(id: -903, start: t0, added: 0.4)
+        XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 12), latest: fragment,
+                                    charges: [charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), end: gapEnd, added: 9),
+                                              fragment]).existing["a"], .dismiss)
         // A process that started and closed since this one also means history moved on.
         XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 12),
                                     latest: charge(id: 11, start: gapEnd, end: t0.addingTimeInterval(-600)))

@@ -311,7 +311,8 @@ final class WidgetSync: VehicleSurfaces {
             || (hadDriving && drivingObservation != .unknown)
         async let chargePage = needCharge ? try? dataSource.charges(vehicleID: vehicleID, range: since, cursor: nil) : nil
         async let drivePage = needDrive ? try? dataSource.drives(vehicleID: vehicleID, range: since, cursor: nil) : nil
-        let latestCharge = await chargePage?.items.max { $0.start < $1.start }
+        let charges = await chargePage?.items
+        let latestCharge = charges?.max { $0.start < $1.start }
         let latestDrive = await drivePage?.items.max { $0.start < $1.start }
 
         // Unpair, demo or a vehicle switch while fetching makes this sync obsolete.
@@ -319,14 +320,14 @@ final class WidgetSync: VehicleSurfaces {
         // Apply in the lane, after any cleanup queued before it; re-check there.
         await mutate { [weak self] in
             await self?.applyActivities(epoch: syncEpoch, status: status, vehicleName: vehicleName, units: units,
-                                        latestCharge: latestCharge, latestDrive: latestDrive)
+                                        latestCharge: latestCharge, charges: charges, latestDrive: latestDrive)
         }.value
     }
 
     /// Runs inside the mutation lane. Plans against the activities present now.
     private func applyActivities(epoch syncEpoch: Int, status: VehicleStatus, vehicleName: String,
                                  units: UnitPreferences, latestCharge: ChargeSummary?,
-                                 latestDrive: DriveSummary?) async {
+                                 charges: [ChargeSummary]?, latestDrive: DriveSummary?) async {
         let vehicleID = status.vehicleId
         guard isLive(syncEpoch, vehicle: vehicleID) else { return }
         let usesMiles = units.distance == .miles
@@ -334,7 +335,7 @@ final class WidgetSync: VehicleSurfaces {
 
         let chargingPlan = LiveActivityPlanner.planCharging(
             existing: activities.chargingActivities(), status: status, vehicleName: vehicleName,
-            latestCharge: latestCharge, usesMiles: usesMiles, canStart: activities.canStart, now: now)
+            latestCharge: latestCharge, charges: charges, usesMiles: usesMiles, canStart: activities.canStart, now: now)
         for (id, action) in chargingPlan.existing.sorted(by: { $0.key < $1.key }) {
             guard isLive(syncEpoch, vehicle: vehicleID) else { return }
             await activities.apply(action, toCharging: id)

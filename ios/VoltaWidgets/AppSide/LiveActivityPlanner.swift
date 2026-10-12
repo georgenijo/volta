@@ -59,6 +59,7 @@ enum LiveActivityPlanner {
 
     /// - Parameters:
     ///   - latestCharge: newest `ChargeSummary` for this vehicle (open when `end == nil`), if fetched.
+    ///   - charges: the recent history page it came from, which may show where a charge ended.
     ///   - canStart: Live Activities are enabled for the app.
     ///
     /// A charge has two names: its Fleet Telemetry session (negative id) and TeslaMate's process
@@ -67,8 +68,8 @@ enum LiveActivityPlanner {
     /// History is matched by start time only when an activity starts; afterwards only exact ids
     /// count, so a record that merely starts near this charge never lends it totals.
     static func planCharging(existing: [ChargingRunning], status: VehicleStatus, vehicleName: String,
-                             latestCharge: ChargeSummary?, usesMiles: Bool, canStart: Bool,
-                             now: Date) -> ChargingPlan {
+                             latestCharge: ChargeSummary?, charges: [ChargeSummary]? = nil, usesMiles: Bool,
+                             canStart: Bool, now: Date) -> ChargingPlan {
         let observation = chargingObservation(status)
         var plan = ChargingPlan()
         var claimed = false
@@ -84,7 +85,7 @@ enum LiveActivityPlanner {
                 case .unknown:
                     action = .keep
                 case .charging:
-                    switch follow(activity, status: status, latestCharge: latestCharge) {
+                    switch follow(activity, status: status, latestCharge: latestCharge, charges: charges) {
                     case .enrich(let identity) where canRestart:
                         enriched = (identity, activity.state)
                         action = .dismiss
@@ -107,7 +108,7 @@ enum LiveActivityPlanner {
                 case .completed, .stopped:
                     // Follow the charge to its end, which may come in a session it resumed in.
                     let followed: ChargeIdentity
-                    switch follow(activity, status: status, latestCharge: latestCharge) {
+                    switch follow(activity, status: status, latestCharge: latestCharge, charges: charges) {
                     case .same(let identity), .enrich(let identity), .unrelated(let identity): followed = identity
                     case .other: followed = identity(of: activity, latestCharge: latestCharge)
                     }
@@ -217,8 +218,10 @@ enum LiveActivityPlanner {
     }
 
     /// Whether the status still describes the activity's charge.
-    static func follow(_ activity: ChargingRunning, status: VehicleStatus, latestCharge: ChargeSummary?) -> ChargeFollow {
+    static func follow(_ activity: ChargingRunning, status: VehicleStatus, latestCharge: ChargeSummary?,
+                       charges: [ChargeSummary]? = nil) -> ChargeFollow {
         var identity = identity(of: activity, latestCharge: latestCharge)
+        let records = charges ?? latestCharge.map { [$0] } ?? []
         let named = status.chargeStartedAt
         if liveSession(status) == nil, let process = namedProcess(status) {
             if identity.others.contains(process) {
@@ -239,16 +242,25 @@ enum LiveActivityPlanner {
             if let known = identity.session {
                 if known != session {
                     guard resumed, !identity.others.contains(session),
-                          continues(identity, from: named, status: status, latestCharge: latestCharge,
+                          continues(identity, from: named, status: status, records: records,
                                     shown: activity.state.energyAddedKwh)
                     else { return .other(identity) }
                     // Without the new session's counter a restart can't be ruled out yet.
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
-                                     latestCharge: latestCharge) { return .unrelated(identity) }
+                                     records: records) { return .unrelated(identity) }
                     // The charge's start, and whether it was seen, stay those already known.
                     identity.session = session; identity.sessionResumed = true
-                } else if resumed, let start = identity.sessionStart, abs(named.timeIntervalSince(start)) < 1 {
-                    identity.sessionStartObserved = false  // the status now says so about this session
+                } else {
+                    // A session taken on as this charge part-way answers to history that arrives later.
+                    if identity.sessionResumed || !identity.sessionStartObserved && identity.teslaMate != nil,
+                       !continues(identity, from: named, status: status, records: records,
+                                  shown: activity.state.energyAddedKwh) {
+                        identity.session = nil  // the session belongs to the charge replacing this one
+                        return .other(identity)
+                    }
+                    if resumed, let start = identity.sessionStart, abs(named.timeIntervalSince(start)) < 1 {
+                        identity.sessionStartObserved = false  // the status now says so about this session
+                    }
                 }
             } else if identity.others.contains(session) {
                 return .other(identity)
@@ -256,10 +268,10 @@ enum LiveActivityPlanner {
                 // TeslaMate's record must start with the session, or the session joined it late.
                 if let start = identity.teslaMateStart, sameCharge(teslaMateStart: start, sessionStart: named) {
                     identity.sessionStartObserved = !resumed
-                } else if resumed, continues(identity, from: named, status: status, latestCharge: latestCharge,
+                } else if resumed, continues(identity, from: named, status: status, records: records,
                                              shown: activity.state.energyAddedKwh) {
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
-                                     latestCharge: latestCharge) { return .unrelated(identity) }
+                                     records: records) { return .unrelated(identity) }
                     identity.sessionStartObserved = false
                 } else {
                     return .other(identity)
@@ -352,26 +364,27 @@ enum LiveActivityPlanner {
 
     /// Whether a session that began mid-charge at `start` continues this activity's charge: it
     /// began after the charge did, the car's counter hasn't restarted below what the activity
-    /// shows, TeslaMate hasn't closed this charge's process, and it hasn't opened a later one.
+    /// shows, and no history record says the charge ended or another began.
     static func continues(_ identity: ChargeIdentity, from start: Date, status: VehicleStatus,
-                          latestCharge: ChargeSummary?, shown: Double?) -> Bool {
+                          records: [ChargeSummary], shown: Double?) -> Bool {
         let own = [identity.sessionStart, identity.teslaMateStart].compactMap { $0 }.min()
         if let own, start.timeIntervalSince(own) < teslaMateStartLag.lowerBound { return false }
         if let counter = status.chargeEnergyAddedKwh, let shown, counter < shown - counterSlack { return false }
-        guard let record = latestCharge, !identity.others.contains(record.id) else { return true }
-        // This charge's record can't total much more than the car's counter for it.
-        let counted = counts(status.chargeEnergyAddedKwh, toward: record)
-        if record.id == identity.session { return counted }
-        guard record.id > 0 else { return true }
-        // This charge's process ending before the session began means the charge ended; ending
-        // since, it closed with the charge the session resumed.
-        let endedBefore = record.end.map { $0 <= start } ?? false
-        if isThisCharge(record, identity) { return !endedBefore && counted }
-        // Another process: one started before this charge's own is older; a later one, open or
-        // closed, means history has moved on.
-        if identity.teslaMate != nil, let known = identity.teslaMateStart { return record.start <= known }
-        guard let own else { return !endedBefore }
-        return record.start.timeIntervalSince(own) < teslaMateStartLag.lowerBound
+        return records.allSatisfy { record in
+            guard !identity.others.contains(record.id) else { return true }
+            // This charge's record can't total much more than the car's counter for it.
+            let counted = counts(status.chargeEnergyAddedKwh, toward: record)
+            if record.id == identity.session { return counted }
+            guard record.id > 0 else { return true }
+            // This charge's process ending before the session began means the charge ended; ending
+            // since, it closed with the charge the session resumed.
+            if isThisCharge(record, identity) { return counted && !(record.end.map { $0 <= start } ?? false) }
+            // Another process: one started before this charge's own is older; a later one, open or
+            // closed, means history has moved on.
+            if identity.teslaMate != nil, let known = identity.teslaMateStart { return record.start <= known }
+            guard let own else { return true }
+            return record.start.timeIntervalSince(own) < teslaMateStartLag.lowerBound
+        }
     }
 
     /// Whether a history record is this activity's charge: one of its ids, or, while its TeslaMate
@@ -406,8 +419,8 @@ enum LiveActivityPlanner {
     /// charge with a known total, shown or recorded: only the counter tells a resumed charge from
     /// a new one.
     static func awaitsCounter(_ status: VehicleStatus, identity: ChargeIdentity, shown: Double?,
-                              latestCharge: ChargeSummary?) -> Bool {
-        let recorded = latestCharge.flatMap { isThisCharge($0, identity) ? $0.energyAddedKwh : nil }
+                              records: [ChargeSummary]) -> Bool {
+        let recorded = records.filter { isThisCharge($0, identity) }.compactMap(\.energyAddedKwh).max()
         return status.chargeEnergyAddedKwh == nil && (shown ?? recorded) != nil
     }
 
