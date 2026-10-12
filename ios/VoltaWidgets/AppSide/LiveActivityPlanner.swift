@@ -76,9 +76,11 @@ enum LiveActivityPlanner {
                 case .unknown:
                     action = .keep
                 case .charging:
-                    action = sameSession(activity.attributes.chargeId, openCharge?.id)
-                        ? .update(chargingState(status: status, chargeId: activity.attributes.chargeId,
-                                                openCharge: openCharge, previous: activity.state))
+                    // Without history, a different live session than the tracked one is a new charge.
+                    let movedOn = openCharge == nil && activity.state.statusSessionId != nil
+                        && status.activeChargeId != nil && activity.state.statusSessionId != status.activeChargeId
+                    action = sameSession(activity.attributes.chargeId, openCharge?.id) && !movedOn
+                        ? .update(chargingState(status: status, openCharge: openCharge, previous: activity.state))
                         : .dismiss
                 case .completed, .stopped:
                     action = .finish(finalChargingState(status: status, observation: observation,
@@ -91,11 +93,9 @@ enum LiveActivityPlanner {
         }
         if observation == .charging, !claimed, canStart,
            now.timeIntervalSince(status.updatedAt) < VoltaLiveActivityTiming.chargingStaleAfter {
-            // Without an open history record, the status's own session names the charge.
-            let chargeId = openCharge?.id ?? status.activeChargeId
             let attributes = ChargingActivityAttributes(
                 vehicleId: status.vehicleId,
-                chargeId: chargeId,
+                chargeId: openCharge?.id,
                 vehicleName: vehicleName,
                 placeName: openCharge?.placeName ?? status.location?.placeName,
                 startedAt: openCharge?.start,
@@ -103,24 +103,24 @@ enum LiveActivityPlanner {
                 fastCharger: openCharge?.fastCharger,
                 usesMiles: usesMiles)
             plan.start = .init(attributes: attributes,
-                               state: chargingState(status: status, chargeId: chargeId,
-                                                  openCharge: openCharge, previous: nil))
+                               state: chargingState(status: status, openCharge: openCharge, previous: nil))
         }
         return plan
     }
 
-    static func chargingState(status: VehicleStatus, chargeId: Int?, openCharge: ChargeSummary?,
+    static func chargingState(status: VehicleStatus, openCharge: ChargeSummary?,
                               previous: ChargingActivityAttributes.ContentState?) -> ChargingActivityAttributes.ContentState {
-        .init(batteryLevel: status.batteryLevel,
-              chargeLimit: status.chargeLimit,
-              chargerPowerKw: status.chargerPowerKw,
-              fullAt: status.chargeReadyAt ?? status.minutesToFull.map { status.updatedAt.addingTimeInterval(Double($0) * 60) },
-              energyAddedKwh: liveEnergy(status, chargeId: chargeId, openCharge: openCharge)
-                  ?? openCharge?.energyAddedKwh ?? previous?.energyAddedKwh,
-              rangeKm: status.estRangeKm ?? status.ratedRangeKm,
-              phase: .charging,
-              updatedAt: status.updatedAt,
-              endedAt: nil)
+        let live = liveEnergy(status, openCharge: openCharge, previous: previous)
+        return .init(batteryLevel: status.batteryLevel,
+                     chargeLimit: status.chargeLimit,
+                     chargerPowerKw: status.chargerPowerKw,
+                     fullAt: status.chargeReadyAt ?? status.minutesToFull.map { status.updatedAt.addingTimeInterval(Double($0) * 60) },
+                     energyAddedKwh: live ?? openCharge?.energyAddedKwh ?? previous?.energyAddedKwh,
+                     rangeKm: status.estRangeKm ?? status.ratedRangeKm,
+                     phase: .charging,
+                     updatedAt: status.updatedAt,
+                     endedAt: nil,
+                     statusSessionId: live != nil ? status.activeChargeId : previous?.statusSessionId)
     }
 
     /// How long TeslaMate's start of a charge may trail (positive) or lead (negative) Fleet
@@ -129,12 +129,17 @@ enum LiveActivityPlanner {
     static let teslaMateStartLag: ClosedRange<TimeInterval> = -5 * 60 ... 60 * 60
 
     /// The live counter belongs to the status's own session. Use it only when that is the
-    /// activity's session: the same id, or the fetched open charge for this activity starting
-    /// with the telemetry session (the two number one charge differently).
-    static func liveEnergy(_ status: VehicleStatus, chargeId: Int?, openCharge: ChargeSummary?) -> Double? {
-        guard let energy = status.chargeEnergyAddedKwh, let chargeId else { return nil }
-        if status.activeChargeId == chargeId { return energy }
-        guard let openCharge, openCharge.id == chargeId, let started = status.chargeStartedAt,
+    /// activity's charge: its open history record (the same id, or starting with the telemetry
+    /// session, as the two number one charge differently); without history, the session the
+    /// activity already tracks, or any session for a new activity.
+    static func liveEnergy(_ status: VehicleStatus, openCharge: ChargeSummary?,
+                           previous: ChargingActivityAttributes.ContentState?) -> Double? {
+        guard let energy = status.chargeEnergyAddedKwh, let session = status.activeChargeId else { return nil }
+        guard let openCharge else {
+            return previous == nil || previous?.statusSessionId == session ? energy : nil
+        }
+        if session == openCharge.id { return energy }
+        guard let started = status.chargeStartedAt,
               teslaMateStartLag.contains(openCharge.start.timeIntervalSince(started)) else { return nil }
         return energy
     }

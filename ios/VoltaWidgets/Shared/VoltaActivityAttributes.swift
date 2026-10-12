@@ -35,6 +35,9 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         var updatedAt: Date
         /// When the session ended. Set only for final phases.
         var endedAt: Date?
+        /// The status's live session (`VehicleStatus.activeChargeId`) this activity tracks,
+        /// once its live counter was matched to the activity's charge.
+        var statusSessionId: Int? = nil
 
         /// Battery fraction toward the charge limit, or nil when the limit is unknown.
         var fractionOfLimit: Double? {
