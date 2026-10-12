@@ -847,6 +847,15 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                      outsideTempAvgC: nil)
         let supercharging = try started(planCharging([], teslaMate(21, startedAt: sessionStart), latest: dcRecord), as: "s")
         XCTAssertEqual(supercharging.state.fastCharger, true)
+        // Known DC rules out a later AC session before the state saved it, from attributes or the record.
+        var unsaved = supercharging
+        unsaved.state.fastCharger = nil
+        var acLater = resumed(-913, startedAt: gapEnd, energy: 25)
+        acLater.fastCharger = false
+        XCTAssertEqual(planCharging([unsaved], acLater, latest: nil).existing["s"], .dismiss)
+        unsaved.attributes.fastCharger = nil
+        XCTAssertEqual(planCharging([unsaved], acLater, latest: dcRecord).existing["s"], .dismiss)
+        XCTAssertEqual(try update(planCharging([unsaved], acLater, latest: nil), "s").statusSessionId, -913)
 
         // A session whose start was observed is a new charge (a replug).
         XCTAssertEqual(planCharging([a], telemetry(-902, startedAt: gapEnd, energy: 0.2), latest: nil).existing["a"], .dismiss)

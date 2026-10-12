@@ -95,8 +95,10 @@ enum LiveActivityPlanner {
                         let recorded = identity.session == nil
                             ? latestCharge.flatMap { $0.end == nil && $0.id == identity.teslaMate ? $0.energyAddedKwh : nil }
                             : nil
+                        let previous = knowingDC(activity.state, attributes: activity.attributes,
+                                                 identity: identity, records: page)
                         action = .update(chargingState(status: status, identity: identity, recordedEnergy: recorded,
-                                                       previous: activity.state))
+                                                       previous: previous))
                     case .unrelated(let identity):
                         // Keep the readings and their time; only remember what was learned.
                         let kept = remembering(identity, in: activity.state)
@@ -240,10 +242,11 @@ enum LiveActivityPlanner {
            records.contains(where: { $0.id == known && $0.fastCharger }) {
             identity.others.insert(known); identity.teslaMate = nil; identity.teslaMateStart = nil
         }
+        let shown = knowingDC(activity.state, attributes: activity.attributes, identity: identity, records: records)
         // A session taken on as this charge part-way answers to history that arrives later, even
         // once telemetry no longer describes it.
         if liveSession(status) == nil, identity.session != nil, let adopted = adoptedAt(identity),
-           !continues(identity, from: adopted, status: status, records: records, showing: activity.state) {
+           !continues(identity, from: adopted, status: status, records: records, showing: shown) {
             identity.session = nil
             return .other(identity)
         }
@@ -267,7 +270,7 @@ enum LiveActivityPlanner {
                 if known != session {
                     guard resumed, !identity.others.contains(session),
                           continues(identity, from: named, status: status, records: records,
-                                    showing: activity.state)
+                                    showing: shown)
                     else { return .other(identity) }
                     // Without the new session's counter a restart can't be ruled out yet.
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
@@ -279,7 +282,7 @@ enum LiveActivityPlanner {
                     // A session taken on as this charge part-way answers to history that arrives later.
                     if identity.sessionResumed || !identity.sessionStartObserved && identity.teslaMate != nil,
                        !continues(identity, from: named, status: status, records: records,
-                                  showing: activity.state) {
+                                  showing: shown) {
                         identity.session = nil  // the session belongs to the charge replacing this one
                         return .other(identity)
                     }
@@ -294,7 +297,7 @@ enum LiveActivityPlanner {
                 if let start = identity.teslaMateStart, sameCharge(teslaMateStart: start, sessionStart: named) {
                     identity.sessionStartObserved = !resumed
                 } else if resumed, continues(identity, from: named, status: status, records: records,
-                                             showing: activity.state) {
+                                             showing: shown) {
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
                                      records: records) { return .unrelated(identity) }
                     identity.sessionStartObserved = false
@@ -397,6 +400,18 @@ enum LiveActivityPlanner {
         state.sessionResumedAt = identity.resumedAt
         state.earlierSessionIds = identity.earlierSessions.isEmpty ? nil : identity.earlierSessions.sorted()
         state.otherChargeIds = identity.others.isEmpty ? nil : identity.others.sorted()
+        return state
+    }
+
+    /// The activity's state with the DC its charge is known to have drawn, which its attributes or
+    /// own records may show before the state saved it.
+    static func knowingDC(_ state: ChargingActivityAttributes.ContentState, attributes: ChargingActivityAttributes,
+                          identity: ChargeIdentity, records: [ChargeSummary]) -> ChargingActivityAttributes.ContentState {
+        guard state.fastCharger == nil, attributes.fastCharger == true || records.contains(where: {
+            $0.fastCharger && ($0.id == identity.teslaMate || $0.id == identity.session)
+        }) else { return state }
+        var state = state
+        state.fastCharger = true
         return state
     }
 
