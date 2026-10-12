@@ -564,6 +564,16 @@ final class ChargingActivityPlannerTests: XCTestCase {
         else { return XCTFail("expected update") }
         XCTAssertEqual(caughtUp.energyAddedKwh, 0.5)
         XCTAssertEqual(caughtUp.historyChargeId, 11)
+
+        // A third session before TeslaMate caught up still excludes charge 10.
+        live.activeChargeId = -903
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 + 180)
+        let third = planCharging([next], live, latest: charge(id: 10, added: 8))
+        XCTAssertEqual(third.existing["b"], .dismiss)
+        let thirdStart = try XCTUnwrap(third.start)
+        XCTAssertNil(thirdStart.attributes.chargeId)
+        XCTAssertNil(thirdStart.state.energyAddedKwh)
+        XCTAssertEqual(thirdStart.state.supersededChargeId, 10)
     }
 
     func testTeslaMateReportingAnotherProcessReplacesTheActivity() throws {
@@ -607,6 +617,13 @@ final class ChargingActivityPlannerTests: XCTestCase {
         else { return XCTFail("expected update") }
         XCTAssertEqual(state.energyAddedKwh, 2.4)
         XCTAssertEqual(state.statusSessionId, -901)
+
+        // TeslaMate then names another process: a new charge, not -901's 2.4 kWh.
+        let fellBack = LiveActivityPlanner.ChargingRunning(id: "a", attributes: start.attributes, state: state)
+        fallback.activeChargeId = 11
+        let moved = planCharging([fellBack], fallback, latest: nil)
+        XCTAssertEqual(moved.existing["a"], .dismiss)
+        XCTAssertNil(try XCTUnwrap(moved.start).state.energyAddedKwh)
     }
 
     func testFinalStateFromTheTrackedSessionSummary() throws {

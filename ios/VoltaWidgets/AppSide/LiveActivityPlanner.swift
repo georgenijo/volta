@@ -86,7 +86,8 @@ enum LiveActivityPlanner {
                     let same: Bool
                     if let tracked = previous.statusSessionId, let session {
                         same = tracked == session
-                    } else if let own, own > 0, let process, process != own {
+                    } else if let known = own.flatMap({ $0 > 0 ? $0 : nil }) ?? previous.teslaMateProcessId,
+                              let process, process != known {
                         same = false  // TeslaMate reports another process
                     } else if session != nil, own == nil {
                         same = false  // no identity at all: replaced once the live session is known
@@ -96,7 +97,7 @@ enum LiveActivityPlanner {
                         same = sameSession(own, history?.id)
                     }
                     // The history the replaced activity claimed is not its replacement's.
-                    if !same { superseded = own }
+                    if !same { superseded = own ?? previous.teslaMateProcessId ?? previous.supersededChargeId }
                     action = same
                         ? .update(chargingState(status: status, openCharge: history, previous: previous))
                         : .dismiss
@@ -148,7 +149,8 @@ enum LiveActivityPlanner {
                      endedAt: nil,
                      statusSessionId: tracked,
                      historyChargeId: openCharge?.id ?? previous?.historyChargeId,
-                     supersededChargeId: previous == nil ? superseded : previous?.supersededChargeId)
+                     supersededChargeId: previous == nil ? superseded : previous?.supersededChargeId,
+                     teslaMateProcessId: teslaMateProcess(status) ?? previous?.teslaMateProcessId)
     }
 
     /// How long TeslaMate's start of a charge may trail (positive) or lead (negative) Fleet
@@ -181,7 +183,8 @@ enum LiveActivityPlanner {
                                    attributes: ChargingActivityAttributes, latestCharge: ChargeSummary?,
                                    previous: ChargingActivityAttributes.ContentState) -> ChargingActivityAttributes.ContentState {
         // The activity's charge, by its history id or the live session it followed.
-        let ids = [attributes.chargeId, previous.historyChargeId, previous.statusSessionId].compactMap { $0 }
+        let ids = [attributes.chargeId, previous.historyChargeId, previous.statusSessionId,
+                   previous.teslaMateProcessId].compactMap { $0 }
         let closed = latestCharge.flatMap { $0.end != nil && ids.contains($0.id) ? $0 : nil }
         // Without a closed summary, the tracked session's own final counter.
         let tracked = previous.statusSessionId
@@ -197,7 +200,8 @@ enum LiveActivityPlanner {
                      endedAt: closed?.end ?? status.updatedAt,
                      statusSessionId: previous.statusSessionId,
                      historyChargeId: previous.historyChargeId,
-                     supersededChargeId: previous.supersededChargeId)
+                     supersededChargeId: previous.supersededChargeId,
+                     teslaMateProcessId: previous.teslaMateProcessId)
     }
 
     // MARK: Driving

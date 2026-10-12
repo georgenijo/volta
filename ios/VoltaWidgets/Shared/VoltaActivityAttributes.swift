@@ -42,6 +42,8 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         var historyChargeId: Int? = nil
         /// History claimed by the session this activity replaced; never this activity's.
         var supersededChargeId: Int? = nil
+        /// TeslaMate's open process (positive id) the status last named for this activity.
+        var teslaMateProcessId: Int? = nil
 
         /// Battery fraction toward the charge limit, or nil when the limit is unknown.
         var fractionOfLimit: Double? {
