@@ -513,17 +513,23 @@ enum LiveActivityPlanner {
         // Only a TeslaMate process: a session the activity started with may since have proved to be
         // an earlier part of the charge, or another charge.
         let byTeslaMate = closed.first { $0.id > 0 && ($0.id == identity.teslaMate || $0.id == attributes.chargeId) }
-        let summary = bySession ?? byTeslaMate ?? ownSession
+        // A session just shown not to continue the charge left readings of another charge; only the
+        // charge's own records count. Its first session measured all of it up to a single gap.
+        let disowned = previous.statusSessionId != nil && identity.session == nil
+        let earlier = disowned ? closed.filter { identity.earlierSessions.contains($0.id) } : []
+        let firstPart = identity.sessionStartObserved && identity.earlierSessions.count == 1 ? earlier.first : nil
+        let summary = bySession ?? byTeslaMate ?? ownSession ?? firstPart
         return .init(batteryLevel: summary?.endBatteryLevel ?? status.batteryLevel,
                      chargeLimit: status.chargeLimit ?? previous.chargeLimit,
                      chargerPowerKw: nil,
                      fullAt: nil,
-                     energyAddedKwh: bySession?.energyAddedKwh ?? counter ?? byTeslaMate?.energyAddedKwh ?? previous.energyAddedKwh,
-                     counterKwh: counter ?? previous.counterKwh,
+                     energyAddedKwh: bySession?.energyAddedKwh ?? counter ?? byTeslaMate?.energyAddedKwh
+                        ?? (disowned ? firstPart?.energyAddedKwh : previous.energyAddedKwh),
+                     counterKwh: counter ?? (disowned ? nil : previous.counterKwh),
                      rangeKm: status.estRangeKm ?? status.ratedRangeKm ?? previous.rangeKm,
                      phase: observation == .completed ? .completed : .stopped,
                      updatedAt: status.updatedAt,
-                     endedAt: summary?.end ?? status.updatedAt,
+                     endedAt: summary?.end ?? earlier.compactMap(\.end).max() ?? status.updatedAt,
                      statusSessionId: identity.session,
                      sessionStartedAt: identity.sessionStart,
                      teslaMateChargeId: identity.teslaMate,

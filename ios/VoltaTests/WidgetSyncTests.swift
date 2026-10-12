@@ -728,6 +728,20 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(pagedEnd.statusSessionId)
         XCTAssertEqual(pagedEnd.energyAddedKwh, 9)
         XCTAssertEqual(pagedEnd.endedAt, processEnd)
+        // Without a process for it, the charge finishes with its first session's record, not the
+        // readings the disowned session left.
+        let firstOnly = charge(id: -901, start: sessionStart, end: gapEnd.addingTimeInterval(-1800), added: 5)
+        let disownedEnd = try finish(planCharging([next(a, continued)], done, latest: closedFragment,
+                                                  charges: [charge(id: 11, start: gapEnd.addingTimeInterval(300), end: t0),
+                                                            closedFragment, firstOnly]))
+        XCTAssertNil(disownedEnd.statusSessionId)
+        XCTAssertEqual(disownedEnd.energyAddedKwh, 5)
+        XCTAssertNil(disownedEnd.counterKwh)
+        XCTAssertEqual(disownedEnd.endedAt, firstOnly.end)
+        // Without that record either, the energy is unknown rather than the other charge's.
+        XCTAssertNil(try finish(planCharging([next(a, continued)], done, latest: closedFragment,
+                                             charges: [charge(id: 11, start: gapEnd.addingTimeInterval(300), end: t0),
+                                                       closedFragment])).energyAddedKwh)
         // Nor does an activity that started with the resumed session's record finish with it.
         let learnedLate = try update(planCharging([enriched], teslaMate(10, startedAt: sessionStart.addingTimeInterval(20 * 60)),
                                                   latest: nil), "e")
