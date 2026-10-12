@@ -38,6 +38,10 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         /// The status's live session (`VehicleStatus.activeChargeId`) this activity tracks,
         /// once its live counter was matched to the activity's charge.
         var statusSessionId: Int? = nil
+        /// The history charge last matched to this activity, which may be learned after it started.
+        var historyChargeId: Int? = nil
+        /// History claimed by the session this activity replaced; never this activity's.
+        var supersededChargeId: Int? = nil
 
         /// Battery fraction toward the charge limit, or nil when the limit is unknown.
         var fractionOfLimit: Double? {
