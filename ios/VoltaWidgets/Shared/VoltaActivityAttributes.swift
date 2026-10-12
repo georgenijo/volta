@@ -32,6 +32,8 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         /// The car's charge counter as last read for this charge; `energyAddedKwh` may instead be
         /// a recorded total.
         var counterKwh: Double? = nil
+        /// Whether the charge drew DC (true) or AC (false) power, when telemetry showed it.
+        var fastCharger: Bool? = nil
         var rangeKm: Double?
         var phase: Phase = .charging
         /// When the vehicle data was recorded.

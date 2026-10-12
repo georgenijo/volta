@@ -738,6 +738,15 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(disownedEnd.energyAddedKwh, 5)
         XCTAssertNil(disownedEnd.counterKwh)
         XCTAssertEqual(disownedEnd.endedAt, firstOnly.end)
+        // The other charge's completion and range aren't this one's either.
+        XCTAssertEqual(disownedEnd.phase, .stopped)
+        XCTAssertNil(disownedEnd.rangeKm)
+        let toLimit = charge(id: -901, start: sessionStart, end: gapEnd.addingTimeInterval(-1800), added: 5, endBattery: 80)
+        let limitEnd = try finish(planCharging([next(a, continued)], done, latest: closedFragment,
+                                               charges: [charge(id: 11, start: gapEnd.addingTimeInterval(300), end: t0),
+                                                         closedFragment, toLimit]))
+        XCTAssertEqual(limitEnd.phase, .completed)
+        XCTAssertEqual(limitEnd.batteryLevel, 80)
         // Without that record either, the energy is unknown rather than the other charge's.
         XCTAssertNil(try finish(planCharging([next(a, continued)], done, latest: closedFragment,
                                              charges: [charge(id: 11, start: gapEnd.addingTimeInterval(300), end: t0),
@@ -790,6 +799,17 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 12),
                                     latest: charge(id: 11, start: gapEnd, end: t0.addingTimeInterval(-600)))
             .existing["a"], .dismiss)
+
+        // A session on another kind of charger is a new charge, even with a rising counter.
+        var ac = telemetry(-911, startedAt: sessionStart, energy: 2)
+        ac.fastCharger = false
+        let home = try started(planCharging([], ac, latest: nil), as: "h")
+        XCTAssertEqual(home.state.fastCharger, false)
+        var dc = resumed(-912, startedAt: gapEnd, energy: 5)
+        dc.fastCharger = true
+        XCTAssertEqual(planCharging([home], dc, latest: nil).existing["h"], .dismiss)
+        dc.fastCharger = false
+        XCTAssertEqual(try update(planCharging([home], dc, latest: nil), "h").statusSessionId, -912)
 
         // A session whose start was observed is a new charge (a replug).
         XCTAssertEqual(planCharging([a], telemetry(-902, startedAt: gapEnd, energy: 0.2), latest: nil).existing["a"], .dismiss)
