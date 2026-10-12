@@ -121,7 +121,8 @@ VehicleStatus  { vehicleId, state: online|asleep|offline|driving|charging|updati
                  packTempMaxC, packTempMinC, energyRemainingKwh, chargePortDoorOpen,
                  chargePortLatch, tpms: { fl, fr, rl, rr }, telemetryFreshness,
                  chargeEnergyAddedKwh, chargerVoltage, chargerCurrentA, fastCharger,
-                 chargeCableType, chargeStartedAt, activeChargeId, chargeReadyAt }
+                 chargeCableType, chargeStartedAt, chargeStartObserved, activeChargeId,
+                 chargeReadyAt }
 TireReading    { pressureBar: number|null, updatedAt: timestamp|null }
 ```
 
@@ -139,7 +140,11 @@ predates the session. A charging state belongs to the open telemetry session;
 Complete or Stopped keeps the newest one. `chargeCableType` is Tesla's raw value
 (`CableTypeSAE`, `CableTypeIEC`, `CableTypeGB_AC`, ...). `activeChargeId` is that
 telemetry session's negative charge id, else the open TeslaMate process; use
-it with `GET /v1/charges/{id}` for the session curve. `location.address` names the
+it with `GET /v1/charges/{id}` for the session curve. `chargeStartObserved` is
+false when that session began mid-charge: telemetry resumed after a gap long
+enough to split the session, or the stream joined a charge already under way.
+Such a session continues the charge rather than starting one; null without a
+telemetry session. `location.address` names the
 newest TeslaMate charge or drive end within 50 m of the car; nothing is geocoded.
 
 ```

@@ -647,6 +647,68 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(replug.start?.attributes.chargeId)
     }
 
+    private func resumed(_ session: Int, startedAt: Date, energy: Double? = nil) -> VehicleStatus {
+        var s = telemetry(session, startedAt: startedAt, energy: energy)
+        s.chargeStartObserved = false
+        return s
+    }
+
+    func testASessionResumedAfterAGapContinuesTheCharge() throws {
+        let sessionStart = t0.addingTimeInterval(-3 * 3600)
+        let a = try started(planCharging([], telemetry(-901, startedAt: sessionStart, energy: 4), latest: nil))
+
+        // Telemetry went quiet for over 30 minutes; ingestion opened -902 mid-charge. The car's
+        // counter carries on, and so does the activity.
+        let gapEnd = t0.addingTimeInterval(-3600)
+        let continued = try update(planCharging([a], resumed(-902, startedAt: gapEnd, energy: 11), latest: nil))
+        XCTAssertEqual(continued.statusSessionId, -902)
+        XCTAssertEqual(continued.sessionStartedAt, sessionStart, "the charge's start stays the first session's")
+        XCTAssertEqual(continued.energyAddedKwh, 11)
+        // TeslaMate's process for this charge, opened 20 minutes into the first session, is still learned.
+        let fellBack = try update(planCharging([next(a, continued)], teslaMate(10, startedAt: sessionStart.addingTimeInterval(20 * 60)),
+                                               latest: nil))
+        XCTAssertEqual(fellBack.teslaMateChargeId, 10)
+        XCTAssertEqual(fellBack.energyAddedKwh, 11)
+
+        // A session whose start was observed is a new charge (a replug).
+        XCTAssertEqual(planCharging([a], telemetry(-902, startedAt: gapEnd, energy: 0.2), latest: nil).existing["a"], .dismiss)
+        // So is a resumed session after TeslaMate opened a later process.
+        XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 0.5),
+                                    latest: charge(id: 11, start: gapEnd)).existing["a"], .dismiss)
+        // And one resuming before this charge began.
+        XCTAssertEqual(planCharging([a], resumed(-900, startedAt: sessionStart.addingTimeInterval(-600), energy: 1), latest: nil)
+            .existing["a"], .dismiss)
+    }
+
+    func testASessionJoiningLateAdoptsTheChargeUnderWay() throws {
+        let processStart = t0.addingTimeInterval(-2 * 3600)
+        let a = try started(planCharging([], teslaMate(10, startedAt: processStart), latest: charge(id: 10, start: processStart, added: 8)))
+
+        // Telemetry connected 90 minutes into TeslaMate's process.
+        let joined = try update(planCharging([a], resumed(-901, startedAt: processStart.addingTimeInterval(90 * 60), energy: 14),
+                                             latest: charge(id: 10, start: processStart, added: 8)))
+        XCTAssertEqual(joined.statusSessionId, -901)
+        XCTAssertEqual(joined.teslaMateChargeId, 10)
+        XCTAssertEqual(joined.energyAddedKwh, 14)
+        XCTAssertEqual(joined.sessionStartObserved, false)
+
+        // A new activity from a late session takes the process already under way, and its start.
+        let b = try started(planCharging([], resumed(-901, startedAt: processStart.addingTimeInterval(90 * 60), energy: 14),
+                                         latest: charge(id: 10, start: processStart, added: 8)), as: "b")
+        XCTAssertEqual(b.attributes.chargeId, 10)
+        XCTAssertEqual(b.attributes.startedAt, processStart)
+        XCTAssertEqual(b.state.teslaMateChargeId, 10)
+        XCTAssertEqual(b.state.energyAddedKwh, 14)
+        // A late session learns TeslaMate's earlier process when telemetry goes quiet.
+        let c = try started(planCharging([], resumed(-901, startedAt: processStart.addingTimeInterval(90 * 60), energy: 14),
+                                         latest: nil), as: "c")
+        XCTAssertEqual(try update(planCharging([c], teslaMate(10, startedAt: processStart), latest: nil), "c").teslaMateChargeId, 10)
+        // The unseen start survives being stored with the activity.
+        let stored = try JSONDecoder().decode(ChargingActivityAttributes.ContentState.self,
+                                              from: JSONEncoder().encode(c.state))
+        XCTAssertEqual(stored.sessionStartObserved, false)
+    }
+
     func testHistoryForTheNamedProcessEnrichesTheActivity() throws {
         let named = teslaMate(10, startedAt: t0.addingTimeInterval(-3600))
         let a = try started(planCharging([], named, latest: nil))

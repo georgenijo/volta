@@ -22,7 +22,7 @@ export class FleetLive {
           AND source_ts >= COALESCE((SELECT receiver_started_at FROM volta_telemetry.stream_health WHERE id=1),now()) - interval '1 second'
         ORDER BY connection_id,source_ts DESC,received_at DESC,status DESC) x) AS connections,
       (SELECT to_jsonb(h) FROM volta_telemetry.stream_health h WHERE id=1) AS health,
-      (SELECT jsonb_build_object('start',s.start_ts,'open',s.end_reason='open','dc',EXISTS(SELECT 1 FROM volta_telemetry.session_samples x
+      (SELECT jsonb_build_object('start',s.start_ts,'open',s.end_reason='open','observed',s.start_reason='charge_state','dc',EXISTS(SELECT 1 FROM volta_telemetry.session_samples x
           WHERE x.vehicle_id=s.vehicle_id AND x.source_ts>=s.start_ts
             AND x.source_ts<=CASE WHEN s.end_reason='open' THEN now() ELSE LEAST(s.end_ts,now()) END AND x.dc_power_kw>0)) FROM volta_telemetry.sessions s
         WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge
@@ -31,7 +31,8 @@ export class FleetLive {
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(row.vin, 'utf8').digest('hex');
     if (row.vin_digest !== digest) return null;
     return { samples: row.samples as Row[], connections: (row.connections ?? []) as Row[], health: row.health as Row | null,
-      lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true, dc: row.last_charge.dc === true } : null };
+      lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true,
+        observed: row.last_charge.observed === true, dc: row.last_charge.dc === true } : null };
   }
 }
 
@@ -80,6 +81,8 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     readyAt: eta != null && etaAt ? new Date(+etaAt + eta * 60_000) : null,
     observedAt: fields.map(at).filter(t => t != null).sort((a,b) => +b-+a)[0] ?? null,
     currentA: num('ChargeAmps',{A:1}), voltage: num('ChargerVoltage',{V:1}), cableType: text('ChargingCableType'), startedAt: session,
+    // Whether the session began at an observed charge start, not mid-charge (after a split gap or a late join).
+    startObserved: session ? last!.observed : null,
     energyAddedKwh: session && counted && +counted >= +session ? num(counter,{kWh:1}) : null };
   const tire = (suffix: string) => ({ pressureBar: num(`TpmsPressure${suffix}`, {bar:1,psi:1/14.5037738,kPa:.01}), updatedAt: times[`TpmsPressure${suffix}`] ?? null });
   return { values: {

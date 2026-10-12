@@ -130,7 +130,7 @@ export class Telemetry {
       chargerPowerKw: row.charge_id ? row.charger_power ?? null : null, minutesToFull: null,
       chargeEnergyAddedKwh: null as number | null, chargerVoltage: null as number | null, chargerCurrentA: null as number | null,
       fastCharger: null as boolean | null, chargeCableType: null as string | null, chargeReadyAt: null as Date | null,
-      chargeStartedAt: (row.charge_id ? row.charge_at : null) as Date | null, activeChargeId: (row.charge_id ?? null) as number | null,
+      chargeStartedAt: (row.charge_id ? row.charge_at : null) as Date | null, chargeStartObserved: null as boolean | null, activeChargeId: (row.charge_id ?? null) as number | null,
       insideTempC: row.polled_inside ?? null, outsideTempC: row.polled_outside ?? null, climateOn: row.polled_climate ?? null,
       driverTempSettingC: row.polled_driver_temp ?? null, locked: null, sentryMode: null, odometerKm: row.odometer ?? null,
       location: row.latitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
@@ -168,6 +168,7 @@ export class Telemetry {
         chargeEnergyAddedKwh: session ? charge.energyAddedKwh : null, chargerVoltage: charging ? charge.voltage : null,
         chargerCurrentA: charging ? charge.currentA : null, fastCharger: session ? charge.fast : null,
         chargeCableType: session ? charge.cableType : null, chargeStartedAt: session ? charge.startedAt : null,
+        chargeStartObserved: session && charge.startedAt ? charge.startObserved : null,
         activeChargeId: session && charge.startedAt ? telemetryChargeId(id, charge.startedAt) : charging && row.charge_id ? row.charge_id : null });
     }
     return {...result,tpms:live.tpms,telemetryFreshness:live.freshness};

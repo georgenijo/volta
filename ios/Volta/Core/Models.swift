@@ -90,6 +90,8 @@ struct VehicleStatus: Codable, Hashable, Sendable {
     var fastCharger: Bool? = nil
     var chargeCableType: String? = nil
     var chargeStartedAt: Date? = nil
+    /// False when the telemetry session began mid-charge (resumed after a gap, or joined late).
+    var chargeStartObserved: Bool? = nil
     var activeChargeId: Int? = nil
     /// When the car expects to reach its limit, dated from its own estimate
     /// (newer servers); `minutesToFull` is what remains of it at `updatedAt`.
