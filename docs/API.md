@@ -141,10 +141,11 @@ Complete or Stopped keeps the newest one. `chargeCableType` is Tesla's raw value
 (`CableTypeSAE`, `CableTypeIEC`, `CableTypeGB_AC`, ...). `activeChargeId` is that
 telemetry session's negative charge id, else the open TeslaMate process; use
 it with `GET /v1/charges/{id}` for the session curve. `chargeStartObserved` is
-false when that session began mid-charge: telemetry resumed after a gap long
-enough to split the session, or the stream joined a charge already under way.
-Such a session continues the charge rather than starting one; null without a
-telemetry session. `location.address` names the
+false when telemetry didn't see that session's charge start: it resumed after a
+gap long enough to split the session, or joined a charge already under way. The
+session may continue an earlier charge or be a new one that began while
+telemetry was away; only other evidence, such as the energy counter, tells
+which. Null without a telemetry session. `location.address` names the
 newest TeslaMate charge or drive end within 50 m of the car; nothing is geocoded.
 
 ```

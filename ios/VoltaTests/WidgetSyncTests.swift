@@ -693,6 +693,15 @@ final class ChargingActivityPlannerTests: XCTestCase {
         // A charge that resumed and ended between refreshes finishes with the car's final counter.
         XCTAssertEqual(try finish(planCharging([a], done, latest: charge(id: -902, start: gapEnd, end: t0, added: 3)))
             .energyAddedKwh, 14)
+        // A record of this charge's process that closed with the resumed charge doesn't stop it.
+        let unlearned = try finish(planCharging([a], done, latest: charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60),
+                                                                           end: t0, added: 13.6)))
+        XCTAssertEqual(unlearned.energyAddedKwh, 14)
+        XCTAssertEqual(unlearned.statusSessionId, -902)
+        // Waiting for a counter doesn't hold an activity whose process ended before the session.
+        XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0),
+                                    latest: charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), end: gapEnd))
+            .existing["a"], .dismiss)
         // A process that started and closed since this one also means history moved on.
         XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 12),
                                     latest: charge(id: 11, start: gapEnd, end: t0.addingTimeInterval(-600)))
@@ -738,6 +747,13 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                                latest: charge(id: 10, start: processStart, added: 20)).start)
         XCTAssertNil(fresh.attributes.chargeId)
         XCTAssertNil(fresh.state.teslaMateChargeId)
+        // Nor when telemetry goes quiet and the status falls back to that process.
+        let quiet = planCharging([.init(id: "f", attributes: fresh.attributes, state: fresh.state)],
+                                 teslaMate(10, startedAt: processStart), latest: nil)
+        XCTAssertEqual(quiet.existing["f"], .keep)
+        let d = try started(planCharging([], resumed(-905, startedAt: t0.addingTimeInterval(-600), energy: 0.2), latest: nil), as: "d")
+        XCTAssertEqual(planCharging([d], teslaMate(10, startedAt: processStart), latest: charge(id: 10, start: processStart, added: 20))
+            .existing["d"], .keep)
 
         // An activity tracking the session before the status reported its start unobserved learns it.
         let legacy = try started(planCharging([], telemetry(-901, startedAt: processStart.addingTimeInterval(90 * 60), energy: 14),
@@ -884,8 +900,8 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let complete = status(state: .online, charging: .complete, battery: 80)
 
         // The closed charge listed under the telemetry session.
-        let bySession = try finish(planCharging([a], complete, latest: charge(id: -901, start: t0.addingTimeInterval(-3600 - 600),
-                                                                              end: ended, added: 3.3)))
+        // Its start is trimmed to the first powered sample, after the session's own.
+        let bySession = try finish(planCharging([a], complete, latest: charge(id: -901, end: ended, added: 3.3)))
         XCTAssertEqual(bySession.energyAddedKwh, 3.3)
         XCTAssertEqual(bySession.endedAt, ended)
         // The session's own final counter outranks TeslaMate's record.
