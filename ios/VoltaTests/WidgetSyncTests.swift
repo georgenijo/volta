@@ -590,6 +590,32 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(final.energyAddedKwh, "charge 10's totals belong to the earlier session")
     }
 
+    func testAnotherRecordDoesNotReplaceAnEstablishedAssociation() throws {
+        var live = status()
+        live.activeChargeId = -901
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 - 10 * 60)
+        let first = try XCTUnwrap(planCharging([], live, latest: charge(id: 10, added: 8)).start)
+        let running = LiveActivityPlanner.ChargingRunning(id: "a", attributes: first.attributes, state: first.state)
+
+        // Replugged: history already lists charge 11 while the status still names -901.
+        guard case .update(let state) = planCharging([running], live,
+                                                      latest: charge(id: 11, start: t0.addingTimeInterval(-3600), added: 0.1)).existing["a"]
+        else { return XCTFail("expected update") }
+        XCTAssertEqual(state.historyChargeId, 10)
+        XCTAssertEqual(state.energyAddedKwh, 8, "not charge 11's total")
+
+        // The next session replaces it, excluding charge 10 but adopting its own charge 11.
+        live.activeChargeId = -902
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 - 60)
+        let next = LiveActivityPlanner.ChargingRunning(id: "a", attributes: first.attributes, state: state)
+        let moved = planCharging([next], live, latest: charge(id: 11, start: t0.addingTimeInterval(-3600), added: 0.1))
+        XCTAssertEqual(moved.existing["a"], .dismiss)
+        let start = try XCTUnwrap(moved.start)
+        XCTAssertEqual(start.attributes.chargeId, 11)
+        XCTAssertEqual(start.state.supersededChargeId, 10)
+        XCTAssertEqual(start.state.energyAddedKwh, 0.1)
+    }
+
     func testHistoryArrivingForTheNamedProcessEnrichesTheActivity() throws {
         var teslaMate = status()
         teslaMate.activeChargeId = 10

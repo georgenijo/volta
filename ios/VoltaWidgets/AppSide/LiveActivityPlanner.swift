@@ -106,7 +106,9 @@ enum LiveActivityPlanner {
                     }
                     if !same { superseded = excluded }
                     action = same
-                        ? .update(chargingState(status: status, openCharge: history, previous: previous))
+                        // A record matching only by start time doesn't replace an established one.
+                        ? .update(chargingState(status: status, openCharge: history.flatMap { own == nil || $0.id == own ? $0 : nil },
+                                                previous: previous))
                         : .dismiss
                 case .completed, .stopped:
                     action = .finish(finalChargingState(status: status, observation: observation,
