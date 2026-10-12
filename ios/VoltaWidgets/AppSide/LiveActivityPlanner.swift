@@ -146,7 +146,10 @@ enum LiveActivityPlanner {
                 chargeId: history?.id,
                 vehicleName: vehicleName,
                 placeName: history?.placeName ?? status.location?.placeName,
-                startedAt: history?.start,
+                // A session that began mid-charge recorded only its part; the charge started earlier.
+                startedAt: enriched != nil && !identity.sessionStartObserved && history?.id == identity.session
+                    ? [history?.start, identity.sessionStart, identity.teslaMateStart].compactMap { $0 }.min()
+                    : history?.start,
                 startBatteryLevel: history?.startBatteryLevel,
                 fastCharger: history?.fastCharger,
                 usesMiles: usesMiles)
@@ -225,9 +228,13 @@ enum LiveActivityPlanner {
             if let known = identity.session {
                 if known != session {
                     guard resumed, !identity.others.contains(session),
-                          continues(identity, from: named, latestCharge: latestCharge)
+                          continues(identity, from: named, status: status, latestCharge: latestCharge,
+                                    shown: activity.state.energyAddedKwh)
                     else { return .other(identity) }
                     identity.session = session  // the charge's start stays the one already known
+                    identity.sessionStartObserved = false
+                } else if resumed, let start = identity.sessionStart, abs(named.timeIntervalSince(start)) < 1 {
+                    identity.sessionStartObserved = false  // the status now says so about this session
                 }
             } else if identity.others.contains(session) {
                 return .other(identity)
@@ -235,7 +242,8 @@ enum LiveActivityPlanner {
                 // TeslaMate's record must start with the session, or the session joined it late.
                 if let start = identity.teslaMateStart, sameCharge(teslaMateStart: start, sessionStart: named) {
                     identity.sessionStartObserved = !resumed
-                } else if resumed, continues(identity, from: named, latestCharge: latestCharge) {
+                } else if resumed, continues(identity, from: named, status: status, latestCharge: latestCharge,
+                                             shown: activity.state.energyAddedKwh) {
                     identity.sessionStartObserved = false
                 } else {
                     return .other(identity)
@@ -307,6 +315,10 @@ enum LiveActivityPlanner {
     /// practice); the small lead allows for clock differences.
     static let teslaMateStartLag: ClosedRange<TimeInterval> = -60 ... 60 * 60
 
+    /// How far the car's charge counter may read below the total shown (a lagging TeslaMate total,
+    /// rounding) before it counts as restarted for a new charge.
+    static let counterSlack = 0.5
+
     static func remembering(_ identity: ChargeIdentity, in state: ChargingActivityAttributes.ContentState)
         -> ChargingActivityAttributes.ContentState {
         var state = state
@@ -320,10 +332,14 @@ enum LiveActivityPlanner {
     }
 
     /// Whether a session that began mid-charge at `start` continues this activity's charge: it
-    /// began after the charge did, and TeslaMate hasn't opened a later process since.
-    static func continues(_ identity: ChargeIdentity, from start: Date, latestCharge: ChargeSummary?) -> Bool {
+    /// began after the charge did, the car's counter hasn't restarted below what the activity
+    /// shows, TeslaMate hasn't closed this charge's process, and it hasn't opened a later one.
+    static func continues(_ identity: ChargeIdentity, from start: Date, status: VehicleStatus,
+                          latestCharge: ChargeSummary?, shown: Double?) -> Bool {
         let own = [identity.sessionStart, identity.teslaMateStart].compactMap { $0 }.min()
         if let own, start.timeIntervalSince(own) < teslaMateStartLag.lowerBound { return false }
+        if let counter = status.chargeEnergyAddedKwh, let shown, counter < shown - counterSlack { return false }
+        if let record = latestCharge, record.id == identity.teslaMate, record.end != nil { return false }
         guard let open = latestCharge, open.end == nil, open.id > 0, open.id != identity.teslaMate,
               !identity.others.contains(open.id) else { return true }
         if identity.teslaMate != nil, let known = identity.teslaMateStart { return open.start <= known }
@@ -379,11 +395,17 @@ enum LiveActivityPlanner {
                                    latestCharge: ChargeSummary?,
                                    previous: ChargingActivityAttributes.ContentState) -> ChargingActivityAttributes.ContentState {
         let closed = latestCharge.flatMap { $0.end != nil ? $0 : nil }
-        let bySession = closed.flatMap { $0.id == identity.session ? $0 : nil }
+        let ownSession = closed.flatMap { $0.id == identity.session ? $0 : nil }
+        // A session that began mid-charge measured only its part of the charge: its end counts,
+        // its energy doesn't.
+        let partial = !identity.sessionStartObserved
+        let bySession = partial ? nil : ownSession
         // The tracked session's own final counter outranks a TeslaMate record.
         let counter = identity.session != nil && identity.session == liveSession(status) ? status.chargeEnergyAddedKwh : nil
-        let byTeslaMate = closed.flatMap { $0.id == identity.teslaMate || $0.id == attributes.chargeId ? $0 : nil }
-        let summary = bySession ?? byTeslaMate
+        let byTeslaMate = closed.flatMap {
+            ($0.id == identity.teslaMate || $0.id == attributes.chargeId) && !(partial && $0.id == identity.session) ? $0 : nil
+        }
+        let summary = bySession ?? byTeslaMate ?? ownSession
         return .init(batteryLevel: summary?.endBatteryLevel ?? status.batteryLevel,
                      chargeLimit: status.chargeLimit ?? previous.chargeLimit,
                      chargerPowerKw: nil,
