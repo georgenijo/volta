@@ -196,8 +196,9 @@ enum LiveActivityPlanner {
             if identity.others.contains(process) {
                 return .unrelated
             } else if let known = identity.teslaMate {
-                // Two TeslaMate ids compare without a start.
-                if known != process { return .other(identity) }
+                // Two TeslaMate ids compare without a start; a process older than this charge is
+                // one TeslaMate never closed.
+                if known != process { return startsBefore(named, identity) ? .unrelated : .other(identity) }
                 if identity.teslaMateStart == nil { identity.teslaMateStart = named }
             } else if identity.session == nil, !identity.others.contains(process) {
                 // Nothing to check it against: the named process is this charge.
@@ -277,6 +278,13 @@ enum LiveActivityPlanner {
     /// charge. Telemetry sees a start first (TeslaMate's poll trailed it by 7 and 27 minutes in
     /// practice); the small lead allows for clock differences.
     static let teslaMateStartLag: ClosedRange<TimeInterval> = -60 ... 60 * 60
+
+    /// Whether a named charge started before this activity's charge, beyond clock differences.
+    static func startsBefore(_ start: Date?, _ identity: ChargeIdentity) -> Bool {
+        guard let start, let own = [identity.sessionStart, identity.teslaMateStart].compactMap({ $0 }).min()
+        else { return false }
+        return start.timeIntervalSince(own) < teslaMateStartLag.lowerBound
+    }
 
     static func sameCharge(teslaMateStart: Date, sessionStart: Date) -> Bool {
         teslaMateStartLag.contains(teslaMateStart.timeIntervalSince(sessionStart))

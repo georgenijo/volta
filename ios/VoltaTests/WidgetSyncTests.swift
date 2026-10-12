@@ -617,6 +617,12 @@ final class ChargingActivityPlannerTests: XCTestCase {
         // An older process TeslaMate never closed says nothing about this charge.
         XCTAssertEqual(planCharging([a], teslaMate(7, startedAt: sessionStart.addingTimeInterval(-2 * 3600)), latest: nil)
             .existing["a"], .keep)
+        // Nor once the activity knows its own process.
+        XCTAssertEqual(planCharging([next(a, fellBack)], teslaMate(7, startedAt: sessionStart.addingTimeInterval(-2 * 3600)),
+                                    latest: nil).existing["a"], .keep)
+        let processOnly = try started(planCharging([], teslaMate(12, startedAt: sessionStart), latest: nil), as: "p")
+        XCTAssertEqual(planCharging([processOnly], teslaMate(7, startedAt: sessionStart.addingTimeInterval(-2 * 3600)),
+                                    latest: nil).existing["p"], .keep)
         // A process starting well after the session is a later charge.
         XCTAssertEqual(planCharging([a], teslaMate(12, startedAt: sessionStart.addingTimeInterval(90 * 60)), latest: nil)
             .existing["a"], .dismiss)
