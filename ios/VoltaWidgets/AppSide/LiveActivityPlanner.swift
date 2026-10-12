@@ -95,6 +95,8 @@ enum LiveActivityPlanner {
                             : nil
                         action = .update(chargingState(status: status, identity: identity, recordedEnergy: recorded,
                                                        previous: activity.state))
+                    case .unrelated:
+                        action = .keep
                     case .other(let identity):
                         replaced.formUnion([identity.session, identity.teslaMate, activity.attributes.chargeId].compactMap { $0 })
                         replaced.formUnion(identity.others)
@@ -167,6 +169,9 @@ enum LiveActivityPlanner {
         case enrich(ChargeIdentity)
         /// The status names another charge.
         case other(ChargeIdentity)
+        /// The status describes a charge that isn't the current one (a replaced charge's process, or
+        /// an older one TeslaMate never closed): leave the activity as it is.
+        case unrelated
     }
 
     static func identity(of activity: ChargingRunning, latestCharge: ChargeSummary?) -> ChargeIdentity {
@@ -187,9 +192,10 @@ enum LiveActivityPlanner {
     static func follow(_ activity: ChargingRunning, status: VehicleStatus, latestCharge: ChargeSummary?) -> ChargeFollow {
         var identity = identity(of: activity, latestCharge: latestCharge)
         let named = status.chargeStartedAt
-        // A replaced charge's process says nothing about this charge.
-        if liveSession(status) == nil, let process = namedProcess(status), !identity.others.contains(process) {
-            if let known = identity.teslaMate {
+        if liveSession(status) == nil, let process = namedProcess(status) {
+            if identity.others.contains(process) {
+                return .unrelated
+            } else if let known = identity.teslaMate {
                 // Two TeslaMate ids compare without a start.
                 if known != process { return .other(identity) }
                 if identity.teslaMateStart == nil { identity.teslaMateStart = named }
@@ -223,6 +229,8 @@ enum LiveActivityPlanner {
                     identity.teslaMate = process; identity.teslaMateStart = named
                 } else if lag > teslaMateStartLag.upperBound {
                     return .other(identity)
+                } else {
+                    return .unrelated
                 }
             } else {
                 identity.teslaMate = process; identity.teslaMateStart = named

@@ -557,10 +557,9 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(later.teslaMateChargeId)
         XCTAssertEqual(later.otherChargeIds, [-901, 10])
         // Nor when the status falls back to that process, though it started within a minute of this session.
-        let stale = try update(planCharging([next(b, later)], teslaMate(10, startedAt: t0.addingTimeInterval(-3600)),
-                                            latest: charge(id: 10, added: 8)), "b")
-        XCTAssertNil(stale.teslaMateChargeId)
-        XCTAssertNil(stale.energyAddedKwh)
+        XCTAssertEqual(planCharging([next(b, later)], teslaMate(10, startedAt: t0.addingTimeInterval(-3600)),
+                                    latest: charge(id: 10, added: 8)).existing["b"], .keep)
+        let stale = later
         let final = try finish(planCharging([next(b, stale)], status(state: .online, charging: .complete),
                                             latest: charge(id: 10, end: t0, added: 8)), "b")
         XCTAssertNil(final.energyAddedKwh, "charge 10's totals belong to the earlier session")
@@ -586,12 +585,12 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let shown = try update(planCharging([next(b, learned)], telemetry(-902, startedAt: replug, energy: 6), latest: nil), "b")
 
         // TeslaMate closed 11 but still has 10 open, so the status falls back to 10.
-        let fallback = try update(planCharging([next(b, shown)], teslaMate(10, startedAt: t0.addingTimeInterval(-3600)),
-                                               latest: charge(id: 10, added: 8)), "b")
-        XCTAssertEqual(fallback.statusSessionId, -902)
-        XCTAssertEqual(fallback.teslaMateChargeId, 11)
-        XCTAssertEqual(fallback.energyAddedKwh, 6)
-        let final = try finish(planCharging([next(b, fallback)], status(state: .online, charging: .complete),
+        // Its readings aren't this charge's: the activity is left as it was.
+        var fallback = teslaMate(10, startedAt: t0.addingTimeInterval(-3600))
+        fallback.chargerPowerKw = 11
+        fallback.updatedAt = t0.addingTimeInterval(30)
+        XCTAssertEqual(planCharging([next(b, shown)], fallback, latest: charge(id: 11, end: t0, added: 6.3)).existing["b"], .keep)
+        let final = try finish(planCharging([next(b, shown)], status(state: .online, charging: .complete),
                                             latest: charge(id: 11, start: replug.addingTimeInterval(7 * 60), end: t0, added: 6.3)), "b")
         XCTAssertEqual(final.energyAddedKwh, 6.3)
     }
@@ -616,9 +615,8 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(other.start?.state.teslaMateChargeId, 11)
 
         // An older process TeslaMate never closed says nothing about this charge.
-        let stale = try update(planCharging([a], teslaMate(7, startedAt: sessionStart.addingTimeInterval(-2 * 3600)), latest: nil))
-        XCTAssertNil(stale.teslaMateChargeId)
-        XCTAssertEqual(stale.energyAddedKwh, 2.4)
+        XCTAssertEqual(planCharging([a], teslaMate(7, startedAt: sessionStart.addingTimeInterval(-2 * 3600)), latest: nil)
+            .existing["a"], .keep)
         // A process starting well after the session is a later charge.
         XCTAssertEqual(planCharging([a], teslaMate(12, startedAt: sessionStart.addingTimeInterval(90 * 60)), latest: nil)
             .existing["a"], .dismiss)
