@@ -50,6 +50,8 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         var sessionStartObserved: Bool? = nil
         /// True when the charge continued into this session after a gap.
         var sessionResumed: Bool? = nil
+        /// When the session the charge resumed into began.
+        var sessionResumedAt: Date? = nil
         /// The sessions this charge ran in before `statusSessionId`, resumed from after gaps.
         var earlierSessionIds: [Int]? = nil
         /// Ids of the charges this activity replaced; never this charge's.

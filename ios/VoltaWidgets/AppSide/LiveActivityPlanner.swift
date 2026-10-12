@@ -182,6 +182,8 @@ enum LiveActivityPlanner {
         var sessionStartObserved = true
         /// The charge continued into `session` after a gap, so that session's record covers only its part.
         var sessionResumed = false
+        /// When `session` began, if the charge resumed into it.
+        var resumedAt: Date?
         /// The sessions this charge ran in before `session`, which it resumed from after gaps.
         var earlierSessions: Set<Int> = []
         /// Whether the tracked session's record covers only part of the charge.
@@ -208,6 +210,7 @@ enum LiveActivityPlanner {
                                       teslaMate: state.teslaMateChargeId, teslaMateStart: state.teslaMateStartedAt,
                                       sessionStartObserved: state.sessionStartObserved ?? true,
                                       sessionResumed: state.sessionResumed ?? false,
+                                      resumedAt: state.sessionResumedAt,
                                       earlierSessions: Set(state.earlierSessionIds ?? []),
                                       others: Set(state.otherChargeIds ?? []))
         // Activities from earlier builds know only their history charge.
@@ -231,6 +234,13 @@ enum LiveActivityPlanner {
         var identity = identity(of: activity, latestCharge: latestCharge)
         let records = charges ?? latestCharge.map { [$0] } ?? []
         let named = status.chargeStartedAt
+        // A session taken on as this charge part-way answers to history that arrives later, even
+        // once telemetry no longer describes it.
+        if liveSession(status) == nil, identity.session != nil, let adopted = adoptedAt(identity),
+           !continues(identity, from: adopted, status: status, records: records, showing: activity.state) {
+            identity.session = nil
+            return .other(identity)
+        }
         if liveSession(status) == nil, let process = namedProcess(status) {
             if identity.others.contains(process) {
                 return .unrelated(identity)
@@ -258,7 +268,7 @@ enum LiveActivityPlanner {
                                      records: records) { return .unrelated(identity) }
                     // The charge's start, and whether it was seen, stay those already known.
                     identity.earlierSessions.insert(known)
-                    identity.session = session; identity.sessionResumed = true
+                    identity.session = session; identity.sessionResumed = true; identity.resumedAt = named
                 } else {
                     // A session taken on as this charge part-way answers to history that arrives later.
                     if identity.sessionResumed || !identity.sessionStartObserved && identity.teslaMate != nil,
@@ -285,7 +295,8 @@ enum LiveActivityPlanner {
                 } else {
                     return .other(identity)
                 }
-                identity.session = session; identity.sessionStart = named; identity.sessionResumed = false
+                identity.session = session; identity.sessionStart = named
+                identity.sessionResumed = false; identity.resumedAt = nil
             } else {
                 identity.session = session; identity.sessionStart = named; identity.sessionStartObserved = !resumed
             }
@@ -349,6 +360,7 @@ enum LiveActivityPlanner {
                      teslaMateStartedAt: identity.teslaMateStart,
                      sessionStartObserved: identity.sessionStartObserved ? nil : false,
                      sessionResumed: identity.sessionResumed ? true : nil,
+                     sessionResumedAt: identity.resumedAt,
                      earlierSessionIds: identity.earlierSessions.isEmpty ? nil : identity.earlierSessions.sorted(),
                      otherChargeIds: identity.others.isEmpty ? nil : identity.others.sorted())
     }
@@ -371,6 +383,7 @@ enum LiveActivityPlanner {
         state.teslaMateStartedAt = identity.teslaMateStart
         state.sessionStartObserved = identity.sessionStartObserved ? nil : false
         state.sessionResumed = identity.sessionResumed ? true : nil
+        state.sessionResumedAt = identity.resumedAt
         state.earlierSessionIds = identity.earlierSessions.isEmpty ? nil : identity.earlierSessions.sorted()
         state.otherChargeIds = identity.others.isEmpty ? nil : identity.others.sorted()
         return state
@@ -409,6 +422,13 @@ enum LiveActivityPlanner {
             guard let own else { return true }
             return record.start.timeIntervalSince(own) < teslaMateStartLag.lowerBound
         }
+    }
+
+    /// When the tracked session began, if the activity took it on part-way: a session the charge
+    /// resumed into, or one that joined the activity's TeslaMate process late.
+    static func adoptedAt(_ identity: ChargeIdentity) -> Date? {
+        if identity.sessionResumed { return identity.resumedAt }
+        return !identity.sessionStartObserved && identity.teslaMate != nil ? identity.sessionStart : nil
     }
 
     /// Whether a history record is this activity's charge: one of its ids, or, while its TeslaMate
@@ -499,8 +519,10 @@ enum LiveActivityPlanner {
     static func startMatches(_ status: VehicleStatus, _ charge: ChargeSummary) -> Bool {
         if let session = liveSession(status), let start = status.chargeStartedAt {
             // A session that began mid-charge joins TeslaMate's process already under way.
-            return charge.id == session || charge.id > 0 && (sameCharge(teslaMateStart: charge.start, sessionStart: start)
-                || status.chargeStartObserved == false && charge.start < start && countsAtLeast(status, charge))
+            // A process that drew DC isn't the charge while AC power flows.
+            return charge.id == session || charge.id > 0 && !(charge.fastCharger && chargerKind(status) == false)
+                && (sameCharge(teslaMateStart: charge.start, sessionStart: start)
+                    || status.chargeStartObserved == false && charge.start < start && countsAtLeast(status, charge))
         }
         if let process = namedProcess(status) { return charge.id == process }
         return true
@@ -553,6 +575,7 @@ enum LiveActivityPlanner {
                      teslaMateStartedAt: identity.teslaMateStart,
                      sessionStartObserved: identity.sessionStartObserved ? nil : false,
                      sessionResumed: identity.sessionResumed ? true : nil,
+                     sessionResumedAt: identity.resumedAt,
                      earlierSessionIds: identity.earlierSessions.isEmpty ? nil : identity.earlierSessions.sorted(),
                      otherChargeIds: previous.otherChargeIds)
     }

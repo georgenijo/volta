@@ -665,6 +665,7 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(continued.sessionStartedAt, sessionStart, "the charge's start stays the first session's")
         XCTAssertEqual(continued.energyAddedKwh, 11)
         XCTAssertEqual(continued.earlierSessionIds, [-901])
+        XCTAssertEqual(continued.sessionResumedAt, gapEnd)
         // History arriving later still answers for the first session: the counter covers it too.
         let firstPart = charge(id: -901, start: sessionStart, end: gapEnd.addingTimeInterval(-1800), added: 25)
         XCTAssertEqual(planCharging([next(a, continued)], resumed(-902, startedAt: gapEnd, energy: 12), latest: nil,
@@ -751,6 +752,15 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(try finish(planCharging([next(a, continued)], done, latest: closedFragment,
                                              charges: [charge(id: 11, start: gapEnd.addingTimeInterval(300), end: t0),
                                                        closedFragment])).energyAddedKwh)
+        // History disowns the continuation even when the car reports only that it unplugged.
+        let unplugged = status(state: .online, charging: .disconnected)
+        let unpluggedEnd = try finish(planCharging([next(a, continued)], unplugged, latest: nil,
+                                                   charges: [charge(id: 11, start: gapEnd.addingTimeInterval(300)), firstOnly]))
+        XCTAssertNil(unpluggedEnd.statusSessionId)
+        XCTAssertEqual(unpluggedEnd.energyAddedKwh, 5)
+        XCTAssertEqual(unpluggedEnd.endedAt, firstOnly.end)
+        // Without such history the continuation stands.
+        XCTAssertEqual(try finish(planCharging([next(a, continued)], unplugged, latest: nil)).statusSessionId, -902)
         // Nor does an activity that started with the resumed session's record finish with it.
         let learnedLate = try update(planCharging([enriched], teslaMate(10, startedAt: sessionStart.addingTimeInterval(20 * 60)),
                                                   latest: nil), "e")
@@ -886,6 +896,18 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let pagedLater = try XCTUnwrap(planCharging([early], resumed(-905, startedAt: t0.addingTimeInterval(-600), energy: 0.2),
                                                     latest: tail, charges: page).start)
         XCTAssertEqual(pagedLater.state.otherChargeIds, [10])
+        // Nor a process that drew DC while this session charges on AC.
+        let dcProcess = ChargeSummary(id: 30, start: processStart, end: nil, address: nil, placeName: "Supercharger",
+                                      energyAddedKwh: 20, energyUsedKwh: nil, startBatteryLevel: 40, endBatteryLevel: nil,
+                                      durationMin: 30, maxPowerKw: nil, fastCharger: true, cost: nil, currency: nil,
+                                      outsideTempAvgC: nil)
+        var onAC = resumed(-908, startedAt: t0.addingTimeInterval(-600), energy: 25)
+        onAC.fastCharger = false
+        let acStart = try XCTUnwrap(planCharging([], onAC, latest: dcProcess).start)
+        XCTAssertNil(acStart.attributes.chargeId)
+        XCTAssertNil(acStart.attributes.fastCharger)
+        onAC.fastCharger = true
+        XCTAssertEqual(try XCTUnwrap(planCharging([], onAC, latest: dcProcess).start).attributes.chargeId, 30)
         // History fetched just after the status may run a little ahead of the counter.
         let racing = try XCTUnwrap(planCharging([], resumed(-905, startedAt: t0.addingTimeInterval(-600), energy: 19.4),
                                                 latest: charge(id: 10, start: processStart, added: 20)).start)
