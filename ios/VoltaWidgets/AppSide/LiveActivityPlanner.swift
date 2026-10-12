@@ -91,9 +91,11 @@ enum LiveActivityPlanner {
         }
         if observation == .charging, !claimed, canStart,
            now.timeIntervalSince(status.updatedAt) < VoltaLiveActivityTiming.chargingStaleAfter {
+            // Without an open history record, the status's own session names the charge.
+            let chargeId = openCharge?.id ?? status.activeChargeId
             let attributes = ChargingActivityAttributes(
                 vehicleId: status.vehicleId,
-                chargeId: openCharge?.id,
+                chargeId: chargeId,
                 vehicleName: vehicleName,
                 placeName: openCharge?.placeName ?? status.location?.placeName,
                 startedAt: openCharge?.start,
@@ -101,7 +103,7 @@ enum LiveActivityPlanner {
                 fastCharger: openCharge?.fastCharger,
                 usesMiles: usesMiles)
             plan.start = .init(attributes: attributes,
-                               state: chargingState(status: status, chargeId: openCharge?.id,
+                               state: chargingState(status: status, chargeId: chargeId,
                                                   openCharge: openCharge, previous: nil))
         }
         return plan
@@ -121,18 +123,19 @@ enum LiveActivityPlanner {
               endedAt: nil)
     }
 
-    /// Telemetry sees a charge start first; TeslaMate's poll can trail it by half an hour.
-    /// A telemetry session starting more than this after the TeslaMate start is a later one.
-    static let telemetryStartLead: TimeInterval = 5 * 60
+    /// How long TeslaMate's start of a charge may trail (positive) or lead (negative) Fleet
+    /// Telemetry's start of the same charge. Telemetry sees a start first; TeslaMate's poll
+    /// trailed it by 27 minutes in practice. Outside this, the two are different sessions.
+    static let teslaMateStartLag: ClosedRange<TimeInterval> = -5 * 60 ... 60 * 60
 
     /// The live counter belongs to the status's own session. Use it only when that is the
-    /// activity's session: the same id, or the fetched open charge for this activity with a
-    /// telemetry session that did not start after it (the two number one charge differently).
+    /// activity's session: the same id, or the fetched open charge for this activity starting
+    /// with the telemetry session (the two number one charge differently).
     static func liveEnergy(_ status: VehicleStatus, chargeId: Int?, openCharge: ChargeSummary?) -> Double? {
         guard let energy = status.chargeEnergyAddedKwh, let chargeId else { return nil }
         if status.activeChargeId == chargeId { return energy }
         guard let openCharge, openCharge.id == chargeId, let started = status.chargeStartedAt,
-              started.timeIntervalSince(openCharge.start) <= telemetryStartLead else { return nil }
+              teslaMateStartLag.contains(openCharge.start.timeIntervalSince(started)) else { return nil }
         return energy
     }
 

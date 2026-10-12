@@ -167,9 +167,10 @@ struct ChargeFooter: View {
         if look.staleCharging {
             Text("Updated \(Text(s.updatedAt, style: .time))").foregroundStyle(WTheme.amber)
         } else if s.phase == .charging {
-            if let fullAt = s.fullAt, fullAt > .now {
+            let now = Date.now
+            if let fullAt = s.fullAt, fullAt > now {
                 // Bounded: stops at zero instead of counting up past the estimate.
-                Text("\(Text(.currentDate, format: .timer(countingDownIn: Date.now..<fullAt, maxFieldCount: 2, maxPrecision: .seconds(60))))\(limit)")
+                Text("\(Text(.currentDate, format: .timer(countingDownIn: now..<fullAt, maxFieldCount: 2, maxPrecision: .seconds(60))))\(limit)")
                     .foregroundStyle(.white).monospacedDigit()
             } else {
                 Text("Charging\(limit)").foregroundStyle(.white)

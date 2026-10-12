@@ -472,6 +472,18 @@ final class ChargingActivityPlannerTests: XCTestCase {
         guard case .update(let same) = planCharging([running("b", chargeId: -901)], live, latest: nil).existing["b"]
         else { return XCTFail("expected update") }
         XCTAssertEqual(same.energyAddedKwh, 2.4)
+        // An old telemetry session cannot lend its counter to a newly opened charge.
+        live.chargeStartedAt = t0.addingTimeInterval(-3600 - 3 * 3600)
+        XCTAssertEqual(planCharging([], live, latest: charge(id: 10, added: 12.5)).start?.state.energyAddedKwh, 12.5)
+    }
+
+    func testStartWithoutOpenHistoryTakesTheStatusSession() throws {
+        var live = status()
+        live.chargeEnergyAddedKwh = 2.4
+        live.activeChargeId = -901
+        let start = try XCTUnwrap(planCharging([], live, latest: nil).start)
+        XCTAssertEqual(start.attributes.chargeId, -901)
+        XCTAssertEqual(start.state.energyAddedKwh, 2.4)
     }
 
     func testOtherVehicleIsDismissedAndReplaced() {
