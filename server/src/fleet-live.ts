@@ -23,7 +23,8 @@ export class FleetLive {
         ORDER BY connection_id,source_ts DESC,received_at DESC,status DESC) x) AS connections,
       (SELECT to_jsonb(h) FROM volta_telemetry.stream_health h WHERE id=1) AS health,
       (SELECT jsonb_build_object('start',s.start_ts,'open',s.end_reason='open','dc',EXISTS(SELECT 1 FROM volta_telemetry.session_samples x
-          WHERE x.vehicle_id=s.vehicle_id AND x.source_ts>=s.start_ts AND (s.end_reason='open' OR x.source_ts<=s.end_ts) AND x.dc_power_kw>0)) FROM volta_telemetry.sessions s
+          WHERE x.vehicle_id=s.vehicle_id AND x.source_ts>=s.start_ts
+            AND x.source_ts<=CASE WHEN s.end_reason='open' THEN now() ELSE LEAST(s.end_ts,now()) END AND x.dc_power_kw>0)) FROM volta_telemetry.sessions s
         WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;

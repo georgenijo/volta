@@ -463,6 +463,10 @@ test('live charging leads TeslaMate while connected; a disconnected stale state 
   await datum('BatteryLevel',69,new Date(+begun+30_000),'live-soc');
   const session=await get(`/v1/charges/${status.activeChargeId}`);
   expect(session.id).toBe(status.activeChargeId);expect(session.telemetry.samples.some((p:any)=>p.powerKw===7.7)).toBe(true);
+  // DC power stamped in the future is not yet evidence that the open session is DC.
+  await datum('DCChargingPower',50,new Date(Date.now()+120_000),'live-dc-future');
+  expect((await get('/v1/vehicles/1/status')).fastCharger).toBe(false);
+  await owner`DELETE FROM volta_telemetry.samples WHERE payload_id='live-dc-future'`;
   // Disconnected: the charge state predates TeslaMate's newest observation, so history stands.
   await owner`UPDATE volta_telemetry.connectivity SET status='DISCONNECTED'`;
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${old},received_at=${old} WHERE field='DetailedChargeState'`;
