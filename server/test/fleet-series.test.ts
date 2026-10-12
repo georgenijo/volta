@@ -439,3 +439,31 @@ test('telemetry drive windows support safe negative IDs without int32 TeslaMate 
   expect(series?.samples).toHaveLength(2);expect(series?.samples[0]?.speedKph).toBeCloseTo(32.18688);
   expect(series?.samples[0]?.elevationM).toBeNull();expect(series?.coverage.metrics.speedKph.sourceSampleCount).toBe(2);
 });
+
+test('live charging leads TeslaMate while connected; a disconnected stale state cannot override newer history',async()=>{
+  await owner`TRUNCATE volta_telemetry.sessions`;
+  const now=new Date(),begun=new Date(+now-40*60_000),old=new Date('2000-01-01T00:00:00Z');
+  const live=async(field:string,v:{num?:number,text?:string,unit?:string},t=begun)=>owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_num,value_text,source_unit,invalid,quality,payload_id)
+    VALUES(1,${field},${t},${t},${v.num??null},${v.text??null},${v.unit??''},false,'ok','live-charge')`;
+  await live('DetailedChargeState',{text:'DetailedChargeStateCharging'});await live('ACChargingPower',{num:7.7,unit:'kW'});
+  await live('TimeToFullCharge',{num:3.2,unit:'h'});await live('ChargeAmps',{num:32,unit:'A'});await live('ChargerVoltage',{num:241,unit:'V'});
+  await live('ChargingCableType',{text:'CableTypeSAE'});await live('ACChargingEnergyIn',{num:2.9,unit:'kWh'},new Date(+now-60_000));
+  await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES (1,'charge',${begun},${now},'charge_state','open','partial',1)`;
+  await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at) VALUES(1,'fixture','CONNECTED',${old},${old})`;
+  await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
+    VALUES(1,'fixture',${old},${now},${old},${now},0,${now})`;
+  let status=await get('/v1/vehicles/1/status');
+  expect(status).toMatchObject({state:'charging',chargingState:'charging',chargerPowerKw:7.7,minutesToFull:192,chargeEnergyAddedKwh:2.9,
+    chargerVoltage:241,chargerCurrentA:32,fastCharger:false,chargeCableType:'CableTypeSAE'});
+  expect(Date.parse(status.chargeStartedAt)).toBe(+begun);expect(status.activeChargeId).toBeLessThan(0);
+  // Disconnected: the charge state predates TeslaMate's newest observation, so history stands.
+  await owner`UPDATE volta_telemetry.connectivity SET status='DISCONNECTED'`;
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${old},received_at=${old} WHERE field='DetailedChargeState'`;
+  status=await get('/v1/vehicles/1/status');expect(status.state).toBe('asleep');expect(status.chargingState).toBeNull();expect(status.activeChargeId).toBeNull();
+  // A newer completed state ends TeslaMate's lagging open process and keeps the session's energy.
+  await owner`UPDATE charging_processes SET end_date=NULL WHERE id=1`;
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${now},received_at=${now},value_text='DetailedChargeStateComplete' WHERE field='DetailedChargeState'`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status).toMatchObject({state:'asleep',chargingState:'complete',chargerPowerKw:null,minutesToFull:null,chargeEnergyAddedKwh:2.9});
+  await owner`TRUNCATE volta_telemetry.sessions`;
+});

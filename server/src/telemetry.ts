@@ -5,7 +5,7 @@ import { timestamp, type ListInput } from './validation';
 import { summaryPeriod } from './period';
 import { FleetDrives, replacedDrive, overlappingWindows, resolveDriveSources, telemetryDriveVehicle, type Catalog, type Window } from './fleet-drives';
 import { FleetSeries } from './fleet-series';
-import { FleetCharges, chargeGroups, coveredCharge, failedCharge, limited, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
+import { FleetCharges, chargeGroups, coveredCharge, failedCharge, limited, telemetryChargeId, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
 import { FleetLive, liveValues } from './fleet-live';
 import { applyDriveEnergy, scoreFromStats, aggregateDriveScore } from './drive-parity';
 
@@ -99,7 +99,14 @@ export class Telemetry {
       LEFT JOIN LATERAL (SELECT * FROM public.states WHERE car_id = car.id ORDER BY start_date DESC, id DESC LIMIT 1) st ON true
       LEFT JOIN LATERAL (SELECT * FROM public.drives WHERE car_id = car.id AND end_date IS NULL ORDER BY start_date DESC, id DESC LIMIT 1) d ON true
       LEFT JOIN LATERAL (SELECT * FROM public.updates WHERE car_id = car.id AND end_date IS NULL ORDER BY start_date DESC, id DESC LIMIT 1) u ON true
-      LEFT JOIN LATERAL (SELECT address_id, geofence_id FROM public.charging_processes WHERE car_id = car.id AND position_id = p.id ORDER BY start_date DESC LIMIT 1) loc ON true
+      -- TeslaMate geocodes only where a charge or drive ends: name the car's spot after the
+      -- newest one recorded within 50 m of it (its own position first). Never geocoded here.
+      LEFT JOIN LATERAL (SELECT c.address_id FROM (
+          SELECT cp.address_id, cp.position_id, cp.start_date AS at FROM public.charging_processes cp WHERE cp.car_id = car.id AND cp.address_id IS NOT NULL
+          UNION ALL SELECT dr.end_address_id, dr.end_position_id, dr.end_date FROM public.drives dr WHERE dr.car_id = car.id AND dr.end_address_id IS NOT NULL
+        ) c JOIN public.positions cpos ON cpos.id = c.position_id
+        WHERE c.position_id = p.id OR 6371000 * 2 * asin(least(1.0, sqrt(power(sin(radians((cpos.latitude-p.latitude)/2)),2) + cos(radians(p.latitude))*cos(radians(cpos.latitude))*power(sin(radians((cpos.longitude-p.longitude)/2)),2)))) <= 50
+        ORDER BY c.position_id = p.id DESC, c.at DESC LIMIT 1) loc ON true
       LEFT JOIN public.addresses a ON a.id = loc.address_id
       LEFT JOIN LATERAL (SELECT name FROM public.geofences WHERE
         6371000 * 2 * asin(least(1.0, sqrt(power(sin(radians((latitude-p.latitude)/2)),2) + cos(radians(p.latitude))*cos(radians(latitude))*power(sin(radians((longitude-p.longitude)/2)),2)))) <= radius
@@ -121,6 +128,9 @@ export class Telemetry {
       ratedRangeKm: chargeNewer ? row.charge_range : row.polled_rated ?? null,
       estRangeKm: row.polled_est ?? null, chargeLimit: null, chargingState: row.charge_id ? 'charging' : null,
       chargerPowerKw: row.charge_id ? row.charger_power ?? null : null, minutesToFull: null,
+      chargeEnergyAddedKwh: null as number | null, chargerVoltage: null as number | null, chargerCurrentA: null as number | null,
+      fastCharger: null as boolean | null, chargeCableType: null as string | null,
+      chargeStartedAt: (row.charge_id ? row.charge_at : null) as Date | null, activeChargeId: (row.charge_id ?? null) as number | null,
       insideTempC: row.polled_inside ?? null, outsideTempC: row.polled_outside ?? null, climateOn: row.polled_climate ?? null,
       driverTempSettingC: row.polled_driver_temp ?? null, locked: null, sentryMode: null, odometerKm: row.odometer ?? null,
       location: row.latitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
@@ -140,6 +150,21 @@ export class Telemetry {
         (result as Record<string,unknown>)[key] = ['batteryLevel','usableBatteryLevel','chargeLimit'].includes(key) && typeof value === 'number' ? Math.round(value) : value;
         if (sample && (!result.updatedAt || +new Date(sample.source_ts) > +result.updatedAt)) result.updatedAt = new Date(sample.source_ts);
       }
+    }
+    // Fleet Telemetry knows the charge state minutes before TeslaMate opens a
+    // process. A connected stream's change-only state is current; a disconnected
+    // one wins only when newer than everything TeslaMate recorded since.
+    const charge = live.charge, recorded = [row.date, row.state_at, row.drive_at, row.charge_at, row.charge_sample_at].filter(Boolean).map(t => +new Date(t));
+    if (charge.state && charge.at && (live.freshness.connected || +charge.at >= Math.max(0, ...recorded))) {
+      const charging = charge.state === 'charging', session = charging || charge.state === 'complete' || charge.state === 'stopped';
+      if (charging && state !== 'updating' && state !== 'driving') result.state = 'charging';
+      else if (!charging && state === 'charging') result.state = row.state && row.state !== 'charging' ? row.state : 'online';
+      Object.assign(result, { chargingState: charge.state, chargerPowerKw: charging ? charge.powerKw : null,
+        minutesToFull: charging && charge.minutesToFull != null ? Math.round(charge.minutesToFull) : null,
+        chargeEnergyAddedKwh: session ? charge.energyAddedKwh : null, chargerVoltage: charging ? charge.voltage : null,
+        chargerCurrentA: charging ? charge.currentA : null, fastCharger: session ? charge.fast : null,
+        chargeCableType: session ? charge.cableType : null, chargeStartedAt: session ? charge.startedAt : null,
+        activeChargeId: session && charge.startedAt ? telemetryChargeId(id, charge.startedAt) : charging && row.charge_id ? row.charge_id : null });
     }
     return {...result,tpms:live.tpms,telemetryFreshness:live.freshness};
   }

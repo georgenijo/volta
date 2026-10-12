@@ -81,6 +81,18 @@ struct VehicleStatus: Codable, Hashable, Sendable {
     var chargePortLatch: String? = nil
     var tpms: TirePressures? = nil
     var telemetryFreshness: TelemetryFreshness? = nil
+    /// Live charging session (newer servers): energy since the session began,
+    /// the charger's voltage and current, Tesla's raw cable type
+    /// ("CableTypeSAE", ...), and the session id for `charge(id:)`.
+    var chargeEnergyAddedKwh: Double? = nil
+    var chargerVoltage: Double? = nil
+    var chargerCurrentA: Double? = nil
+    var fastCharger: Bool? = nil
+    var chargeCableType: String? = nil
+    var chargeStartedAt: Date? = nil
+    var activeChargeId: Int? = nil
+
+    var isCharging: Bool { chargingState == .charging || (chargingState == nil && state == .charging) }
 }
 
 struct TireReading: Codable, Hashable, Sendable {

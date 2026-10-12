@@ -7,6 +7,9 @@ struct DashboardMap: View {
     var location: Location?
     var sentry: Bool
     var state: VehicleState?
+    /// Live charging power; non-nil switches the marker and pill to charging.
+    var charging: Bool = false
+    var chargerPowerKw: Double? = nil
 
     var body: some View {
         if let location {
@@ -31,8 +34,13 @@ struct DashboardMap: View {
             .brightness(-0.04)
             .overlay {
                 ZStack {
-                    CarMarker(heading: location.heading, tint: sentry ? .voltaRed : .voltaBlue)
-                    AddressPill(location: location, sentry: sentry, state: state)
+                    if charging {
+                        ChargingMarker()
+                    } else {
+                        CarMarker(heading: location.heading, tint: sentry ? .voltaRed : .voltaBlue)
+                    }
+                    AddressPill(location: location, sentry: sentry, state: state,
+                                charging: charging, chargerPowerKw: chargerPowerKw)
                         .alignmentGuide(VerticalAlignment.center) { d in d[.bottom] + 16 }
                 }
             }
@@ -95,11 +103,56 @@ struct CarMarker: View {
     }
 }
 
-/// "Street / ● SENTRY · TOWN" pill with a hairline stem.
+/// Charging pin: a white disc with a green bolt, a breathing green glow and
+/// sparks drifting up off it.
+struct ChargingMarker: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            TimelineView(.animation(paused: reduceMotion)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                Canvas { ctx, size in
+                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                    for i in 0..<9 {
+                        let seed = Double(i) * 1.618
+                        let phase = (t / (2.4 + seed.truncatingRemainder(dividingBy: 1.1)) + seed).truncatingRemainder(dividingBy: 1)
+                        let angle = seed * 2.4
+                        let x = center.x + cos(angle) * (10 + 18 * phase)
+                        let y = center.y - 8 - 34 * phase + sin(angle) * 6
+                        let r = 1.6 * (1 - phase) + 0.6
+                        ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
+                                 with: .color(Color.voltaGreen.opacity(0.85 * (1 - phase))))
+                    }
+                }
+            }
+            Circle()
+                .fill(Color.voltaGreen.opacity(0.35))
+                .frame(width: 46, height: 46)
+                .blur(radius: 8)
+                .phaseAnimator(reduceMotion ? [1] : [0.7, 1.15]) { view, scale in
+                    view.scaleEffect(scale)
+                } animation: { _ in .easeInOut(duration: 1.4) }
+            Circle()
+                .fill(Color.white)
+                .frame(width: 26, height: 26)
+                .shadow(color: .voltaGreen.opacity(0.8), radius: 6)
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.voltaGreen)
+        }
+        .frame(width: 92, height: 92)
+    }
+}
+
+/// "Street / ● SENTRY · TOWN" pill with a hairline stem; while charging,
+/// "● CHARGING · 7.7 kW  LIVE ›".
 struct AddressPill: View {
     var location: Location
     var sentry: Bool
     var state: VehicleState?
+    var charging: Bool = false
+    var chargerPowerKw: Double? = nil
 
     static func title(for location: Location) -> String {
         if let place = location.placeName, !place.isEmpty { return place }
@@ -113,6 +166,9 @@ struct AddressPill: View {
     }
 
     private var statusText: String {
+        if charging {
+            return chargerPowerKw.map { "Charging · \(VoltaFormat.number($0, digits: $0 >= 20 ? 0 : 1)) kW" } ?? "Charging"
+        }
         if sentry { return "Sentry" }
         switch state {
         case .driving: return "Driving"
@@ -124,7 +180,7 @@ struct AddressPill: View {
     }
 
     private var statusColor: Color {
-        sentry ? .voltaRed : (state?.color ?? .voltaTextSecondary)
+        charging ? .voltaGreen : sentry ? .voltaRed : (state?.color ?? .voltaTextSecondary)
     }
 
     var body: some View {
@@ -138,7 +194,16 @@ struct AddressPill: View {
                     StatusDot(color: statusColor, size: 6)
                     Text(statusText)
                         .foregroundStyle(statusColor)
-                    if let locality {
+                    if charging {
+                        HStack(spacing: 2) {
+                            Text("Live")
+                            Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                        }
+                        .foregroundStyle(Color.voltaGreen)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.voltaGreen.opacity(0.16), in: .capsule)
+                        .padding(.leading, 4)
+                    } else if let locality {
                         Text("·").foregroundStyle(Color.voltaTextTertiary)
                         Text(locality).foregroundStyle(Color.voltaTextSecondary)
                     }
@@ -174,6 +239,14 @@ private extension String {
     DashboardMap(location: Location(latitude: 37.4419, longitude: -122.1430, heading: 115,
                                     address: "Palo Alto, CA", placeName: "Home"),
                  sentry: true, state: .online)
+        .frame(height: 460)
+        .ignoresSafeArea()
+}
+
+#Preview("Map charging") {
+    DashboardMap(location: Location(latitude: 37.4419, longitude: -122.1430, heading: 115,
+                                    address: "Palo Alto, CA", placeName: "Home"),
+                 sentry: true, state: .charging, charging: true, chargerPowerKw: 7.7)
         .frame(height: 460)
         .ignoresSafeArea()
 }

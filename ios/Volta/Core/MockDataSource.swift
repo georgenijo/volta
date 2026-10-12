@@ -42,9 +42,16 @@ struct MockDataSource: VoltaDataSource {
         if Self.showsCharging {
             status.state = .charging
             status.chargingState = .charging
-            status.chargerPowerKw = 11
+            status.chargerPowerKw = 7.7
             status.minutesToFull = 48
             status.chargePortDoorOpen = true
+            status.chargeEnergyAddedKwh = 2.9
+            status.chargerVoltage = 241
+            status.chargerCurrentA = 32
+            status.fastCharger = false
+            status.chargeCableType = "CableTypeSAE"
+            status.chargeStartedAt = now.addingTimeInterval(-Self.liveChargeMinutes * 60)
+            status.activeChargeId = Self.liveChargeID
         }
         return status
     }
@@ -170,7 +177,27 @@ struct MockDataSource: VoltaDataSource {
         return DriveDetail(summary: drive, path: path, elevationGainM: 86)
     }
     func charges(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<ChargeSummary> { try check(vehicleID); return try page(allCharges.filter { within($0.start, range) }, cursor: cursor) }
+    /// The demo's open home session: 23 minutes at 7.7 kW, 69 % → 72 %.
+    static let liveChargeID = -900_001
+    static let liveChargeMinutes = 23.0
+    private var liveCharge: ChargeDetail {
+        let start = now.addingTimeInterval(-Self.liveChargeMinutes * 60)
+        let rows = stride(from: 0.0, through: Self.liveChargeMinutes * 60, by: 30).map { offset -> FleetTelemetrySample in
+            let f = offset / (Self.liveChargeMinutes * 60), power = offset < 60 ? 7.7 * offset / 60 : 7.6 + 0.1 * sin(offset / 90)
+            return FleetTelemetrySample(t: start.addingTimeInterval(offset), latitude: nil, longitude: nil, speedKph: nil,
+                                        powerKw: power, elevationM: nil, batteryLevel: 69 + 3 * f, energyRemainingKwh: (69 + 3 * f) * 0.75,
+                                        batteryTempMinC: 24, batteryTempMaxC: 27, insideTempC: 21, outsideTempC: 16,
+                                        voltage: 241, currentA: power * 1000 / 241, ratedRangeKm: 340 + 14 * f, routeBreakBefore: false)
+        }
+        var summary = ChargeSummary(id: Self.liveChargeID, start: start, end: nil, address: home, placeName: "Home", energyAddedKwh: 2.9,
+                                    energyUsedKwh: nil, startBatteryLevel: 69, endBatteryLevel: 72, durationMin: Self.liveChargeMinutes,
+                                    maxPowerKw: 7.7, fastCharger: false, cost: nil, currency: nil, outsideTempAvgC: 16)
+        summary.source = "fleet_telemetry"
+        return ChargeDetail(summary: summary, samples: [], efficiency: nil,
+                            telemetry: FleetTelemetrySeries(source: "fleet_telemetry", samples: rows, gaps: [], truncated: false))
+    }
     func charge(id: Int) async throws -> ChargeDetail {
+        if id == Self.liveChargeID, Self.showsCharging { return liveCharge }
         guard let charge = allCharges.first(where: { $0.id == id }) else { throw VoltaError.notFound }
         if charge.source == "fleet_telemetry", charge.fastCharger { return Self.telemetryFastCharge(charge) }
         let samples = (0...20).map { i in

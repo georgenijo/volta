@@ -17,6 +17,7 @@ struct DashboardView: View {
     @State private var showControls = false
     @State private var showVehicle = false
     @State private var showNotifications = false
+    @State private var showLiveCharge = false
     @State private var scrollPosition = ScrollPosition(edge: .top)
 
     /// Visible map height below the safe area before content starts.
@@ -40,6 +41,8 @@ struct DashboardView: View {
             if y > 0 { scrollPosition.scrollTo(y: y) }
             // `-dashboardOpenControls YES` opens the Controls sheet on launch.
             if UserDefaults.standard.bool(forKey: "dashboardOpenControls") { showControls = true }
+            // `-dashboardOpenLiveCharge YES` opens the live charging sheet on launch.
+            if UserDefaults.standard.bool(forKey: "dashboardOpenLiveCharge"), model.status?.isCharging == true { showLiveCharge = true }
             #endif
         }
         .onChange(of: scenePhase) { _, phase in
@@ -57,6 +60,11 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showControls) {
             ControlsView(initialStatus: model.status, vehicleName: model.vehicle?.name)
+        }
+        .sheet(isPresented: $showLiveCharge, onDismiss: { Task { await load() } }) {
+            if let status = model.status {
+                LiveChargingSheet(initialStatus: status)
+            }
         }
         .sheet(isPresented: $showVehicle) {
             VehicleInfoSheet(vehicle: model.vehicle, status: model.status, vehicles: model.vehicles,
@@ -85,7 +93,9 @@ struct DashboardView: View {
         let progress = min(max(scrollOffset / mapReveal, 0), 1)
         return DashboardMap(location: model.status?.location,
                             sentry: model.status?.sentryMode ?? false,
-                            state: model.status?.state)
+                            state: model.status?.state,
+                            charging: model.status?.isCharging ?? false,
+                            chargerPowerKw: model.status?.chargerPowerKw)
             .frame(height: mapHeight)
             .overlay(alignment: .bottom) {
                 LinearGradient(colors: [.clear, .voltaBackground.opacity(0.85), .voltaBackground],
@@ -167,7 +177,14 @@ struct DashboardView: View {
         let isPlaceholder = model.status == nil
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                // The map can't take touches; while charging its pill opens the live session.
                 Color.clear.frame(height: mapReveal)
+                    .contentShape(.rect)
+                    .onTapGesture { if status.isCharging { showLiveCharge = true } }
+                    .accessibilityHidden(!status.isCharging)
+                    .accessibilityLabel("Live charging session")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityIdentifier("button.liveCharge.map")
                 VStack(alignment: .leading, spacing: 0) {
                     if let error = model.refreshError {
                         InlineBanner(systemImage: "wifi.exclamationmark",
@@ -317,7 +334,8 @@ struct DashboardView: View {
         let range = Self.rangeDisplay(status)
         return VStack(spacing: VoltaSpacing.xl) {
             HStack(alignment: .bottom) {
-                BigNumber("\(status.batteryLevel)", unit: "%", size: 66)
+                BigNumber("\(status.batteryLevel)", unit: "%", size: 66,
+                          color: status.isCharging ? .voltaGreen : .voltaTextPrimary)
                     .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
                 Spacer()
                 VStack(alignment: .trailing, spacing: VoltaSpacing.sm) {
@@ -327,10 +345,14 @@ struct DashboardView: View {
                 }
                 .padding(.bottom, 10)
             }
+            .accessibilityElement(children: .combine)
             RangeBar(level: status.batteryLevel, limit: status.chargeLimit,
-                     charging: status.chargingState == .charging)
+                     charging: status.isCharging)
+            if status.isCharging {
+                LiveChargeStats(status: status) { showLiveCharge = true }
+                    .padding(.top, -VoltaSpacing.sm)
+            }
         }
-        .accessibilityElement(children: .combine)
     }
 
     private func metricGrid(_ status: VehicleStatus) -> some View {
@@ -446,11 +468,13 @@ struct RangeBar: View {
             let w = geo.size.width
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.1))
+                let fill = w * CGFloat(min(max(level, 0), 100)) / 100
                 Capsule()
-                    .fill(LinearGradient(colors: [Color(hex: 0x2563EB), .voltaBlue, Color(hex: 0x60A5FA)],
+                    .fill(LinearGradient(colors: charging ? [Color(hex: 0x15803D), .voltaGreen, Color(hex: 0xA7F3D0)]
+                                                          : [Color(hex: 0x2563EB), .voltaBlue, Color(hex: 0x60A5FA)],
                                          startPoint: .leading, endPoint: .trailing))
-                    .frame(width: w * CGFloat(min(max(level, 0), 100)) / 100)
-                    .shadow(color: .voltaBlue.opacity(0.7), radius: 6)
+                    .frame(width: fill)
+                    .shadow(color: (charging ? Color.voltaGreen : .voltaBlue).opacity(0.7), radius: 6)
                     .phaseAnimator(charging ? [0.6, 1] : [1]) { view, phase in
                         view.opacity(phase)
                     } animation: { _ in .easeInOut(duration: 1.2) }
@@ -460,10 +484,65 @@ struct RangeBar: View {
                         .frame(width: 2, height: 10)
                         .offset(x: w * CGFloat(limit) / 100 - 1)
                 }
+                if charging, fill > 0 {
+                    // Bright leading edge where energy is going in.
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 8, height: 8)
+                        .shadow(color: .voltaGreen, radius: 6)
+                        .offset(x: fill - 4)
+                }
             }
         }
         .frame(height: 6)
         .accessibilityLabel("Battery \(level) percent\(limit.map { ", limit \($0) percent" } ?? "")")
+    }
+}
+
+// MARK: - Live charging
+
+/// "⚡ 7.7 kW · ⏱ 4h 28m · ⊕ +1.4 kWh   LIVE ›" under the battery bar.
+struct LiveChargeStats: View {
+    var status: VehicleStatus
+    var open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: VoltaSpacing.md) {
+                if let kw = status.chargerPowerKw {
+                    item("bolt.fill", "\(VoltaFormat.number(kw, digits: kw >= 20 ? 0 : 1)) kW", color: .voltaGreen)
+                }
+                if let minutes = status.minutesToFull {
+                    item("clock", VoltaFormat.duration(minutes: Double(minutes)), color: .voltaAmber)
+                }
+                if let added = status.chargeEnergyAddedKwh {
+                    item("plus.circle", "+\(VoltaFormat.number(added, digits: 1)) kWh", color: .voltaTextSecondary)
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 3) {
+                    StatusDot(color: .voltaGreen, size: 5)
+                    Text("LIVE").tracking(1.4)
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
+                }
+                .font(.system(.caption2, weight: .bold))
+                .foregroundStyle(Color.voltaGreen)
+                .padding(.horizontal, 9).padding(.vertical, 5)
+                .background(Color.voltaGreen.opacity(0.14), in: .capsule)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Live charging session")
+        .accessibilityIdentifier("button.liveCharge")
+    }
+
+    private func item(_ symbol: String, _ text: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
+            Text(text).font(.system(.footnote, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(color == .voltaTextSecondary ? Color.voltaTextPrimary.opacity(0.85) : color)
+        }
+        .lineLimit(1)
     }
 }
 

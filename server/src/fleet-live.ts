@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
 
-export const liveFields = ['BatteryLevel','Soc','RatedRange','EstBatteryRange','ChargeLimitSoc','ModuleTempMax','ModuleTempMin','Locked','SentryMode','TpmsPressureFl','TpmsPressureFr','TpmsPressureRl','TpmsPressureRr','ChargePortDoorOpen','ChargePortLatch','InsideTemp','OutsideTemp','Version','Odometer','EnergyRemaining'];
+export const liveFields = ['BatteryLevel','Soc','RatedRange','EstBatteryRange','ChargeLimitSoc','ModuleTempMax','ModuleTempMin','Locked','SentryMode','TpmsPressureFl','TpmsPressureFr','TpmsPressureRl','TpmsPressureRr','ChargePortDoorOpen','ChargePortLatch','InsideTemp','OutsideTemp','Version','Odometer','EnergyRemaining',
+  'DetailedChargeState','ACChargingPower','DCChargingPower','ChargeAmps','ChargerVoltage','TimeToFullCharge','ACChargingEnergyIn','DCChargingEnergyIn','FastChargerPresent','ChargingCableType'];
+/** Tesla's DetailedChargeState mapped onto the API's chargingState. */
+const chargeStates: Record<string,string> = {DetailedChargeStateDisconnected:'disconnected',DetailedChargeStateNoPower:'stopped',
+  DetailedChargeStateStarting:'charging',DetailedChargeStateCharging:'charging',DetailedChargeStateComplete:'complete',DetailedChargeStateStopped:'stopped'};
 
 /** Latest means latest observation, including invalidation; never resurrect an older valid value. */
 export class FleetLive {
@@ -17,12 +21,14 @@ export class FleetLive {
         FROM volta_telemetry.connectivity WHERE vehicle_id=b.vehicle_id
           AND source_ts >= COALESCE((SELECT receiver_started_at FROM volta_telemetry.stream_health WHERE id=1),now()) - interval '1 second'
         ORDER BY connection_id,source_ts DESC,received_at DESC,status DESC) x) AS connections,
-      (SELECT to_jsonb(h) FROM volta_telemetry.stream_health h WHERE id=1) AS health
+      (SELECT to_jsonb(h) FROM volta_telemetry.stream_health h WHERE id=1) AS health,
+      (SELECT s.start_ts FROM volta_telemetry.sessions s WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' AND s.end_reason='open' ORDER BY s.start_ts DESC LIMIT 1) AS open_charge
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(row.vin, 'utf8').digest('hex');
     if (row.vin_digest !== digest) return null;
-    return { samples: row.samples as Row[], connections: (row.connections ?? []) as Row[], health: row.health as Row | null };
+    return { samples: row.samples as Row[], connections: (row.connections ?? []) as Row[], health: row.health as Row | null,
+      openCharge: row.open_charge ? new Date(row.open_charge) : null };
   }
 }
 
@@ -49,6 +55,16 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
   const sentry = text('SentryMode');
   const sentryMode = sentry === 'SentryModeStateOff' ? false :
     ['SentryModeStateIdle','SentryModeStateArmed','SentryModeStateAware','SentryModeStatePanic','SentryModeStateQuiet'].includes(sentry) ? true : null;
+  // Charging is reported separately so status merges it as one unit. Session
+  // counters count only from the open session's start; a held counter from a
+  // finished session is not this session's energy.
+  const at = (f: string) => valid(f) ? new Date(by.get(f)!.source_ts) : null;
+  const ac = num('ACChargingPower',{kW:1}), dc = num('DCChargingPower',{kW:1}), fast = (dc ?? 0) > 0 || bool('FastChargerPresent') === true;
+  const counter = fast ? 'DCChargingEnergyIn' : 'ACChargingEnergyIn', counted = at(counter), open = live.openCharge ?? null;
+  const charge = { state: chargeStates[text('DetailedChargeState') ?? ''] ?? null, at: at('DetailedChargeState'),
+    powerKw: (dc ?? 0) > 0 ? dc : ac, fast, minutesToFull: num('TimeToFullCharge',{h:60}),
+    currentA: num('ChargeAmps',{A:1}), voltage: num('ChargerVoltage',{V:1}), cableType: text('ChargingCableType'), startedAt: open,
+    energyAddedKwh: open && counted && +counted >= +open - 60_000 ? num(counter,{kWh:1}) : null };
   const tire = (suffix: string) => ({ pressureBar: num(`TpmsPressure${suffix}`, {bar:1,psi:1/14.5037738,kPa:.01}), updatedAt: times[`TpmsPressure${suffix}`] ?? null });
   return { values: {
     batteryLevel:num('BatteryLevel',{'%':1}), usableBatteryLevel:num('Soc',{'%':1}),
@@ -58,5 +74,5 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     insideTempC:num('InsideTemp',{C:1}),outsideTempC:num('OutsideTemp',{C:1}),firmware:text('Version'),
     odometerKm:num('Odometer',{mi:1.609344,km:1}),energyRemainingKwh:num('EnergyRemaining',{kWh:1}),
   }, tpms:{fl:tire('Fl'),fr:tire('Fr'),rl:tire('Rl'),rr:tire('Rr')},
-  freshness:{connected,lastSeenAt,recordedAt:times}, by };
+  freshness:{connected,lastSeenAt,recordedAt:times}, charge, by };
 }

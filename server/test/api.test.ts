@@ -283,6 +283,8 @@ describe('metric telemetry contract', () => {
   test('status maps observations and unknown live attributes without fabricating zeros', async () => {
     const status = await json('/v1/vehicles/1/status'); expect(status.state).toBe('asleep'); expect(status.batteryLevel).toBe(84);
     expect(status.ratedRangeKm).toBe(420); expect(status.insideTempC).toBe(21); expect(status.location.latitude).toBe(40.01);
+    // No charge at the parked position: the drive that ended there names it.
+    expect(status.location.address).toBe('2 Synthetic Street');
     for (const key of ['locked','sentryMode','chargeLimit','minutesToFull','chargingState']) expect(status[key]).toBeNull();
     const r = await request('/v1/vehicles/2/status'); expect(r.status).toBe(409); expect((await r.json() as any).error.code).toBe('data_unavailable');
   });
