@@ -187,7 +187,8 @@ enum LiveActivityPlanner {
     static func follow(_ activity: ChargingRunning, status: VehicleStatus, latestCharge: ChargeSummary?) -> ChargeFollow {
         var identity = identity(of: activity, latestCharge: latestCharge)
         let named = status.chargeStartedAt
-        if liveSession(status) == nil, let process = namedProcess(status) {
+        // A replaced charge's process says nothing about this charge.
+        if liveSession(status) == nil, let process = namedProcess(status), !identity.others.contains(process) {
             if let known = identity.teslaMate {
                 // Two TeslaMate ids compare without a start.
                 if known != process { return .other(identity) }

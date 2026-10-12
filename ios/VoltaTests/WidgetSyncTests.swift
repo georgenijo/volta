@@ -575,6 +575,27 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(c.state.otherChargeIds, [-902, -901, 10])
     }
 
+    func testFallbackToAReplacedChargesProcessKeepsTheActivity() throws {
+        let a = try started(planCharging([], telemetry(-901, startedAt: t0.addingTimeInterval(-3600 - 600), energy: 9),
+                                         latest: charge(id: 10, added: 8)))
+        let replug = t0.addingTimeInterval(-1800)
+        let b = try started(planCharging([a], telemetry(-902, startedAt: replug, energy: 1), latest: charge(id: 10, added: 8)), as: "b")
+        XCTAssertEqual(b.state.otherChargeIds, [-901, 10])
+        let learned = try update(planCharging([b], teslaMate(11, startedAt: replug.addingTimeInterval(7 * 60)), latest: nil), "b")
+        XCTAssertEqual(learned.teslaMateChargeId, 11)
+        let shown = try update(planCharging([next(b, learned)], telemetry(-902, startedAt: replug, energy: 6), latest: nil), "b")
+
+        // TeslaMate closed 11 but still has 10 open, so the status falls back to 10.
+        let fallback = try update(planCharging([next(b, shown)], teslaMate(10, startedAt: t0.addingTimeInterval(-3600)),
+                                               latest: charge(id: 10, added: 8)), "b")
+        XCTAssertEqual(fallback.statusSessionId, -902)
+        XCTAssertEqual(fallback.teslaMateChargeId, 11)
+        XCTAssertEqual(fallback.energyAddedKwh, 6)
+        let final = try finish(planCharging([next(b, fallback)], status(state: .online, charging: .complete),
+                                            latest: charge(id: 11, start: replug.addingTimeInterval(7 * 60), end: t0, added: 6.3)), "b")
+        XCTAssertEqual(final.energyAddedKwh, 6.3)
+    }
+
     func testTeslaMateFallbackLearnsOnlyAProcessStartingWithTheSession() throws {
         let sessionStart = t0.addingTimeInterval(-3600)
         let a = try started(planCharging([], telemetry(-901, startedAt: sessionStart, energy: 2.4), latest: nil))
