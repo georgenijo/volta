@@ -720,6 +720,28 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(final.endedAt, ended)
     }
 
+    func testAnOlderProcessIsJudgedByTheActivitysOwnProcess() throws {
+        let sessionStart = t0.addingTimeInterval(-3600)
+        let a = try started(planCharging([], telemetry(-902, startedAt: sessionStart, energy: 1), latest: nil))
+        let learned = try update(planCharging([a], teslaMate(12, startedAt: sessionStart.addingTimeInterval(27 * 60)), latest: nil))
+        XCTAssertEqual(learned.teslaMateChargeId, 12)
+        // Process 12 closed, exposing process 11 that TeslaMate never closed, opened after the session.
+        XCTAssertEqual(planCharging([next(a, learned)], teslaMate(11, startedAt: sessionStart.addingTimeInterval(10 * 60)),
+                                    latest: nil).existing["a"], .keep)
+        XCTAssertEqual(planCharging([next(a, learned)], teslaMate(13, startedAt: sessionStart.addingTimeInterval(40 * 60)),
+                                    latest: nil).existing["a"], .dismiss, "a later process is a new charge")
+
+        // A process named without a start takes it from its record when enriched.
+        var unstarted = status()
+        unstarted.activeChargeId = 12
+        let p = try started(planCharging([], unstarted, latest: nil), as: "p")
+        XCTAssertNil(p.state.teslaMateStartedAt)
+        let enriched = try started(planCharging([p], unstarted, latest: charge(id: 12, start: sessionStart)), as: "p")
+        XCTAssertEqual(enriched.state.teslaMateStartedAt, sessionStart)
+        XCTAssertEqual(planCharging([enriched], teslaMate(7, startedAt: sessionStart.addingTimeInterval(-2 * 3600)),
+                                    latest: nil).existing["p"], .keep)
+    }
+
     func testAnotherNamedProcessReplacesWithoutAStart() throws {
         let a = try started(planCharging([], teslaMate(10, startedAt: t0.addingTimeInterval(-3600)), latest: nil))
         var other = status()

@@ -181,10 +181,16 @@ enum LiveActivityPlanner {
                                       others: Set(state.otherChargeIds ?? []))
         // Activities from earlier builds know only their history charge.
         if identity.session == nil, identity.teslaMate == nil, let id = activity.attributes.chargeId {
-            let start = activity.attributes.startedAt ?? latestCharge.flatMap { $0.id == id ? $0.start : nil }
-            if id < 0 { identity.session = id; identity.sessionStart = start }
-            else { identity.teslaMate = id; identity.teslaMateStart = start }
+            if id < 0 { identity.session = id } else { identity.teslaMate = id }
         }
+        // A start the status didn't give comes from the charge's own record.
+        func recordedStart(_ id: Int?) -> Date? {
+            guard let id else { return nil }
+            return (activity.attributes.chargeId == id ? activity.attributes.startedAt : nil)
+                ?? latestCharge.flatMap { $0.id == id ? $0.start : nil }
+        }
+        if identity.sessionStart == nil { identity.sessionStart = recordedStart(identity.session) }
+        if identity.teslaMateStart == nil { identity.teslaMateStart = recordedStart(identity.teslaMate) }
         return identity
     }
 
@@ -279,11 +285,13 @@ enum LiveActivityPlanner {
     /// practice); the small lead allows for clock differences.
     static let teslaMateStartLag: ClosedRange<TimeInterval> = -60 ... 60 * 60
 
-    /// Whether a named charge started before this activity's charge, beyond clock differences.
+    /// Whether a TeslaMate process started before this activity's charge: before its own
+    /// TeslaMate process (the same clock), else beyond clock differences before its session.
     static func startsBefore(_ start: Date?, _ identity: ChargeIdentity) -> Bool {
-        guard let start, let own = [identity.sessionStart, identity.teslaMateStart].compactMap({ $0 }).min()
-        else { return false }
-        return start.timeIntervalSince(own) < teslaMateStartLag.lowerBound
+        guard let start else { return false }
+        if let own = identity.teslaMateStart { return start < own }
+        guard let session = identity.sessionStart else { return false }
+        return start.timeIntervalSince(session) < teslaMateStartLag.lowerBound
     }
 
     static func sameCharge(teslaMateStart: Date, sessionStart: Date) -> Bool {
