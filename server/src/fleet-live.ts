@@ -22,14 +22,15 @@ export class FleetLive {
           AND source_ts >= COALESCE((SELECT receiver_started_at FROM volta_telemetry.stream_health WHERE id=1),now()) - interval '1 second'
         ORDER BY connection_id,source_ts DESC,received_at DESC,status DESC) x) AS connections,
       (SELECT to_jsonb(h) FROM volta_telemetry.stream_health h WHERE id=1) AS health,
-      (SELECT jsonb_build_object('start',s.start_ts,'open',s.end_reason='open') FROM volta_telemetry.sessions s
+      (SELECT jsonb_build_object('start',s.start_ts,'open',s.end_reason='open','dc',EXISTS(SELECT 1 FROM volta_telemetry.session_samples x
+          WHERE x.vehicle_id=s.vehicle_id AND x.source_ts>=s.start_ts AND (s.end_reason='open' OR x.source_ts<=s.end_ts) AND x.dc_power_kw>0)) FROM volta_telemetry.sessions s
         WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(row.vin, 'utf8').digest('hex');
     if (row.vin_digest !== digest) return null;
     return { samples: row.samples as Row[], connections: (row.connections ?? []) as Row[], health: row.health as Row | null,
-      lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true } : null };
+      lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true, dc: row.last_charge.dc === true } : null };
   }
 }
 
@@ -59,14 +60,17 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
   // Charging is reported separately so status merges it as one unit. Charging
   // belongs to the open session; Complete or Stopped still describes the newest
   // one (the receiver closes it on that state). Readings from before that
-  // session began are a previous session's: a held counter, or a positive
-  // power whose drop to zero was missed.
+  // session began are a previous session's: a held counter, a charger-type
+  // flag, or a positive power whose drop to zero was missed. A session that
+  // drew DC power at any point stays DC after its power falls to zero.
   const at = (f: string) => valid(f) ? new Date(by.get(f)!.source_ts) : null;
   const state = chargeStates[text('DetailedChargeState') ?? ''] ?? null, last = live.lastCharge ?? null;
   const session = last && (last.open || state === 'complete' || state === 'stopped') ? last.start : null;
   const current = (v: number | null, t: Date | null) => v != null && v > 0 && t != null && (!session || +t >= +session);
   const ac = num('ACChargingPower',{kW:1}), dc = num('DCChargingPower',{kW:1}), acAt = at('ACChargingPower'), dcAt = at('DCChargingPower');
-  const fast = bool('FastChargerPresent') ?? (current(dc, dcAt) && (!current(ac, acAt) || +dcAt! >= +acAt!));
+  const flagAt = at('FastChargerPresent');
+  const fast = (session != null && last!.dc) || (current(dc, dcAt) && (!current(ac, acAt) || +dcAt! >= +acAt!)) ||
+    (bool('FastChargerPresent') === true && session != null && flagAt != null && +flagAt >= +session);
   const counter = fast ? 'DCChargingEnergyIn' : 'ACChargingEnergyIn', counted = at(counter);
   const eta = num('TimeToFullCharge',{h:60}), etaAt = at('TimeToFullCharge');
   const fields = ['DetailedChargeState', fast ? 'DCChargingPower' : 'ACChargingPower', 'TimeToFullCharge', counter, 'ChargeAmps', 'ChargerVoltage'];

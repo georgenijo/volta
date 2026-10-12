@@ -20,6 +20,7 @@ struct LiveChargingSheet: View {
 
     init(initialStatus: VehicleStatus) {
         _status = State(initialValue: initialStatus)
+        _shownChargeId = State(initialValue: initialStatus.activeChargeId)
     }
 
     var body: some View {
@@ -286,11 +287,17 @@ struct LiveChargingSheet: View {
     }
 
     /// Range added since the session began: the car's rated range now minus
-    /// the first rated range recorded in the session.
+    /// the earliest valid rated range either source recorded in the session.
+    /// Chosen apart from the chart's source, which needs whole curves.
     private var rangeAddedKm: Double? {
-        guard let now = status.ratedRangeKm,
-              let first = curve("RatedRange", { $0.ratedRangeKm }, { $0.ratedRangeKm }).first?.value else { return nil }
-        return max(0, now - first)
+        guard let now = status.ratedRangeKm, let detail, let window else { return nil }
+        let span = window.start...max(window.end, window.start)
+        let telemetry = TelemetryMetricSeries(detail.telemetry, field: "RatedRange") { $0.ratedRangeKm }.points
+            .filter { span.contains($0.t) }.map { (t: $0.t, value: $0.value) }
+        let recorded = detail.samples.compactMap { s in s.ratedRangeKm.map { (t: s.t, value: $0) } }
+            .filter { span.contains($0.t) && $0.value.isFinite }
+        guard let first = (telemetry + recorded).min(by: { $0.t < $1.t }) else { return nil }
+        return max(0, now - first.value)
     }
 
     private var addedKwh: Double? { status.chargeEnergyAddedKwh ?? detail?.summary.energyAddedKwh }

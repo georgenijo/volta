@@ -131,8 +131,9 @@ observation; otherwise from TeslaMate's open charging process. `minutesToFull`,
 `chargeReadyAt`, `chargerVoltage` and `chargerCurrentA` are set only while
 charging. `chargeReadyAt` is the car's estimate counted from when it was made,
 and `minutesToFull` is what remains of it now; both are null once it has passed.
-Power and charger type come from the car's `FastChargerPresent` when reported,
-else from the newer positive AC or DC power observed in this session.
+A session is DC (`fastCharger`, DC power and counter) once it has drawn DC power,
+which holds after its power falls to zero; otherwise the newer positive AC or DC
+power, or a `FastChargerPresent` reported during the session, decides.
 `chargeEnergyAddedKwh` is the session's own counter (AC or DC), null when it
 predates the session. A charging state belongs to the open telemetry session;
 Complete or Stopped keeps the newest one. `chargeCableType` is Tesla's raw value

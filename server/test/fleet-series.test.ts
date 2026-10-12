@@ -477,5 +477,9 @@ test('live charging leads TeslaMate while connected; a disconnected stale state 
   expect(status).toMatchObject({state:'asleep',chargingState:'complete',chargerPowerKw:null,minutesToFull:null,chargeReadyAt:null,
     chargeEnergyAddedKwh:2.9,activeChargeId:sessionId});
   expect((await get(`/v1/charges/${sessionId}`)).id).toBe(sessionId);
+  // DC power drawn during the session marks it fast even after its power fell to zero.
+  expect(status.fastCharger).toBe(false);await datum('DCChargingPower',50,new Date(+begun+600_000),'live-dc');
+  expect((await get('/v1/vehicles/1/status')).fastCharger).toBe(true);
+  await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'live-%'`;
   await owner`TRUNCATE volta_telemetry.sessions`;
 });
