@@ -555,8 +555,9 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let later = try update(planCharging([b], replug, latest: charge(id: 10, added: 8)), "b")
         XCTAssertNil(later.energyAddedKwh)
         XCTAssertNil(later.teslaMateChargeId)
-        // Nor when the status falls back to that stale process, which started before this session.
-        let stale = try update(planCharging([next(b, later)], teslaMate(10, startedAt: t0.addingTimeInterval(-3600 - 120)),
+        XCTAssertEqual(later.otherChargeIds, [-901, 10])
+        // Nor when the status falls back to that process, though it started within a minute of this session.
+        let stale = try update(planCharging([next(b, later)], teslaMate(10, startedAt: t0.addingTimeInterval(-3600)),
                                             latest: charge(id: 10, added: 8)), "b")
         XCTAssertNil(stale.teslaMateChargeId)
         XCTAssertNil(stale.energyAddedKwh)
@@ -629,6 +630,51 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertEqual(enriched.attributes.fastCharger, false)
         XCTAssertEqual(enriched.state.energyAddedKwh, 12.5)
         XCTAssertEqual(enriched.state.teslaMateChargeId, 10)
+    }
+
+    func testEnrichingKeepsTheTrackedSessionAndItsTotal() throws {
+        let sessionStart = t0.addingTimeInterval(-3600)
+        let a = try started(planCharging([], telemetry(-901, startedAt: sessionStart, energy: 8), latest: nil))
+        XCTAssertNil(a.attributes.chargeId)
+
+        // Telemetry is quiet; TeslaMate names its process for this charge and lists its lagging record.
+        let fallback = teslaMate(10, startedAt: sessionStart.addingTimeInterval(7 * 60))
+        let record = charge(id: 10, start: sessionStart.addingTimeInterval(7 * 60), added: 2)
+        let plan = planCharging([a], fallback, latest: record)
+        XCTAssertEqual(plan.existing["a"], .dismiss)
+        let b = try started(plan, as: "b")
+        XCTAssertEqual(b.attributes.chargeId, 10)
+        XCTAssertEqual(b.attributes.startedAt, record.start)
+        XCTAssertEqual(b.state.statusSessionId, -901)
+        XCTAssertEqual(b.state.teslaMateChargeId, 10)
+        XCTAssertEqual(b.state.energyAddedKwh, 8, "the session's total, not the lagging record")
+
+        // Activities can't restart: the same activity continues instead.
+        let kept = try update(planCharging([a], fallback, latest: record, canStart: false))
+        XCTAssertEqual(kept.statusSessionId, -901)
+        XCTAssertEqual(kept.teslaMateChargeId, 10)
+        XCTAssertEqual(kept.energyAddedKwh, 8)
+
+        // The session's final counter still counts.
+        var counted = telemetry(-901, startedAt: sessionStart, energy: 9.4)
+        counted.state = .online
+        counted.chargingState = .complete
+        XCTAssertEqual(try finish(planCharging([b], counted, latest: record), "b").energyAddedKwh, 9.4)
+    }
+
+    func testAnotherNamedProcessReplacesWithoutAStart() throws {
+        let a = try started(planCharging([], teslaMate(10, startedAt: t0.addingTimeInterval(-3600)), latest: nil))
+        var other = status()
+        other.activeChargeId = 11  // the server keeps TeslaMate's id when Fleet's session has closed
+        let plan = planCharging([a], other, latest: nil)
+        XCTAssertEqual(plan.existing["a"], .dismiss)
+        let b = try XCTUnwrap(plan.start)
+        XCTAssertEqual(b.state.teslaMateChargeId, 11)
+        XCTAssertEqual(b.state.otherChargeIds, [10])
+
+        // The same process without a start continues.
+        other.activeChargeId = 10
+        XCTAssertEqual(try update(planCharging([a], other, latest: nil)).teslaMateChargeId, 10)
     }
 
     func testFinalStateFromEitherIdentityOrTheFinalCounter() throws {

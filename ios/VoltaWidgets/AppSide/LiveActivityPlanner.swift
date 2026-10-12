@@ -73,6 +73,8 @@ enum LiveActivityPlanner {
         var plan = ChargingPlan()
         var claimed = false
         var replaced: Set<Int> = []  // ids of charges the status has moved on from
+        var enriched: (identity: ChargeIdentity, previous: ChargingActivityAttributes.ContentState)?
+        let canRestart = canStart && now.timeIntervalSince(status.updatedAt) < VoltaLiveActivityTiming.chargingStaleAfter
         for activity in existing {
             let action: ExistingActivityAction<ChargingActivityAttributes.ContentState>
             if activity.attributes.vehicleId != status.vehicleId || claimed {
@@ -83,15 +85,16 @@ enum LiveActivityPlanner {
                     action = .keep
                 case .charging:
                     switch follow(activity, status: status, latestCharge: latestCharge) {
-                    case .same(let identity):
+                    case .enrich(let identity) where canRestart:
+                        enriched = (identity, activity.state)
+                        action = .dismiss
+                    case .same(let identity), .enrich(let identity):
                         // Only an exact record, and only while no live counter is tracked.
                         let recorded = identity.session == nil
                             ? latestCharge.flatMap { $0.end == nil && $0.id == identity.teslaMate ? $0.energyAddedKwh : nil }
                             : nil
                         action = .update(chargingState(status: status, identity: identity, recordedEnergy: recorded,
                                                        previous: activity.state))
-                    case .enrich:
-                        action = .dismiss
                     case .other(let identity):
                         replaced.formUnion([identity.session, identity.teslaMate, activity.attributes.chargeId].compactMap { $0 })
                         action = .dismiss
@@ -103,19 +106,36 @@ enum LiveActivityPlanner {
                                                         latestCharge: latestCharge, previous: activity.state))
                 }
             }
-            if action != .dismiss { claimed = true }
+            if action != .dismiss || enriched != nil { claimed = true }
             plan.existing[activity.id] = action
         }
-        if observation == .charging, !claimed, canStart,
-           now.timeIntervalSince(status.updatedAt) < VoltaLiveActivityTiming.chargingStaleAfter {
-            let history = latestCharge.flatMap { $0.end == nil && !replaced.contains($0.id) && startMatches(status, $0) ? $0 : nil }
-            var identity = ChargeIdentity()
-            if let session = liveSession(status) { identity.session = session; identity.sessionStart = status.chargeStartedAt }
-            if let process = teslaMateProcess(status) { identity.teslaMate = process; identity.teslaMateStart = status.chargeStartedAt }
-            if let history, history.id < 0 {
-                identity.session = history.id; identity.sessionStart = identity.sessionStart ?? history.start
-            } else if let history, identity.teslaMate == nil {
-                identity.teslaMate = history.id; identity.teslaMateStart = history.start
+        if observation == .charging, canRestart, enriched != nil || !claimed {
+            var identity: ChargeIdentity
+            let history: ChargeSummary?
+            var recorded: Double?
+            if let enriched {
+                // The same charge, now with its record: keep what the activity established.
+                identity = enriched.identity
+                history = latestCharge
+                recorded = (identity.session == nil ? history?.energyAddedKwh : nil) ?? enriched.previous.energyAddedKwh
+                if identity.session == nil, identity.teslaMate == nil, let history {
+                    if history.id < 0 { identity.session = history.id; identity.sessionStart = history.start }
+                    else { identity.teslaMate = history.id; identity.teslaMateStart = history.start }
+                }
+            } else {
+                identity = ChargeIdentity(others: replaced)
+                history = latestCharge.flatMap { $0.end == nil && !replaced.contains($0.id) && startMatches(status, $0) ? $0 : nil }
+                recorded = history?.energyAddedKwh
+                if let session = liveSession(status) { identity.session = session; identity.sessionStart = status.chargeStartedAt }
+                if liveSession(status) == nil, let process = namedProcess(status), !replaced.contains(process) {
+                    identity.teslaMate = process
+                    identity.teslaMateStart = status.chargeStartedAt ?? history.flatMap { $0.id == process ? $0.start : nil }
+                }
+                if let history, history.id < 0 {
+                    identity.session = history.id; identity.sessionStart = identity.sessionStart ?? history.start
+                } else if let history, identity.teslaMate == nil {
+                    identity.teslaMate = history.id; identity.teslaMateStart = history.start
+                }
             }
             let attributes = ChargingActivityAttributes(
                 vehicleId: status.vehicleId,
@@ -128,7 +148,7 @@ enum LiveActivityPlanner {
                 usesMiles: usesMiles)
             plan.start = .init(attributes: attributes,
                                state: chargingState(status: status, identity: identity,
-                                                    recordedEnergy: history?.energyAddedKwh, previous: nil))
+                                                    recordedEnergy: recorded, previous: nil))
         }
         return plan
     }
@@ -139,13 +159,15 @@ enum LiveActivityPlanner {
         var sessionStart: Date?
         var teslaMate: Int?
         var teslaMateStart: Date?
+        /// Charges this activity replaced, whose ids it never adopts.
+        var others: Set<Int> = []
     }
 
     enum ChargeFollow: Hashable {
         /// Still this activity's charge, with any id the status newly named for it.
         case same(ChargeIdentity)
         /// This charge, whose details the activity lacks: start again with them.
-        case enrich
+        case enrich(ChargeIdentity)
         /// The status names another charge.
         case other(ChargeIdentity)
     }
@@ -153,7 +175,8 @@ enum LiveActivityPlanner {
     static func identity(of activity: ChargingRunning, latestCharge: ChargeSummary?) -> ChargeIdentity {
         let state = activity.state
         var identity = ChargeIdentity(session: state.statusSessionId, sessionStart: state.sessionStartedAt,
-                                      teslaMate: state.teslaMateChargeId, teslaMateStart: state.teslaMateStartedAt)
+                                      teslaMate: state.teslaMateChargeId, teslaMateStart: state.teslaMateStartedAt,
+                                      others: Set(state.otherChargeIds ?? []))
         // Activities from earlier builds know only their history charge.
         if identity.session == nil, identity.teslaMate == nil, let id = activity.attributes.chargeId {
             let start = activity.attributes.startedAt ?? latestCharge.flatMap { $0.id == id ? $0.start : nil }
@@ -167,9 +190,16 @@ enum LiveActivityPlanner {
     static func follow(_ activity: ChargingRunning, status: VehicleStatus, latestCharge: ChargeSummary?) -> ChargeFollow {
         var identity = identity(of: activity, latestCharge: latestCharge)
         let named = status.chargeStartedAt
+        if liveSession(status) == nil, let process = namedProcess(status), let known = identity.teslaMate {
+            // Two TeslaMate ids compare without a start.
+            if known != process { return .other(identity) }
+            if identity.teslaMateStart == nil { identity.teslaMateStart = named }
+        }
         if let session = liveSession(status), let named {
             if let known = identity.session {
                 if known != session { return .other(identity) }
+            } else if identity.others.contains(session) {
+                return .other(identity)
             } else if identity.teslaMate != nil {
                 // TeslaMate's record must start with the session; unknown start can't be checked.
                 guard let start = identity.teslaMateStart, sameCharge(teslaMateStart: start, sessionStart: named)
@@ -178,10 +208,9 @@ enum LiveActivityPlanner {
             } else {
                 identity.session = session; identity.sessionStart = named
             }
-        } else if let process = teslaMateProcess(status), let named {
-            if let known = identity.teslaMate {
-                if known != process { return .other(identity) }
-            } else if identity.session != nil {
+        } else if let process = teslaMateProcess(status), let named, identity.teslaMate == nil,
+                  !identity.others.contains(process) {
+            if identity.session != nil {
                 // TeslaMate names a process while telemetry is quiet. Starting with the session it is
                 // this charge; starting well after, a later one; starting before, an older process
                 // TeslaMate never closed, which says nothing about this charge.
@@ -195,15 +224,15 @@ enum LiveActivityPlanner {
             } else {
                 identity.teslaMate = process; identity.teslaMateStart = named
             }
-        } else if identity.session == nil, let known = identity.teslaMate, let open = latestCharge,
-                  open.end == nil, open.id != known {
+        } else if namedProcess(status) == nil, identity.session == nil, let known = identity.teslaMate,
+                  let open = latestCharge, open.end == nil, open.id != known {
             return .other(identity)  // the status names no charge; history has moved on
         }
         // An activity started without history takes its charge's exact record once it appears.
         if activity.attributes.chargeId == nil, let open = latestCharge, open.end == nil {
             let exact = open.id == identity.session || open.id == identity.teslaMate
-            let unnamed = identity.session == nil && identity.teslaMate == nil
-            if exact || unnamed { return .enrich }
+            let unnamed = identity.session == nil && identity.teslaMate == nil && !identity.others.contains(open.id)
+            if exact || unnamed { return .enrich(identity) }
         }
         return .same(identity)
     }
@@ -225,7 +254,8 @@ enum LiveActivityPlanner {
                      statusSessionId: identity.session,
                      sessionStartedAt: identity.sessionStart,
                      teslaMateChargeId: identity.teslaMate,
-                     teslaMateStartedAt: identity.teslaMateStart)
+                     teslaMateStartedAt: identity.teslaMateStart,
+                     otherChargeIds: identity.others.isEmpty ? nil : identity.others.sorted())
     }
 
     /// How long TeslaMate's start of a charge may trail Fleet Telemetry's start of the same
@@ -249,12 +279,18 @@ enum LiveActivityPlanner {
         return id
     }
 
+    /// The TeslaMate process the status names, with or without its start.
+    static func namedProcess(_ status: VehicleStatus) -> Int? {
+        guard let id = status.activeChargeId, id > 0 else { return nil }
+        return id
+    }
+
     /// Whether an open history charge is the one the status describes, for a new activity.
     static func startMatches(_ status: VehicleStatus, _ charge: ChargeSummary) -> Bool {
         if let session = liveSession(status), let start = status.chargeStartedAt {
             return charge.id == session || charge.id > 0 && sameCharge(teslaMateStart: charge.start, sessionStart: start)
         }
-        if let process = teslaMateProcess(status) { return charge.id == process }
+        if let process = namedProcess(status) { return charge.id == process }
         return true
     }
 
@@ -281,7 +317,8 @@ enum LiveActivityPlanner {
                      statusSessionId: identity.session,
                      sessionStartedAt: identity.sessionStart,
                      teslaMateChargeId: identity.teslaMate,
-                     teslaMateStartedAt: identity.teslaMateStart)
+                     teslaMateStartedAt: identity.teslaMateStart,
+                     otherChargeIds: previous.otherChargeIds)
     }
 
     // MARK: Driving

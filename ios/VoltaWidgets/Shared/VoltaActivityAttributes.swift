@@ -41,6 +41,8 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         var sessionStartedAt: Date? = nil
         var teslaMateChargeId: Int? = nil
         var teslaMateStartedAt: Date? = nil
+        /// Ids of the charges this activity replaced; never this charge's.
+        var otherChargeIds: [Int]? = nil
 
         /// Battery fraction toward the charge limit, or nil when the limit is unknown.
         var fractionOfLimit: Double? {
