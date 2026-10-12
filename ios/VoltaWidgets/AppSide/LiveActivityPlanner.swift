@@ -64,7 +64,9 @@ enum LiveActivityPlanner {
                              latestCharge: ChargeSummary?, usesMiles: Bool, canStart: Bool,
                              now: Date) -> ChargingPlan {
         let observation = chargingObservation(status)
-        let openCharge = latestCharge?.end == nil ? latestCharge : nil
+        let session = liveSession(status)
+        // An open record of another session (TeslaMate not caught up yet) is not this charge's history.
+        let openCharge = latestCharge.flatMap { $0.end == nil && matches(status, $0) ? $0 : nil }
         var plan = ChargingPlan()
         var claimed = false
         for activity in existing {
@@ -76,10 +78,18 @@ enum LiveActivityPlanner {
                 case .unknown:
                     action = .keep
                 case .charging:
-                    // Without history, a different live session than the tracked one is a new charge.
-                    let movedOn = openCharge == nil && activity.state.statusSessionId != nil
-                        && status.activeChargeId != nil && activity.state.statusSessionId != status.activeChargeId
-                    action = sameSession(activity.attributes.chargeId, openCharge?.id) && !movedOn
+                    // The live session decides when both are known, whatever history says.
+                    // An activity's own history charge that isn't the live session has ended.
+                    let tracked = activity.state.statusSessionId
+                    let same: Bool
+                    if let tracked, let session {
+                        same = tracked == session
+                    } else if let own = latestCharge, own.id == activity.attributes.chargeId, !matches(status, own) {
+                        same = false
+                    } else {
+                        same = sameSession(activity.attributes.chargeId, openCharge?.id)
+                    }
+                    action = same
                         ? .update(chargingState(status: status, openCharge: openCharge, previous: activity.state))
                         : .dismiss
                 case .completed, .stopped:
@@ -108,9 +118,13 @@ enum LiveActivityPlanner {
         return plan
     }
 
+    /// `openCharge` must already match the status (see `matches`); `previous` is nil for a new activity.
     static func chargingState(status: VehicleStatus, openCharge: ChargeSummary?,
                               previous: ChargingActivityAttributes.ContentState?) -> ChargingActivityAttributes.ContentState {
-        let live = liveEnergy(status, openCharge: openCharge, previous: previous)
+        let session = liveSession(status)
+        // The activity follows the live session it started with, or first saw alongside its history.
+        let tracked = previous == nil || openCharge != nil ? previous?.statusSessionId ?? session : previous?.statusSessionId
+        let live = tracked != nil && tracked == session ? status.chargeEnergyAddedKwh : nil
         return .init(batteryLevel: status.batteryLevel,
                      chargeLimit: status.chargeLimit,
                      chargerPowerKw: status.chargerPowerKw,
@@ -120,7 +134,7 @@ enum LiveActivityPlanner {
                      phase: .charging,
                      updatedAt: status.updatedAt,
                      endedAt: nil,
-                     statusSessionId: live != nil ? status.activeChargeId : previous?.statusSessionId)
+                     statusSessionId: tracked)
     }
 
     /// How long TeslaMate's start of a charge may trail (positive) or lead (negative) Fleet
@@ -128,29 +142,27 @@ enum LiveActivityPlanner {
     /// trailed it by 27 minutes in practice. Outside this, the two are different sessions.
     static let teslaMateStartLag: ClosedRange<TimeInterval> = -5 * 60 ... 60 * 60
 
-    /// The live counter belongs to the status's own session. Use it only when that is the
-    /// activity's charge: its open history record (the same id, or starting with the telemetry
-    /// session, as the two number one charge differently); without history, the session the
-    /// activity already tracks, or any session for a new activity.
-    static func liveEnergy(_ status: VehicleStatus, openCharge: ChargeSummary?,
-                           previous: ChargingActivityAttributes.ContentState?) -> Double? {
-        guard let energy = status.chargeEnergyAddedKwh, let session = status.activeChargeId else { return nil }
-        guard let openCharge else {
-            return previous == nil || previous?.statusSessionId == session ? energy : nil
-        }
-        if session == openCharge.id { return energy }
-        guard let started = status.chargeStartedAt,
-              teslaMateStartLag.contains(openCharge.start.timeIntervalSince(started)) else { return nil }
-        return energy
+    /// The status's live Fleet Telemetry session, whose counter `chargeEnergyAddedKwh` is.
+    /// Nil when the status comes from TeslaMate alone.
+    static func liveSession(_ status: VehicleStatus) -> Int? {
+        status.chargeStartedAt == nil ? nil : status.activeChargeId
+    }
+
+    /// Whether a history charge is the status's live session: the same id, or a TeslaMate
+    /// record starting with it (the two number one charge differently). Without a live
+    /// session there is nothing to contradict history.
+    static func matches(_ status: VehicleStatus, _ charge: ChargeSummary) -> Bool {
+        guard let session = liveSession(status), let started = status.chargeStartedAt else { return true }
+        return charge.id == session || teslaMateStartLag.contains(charge.start.timeIntervalSince(started))
     }
 
     /// Final content: no power or countdown, the end time, and the last known totals.
     static func finalChargingState(status: VehicleStatus, observation: ChargingObservation,
                                    attributes: ChargingActivityAttributes, latestCharge: ChargeSummary?,
                                    previous: ChargingActivityAttributes.ContentState) -> ChargingActivityAttributes.ContentState {
-        let closed = latestCharge.flatMap { charge in
-            charge.end != nil && attributes.chargeId != nil && charge.id == attributes.chargeId ? charge : nil
-        }
+        // The activity's charge, by its history id or else the live session it followed.
+        let id = attributes.chargeId ?? previous.statusSessionId
+        let closed = latestCharge.flatMap { charge in charge.end != nil && id != nil && charge.id == id ? charge : nil }
         return .init(batteryLevel: closed?.endBatteryLevel ?? status.batteryLevel,
                      chargeLimit: status.chargeLimit ?? previous.chargeLimit,
                      chargerPowerKw: nil,
@@ -159,7 +171,8 @@ enum LiveActivityPlanner {
                      rangeKm: status.estRangeKm ?? status.ratedRangeKm ?? previous.rangeKm,
                      phase: observation == .completed ? .completed : .stopped,
                      updatedAt: status.updatedAt,
-                     endedAt: closed?.end ?? status.updatedAt)
+                     endedAt: closed?.end ?? status.updatedAt,
+                     statusSessionId: previous.statusSessionId)
     }
 
     // MARK: Driving
