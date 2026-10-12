@@ -671,6 +671,12 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                     charges: [firstPart]).existing["a"], .dismiss)
         XCTAssertEqual(try update(planCharging([next(a, continued)], resumed(-902, startedAt: gapEnd, energy: 24.8),
                                                latest: nil, charges: [firstPart])).statusSessionId, -902)
+        // A session that ended before the counter was read gets no allowance for history running ahead.
+        let smallerPart = charge(id: -901, start: sessionStart, end: gapEnd.addingTimeInterval(-1800), added: 20)
+        XCTAssertEqual(planCharging([next(a, continued)], resumed(-902, startedAt: gapEnd, energy: 13), latest: nil,
+                                    charges: [smallerPart]).existing["a"], .dismiss)
+        XCTAssertEqual(planCharging([a], resumed(-902, startedAt: gapEnd, energy: 13), latest: nil,
+                                    charges: [smallerPart]).existing["a"], .dismiss)
         // TeslaMate's process for this charge, opened 20 minutes into the first session, is still learned.
         let fellBack = try update(planCharging([next(a, continued)], teslaMate(10, startedAt: sessionStart.addingTimeInterval(20 * 60)),
                                                latest: nil))
@@ -714,6 +720,14 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(unrelatedEnd.statusSessionId)
         XCTAssertEqual(unrelatedEnd.energyAddedKwh, 9)
         XCTAssertEqual(unrelatedEnd.endedAt, processEnd)
+        // Also when that process is an older row of the page, behind the session's own fragment.
+        let closedFragment = charge(id: -902, start: gapEnd, end: t0, added: 3)
+        let pagedEnd = try finish(planCharging([next(a, fellBack)], done, latest: closedFragment,
+                                               charges: [charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60),
+                                                                end: processEnd, added: 9), closedFragment]))
+        XCTAssertNil(pagedEnd.statusSessionId)
+        XCTAssertEqual(pagedEnd.energyAddedKwh, 9)
+        XCTAssertEqual(pagedEnd.endedAt, processEnd)
         // A counter well below this charge's own recorded total is a new charge; a little below,
         // the record was fetched after the status.
         let record = charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), added: 20)
@@ -820,6 +834,13 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let racing = try XCTUnwrap(planCharging([], resumed(-905, startedAt: t0.addingTimeInterval(-600), energy: 19.4),
                                                 latest: charge(id: 10, start: processStart, added: 20)).start)
         XCTAssertEqual(racing.attributes.chargeId, 10)
+
+        // A total the activity showed from TeslaMate may have been recorded after the counter was read.
+        let recorded = try started(planCharging([], teslaMate(10, startedAt: processStart),
+                                                latest: charge(id: 10, start: processStart, added: 20)), as: "r")
+        XCTAssertEqual(recorded.state.energyAddedKwh, 20)
+        XCTAssertEqual(try update(planCharging([recorded], resumed(-901, startedAt: processStart.addingTimeInterval(90 * 60),
+                                                                   energy: 19.2), latest: nil), "r").statusSessionId, -901)
 
         // An activity showing no total waits for the counter when history records the charge's.
         let bare = try started(planCharging([], teslaMate(10, startedAt: processStart), latest: nil), as: "n")
