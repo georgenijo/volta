@@ -574,6 +574,38 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(thirdStart.attributes.chargeId)
         XCTAssertNil(thirdStart.state.energyAddedKwh)
         XCTAssertEqual(thirdStart.state.supersededChargeId, 10)
+
+        // Status falls back to TeslaMate's stale process 10: kept, and 10 never becomes its identity.
+        var fallback = status()
+        fallback.activeChargeId = 10
+        fallback.chargeStartedAt = t0.addingTimeInterval(-3600)
+        guard case .update(let fellBack) = planCharging([next], fallback, latest: charge(id: 10, added: 8)).existing["b"]
+        else { return XCTFail("expected update") }
+        XCTAssertNil(fellBack.teslaMateProcessId)
+        XCTAssertNil(fellBack.energyAddedKwh)
+        let ended = LiveActivityPlanner.ChargingRunning(id: "b", attributes: replaced.attributes, state: fellBack)
+        guard case .finish(let final) = planCharging([ended], status(state: .online, charging: .complete),
+                                                      latest: charge(id: 10, end: t0, added: 8)).existing["b"]
+        else { return XCTFail("expected finish") }
+        XCTAssertNil(final.energyAddedKwh, "charge 10's totals belong to the earlier session")
+    }
+
+    func testHistoryArrivingForTheNamedProcessEnrichesTheActivity() throws {
+        var teslaMate = status()
+        teslaMate.activeChargeId = 10
+        teslaMate.chargeStartedAt = t0.addingTimeInterval(-3600)
+        let first = try XCTUnwrap(planCharging([], teslaMate, latest: nil).start)
+        XCTAssertNil(first.attributes.chargeId)
+        XCTAssertEqual(first.state.teslaMateProcessId, 10)
+        let running = LiveActivityPlanner.ChargingRunning(id: "a", attributes: first.attributes, state: first.state)
+
+        let plan = planCharging([running], teslaMate, latest: charge(id: 10, added: 12.5))
+        XCTAssertEqual(plan.existing["a"], .dismiss)
+        let enriched = try XCTUnwrap(plan.start)
+        XCTAssertEqual(enriched.attributes.chargeId, 10)
+        XCTAssertEqual(enriched.attributes.fastCharger, false)
+        XCTAssertEqual(enriched.state.energyAddedKwh, 12.5)
+        XCTAssertNil(enriched.state.supersededChargeId)
     }
 
     func testTeslaMateReportingAnotherProcessReplacesTheActivity() throws {
