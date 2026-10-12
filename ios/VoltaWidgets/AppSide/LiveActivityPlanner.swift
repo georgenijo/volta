@@ -97,6 +97,7 @@ enum LiveActivityPlanner {
                                                        previous: activity.state))
                     case .other(let identity):
                         replaced.formUnion([identity.session, identity.teslaMate, activity.attributes.chargeId].compactMap { $0 })
+                        replaced.formUnion(identity.others)
                         action = .dismiss
                     }
                 case .completed, .stopped:
@@ -118,10 +119,6 @@ enum LiveActivityPlanner {
                 identity = enriched.identity
                 history = latestCharge
                 recorded = (identity.session == nil ? history?.energyAddedKwh : nil) ?? enriched.previous.energyAddedKwh
-                if identity.session == nil, identity.teslaMate == nil, let history {
-                    if history.id < 0 { identity.session = history.id; identity.sessionStart = history.start }
-                    else { identity.teslaMate = history.id; identity.teslaMateStart = history.start }
-                }
             } else {
                 identity = ChargeIdentity(others: replaced)
                 history = latestCharge.flatMap { $0.end == nil && !replaced.contains($0.id) && startMatches(status, $0) ? $0 : nil }
@@ -190,10 +187,15 @@ enum LiveActivityPlanner {
     static func follow(_ activity: ChargingRunning, status: VehicleStatus, latestCharge: ChargeSummary?) -> ChargeFollow {
         var identity = identity(of: activity, latestCharge: latestCharge)
         let named = status.chargeStartedAt
-        if liveSession(status) == nil, let process = namedProcess(status), let known = identity.teslaMate {
-            // Two TeslaMate ids compare without a start.
-            if known != process { return .other(identity) }
-            if identity.teslaMateStart == nil { identity.teslaMateStart = named }
+        if liveSession(status) == nil, let process = namedProcess(status) {
+            if let known = identity.teslaMate {
+                // Two TeslaMate ids compare without a start.
+                if known != process { return .other(identity) }
+                if identity.teslaMateStart == nil { identity.teslaMateStart = named }
+            } else if identity.session == nil, !identity.others.contains(process) {
+                // Nothing to check it against: the named process is this charge.
+                identity.teslaMate = process; identity.teslaMateStart = named
+            }
         }
         if let session = liveSession(status), let named {
             if let known = identity.session {
@@ -232,6 +234,10 @@ enum LiveActivityPlanner {
         if activity.attributes.chargeId == nil, let open = latestCharge, open.end == nil {
             let exact = open.id == identity.session || open.id == identity.teslaMate
             let unnamed = identity.session == nil && identity.teslaMate == nil && !identity.others.contains(open.id)
+            if unnamed {
+                if open.id < 0 { identity.session = open.id; identity.sessionStart = open.start }
+                else { identity.teslaMate = open.id; identity.teslaMateStart = open.start }
+            }
             if exact || unnamed { return .enrich(identity) }
         }
         return .same(identity)

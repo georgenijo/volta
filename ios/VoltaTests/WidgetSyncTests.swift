@@ -564,6 +564,15 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let final = try finish(planCharging([next(b, stale)], status(state: .online, charging: .complete),
                                             latest: charge(id: 10, end: t0, added: 8)), "b")
         XCTAssertNil(final.energyAddedKwh, "charge 10's totals belong to the earlier session")
+
+        // Replugged again: the next activity inherits the exclusions too.
+        let again = planCharging([next(b, stale)], telemetry(-903, startedAt: t0.addingTimeInterval(-3600 + 45)),
+                                 latest: charge(id: 10, added: 8))
+        XCTAssertEqual(again.existing["b"], .dismiss)
+        let c = try XCTUnwrap(again.start)
+        XCTAssertNil(c.attributes.chargeId)
+        XCTAssertNil(c.state.energyAddedKwh)
+        XCTAssertEqual(c.state.otherChargeIds, [-902, -901, 10])
     }
 
     func testTeslaMateFallbackLearnsOnlyAProcessStartingWithTheSession() throws {
@@ -660,6 +669,30 @@ final class ChargingActivityPlannerTests: XCTestCase {
         counted.state = .online
         counted.chargingState = .complete
         XCTAssertEqual(try finish(planCharging([b], counted, latest: record), "b").energyAddedKwh, 9.4)
+    }
+
+    func testAnActivityWithoutIdsTakesTheNamedProcessAndItsRecord() throws {
+        let a = try started(planCharging([], status(), latest: nil))
+        XCTAssertNil(a.state.teslaMateChargeId)
+
+        // The status names process 11 without a start; history lists process 12, opened since.
+        var named = status()
+        named.activeChargeId = 11
+        let kept = try update(planCharging([a], named, latest: charge(id: 12, added: 0.4)))
+        XCTAssertEqual(kept.teslaMateChargeId, 11)
+        XCTAssertNil(kept.energyAddedKwh, "not process 12's record")
+
+        // With a stale status the record can't restart the activity; it updates in place and
+        // the closed record still finishes it.
+        let stale = try update(planCharging([a], status(), latest: charge(id: 10, added: 6),
+                                            now: t0.addingTimeInterval(VoltaLiveActivityTiming.chargingStaleAfter + 60)))
+        XCTAssertEqual(stale.teslaMateChargeId, 10)
+        XCTAssertEqual(stale.energyAddedKwh, 6)
+        let ended = t0.addingTimeInterval(120)
+        let final = try finish(planCharging([next(a, stale)], status(state: .online, charging: .complete),
+                                            latest: charge(id: 10, end: ended, added: 6.5)))
+        XCTAssertEqual(final.energyAddedKwh, 6.5)
+        XCTAssertEqual(final.endedAt, ended)
     }
 
     func testAnotherNamedProcessReplacesWithoutAStart() throws {
