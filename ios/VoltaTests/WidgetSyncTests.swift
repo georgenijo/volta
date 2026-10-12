@@ -746,7 +746,8 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let limitEnd = try finish(planCharging([next(a, continued)], done, latest: closedFragment,
                                                charges: [charge(id: 11, start: gapEnd.addingTimeInterval(300), end: t0),
                                                          closedFragment, toLimit]))
-        XCTAssertEqual(limitEnd.phase, .completed)
+        XCTAssertEqual(limitEnd.phase, .stopped, "the limit known may be the other charge's")
+        XCTAssertNil(limitEnd.chargeLimit)
         XCTAssertEqual(limitEnd.batteryLevel, 80)
         // Without that record either, the energy is unknown rather than the other charge's.
         XCTAssertNil(try finish(planCharging([next(a, continued)], done, latest: closedFragment,
@@ -770,6 +771,9 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                              charges: [charge(id: 11, start: gapEnd.addingTimeInterval(20 * 60)),
                                                        charge(id: -902, start: gapEnd, end: gapEnd.addingTimeInterval(600), added: 1),
                                                        firstOnly])).statusSessionId)
+        // The counter last read in the resumed session must reach the first session's total.
+        XCTAssertNil(try finish(planCharging([next(a, continued)], unplugged, latest: nil,
+                                             charges: [firstPart])).statusSessionId)
         // Without such history the continuation stands.
         XCTAssertEqual(try finish(planCharging([next(a, continued)], unplugged, latest: nil)).statusSessionId, -902)
         // Nor does an activity that started with the resumed session's record finish with it.
@@ -925,6 +929,15 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                                  charges: [dcProcess]), "ab")
         XCTAssertNil(acFallback.teslaMateChargeId)
         XCTAssertEqual(acFallback.otherChargeIds, [30])
+        // Or only after the process was learned without it.
+        let acLearned = try update(planCharging([acBlind], teslaMate(30, startedAt: processStart), latest: nil), "ab")
+        XCTAssertEqual(acLearned.teslaMateChargeId, 30)
+        onAC.chargeEnergyAddedKwh = 26
+        let acBack = try update(planCharging([next(acBlind, acLearned)], onAC, latest: dcProcess, charges: [dcProcess]), "ab")
+        XCTAssertNil(acBack.teslaMateChargeId)
+        XCTAssertEqual(acBack.statusSessionId, -908)
+        XCTAssertEqual(acBack.otherChargeIds, [30])
+        onAC.chargeEnergyAddedKwh = 25
         XCTAssertEqual(planCharging([.init(id: "ac", attributes: acStart.attributes, state: acStart.state)],
                                     teslaMate(30, startedAt: processStart), latest: nil).existing["ac"], .keep)
         onAC.fastCharger = true

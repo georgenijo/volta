@@ -234,6 +234,12 @@ enum LiveActivityPlanner {
         var identity = identity(of: activity, latestCharge: latestCharge)
         let records = charges ?? latestCharge.map { [$0] } ?? []
         let named = status.chargeStartedAt
+        // A process learned while history was away isn't this charge if it drew DC where this charge
+        // was seen on AC.
+        if let known = identity.teslaMate, activity.state.fastCharger == false,
+           records.contains(where: { $0.id == known && $0.fastCharger }) {
+            identity.others.insert(known); identity.teslaMate = nil; identity.teslaMateStart = nil
+        }
         // A session taken on as this charge part-way answers to history that arrives later, even
         // once telemetry no longer describes it.
         if liveSession(status) == nil, identity.session != nil, let adopted = adoptedAt(identity),
@@ -407,6 +413,8 @@ enum LiveActivityPlanner {
         // may have been fetched after.
         guard reaches(status.chargeEnergyAddedKwh, state.counterKwh),
               counts(status.chargeEnergyAddedKwh, toward: state.energyAddedKwh) else { return false }
+        // Without telemetry, the counter last read in the session from `start` stands for it.
+        let read = status.chargeEnergyAddedKwh ?? (liveSession(status) == nil ? state.counterKwh : nil)
         // Where the session from `start` ends, if its record shows (only the last point of a session
         // a gap split): a process beginning after that, and too late to be that session's own, is a
         // later charge.
@@ -419,7 +427,7 @@ enum LiveActivityPlanner {
             // that ended before this session began was recorded before the counter was read.
             if record.id == identity.session || identity.earlierSessions.contains(record.id) {
                 return record.end.map { $0 <= start } ?? false
-                    ? reaches(status.chargeEnergyAddedKwh, record.energyAddedKwh) : counted
+                    ? reaches(read, record.energyAddedKwh) : counted
             }
             guard record.id > 0 else { return true }
             // This charge's process ending before the session began means the charge ended; ending
@@ -560,17 +568,18 @@ enum LiveActivityPlanner {
         let counter = identity.session != nil && identity.session == liveSession(status) ? status.chargeEnergyAddedKwh : nil
         // Only a TeslaMate process: a session the activity started with may since have proved to be
         // an earlier part of the charge, or another charge.
-        let byTeslaMate = closed.first { $0.id > 0 && ($0.id == identity.teslaMate || $0.id == attributes.chargeId) }
+        let byTeslaMate = closed.first {
+            $0.id > 0 && ($0.id == identity.teslaMate || $0.id == attributes.chargeId) && !identity.others.contains($0.id)
+        }
         // A session just shown not to continue the charge left readings of another charge; only the
         // charge's own records count. Its first session measured all of it up to a single gap.
         let disowned = previous.statusSessionId != nil && identity.session == nil
         let earlier = disowned ? closed.filter { identity.earlierSessions.contains($0.id) } : []
         let firstPart = identity.sessionStartObserved && identity.earlierSessions.count == 1 ? earlier.first : nil
         let summary = bySession ?? byTeslaMate ?? ownSession ?? firstPart
-        // So did the status's phase and range; the record shows whether the charge reached its limit.
-        let reachedLimit = summary?.endBatteryLevel.flatMap { end in previous.chargeLimit.map { end >= $0 } }
+        // So did its phase, range and charge limit, which can't tell whether this charge reached its limit.
         return .init(batteryLevel: summary?.endBatteryLevel ?? status.batteryLevel,
-                     chargeLimit: status.chargeLimit ?? previous.chargeLimit,
+                     chargeLimit: disowned ? nil : status.chargeLimit ?? previous.chargeLimit,
                      chargerPowerKw: nil,
                      fullAt: nil,
                      energyAddedKwh: bySession?.energyAddedKwh ?? counter ?? byTeslaMate?.energyAddedKwh
@@ -578,7 +587,7 @@ enum LiveActivityPlanner {
                      counterKwh: counter ?? (disowned ? nil : previous.counterKwh),
                      fastCharger: previous.fastCharger,
                      rangeKm: disowned ? nil : status.estRangeKm ?? status.ratedRangeKm ?? previous.rangeKm,
-                     phase: (disowned ? reachedLimit == true : observation == .completed) ? .completed : .stopped,
+                     phase: !disowned && observation == .completed ? .completed : .stopped,
                      updatedAt: status.updatedAt,
                      endedAt: summary?.end ?? earlier.compactMap(\.end).max() ?? status.updatedAt,
                      statusSessionId: identity.session,
@@ -589,7 +598,7 @@ enum LiveActivityPlanner {
                      sessionResumed: identity.sessionResumed ? true : nil,
                      sessionResumedAt: identity.resumedAt,
                      earlierSessionIds: identity.earlierSessions.isEmpty ? nil : identity.earlierSessions.sorted(),
-                     otherChargeIds: previous.otherChargeIds)
+                     otherChargeIds: identity.others.isEmpty ? nil : identity.others.sorted())
     }
 
     // MARK: Driving
