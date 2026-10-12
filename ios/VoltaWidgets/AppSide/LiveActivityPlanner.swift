@@ -248,7 +248,8 @@ enum LiveActivityPlanner {
                                     shown: activity.state.energyAddedKwh)
                     else { return .other(identity) }
                     // Without the new session's counter a restart can't be ruled out yet.
-                    if awaitsCounter(status, shown: activity.state.energyAddedKwh) { return .unrelated(identity) }
+                    if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
+                                     latestCharge: latestCharge) { return .unrelated(identity) }
                     // The charge's start, and whether it was seen, stay those already known.
                     identity.session = session; identity.sessionResumed = true
                 } else if resumed, let start = identity.sessionStart, abs(named.timeIntervalSince(start)) < 1 {
@@ -262,7 +263,8 @@ enum LiveActivityPlanner {
                     identity.sessionStartObserved = !resumed
                 } else if resumed, continues(identity, from: named, status: status, latestCharge: latestCharge,
                                              shown: activity.state.energyAddedKwh) {
-                    if awaitsCounter(status, shown: activity.state.energyAddedKwh) { return .unrelated(identity) }
+                    if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
+                                     latestCharge: latestCharge) { return .unrelated(identity) }
                     identity.sessionStartObserved = false
                 } else {
                     return .other(identity)
@@ -280,12 +282,6 @@ enum LiveActivityPlanner {
                 guard let start = identity.sessionStart else { return .same(identity) }
                 let lag = named.timeIntervalSince(start)
                 // A session that began mid-charge may have joined a process already under way.
-                let record = latestCharge.flatMap { $0.id == process ? $0 : nil }
-                if lag < 0, !identity.sessionStartObserved, !reached(activity.state.energyAddedKwh, record) {
-                    // An earlier process whose total this charge hasn't reached is another charge.
-                    identity.others.insert(process)
-                    return .unrelated(identity)
-                }
                 if teslaMateStartLag.contains(lag) || lag < 0 && !identity.sessionStartObserved {
                     identity.teslaMate = process; identity.teslaMateStart = named
                 } else if lag > teslaMateStartLag.upperBound {
@@ -371,7 +367,7 @@ enum LiveActivityPlanner {
         // since, it closed with the charge the session resumed.
         let endedBefore = record.end.map { $0 <= start } ?? false
         // This charge's process can't total more than the car's counter for it.
-        if record.id == identity.teslaMate { return !endedBefore && reached(status.chargeEnergyAddedKwh, record) }
+        if record.id == identity.teslaMate { return !endedBefore && counts(status.chargeEnergyAddedKwh, toward: record) }
         // Another process: one started before this charge's own is older; a later one, open or
         // closed, means history has moved on.
         if identity.teslaMate != nil, let known = identity.teslaMateStart { return record.start <= known }
@@ -379,20 +375,24 @@ enum LiveActivityPlanner {
         let lag = record.start.timeIntervalSince(own)
         if lag < teslaMateStartLag.lowerBound { return true }
         // Starting with this charge, it is this charge's process.
-        return lag <= teslaMateStartLag.upperBound && !endedBefore && reached(status.chargeEnergyAddedKwh, record)
+        return lag <= teslaMateStartLag.upperBound && !endedBefore && counts(status.chargeEnergyAddedKwh, toward: record)
     }
 
-    /// Whether a total shown for this charge has reached a record's, as it must if the record is
-    /// this charge's; true when either is unknown.
-    static func reached(_ shown: Double?, _ record: ChargeSummary?) -> Bool {
-        guard let shown, let total = record?.energyAddedKwh else { return true }
-        return shown >= total - counterSlack
+    /// Whether the car's counter fits a record of the same charge, fetched just after the status:
+    /// such a record may run slightly ahead, while a new charge restarts the counter well below
+    /// the old total. True when either is unknown.
+    static func counts(_ counter: Double?, toward record: ChargeSummary?) -> Bool {
+        guard let counter, let total = record?.energyAddedKwh else { return true }
+        return counter >= total / 2 || counter >= total - counterSlack
     }
 
     /// Whether a session that began mid-charge must wait for its counter before it can continue a
-    /// charge showing a total: only the counter tells a resumed charge from a new one.
-    static func awaitsCounter(_ status: VehicleStatus, shown: Double?) -> Bool {
-        status.chargeEnergyAddedKwh == nil && shown != nil
+    /// charge with a known total, shown or recorded: only the counter tells a resumed charge from
+    /// a new one.
+    static func awaitsCounter(_ status: VehicleStatus, identity: ChargeIdentity, shown: Double?,
+                              latestCharge: ChargeSummary?) -> Bool {
+        let recorded = latestCharge.flatMap { $0.id == identity.teslaMate || $0.id == identity.session ? $0.energyAddedKwh : nil }
+        return status.chargeEnergyAddedKwh == nil && (shown ?? recorded) != nil
     }
 
     /// Whether a TeslaMate process started before this activity's charge: before its own
@@ -437,10 +437,9 @@ enum LiveActivityPlanner {
         return true
     }
 
-    /// Whether the car's counter has reached the record's total, as it must if the record is this charge's.
+    /// Whether the status's counter fits the record as this charge's; false without a counter.
     static func countsAtLeast(_ status: VehicleStatus, _ charge: ChargeSummary) -> Bool {
-        guard let counter = status.chargeEnergyAddedKwh else { return false }
-        return charge.energyAddedKwh.map { counter >= $0 - counterSlack } ?? true
+        status.chargeEnergyAddedKwh != nil && counts(status.chargeEnergyAddedKwh, toward: charge)
     }
 
     /// Final content: no power or countdown, the end time, and the last known totals.

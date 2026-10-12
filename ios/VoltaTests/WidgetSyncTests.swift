@@ -698,10 +698,16 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                                                            end: t0, added: 13.6)))
         XCTAssertEqual(unlearned.energyAddedKwh, 14)
         XCTAssertEqual(unlearned.statusSessionId, -902)
-        // A counter below this charge's own recorded total is a new charge.
-        XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 12),
-                                    latest: charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), added: 20))
+        // A counter well below this charge's own recorded total is a new charge; a little below,
+        // the record was fetched after the status.
+        let record = charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), added: 20)
+        XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 3), latest: record)
             .existing["a"], .dismiss)
+        // (The record also enriches the activity, which started without history.)
+        let ahead = try XCTUnwrap(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 19.2), latest: record).start)
+        XCTAssertEqual(ahead.state.statusSessionId, -903)
+        XCTAssertEqual(ahead.state.teslaMateChargeId, 10)
+        XCTAssertEqual(ahead.state.sessionStartedAt, sessionStart)
         // Waiting for a counter doesn't hold an activity whose process ended before the session.
         XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0),
                                     latest: charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), end: gapEnd))
@@ -755,14 +761,16 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let quiet = planCharging([.init(id: "f", attributes: fresh.attributes, state: fresh.state)],
                                  teslaMate(10, startedAt: processStart), latest: nil)
         XCTAssertEqual(quiet.existing["f"], .keep)
-        let d = try started(planCharging([], resumed(-905, startedAt: t0.addingTimeInterval(-600), energy: 0.2), latest: nil), as: "d")
-        let rejected = try update(planCharging([d], teslaMate(10, startedAt: processStart),
-                                               latest: charge(id: 10, start: processStart, added: 20)), "d")
-        XCTAssertNil(rejected.teslaMateChargeId)
-        XCTAssertEqual(rejected.otherChargeIds, [10])
-        XCTAssertEqual(rejected.updatedAt, d.state.updatedAt)
-        // Remembered, so a later refresh without history doesn't adopt it.
-        XCTAssertEqual(planCharging([next(d, rejected)], teslaMate(10, startedAt: processStart), latest: nil).existing["d"], .keep)
+        // History fetched just after the status may run a little ahead of the counter.
+        let racing = try XCTUnwrap(planCharging([], resumed(-905, startedAt: t0.addingTimeInterval(-600), energy: 19.4),
+                                                latest: charge(id: 10, start: processStart, added: 20)).start)
+        XCTAssertEqual(racing.attributes.chargeId, 10)
+
+        // An activity showing no total waits for the counter when history records the charge's.
+        let bare = try started(planCharging([], teslaMate(10, startedAt: processStart), latest: nil), as: "n")
+        XCTAssertNil(bare.state.energyAddedKwh)
+        XCTAssertEqual(planCharging([bare], resumed(-906, startedAt: processStart.addingTimeInterval(90 * 60)),
+                                    latest: charge(id: 10, start: processStart, added: 8)).existing["n"], .keep)
 
         // An activity tracking the session before the status reported its start unobserved learns it.
         let legacy = try started(planCharging([], telemetry(-901, startedAt: processStart.addingTimeInterval(90 * 60), energy: 14),
