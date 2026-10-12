@@ -402,6 +402,8 @@ enum LiveActivityPlanner {
         // may have been fetched after.
         guard reaches(status.chargeEnergyAddedKwh, state.counterKwh),
               counts(status.chargeEnergyAddedKwh, toward: state.energyAddedKwh) else { return false }
+        // Once the session from `start` has ended, a charge beginning after it is a later one.
+        let ended = records.first { $0.id == identity.session }?.end.flatMap { $0 > start ? $0 : nil }
         return records.allSatisfy { record in
             guard !identity.others.contains(record.id) else { return true }
             // This charge's record can't total much more than the car's counter for it.
@@ -417,7 +419,8 @@ enum LiveActivityPlanner {
             // since, it closed with the charge the session resumed.
             if isThisCharge(record, identity) { return counted && !(record.end.map { $0 <= start } ?? false) }
             // Another process: one started before this charge's own is older; a later one, open or
-            // closed, means history has moved on.
+            // closed, means history has moved on, unless it began after the session ended.
+            if let ended, record.start >= ended { return true }
             if identity.teslaMate != nil, let known = identity.teslaMateStart { return record.start <= known }
             guard let own else { return true }
             return record.start.timeIntervalSince(own) < teslaMateStartLag.lowerBound
@@ -443,13 +446,15 @@ enum LiveActivityPlanner {
 
     /// Remembers each open TeslaMate process on the history page that started before a session
     /// which began mid-charge as another charge when the session's counter sits well below its
-    /// total, so a later fallback to that process doesn't adopt it.
+    /// total or it drew DC while the session charges on AC, so a later fallback to that process
+    /// doesn't adopt it.
     static func rejectEarlierProcesses(_ identity: inout ChargeIdentity, status: VehicleStatus,
                                        records: [ChargeSummary]) {
-        guard !identity.sessionStartObserved, identity.teslaMate == nil, let start = identity.sessionStart,
-              status.chargeEnergyAddedKwh != nil else { return }
-        for open in records where open.end == nil && open.id > 0 && open.start < start
-            && !identity.others.contains(open.id) && !counts(status.chargeEnergyAddedKwh, toward: open.energyAddedKwh) {
+        guard !identity.sessionStartObserved, identity.teslaMate == nil, let start = identity.sessionStart else { return }
+        let onAC = chargerKind(status) == false
+        for open in records where open.end == nil && open.id > 0 && open.start < start && !identity.others.contains(open.id)
+            && (status.chargeEnergyAddedKwh != nil && !counts(status.chargeEnergyAddedKwh, toward: open.energyAddedKwh)
+                || onAC && open.fastCharger) {
             identity.others.insert(open.id)
         }
     }

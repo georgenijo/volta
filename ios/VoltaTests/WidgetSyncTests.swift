@@ -759,6 +759,12 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(unpluggedEnd.statusSessionId)
         XCTAssertEqual(unpluggedEnd.energyAddedKwh, 5)
         XCTAssertEqual(unpluggedEnd.endedAt, firstOnly.end)
+        // A charge that began after the resumed session ended says nothing against it.
+        let laterCharge = try finish(planCharging([next(a, continued)], unplugged, latest: nil,
+                                                  charges: [charge(id: 11, start: t0.addingTimeInterval(1800), end: t0.addingTimeInterval(3600)),
+                                                            closedFragment, firstOnly]))
+        XCTAssertEqual(laterCharge.statusSessionId, -902)
+        XCTAssertEqual(laterCharge.endedAt, closedFragment.end)
         // Without such history the continuation stands.
         XCTAssertEqual(try finish(planCharging([next(a, continued)], unplugged, latest: nil)).statusSessionId, -902)
         // Nor does an activity that started with the resumed session's record finish with it.
@@ -906,6 +912,9 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let acStart = try XCTUnwrap(planCharging([], onAC, latest: dcProcess).start)
         XCTAssertNil(acStart.attributes.chargeId)
         XCTAssertNil(acStart.attributes.fastCharger)
+        XCTAssertEqual(acStart.state.otherChargeIds, [30])
+        XCTAssertEqual(planCharging([.init(id: "ac", attributes: acStart.attributes, state: acStart.state)],
+                                    teslaMate(30, startedAt: processStart), latest: nil).existing["ac"], .keep)
         onAC.fastCharger = true
         XCTAssertEqual(try XCTUnwrap(planCharging([], onAC, latest: dcProcess).start).attributes.chargeId, 30)
         // History fetched just after the status may run a little ahead of the counter.
