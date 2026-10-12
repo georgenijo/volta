@@ -280,9 +280,13 @@ enum LiveActivityPlanner {
                 guard let start = identity.sessionStart else { return .same(identity) }
                 let lag = named.timeIntervalSince(start)
                 // A session that began mid-charge may have joined a process already under way.
-                let joined = lag < 0 && !identity.sessionStartObserved
-                    && reached(activity.state.energyAddedKwh, latestCharge.flatMap { $0.id == process ? $0 : nil })
-                if teslaMateStartLag.contains(lag) || joined {
+                let record = latestCharge.flatMap { $0.id == process ? $0 : nil }
+                if lag < 0, !identity.sessionStartObserved, !reached(activity.state.energyAddedKwh, record) {
+                    // An earlier process whose total this charge hasn't reached is another charge.
+                    identity.others.insert(process)
+                    return .unrelated(identity)
+                }
+                if teslaMateStartLag.contains(lag) || lag < 0 && !identity.sessionStartObserved {
                     identity.teslaMate = process; identity.teslaMateStart = named
                 } else if lag > teslaMateStartLag.upperBound {
                     return .other(identity)
@@ -366,7 +370,8 @@ enum LiveActivityPlanner {
         // This charge's process ending before the session began means the charge ended; ending
         // since, it closed with the charge the session resumed.
         let endedBefore = record.end.map { $0 <= start } ?? false
-        if record.id == identity.teslaMate { return !endedBefore }
+        // This charge's process can't total more than the car's counter for it.
+        if record.id == identity.teslaMate { return !endedBefore && reached(status.chargeEnergyAddedKwh, record) }
         // Another process: one started before this charge's own is older; a later one, open or
         // closed, means history has moved on.
         if identity.teslaMate != nil, let known = identity.teslaMateStart { return record.start <= known }
@@ -374,7 +379,7 @@ enum LiveActivityPlanner {
         let lag = record.start.timeIntervalSince(own)
         if lag < teslaMateStartLag.lowerBound { return true }
         // Starting with this charge, it is this charge's process.
-        return lag <= teslaMateStartLag.upperBound && !endedBefore
+        return lag <= teslaMateStartLag.upperBound && !endedBefore && reached(status.chargeEnergyAddedKwh, record)
     }
 
     /// Whether a total shown for this charge has reached a record's, as it must if the record is

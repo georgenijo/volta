@@ -698,6 +698,10 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                                                            end: t0, added: 13.6)))
         XCTAssertEqual(unlearned.energyAddedKwh, 14)
         XCTAssertEqual(unlearned.statusSessionId, -902)
+        // A counter below this charge's own recorded total is a new charge.
+        XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0, energy: 12),
+                                    latest: charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), added: 20))
+            .existing["a"], .dismiss)
         // Waiting for a counter doesn't hold an activity whose process ended before the session.
         XCTAssertEqual(planCharging([next(a, fellBack)], resumed(-903, startedAt: t0),
                                     latest: charge(id: 10, start: sessionStart.addingTimeInterval(20 * 60), end: gapEnd))
@@ -752,8 +756,13 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                  teslaMate(10, startedAt: processStart), latest: nil)
         XCTAssertEqual(quiet.existing["f"], .keep)
         let d = try started(planCharging([], resumed(-905, startedAt: t0.addingTimeInterval(-600), energy: 0.2), latest: nil), as: "d")
-        XCTAssertEqual(planCharging([d], teslaMate(10, startedAt: processStart), latest: charge(id: 10, start: processStart, added: 20))
-            .existing["d"], .keep)
+        let rejected = try update(planCharging([d], teslaMate(10, startedAt: processStart),
+                                               latest: charge(id: 10, start: processStart, added: 20)), "d")
+        XCTAssertNil(rejected.teslaMateChargeId)
+        XCTAssertEqual(rejected.otherChargeIds, [10])
+        XCTAssertEqual(rejected.updatedAt, d.state.updatedAt)
+        // Remembered, so a later refresh without history doesn't adopt it.
+        XCTAssertEqual(planCharging([next(d, rejected)], teslaMate(10, startedAt: processStart), latest: nil).existing["d"], .keep)
 
         // An activity tracking the session before the status reported its start unobserved learns it.
         let legacy = try started(planCharging([], telemetry(-901, startedAt: processStart.addingTimeInterval(90 * 60), energy: 14),
