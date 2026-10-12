@@ -311,6 +311,11 @@ enum LiveActivityPlanner {
                 let lag = named.timeIntervalSince(start)
                 // A session that began mid-charge may have joined a process already under way.
                 if teslaMateStartLag.contains(lag) || lag < 0 && !identity.sessionStartObserved {
+                    // Not a process that drew DC when this charge was seen on AC.
+                    if activity.state.fastCharger == false, records.contains(where: { $0.id == process && $0.fastCharger }) {
+                        identity.others.insert(process)
+                        return .unrelated(identity)
+                    }
                     identity.teslaMate = process; identity.teslaMateStart = named
                 } else if lag > teslaMateStartLag.upperBound {
                     return .other(identity)
@@ -402,7 +407,9 @@ enum LiveActivityPlanner {
         // may have been fetched after.
         guard reaches(status.chargeEnergyAddedKwh, state.counterKwh),
               counts(status.chargeEnergyAddedKwh, toward: state.energyAddedKwh) else { return false }
-        // Once the session from `start` has ended, a charge beginning after it is a later one.
+        // Where the session from `start` ends, if its record shows (only the last point of a session
+        // a gap split): a process beginning after that, and too late to be that session's own, is a
+        // later charge.
         let ended = records.first { $0.id == identity.session }?.end.flatMap { $0 > start ? $0 : nil }
         return records.allSatisfy { record in
             guard !identity.others.contains(record.id) else { return true }
@@ -420,7 +427,7 @@ enum LiveActivityPlanner {
             if isThisCharge(record, identity) { return counted && !(record.end.map { $0 <= start } ?? false) }
             // Another process: one started before this charge's own is older; a later one, open or
             // closed, means history has moved on, unless it began after the session ended.
-            if let ended, record.start >= ended { return true }
+            if let ended, record.start >= ended, !sameCharge(teslaMateStart: record.start, sessionStart: start) { return true }
             if identity.teslaMate != nil, let known = identity.teslaMateStart { return record.start <= known }
             guard let own else { return true }
             return record.start.timeIntervalSince(own) < teslaMateStartLag.lowerBound

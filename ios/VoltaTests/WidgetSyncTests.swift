@@ -765,6 +765,11 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                                             closedFragment, firstOnly]))
         XCTAssertEqual(laterCharge.statusSessionId, -902)
         XCTAssertEqual(laterCharge.endedAt, closedFragment.end)
+        // But a process opening soon after that session began is its own charge's, however its record ends.
+        XCTAssertNil(try finish(planCharging([next(a, continued)], unplugged, latest: nil,
+                                             charges: [charge(id: 11, start: gapEnd.addingTimeInterval(20 * 60)),
+                                                       charge(id: -902, start: gapEnd, end: gapEnd.addingTimeInterval(600), added: 1),
+                                                       firstOnly])).statusSessionId)
         // Without such history the continuation stands.
         XCTAssertEqual(try finish(planCharging([next(a, continued)], unplugged, latest: nil)).statusSessionId, -902)
         // Nor does an activity that started with the resumed session's record finish with it.
@@ -913,6 +918,13 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(acStart.attributes.chargeId)
         XCTAssertNil(acStart.attributes.fastCharger)
         XCTAssertEqual(acStart.state.otherChargeIds, [30])
+        // Also when that record first arrives as telemetry falls back to its process.
+        let acBlind = try started(planCharging([], onAC, latest: nil), as: "ab")
+        XCTAssertEqual(acBlind.state.fastCharger, false)
+        let acFallback = try update(planCharging([acBlind], teslaMate(30, startedAt: processStart), latest: dcProcess,
+                                                 charges: [dcProcess]), "ab")
+        XCTAssertNil(acFallback.teslaMateChargeId)
+        XCTAssertEqual(acFallback.otherChargeIds, [30])
         XCTAssertEqual(planCharging([.init(id: "ac", attributes: acStart.attributes, state: acStart.state)],
                                     teslaMate(30, startedAt: processStart), latest: nil).existing["ac"], .keep)
         onAC.fastCharger = true
