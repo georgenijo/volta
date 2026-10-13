@@ -992,6 +992,14 @@ final class ChargingActivityPlannerTests: XCTestCase {
         retained.telemetryFreshness?.recordedAt["DCChargingEnergyIn"] = t0.addingTimeInterval(-8 * 60)
         XCTAssertNil(try XCTUnwrap(planCharging([], retained, latest: charge(id: 10, start: processStart, added: 25)).start)
             .state.otherChargeIds)
+        // Nor does a counter kept through an outage keep a late session from the process it joined.
+        let underWay = try started(planCharging([], teslaMate(12, startedAt: processStart),
+                                                latest: charge(id: 12, start: processStart, added: 6)), as: "j")
+        var rejoined = resumed(-916, startedAt: processStart.addingTimeInterval(90 * 60), energy: 6)
+        rejoined.fastCharger = true
+        rejoined.telemetryFreshness?.recordedAt["DCChargingEnergyIn"] = t0.addingTimeInterval(-8 * 60)
+        XCTAssertEqual(try update(planCharging([underWay], rejoined, latest: charge(id: 12, start: processStart, added: 25)), "j")
+            .statusSessionId, -916)
         // A process just ahead of a counter sampled a little earlier is still learned.
         let sampled = try started(planCharging([], resumed(-909, startedAt: t0.addingTimeInterval(-600), energy: 20),
                                                latest: nil), as: "m")

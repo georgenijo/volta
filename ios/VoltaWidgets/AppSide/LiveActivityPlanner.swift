@@ -264,7 +264,7 @@ enum LiveActivityPlanner {
         // A session taken on as this charge part-way answers to history that arrives later, even
         // once telemetry no longer describes it.
         if liveSession(status) == nil, identity.session != nil, let adopted = adoptedAt(identity),
-           !continues(identity, from: adopted, status: status, records: records, showing: shown) {
+           !continues(identity, from: adopted, status: status, records: records, showing: shown, now: now) {
             identity.session = nil
             return .other(identity)
         }
@@ -288,7 +288,7 @@ enum LiveActivityPlanner {
                 if known != session {
                     guard resumed, !identity.others.contains(session),
                           continues(identity, from: named, status: status, records: records,
-                                    showing: shown)
+                                    showing: shown, now: now)
                     else { return .other(identity) }
                     // Without the new session's counter a restart can't be ruled out yet.
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
@@ -300,7 +300,7 @@ enum LiveActivityPlanner {
                     // A session taken on as this charge part-way answers to history that arrives later.
                     if adoptedAt(identity) != nil,
                        !continues(identity, from: named, status: status, records: records,
-                                  showing: shown) {
+                                  showing: shown, now: now) {
                         identity.session = nil  // the session belongs to the charge replacing this one
                         return .other(identity)
                     }
@@ -315,7 +315,7 @@ enum LiveActivityPlanner {
                 if let start = identity.teslaMateStart, sameCharge(teslaMateStart: start, sessionStart: named) {
                     identity.sessionStartObserved = !resumed
                 } else if resumed, continues(identity, from: named, status: status, records: records,
-                                             showing: shown) {
+                                             showing: shown, now: now) {
                     if awaitsCounter(status, identity: identity, shown: activity.state.energyAddedKwh,
                                      records: records) { return .unrelated(identity) }
                     identity.sessionStartObserved = false
@@ -447,14 +447,22 @@ enum LiveActivityPlanner {
     /// below what the activity read or shows, and no history record says the charge ended or
     /// another began.
     static func continues(_ identity: ChargeIdentity, from start: Date, status: VehicleStatus,
-                          records: [ChargeSummary], showing state: ChargingActivityAttributes.ContentState) -> Bool {
+                          records: [ChargeSummary], showing state: ChargingActivityAttributes.ContentState,
+                          now: Date) -> Bool {
         let own = [identity.sessionStart, identity.teslaMateStart].compactMap { $0 }.min()
         if let own, start.timeIntervalSince(own) < teslaMateStartLag.lowerBound { return false }
         if let was = state.fastCharger, let now = chargerKind(status), was != now { return false }
+        // A total that grew since the counter was sampled says nothing of a restart; without the
+        // sample's time, the counter is taken as read with the status.
+        let onAC = chargerKind(status) == false
+        func fitsCounter(_ total: Double?, at time: Date) -> Bool {
+            guard let sampled = counterAt(status) else { return counts(status.chargeEnergyAddedKwh, toward: total) }
+            return !outruns(total, counter: status.chargeEnergyAddedKwh, at: sampled, onAC: onAC, now: time)
+        }
         // The counter the activity last read came before this reading; a recorded total it shows
         // may have been fetched after.
         guard reaches(status.chargeEnergyAddedKwh, state.counterKwh),
-              counts(status.chargeEnergyAddedKwh, toward: state.energyAddedKwh) else { return false }
+              fitsCounter(state.energyAddedKwh, at: state.updatedAt) else { return false }
         // Without telemetry, the counter last read in the session from `start` stands for it.
         let read = status.chargeEnergyAddedKwh ?? (liveSession(status) == nil ? state.counterKwh : nil)
         // Where the session from `start` ends, if its record shows (only the last point of a session
@@ -464,7 +472,7 @@ enum LiveActivityPlanner {
         return records.allSatisfy { record in
             guard !identity.others.contains(record.id) else { return true }
             // This charge's record can't total much more than the car's counter for it.
-            let counted = counts(status.chargeEnergyAddedKwh, toward: record.energyAddedKwh)
+            let counted = fitsCounter(record.energyAddedKwh, at: now)
             // The car's counter runs on through a gap, so it covers every session of this charge; one
             // that ended before this session began was recorded before the counter was read.
             if record.id == identity.session || identity.earlierSessions.contains(record.id) {
