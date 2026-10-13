@@ -121,13 +121,36 @@ func (o *OAuth) Start(device string) (string, time.Time, *Result) {
 		r := failure(400, "invalid_device", "A paired device is required.")
 		return "", time.Time{}, &r
 	}
-	if t := o.store.tokens(); (o.unsaved != nil && !o.unsaved.ReauthRequired) || (t != nil && !t.ReauthRequired) {
+	if err := o.persist(); err != nil {
+		return "", time.Time{}, err
+	}
+	t := o.store.tokens()
+	// Missing command consent is an in-place upgrade. Keep the working read
+	// account until a new exchange succeeds; cancellation never disconnects it.
+	upgrade := o.c.Mode == "live" && o.c.Enabled && t != nil && !hasCommandScopes(t)
+	if t != nil && !t.ReauthRequired && !upgrade {
 		r := failure(409, "already_authorized", "A Tesla account is already connected; disconnect it before changing accounts.")
 		return "", time.Time{}, &r
 	}
+	upgradeSubject, upgradeLinkID := "", ""
+	if upgrade {
+		upgradeSubject = tokenSubject(t.Access)
+		if upgradeSubject == "" {
+			r := failure(409, "already_authorized", "Cannot verify the connected account for a consent upgrade; disconnect before signing in again.")
+			return "", time.Time{}, &r
+		}
+		upgradeLinkID = t.LinkID
+		if upgradeLinkID == "" {
+			upgradeLinkID = randomString()
+		}
+	}
 	state, verifier, expires := randomString(), randomString(), time.Now().Add(linkLifetime)
 	if err := o.store.update(func(d *diskState) {
-		d.Link = &PendingLink{StateHash: hash(state), Verifier: verifier, Device: device, Expires: expires}
+		if upgrade {
+			d.Tokens.LinkID = upgradeLinkID
+		}
+		d.Link = &PendingLink{StateHash: hash(state), Verifier: verifier, Device: device, Expires: expires,
+			UpgradeSubject: upgradeSubject, UpgradeLinkID: upgradeLinkID}
 		d.Outcome = nil
 	}); err != nil {
 		r := failure(503, "storage_unavailable", "Cannot safely start sign-in.")
@@ -217,7 +240,15 @@ func (o *OAuth) finish(ctx context.Context, l *PendingLink, code, providerError 
 		}
 		return *errResult
 	}
-	t.LinkID = randomString()
+	if l.UpgradeSubject != "" {
+		old := o.store.tokens()
+		if old == nil || old.LinkID != l.UpgradeLinkID || tokenSubject(old.Access) != l.UpgradeSubject || tokenSubject(t.Access) != l.UpgradeSubject {
+			return failure(409, "already_authorized", "The consent upgrade must use the connected Tesla account.")
+		}
+		t.LinkID, t.FleetBase = old.LinkID, old.FleetBase
+	} else {
+		t.LinkID = randomString()
+	}
 	o.unsaved = t
 	if err := o.persist(); err != nil {
 		// Never keep an unsaved new account; the earlier state stays on disk.
@@ -227,7 +258,9 @@ func (o *OAuth) finish(ctx context.Context, l *PendingLink, code, providerError 
 	o.account.Add(1)
 	// The refresh token is saved first; a failed region lookup is retried on
 	// first use and never needs another authorization-code exchange.
-	_ = o.discover(ctx, t)
+	if t.FleetBase == "" {
+		_ = o.discover(ctx, t)
+	}
 	return Result{Status: 200, OK: true}
 }
 
@@ -277,6 +310,11 @@ func (o *OAuth) Token(ctx context.Context) (*Tokens, *Result) {
 		}
 		o.stale = false
 		fresh.FleetBase, fresh.LinkID = t.FleetBase, t.LinkID
+		// OAuth refresh responses may omit unchanged scope metadata. Prefer
+		// the fresh token's own claims whenever available.
+		if fresh.Scope == "" && !tokenHasScopeClaim(fresh.Access) {
+			fresh.Scope = t.Scope
+		}
 		o.unsaved = fresh
 		if err := o.persist(); err != nil {
 			return nil, err
@@ -310,6 +348,7 @@ func (o *OAuth) exchange(ctx context.Context, form url.Values) (*Tokens, *Result
 	}
 	var body struct {
 		Access  string `json:"access_token"`
+		Scope   string `json:"scope"`
 		Refresh string `json:"refresh_token"`
 		Expires int    `json:"expires_in"`
 	}
@@ -317,7 +356,7 @@ func (o *OAuth) exchange(ctx context.Context, form url.Values) (*Tokens, *Result
 		r := failure(502, "oauth_invalid_response", "Tesla returned an invalid authorization response.")
 		return nil, &r
 	}
-	return &Tokens{Access: body.Access, Refresh: body.Refresh, Expires: time.Now().Add(time.Duration(body.Expires) * time.Second)}, nil
+	return &Tokens{Access: body.Access, Refresh: body.Refresh, Scope: body.Scope, Expires: time.Now().Add(time.Duration(body.Expires) * time.Second)}, nil
 }
 
 func (o *OAuth) discover(ctx context.Context, t *Tokens) *Result {

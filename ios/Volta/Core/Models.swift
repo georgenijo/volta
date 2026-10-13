@@ -73,6 +73,9 @@ struct VehicleStatus: Codable, Hashable, Sendable {
     var sentryMode: Bool?
     var odometerKm: Double?
     var location: Location?
+    /// Timestamp of the position row itself. Other status timestamps must not
+    /// be used to infer location freshness for physical commands.
+    var locationUpdatedAt: Date? = nil
     var firmware: String?
     var packTempMaxC: Double? = nil
     var packTempMinC: Double? = nil

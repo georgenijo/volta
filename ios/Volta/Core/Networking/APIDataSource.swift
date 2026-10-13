@@ -1,17 +1,20 @@
 import Foundation
+import CryptoKit
 
 /// The HTTPS Volta endpoint. Redirects are rejected so tokens cannot cross hosts.
 struct APIDataSource: VoltaDataSource {
     let baseURL: URL
     private let token: String
     private let session: URLSession
+    private let commandSession: URLSession
     private let onUnauthorized: @Sendable () async -> Void
 
-    init(baseURL: URL, token: String, session: URLSession? = nil,
+    init(baseURL: URL, token: String, session: URLSession? = nil, commandSession: URLSession? = nil,
          onUnauthorized: @escaping @Sendable () async -> Void = {}) {
         self.baseURL = baseURL
         self.token = token
         self.session = session ?? Self.sharedSession
+        self.commandSession = commandSession ?? session ?? Self.sharedCommandSession
         self.onUnauthorized = onUnauthorized
     }
 
@@ -40,6 +43,7 @@ struct APIDataSource: VoltaDataSource {
     }
 
     private static let sharedSession = makeSession()
+    private static let sharedCommandSession = makeCommandSession()
 
     private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
@@ -50,7 +54,17 @@ struct APIDataSource: VoltaDataSource {
         return URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
     }
 
+    private static func makeCommandSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 90
+        config.urlCache = nil
+        config.httpCookieStorage = nil
+        return URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
+    }
+
     private struct ErrorEnvelope: Decodable { let error: Payload; struct Payload: Decodable { let code: String; let message: String } }
+    private struct CommandEnvelope: Decodable { let ok: Bool; let command: String; let requestId: String }
 
     private func request(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: Data? = nil, authenticated: Bool = true) async throws -> Data {
         _ = try Self.validatedServerURL(baseURL.absoluteString)
@@ -134,9 +148,85 @@ struct APIDataSource: VoltaDataSource {
     func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { try await get("vehicles/\(vehicleID)/mileage", query: [.init(name: "bucket", value: bucket.rawValue)]) }
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { try await get("vehicles/\(vehicleID)/firmware") }
     func places(vehicleID: Int) async throws -> [Place] { try await get("vehicles/\(vehicleID)/places") }
-    func command(vehicleID: Int, name: String, params: [String: String]) async throws {
-        // Phase 1 never sends a vehicle command.
-        throw VoltaError.commandsUnavailable
+    var commandBackendID: String {
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        let scheme = components?.scheme?.lowercased()
+        let host = components?.host?.lowercased()
+        components?.scheme = scheme
+        components?.host = host
+        components?.path = ""
+        components?.query = nil
+        components?.fragment = nil
+        let normalized = components?.url?.absoluteString ?? baseURL.absoluteString
+        let digest = SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "\(normalized)#device:\(digest)"
+    }
+    func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities {
+        try await get("vehicles/\(vehicleID)/commands")
+    }
+    func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult {
+        let body: Data
+        do { body = try command.encodedBody() }
+        catch {
+            throw VehicleCommandFailure(status: nil, code: "invalid_params", requestID: nil,
+                                        retryAfter: nil, replayed: false)
+        }
+        _ = try Self.validatedServerURL(baseURL.absoluteString)
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        components.path = "/v1/vehicles/\(vehicleID)/commands/\(command.name)"
+        guard let url = components.url else {
+            throw VehicleCommandFailure(status: nil, code: "invalid_command", requestID: nil,
+                                        retryAfter: nil, replayed: false)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(intentID.uuidString, forHTTPHeaderField: "Idempotency-Key")
+        request.timeoutInterval = 90
+        do {
+            let (data, rawResponse) = try await commandSession.data(for: request)
+            guard let response = rawResponse as? HTTPURLResponse else {
+                throw VehicleCommandFailure(status: nil, code: "command_outcome_unknown", requestID: nil,
+                                            retryAfter: nil, replayed: false)
+            }
+            let replayed = response.value(forHTTPHeaderField: "Idempotency-Replayed")?.lowercased() == "true"
+            let retryAfter = response.value(forHTTPHeaderField: "Retry-After")
+            guard (200..<300).contains(response.statusCode) else {
+                let envelope = try? Self.makeDecoder().decode(ErrorEnvelope.self, from: data)
+                throw VehicleCommandFailure(status: response.statusCode,
+                                            code: envelope?.error.code ?? "command_outcome_unknown",
+                                            requestID: Self.requestID(in: data), retryAfter: retryAfter,
+                                            replayed: replayed)
+            }
+            guard let envelope = try? Self.makeDecoder().decode(CommandEnvelope.self, from: data), envelope.ok,
+                  envelope.command == command.name, Self.validRequestID(envelope.requestId) else {
+                throw VehicleCommandFailure(status: response.statusCode, code: "command_outcome_unknown",
+                                            requestID: Self.requestID(in: data), retryAfter: retryAfter,
+                                            replayed: replayed)
+            }
+            return VehicleCommandResult(command: envelope.command, requestID: envelope.requestId, replayed: replayed)
+        } catch let failure as VehicleCommandFailure {
+            throw failure
+        } catch {
+            // Once a physical-command POST begins, transport and cancellation
+            // cannot prove whether Tesla acted. Preserve the same saved intent.
+            throw VehicleCommandFailure(status: nil, code: "command_outcome_unknown", requestID: nil,
+                                        retryAfter: nil, replayed: false)
+        }
+    }
+
+    private static func requestID(in data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["requestId"] as? String
+    }
+
+    private static func validRequestID(_ value: String) -> Bool {
+        (1...128).contains(value.count) && value.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-"
+        }
     }
 }
 

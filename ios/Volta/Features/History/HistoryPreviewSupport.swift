@@ -19,7 +19,6 @@ struct HistoryPreviewFailingSource: VoltaDataSource {
     func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { try await base.mileage(vehicleID: vehicleID, bucket: bucket) }
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { try await base.firmware(vehicleID: vehicleID) }
     func places(vehicleID: Int) async throws -> [Place] { try await base.places(vehicleID: vehicleID) }
-    func command(vehicleID: Int, name: String, params: [String: String]) async throws { throw VoltaError.commandsUnavailable }
 }
 
 extension MockDataSource {

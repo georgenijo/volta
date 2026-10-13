@@ -1,8 +1,8 @@
 # volta-api → commander integration
 
-This worker owns only `commander/` and `deploy/commander/`. The backend worker
-should keep Phase 1's `501 commands_unavailable` until George completes setup
-and explicitly enables Phase 2. Do not reuse or read TeslaMate credentials.
+The app, volta-api and commander share the typed contract below. Commands stay
+disabled until the live-controls overlay is applied and the owner grants command
+consent. TeslaMate remains read-only; never reuse its credentials for commands.
 
 ## Backend contract
 
@@ -50,43 +50,39 @@ Backend responsibilities:
    `Idempotency-Replayed`. A successful replay has `Idempotency-Replayed: true`.
    Do not automatically retry physical commands with a new key. A transport
    timeout after sending must surface `command_outcome_unknown`.
-5. Refresh observed status after a command without assuming execution from
+5. Accept success only with `X-Volta-Command-Mode: live` on the command reply.
+   Readiness may race a service restart; stub replies are never real execution.
+6. Refresh observed status after a command without assuming execution from
    TeslaMate's lagging history. Phase 1's TeslaMate collector remains read-only.
    `wake_up` success means **wake request accepted**, not confirmed online; only
    commander's automatic wake/retry path polls for online. Stub health includes
    `mode: "stub"`; never present stub success as actual vehicle control.
 
-### Required additive Phase 2 iOS seam (owned by the iOS/backend workers)
+### Capabilities and typed requests
 
-The current `VoltaDataSource.command(vehicleID:name:params:)` uses
-`[String: String]` and has no intent key. It is the Phase 1 disabled contract;
-it cannot call commander unchanged. Keep that existing method unavailable, and
-add a typed Phase 2 overload such as:
+`GET /v1/vehicles/{id}/commands` returns `{available, reason, commands}` after
+normal device authentication and vehicle validation. `available` is false when
+disabled, stubbed, unmapped, disconnected, revoked, or missing command consent.
+`reason` is a stable code or null. The list contains only implemented signed
+commands, not a guarantee of optional vehicle hardware or pairing. Discovery
+never wakes the car or spends a Fleet API call.
 
-```swift
-func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws
-```
+The old string-only iOS method stays unavailable. The typed path creates and
+retains one UUID per confirmed intent, encodes the flat bodies below, and keeps
+unresolved intents for same-key recovery. Timeouts mean unknown execution. Never
+replay beyond the 24-hour receipt lifetime or create a new automatic intent.
 
-`VehicleCommand` should encode the command-specific flat bodies in the table
-below: temperatures/coordinates as JSON numbers, percentages as JSON integers,
-trunk/window selectors as JSON strings, and parameterless commands as `{}`.
-The Controls sheet creates and retains `intentID` before sending. The networking
-layer adds its UUID string as `Idempotency-Key`; volta-api validates the typed
-body and forwards it without string coercion. On client timeout, recover/query
-the same intent by replaying its same key and body; retain pending keys across
-app retries/restarts. A new deliberate control action gets a new UUID.
-
-This typed overload, networking header and backend forwarding remain separate
-Phase 2 integration work. This PR does not edit the shared Swift contract,
-Controls sheet or `server/`. Do not forward the old string-only numeric payloads
-or connect Phase 1 controls while claiming this seam is already implemented.
+`/oauth/status` adds `commandsEnabled` and `commandScopeRequired`. Connected
+read-only accounts can explicitly start a consent upgrade without disconnecting;
+denial or cancellation leaves old credentials usable. Live commands check the
+Tesla-issued scopes again before sending.
 
 Commander caps queue wait at two seconds. `command_in_progress` has no receipt
 or budget charge: retry the same key after `Retry-After`. Cancellation before
 durable reservation creates no command receipt; after reservation, execution
 continues with a bounded independent context to persist the result even if the
-client disconnects. A definite Tesla 429 clears its reservation (local budget
-still applies), so the same key can retry after `Retry-After`. Definitive dial
+client disconnects. A definite Tesla 429 or pre-send budget/storage/deadline refusal clears its
+reservation (the local attempt rate still applies), so the same key can retry after `Retry-After`. Definitive dial
 failure is saved as `upstream_unavailable`; after repair use a new confirmed
 intent/key, since replays retain that original failure. Never automatically use
 a new key to retry an ambiguous outcome.
@@ -111,7 +107,13 @@ closed before contacting Tesla. There are no arbitrary Fleet endpoints.
 | `honk`, `flash` | `{}` | `honk_horn`, `flash_lights` |
 | `sentry_on`, `sentry_off` | `{}` | `set_sentry_mode`, `{on:true/false}` |
 | `trigger_homelink` | `{latitude, longitude}`, numbers −90…90/−180…180 | `trigger_homelink`, `lat`, `lon` |
+| `seat_heater` | `{heater, level}`, integer heater 0–5 and level 0–3 | `remote_seat_heater_request`, `{seat_position, level}`; 0/1 front, 2/4/5 second-row left/center/right, 3 left back |
+| `steering_wheel_heat` | `{on}`, boolean | `remote_steering_wheel_heater_request` |
+| `defrost` | `{on}`, boolean | `set_preconditioning_max` |
 | `wake_up` | `{}` | direct Fleet `POST /api/1/vehicles/{vin}/wake_up` |
+
+Locate/`remote_boombox` is not supported by the pinned signing proxy. Do not
+send an unsigned command or substitute a different physical action.
 
 `actuate_trunk` is upstream's open/actuate operation, not a general close-trunk
 toggle. Legacy pre-2021 S/X vehicles have different protocol/parameter behavior;
@@ -122,7 +124,11 @@ capabilities during pairing and do not promise unsupported controls.
 
 | HTTP | `error.code` | iOS action/message |
 |---|---|---|
-| 501 | `commands_unavailable` | Disable controls; Phase 2 setup pending. |
+| 501 | `commands_unavailable` | Disable controls; server setup pending. |
+| 409 | `command_scope_required` | Offer explicit Tesla consent upgrade; keep the existing account. |
+| 503 | `command_not_sent` | Deadline elapsed before the next send; safe to retry deliberately. |
+| 503 | `command_budget_unavailable` | Usage accounting is unavailable; controls paused. |
+| 429 | `command_budget_exhausted` | Monthly usage cap reached; no automatic retry. |
 | 409 | `authorization_required`, `reauthorization_required` | Owner must connect/reconnect Tesla on the server; no phone credentials. |
 | 409 | `virtual_key_missing` | Open the documented owner pairing link. |
 | 409 | `vehicle_asleep` | Vehicle did not wake; show retry later, with a new confirmed intent. |

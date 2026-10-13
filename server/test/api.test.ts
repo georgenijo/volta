@@ -288,6 +288,14 @@ describe('metric telemetry contract', () => {
     for (const key of ['locked','sentryMode','chargeLimit','minutesToFull','chargingState']) expect(status[key]).toBeNull();
     const r = await request('/v1/vehicles/2/status'); expect(r.status).toBe(409); expect((await r.json() as any).error.code).toBe('data_unavailable');
   });
+  test('location age stays tied to its position when other status becomes fresh', async () => {
+    const before = await json('/v1/vehicles/1/status');
+    expect(before.locationUpdatedAt).toBeString();
+    await owner`INSERT INTO updates (id, car_id, start_date) VALUES (500, 1, now() AT TIME ZONE 'UTC')`;
+    const after = await json('/v1/vehicles/1/status');
+    expect(after.locationUpdatedAt).toBe(before.locationUpdatedAt);
+    expect(new Date(after.updatedAt).getTime()).toBeGreaterThan(new Date(after.locationUpdatedAt).getTime());
+  });
   test('active drive, charge sample and update take precedence over logged state', async () => {
     await owner`UPDATE drives SET end_date = NULL WHERE id = 3`;
     expect((await json('/v1/vehicles/1/status')).state).toBe('driving');

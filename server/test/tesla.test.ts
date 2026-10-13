@@ -14,7 +14,7 @@ const telemetry = {} as Telemetry;
 
 let calls: { method: string; path: string; auth: string | null; body: any }[] = [];
 let next: { status: number; body: any } | null = null;
-const status = { available: true, connected: true, needsReauth: false, linkPending: false, collector: { enabled: true }, budget: { monthlyLimitUsd: 20, spentUsd: 1.5, paused: false }, accessToken: 'MUST-NOT-LEAK' };
+const status = { available: true, connected: true, needsReauth: false, linkPending: false, commandsEnabled: false, commandScopeRequired: true, collector: { enabled: true }, budget: { monthlyLimitUsd: 20, spentUsd: 1.5, paused: false }, accessToken: 'MUST-NOT-LEAK' };
 const commander = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
   const url = new URL(req.url);
   const body = req.method === 'GET' || req.method === 'DELETE' ? null : await req.json();
@@ -49,6 +49,12 @@ describe('tesla sign-in relay', () => {
     expect(r.status).toBe(501); expect(await code(r)).toBe('tesla_link_unavailable');
   });
 
+  test('older commander status safely defaults command fields to false', async () => {
+    next = { status: 200, body: { available: true, connected: true, needsReauth: false, linkPending: false, collector: { enabled: true }, budget: {} } };
+    const r = await call(configured, 'GET', '/v1/tesla/status');
+    expect(await r.json()).toEqual({ available: true, connected: true, needsReauth: false, linkPending: false, commandsEnabled: false, commandScopeRequired: false, collector: { enabled: true }, budget: { monthlyLimitUsd: 0, spentUsd: 0, paused: false } });
+  });
+
   test('start binds the sign-in to the calling device', async () => {
     const r = await call(configured, 'POST', '/v1/tesla/link', {});
     expect(r.status).toBe(200);
@@ -61,7 +67,7 @@ describe('tesla sign-in relay', () => {
     expect(r.status).toBe(200);
     const text = await r.text();
     expect(text).not.toContain('MUST-NOT-LEAK'); expect(text).not.toContain(SECRET);
-    expect(JSON.parse(text)).toEqual({ available: true, connected: true, needsReauth: false, linkPending: false, collector: { enabled: true }, budget: { monthlyLimitUsd: 20, spentUsd: 1.5, paused: false } });
+    expect(JSON.parse(text)).toEqual({ available: true, connected: true, needsReauth: false, linkPending: false, commandsEnabled: false, commandScopeRequired: true, collector: { enabled: true }, budget: { monthlyLimitUsd: 20, spentUsd: 1.5, paused: false } });
     expect(calls[0]).toEqual({ method: 'POST', path: '/oauth/complete', auth: `Bearer ${SECRET}`, body: { deviceId: '7', state: STATE, code: CODE, error: '' } });
     expect(JSON.stringify(logs)).not.toContain(CODE); expect(JSON.stringify(logs)).not.toContain(STATE);
     expect(logs).toContainEqual(expect.objectContaining({ route: '/v1/tesla/link/complete', status: 200 }));

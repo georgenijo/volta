@@ -25,8 +25,12 @@ protocol VoltaDataSource: Sendable {
     func deleteServiceEvent(vehicleID: Int, eventID: String) async throws
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation]
     func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary>
-    /// Phase 1 always throws `VoltaError.commandsUnavailable`.
-    func command(vehicleID: Int, name: String, params: [String: String]) async throws
+    /// Stable local identity for isolating saved command intents by backend.
+    var commandBackendID: String { get }
+    /// Demo sources may simulate supported actions, but are never live-ready.
+    var simulatesVehicleCommands: Bool { get }
+    func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities
+    func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult
 }
 
 enum VoltaError: LocalizedError, Equatable {
@@ -69,6 +73,13 @@ extension EnvironmentValues {
 
 // Read-only test sources need not implement service writes.
 extension VoltaDataSource {
+    var commandBackendID: String { String(reflecting: type(of: self)) }
+    var simulatesVehicleCommands: Bool { false }
+    func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities { .unavailable }
+    func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult {
+        throw VehicleCommandFailure(status: 501, code: "commands_unavailable", requestID: nil,
+                                    retryAfter: nil, replayed: false)
+    }
     func service(vehicleID: Int) async throws -> ServiceState { throw VoltaError.server(code: "service_unavailable", message: "Service storage is unavailable") }
     func addService(vehicleID: Int, item: ServiceItemInput) async throws { throw VoltaError.server(code: "service_unavailable", message: "Service storage is unavailable") }
     func completeService(vehicleID: Int, itemID: String, event: ServiceEventInput) async throws { throw VoltaError.server(code: "service_unavailable", message: "Service storage is unavailable") }

@@ -14,6 +14,9 @@ import (
 )
 
 type Tokens struct {
+	// Optional scope metadata returned by Tesla's token endpoint. Older stores
+	// use the scope claim inside the Tesla-issued access token instead.
+	Scope     string    `json:"scope,omitempty"`
 	Access    string    `json:"access"`
 	Refresh   string    `json:"refresh"`
 	Expires   time.Time `json:"expires"`
@@ -29,10 +32,13 @@ type Tokens struct {
 // A pending sign-in survives restarts so a device can finish after the app
 // was backgrounded. Only the state's hash is kept; the verifier never leaves.
 type PendingLink struct {
-	StateHash string    `json:"stateHash"`
-	Verifier  string    `json:"verifier"`
-	Device    string    `json:"device"`
-	Expires   time.Time `json:"expires"`
+	// A consent upgrade is bound to the existing account and history namespace.
+	UpgradeSubject string    `json:"upgradeSubject,omitempty"`
+	UpgradeLinkID  string    `json:"upgradeLinkId,omitempty"`
+	StateHash      string    `json:"stateHash"`
+	Verifier       string    `json:"verifier"`
+	Device         string    `json:"device"`
+	Expires        time.Time `json:"expires"`
 }
 
 // The consumed state's outcome lets the same device retry completion after a
@@ -77,6 +83,7 @@ type HistoryUsage struct {
 	Pending time.Time `json:"pendingSince,omitzero"`
 }
 type Receipt struct {
+	Mode        string    `json:"mode,omitempty"`
 	Fingerprint string    `json:"fingerprint"`
 	Created     time.Time `json:"created"`
 	Result      *Result   `json:"result,omitempty"`

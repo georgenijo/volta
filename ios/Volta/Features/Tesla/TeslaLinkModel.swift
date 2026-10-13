@@ -14,7 +14,8 @@ final class TeslaLinkModel {
     }
     static let callbackScheme = "volta"
     static let callbackHost = "tesla-callback"
-    static let scopeDisclosure = "Volta requests read-only access to your vehicle data and location. No remote commands are enabled. You sign in on Tesla's page; Volta never sees your Tesla password."
+    static let scopeDisclosure = "Volta requests access to your vehicle data and location. Remote command access is requested only when controls are enabled. You sign in on Tesla's page; Volta never sees your Tesla password."
+    static let commandScopeDisclosure = "Enabling controls asks Tesla for vehicle and charging command access. Your existing read-only telemetry remains connected if you cancel."
 
     private(set) var state: State = .idle
     private(set) var status: TeslaStatus?
@@ -27,6 +28,10 @@ final class TeslaLinkModel {
     }
     var canSignIn: Bool {
         switch state { case .disconnected, .needsReauth, .failed: client != nil && !isDisconnecting; default: false }
+    }
+    var canEnableCommands: Bool {
+        state == .connected && status?.connected == true && status?.commandScopeRequired == true
+            && client != nil && !isDisconnecting
     }
 
     @ObservationIgnored private var client: (any TeslaAccountClient)?
@@ -65,6 +70,17 @@ final class TeslaLinkModel {
 
     func start() {
         guard canSignIn, let client else { return }
+        begin(client: client)
+    }
+
+    /// Starts an additive consent upgrade. It does not disconnect or discard
+    /// the account that continues serving read-only telemetry.
+    func enableVehicleControls() {
+        guard canEnableCommands, let client else { return }
+        begin(client: client)
+    }
+
+    private func begin(client: any TeslaAccountClient) {
         let current = generation
         statusRequest += 1
         state = .starting; disconnectError = nil; pendingCallback = nil
@@ -101,7 +117,9 @@ final class TeslaLinkModel {
             // The server dropped the account: a failed reconcile must fall back
             // to this, not to the connected status read before.
             if let old = status {
-                status = TeslaStatus(available: old.available, connected: false, needsReauth: false, linkPending: false, collector: old.collector, budget: old.budget)
+                status = TeslaStatus(available: old.available, connected: false, needsReauth: false, linkPending: false,
+                                     collector: old.collector, budget: old.budget, commandsEnabled: old.commandsEnabled,
+                                     commandScopeRequired: old.commandScopeRequired)
             }
             state = .disconnected
             await loadStatus(generation: current)
@@ -210,7 +228,10 @@ final class TeslaLinkModel {
         state = !status.available ? .notAvailable : status.needsReauth ? .needsReauth : status.connected ? .connected : .disconnected
     }
 
-    private var restingState: State { status?.needsReauth == true ? .needsReauth : .disconnected }
+    private var restingState: State {
+        if status?.needsReauth == true { return .needsReauth }
+        return status?.connected == true ? .connected : .disconnected
+    }
 
     private static func isRetryable(_ error: any Error) -> Bool {
         if case .server(let code, _)? = error as? VoltaError { return code == "tesla_unavailable" || code == "http_503" }

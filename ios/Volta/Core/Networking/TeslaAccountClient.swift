@@ -25,6 +25,9 @@ struct TeslaStatus: Decodable, Equatable, Sendable {
     let linkPending: Bool
     let collector: Collector?
     let budget: Budget?
+    /// Additive command-readiness fields; nil for older servers.
+    var commandsEnabled: Bool? = nil
+    var commandScopeRequired: Bool? = nil
 }
 
 struct TeslaLinkStart: Decodable, Equatable, Sendable {
@@ -42,7 +45,8 @@ enum TeslaLinkError: Error, Equatable {
 extension MockDataSource: TeslaAccountClient {
     func teslaStatus() async throws -> TeslaStatus {
         TeslaStatus(available: true, connected: false, needsReauth: false, linkPending: false,
-                    collector: .init(enabled: false), budget: nil)
+                    collector: .init(enabled: false), budget: nil, commandsEnabled: false,
+                    commandScopeRequired: false)
     }
     func startTeslaLink() async throws -> TeslaLinkStart { throw TeslaLinkError.demoMode }
     func completeTeslaLink(callbackURL: URL) async throws -> TeslaStatus { throw TeslaLinkError.demoMode }

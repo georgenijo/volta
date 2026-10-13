@@ -119,6 +119,15 @@ struct TeslaAccountSection: View {
             if tesla.canSignIn || tesla.isBusy {
                 TeslaSignInButton(tesla: tesla)
             }
+            if tesla.canEnableCommands {
+                PillButton("Enable vehicle controls", systemImage: "key.horizontal", size: .wide, style: .accent) {
+                    tesla.enableVehicleControls()
+                }
+                .accessibilityIdentifier("button.teslaEnableControls")
+                Text(TeslaLinkModel.commandScopeDisclosure)
+                    .font(.footnote)
+                    .foregroundStyle(ScreenKit.secondary)
+            }
             if tesla.state == .connected || tesla.state == .needsReauth {
                 Button(role: .destructive) { confirmDisconnect = true } label: {
                     HStack {
@@ -178,7 +187,12 @@ struct TeslaAccountSection: View {
         switch tesla.state {
         case .notAvailable: "Sign in with Tesla isn't set up on your server yet."
         case .needsReauth: "Tesla access expired or was revoked. Reconnect to resume collecting. " + TeslaLinkModel.scopeDisclosure
-        default: TeslaLinkModel.scopeDisclosure
+        default:
+            if tesla.status?.commandScopeRequired == true {
+                TeslaLinkModel.commandScopeDisclosure
+            } else {
+                TeslaLinkModel.scopeDisclosure
+            }
         }
     }
 }

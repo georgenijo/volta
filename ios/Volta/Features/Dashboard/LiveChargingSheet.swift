@@ -14,6 +14,7 @@ struct LiveChargingSheet: View {
 
     @State private var status: VehicleStatus
     @State private var detail: ChargeDetail?
+    @State private var showControls = false
     /// The session whose detail is shown; it outlives the status's id so a
     /// finished session keeps its final totals and curve.
     @State private var shownChargeId: Int?
@@ -45,6 +46,9 @@ struct LiveChargingSheet: View {
         .preferredColorScheme(.dark)
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("screen.liveCharge")
+        .sheet(isPresented: $showControls, onDismiss: { Task { await refresh() } }) {
+            ControlsView(initialStatus: status, vehicleName: app?.selectedVehicle?.name)
+        }
         .task(id: vehicleID) {
             while !Task.isCancelled {
                 await refresh()
@@ -223,14 +227,20 @@ struct LiveChargingSheet: View {
 
     // MARK: Controls
 
-    /// Wattly's session controls. Volta can't send vehicle commands yet, so
-    /// they're shown for layout and disabled.
+    /// Charging actions live in the shared controls coordinator, so opening
+    /// them here cannot create a second independent intent stream.
     private var controls: some View {
         VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
-            HStack(spacing: VoltaSpacing.md) {
-                controlButton("Stop Charging", systemImage: "stop.fill", tint: .voltaRed)
-                controlButton("Unlock Port", systemImage: "lock.open.fill", tint: .voltaTextPrimary)
+            Button { showControls = true } label: {
+                Label("Manage charging", systemImage: "bolt.car.fill")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Color.voltaTextPrimary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(Color.voltaCard, in: .rect(cornerRadius: VoltaRadius.control))
             }
+            .buttonStyle(VoltaPressStyle())
+            .accessibilityHint("Opens live vehicle controls")
             HStack {
                 Text("Charge current").font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
                 Spacer()
@@ -246,20 +256,9 @@ struct LiveChargingSheet: View {
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(Color.voltaRaised, in: .capsule)
             }
-            Text("Charging controls need vehicle commands, which aren't connected yet.")
-                .font(.caption).foregroundStyle(Color.voltaTextTertiary)
+            Text("Open vehicle controls to stop charging or change the charge limit.")
+                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Charging controls unavailable")
-    }
-
-    private func controlButton(_ title: String, systemImage: String, tint: Color) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.system(.subheadline, weight: .semibold))
-            .foregroundStyle(tint.opacity(0.45))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(Color.voltaCard, in: .rect(cornerRadius: VoltaRadius.control))
     }
 
     // MARK: Stats

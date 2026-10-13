@@ -60,7 +60,7 @@ struct MockDataSource: VoltaDataSource {
             throw VoltaError.server(code: "data_unavailable", message: "TeslaMate has not recorded a battery observation for this vehicle")
         }
         try check(vehicleID)
-        return VehicleStatus(vehicleId: vehicleID, state: .online, updatedAt: now, batteryLevel: 72, usableBatteryLevel: 71, ratedRangeKm: 354, estRangeKm: 328, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil, minutesToFull: nil, insideTempC: 21, outsideTempC: 16, climateOn: false, driverTempSettingC: 20, locked: true, sentryMode: true, odometerKm: 38642, location: Location(latitude: 37.4419, longitude: -122.1430, heading: 115, address: home, placeName: "Home"), firmware: "2026.32.6", packTempMaxC: 38, packTempMinC: 31,
+        return VehicleStatus(vehicleId: vehicleID, state: .online, updatedAt: now, batteryLevel: 72, usableBatteryLevel: 71, ratedRangeKm: 354, estRangeKm: 328, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil, minutesToFull: nil, insideTempC: 21, outsideTempC: 16, climateOn: false, driverTempSettingC: 20, locked: true, sentryMode: true, odometerKm: 38642, location: Location(latitude: 37.4419, longitude: -122.1430, heading: 115, address: home, placeName: "Home"), locationUpdatedAt: now, firmware: "2026.32.6", packTempMaxC: 38, packTempMinC: 31,
             energyRemainingKwh: 43.2, chargePortDoorOpen: false, chargePortLatch: "ChargePortLatchEngaged",
             tpms: TirePressures(fl: TireReading(pressureBar: 2.9, updatedAt: now.addingTimeInterval(-7200)),
                                fr: TireReading(pressureBar: 2.9, updatedAt: now.addingTimeInterval(-7200)),
@@ -316,7 +316,17 @@ struct MockDataSource: VoltaDataSource {
     func places(vehicleID: Int) async throws -> [Place] {
         try check(vehicleID); return empty ? [] : [Place(id: 1, name: "Home", latitude: 37.4419, longitude: -122.1430, radiusM: 120, costPerKwh: 0.23), Place(id: 2, name: "Mountain View Supercharger", latitude: 37.4148, longitude: -122.0782, radiusM: 150, costPerKwh: 0.41)]
     }
-    func command(vehicleID: Int, name: String, params: [String: String]) async throws { throw VoltaError.commandsUnavailable }
+    var commandBackendID: String { "volta-demo" }
+    var simulatesVehicleCommands: Bool { true }
+    func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities {
+        try check(vehicleID)
+        return .demo
+    }
+    func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult {
+        try check(vehicleID)
+        _ = try command.encodedBody()
+        return VehicleCommandResult(command: command.name, requestID: "demo", replayed: false)
+    }
 }
 
 extension MockDataSource {

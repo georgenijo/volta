@@ -788,5 +788,4 @@ struct FailingDataSource: VoltaDataSource {
     func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { throw error }
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { throw error }
     func places(vehicleID: Int) async throws -> [Place] { throw error }
-    func command(vehicleID: Int, name: String, params: [String: String]) async throws { throw VoltaError.commandsUnavailable }
 }

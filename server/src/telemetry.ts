@@ -133,7 +133,9 @@ export class Telemetry {
       chargeStartedAt: (row.charge_id ? row.charge_at : null) as Date | null, chargeStartObserved: null as boolean | null, activeChargeId: (row.charge_id ?? null) as number | null,
       insideTempC: row.polled_inside ?? null, outsideTempC: row.polled_outside ?? null, climateOn: row.polled_climate ?? null,
       driverTempSettingC: row.polled_driver_temp ?? null, locked: null, sentryMode: null, odometerKm: row.odometer ?? null,
-      location: row.latitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
+      // Location age is independent of fresh battery/charge/state observations.
+      locationUpdatedAt: row.latitude == null || row.longitude == null ? null : row.date ?? null,
+      location: row.latitude == null || row.longitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
     if (!live) return result;
     const sources: Record<string,string> = {batteryLevel:'BatteryLevel',usableBatteryLevel:'Soc',ratedRangeKm:'RatedRange',estRangeKm:'EstBatteryRange',chargeLimit:'ChargeLimitSoc',insideTempC:'InsideTemp',outsideTempC:'OutsideTemp',odometerKm:'Odometer',firmware:'Version',packTempMaxC:'ModuleTempMax',packTempMinC:'ModuleTempMin',locked:'Locked',sentryMode:'SentryMode',chargePortDoorOpen:'ChargePortDoorOpen',chargePortLatch:'ChargePortLatch',energyRemainingKwh:'EnergyRemaining'};
     for (const [key,value] of Object.entries(live.values)) {

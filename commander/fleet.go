@@ -18,8 +18,9 @@ type fleetReply struct {
 	Description string          `json:"error_description"`
 }
 type Fleet struct {
-	c      Config
-	client *http.Client
+	c       Config
+	client  *http.Client
+	reserve func(context.Context, float64) *Result
 }
 
 func (f *Fleet) request(ctx context.Context, method, endpoint, token string, params map[string]any) (int, fleetReply, *Result) {
@@ -94,12 +95,30 @@ func mapFleetError(status int, b fleetReply) *Result {
 	return &r
 }
 
+// Prices checked against Tesla Fleet API billing on 2026-10-13: commands
+// $0.001, wake $0.02, data reads $0.002. Never refund an uncertain request.
+func (f *Fleet) commandRequest(ctx context.Context, method, endpoint, token string, params map[string]any) (int, fleetReply, *Result) {
+	cost := 0.001
+	if method == "GET" {
+		cost = 0.002
+	}
+	if strings.HasSuffix(endpoint, "/wake_up") {
+		cost = 0.02
+	}
+	if f.reserve != nil {
+		if err := f.reserve(ctx, cost); err != nil {
+			return 0, fleetReply{}, err
+		}
+	}
+	return f.request(ctx, method, endpoint, token, params)
+}
+
 func (f *Fleet) send(ctx context.Context, t *Tokens, vin string, c Command) Result {
 	if c.Name == "wake_up" {
 		return f.wake(ctx, t, vin)
 	}
 	endpoint := f.c.ProxyURL + "/api/1/vehicles/" + vin + "/command/" + c.Upstream
-	status, b, err := f.request(ctx, "POST", endpoint, t.Access, c.Params)
+	status, b, err := f.commandRequest(ctx, "POST", endpoint, t.Access, c.Params)
 	if err != nil {
 		return *err
 	}
@@ -118,7 +137,7 @@ func (f *Fleet) send(ctx context.Context, t *Tokens, vin string, c Command) Resu
 	if ready := f.waitOnline(ctx, t, vin); ready != nil {
 		return *ready
 	}
-	status, b, err = f.request(ctx, "POST", endpoint, t.Access, c.Params)
+	status, b, err = f.commandRequest(ctx, "POST", endpoint, t.Access, c.Params)
 	if err != nil {
 		return *err
 	}
@@ -129,7 +148,7 @@ func (f *Fleet) send(ctx context.Context, t *Tokens, vin string, c Command) Resu
 }
 
 func (f *Fleet) wake(ctx context.Context, t *Tokens, vin string) Result {
-	status, b, err := f.request(ctx, "POST", t.FleetBase+"/api/1/vehicles/"+vin+"/wake_up", t.Access, map[string]any{})
+	status, b, err := f.commandRequest(ctx, "POST", t.FleetBase+"/api/1/vehicles/"+vin+"/wake_up", t.Access, map[string]any{})
 	if err != nil {
 		return *err
 	}
@@ -158,8 +177,11 @@ func (f *Fleet) waitOnline(ctx context.Context, t *Tokens, vin string) *Result {
 		return &r
 	}
 	for {
-		status, b, err := f.request(ctx, "GET", t.FleetBase+"/api/1/vehicles/"+vin, t.Access, nil)
+		status, b, err := f.commandRequest(ctx, "GET", t.FleetBase+"/api/1/vehicles/"+vin, t.Access, nil)
 		if err != nil {
+			if err.Error != nil && commandReservationRefused(err.Error.Code) {
+				return err
+			}
 			if ctx.Err() != nil {
 				return timedOut()
 			}

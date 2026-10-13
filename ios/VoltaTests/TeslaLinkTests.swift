@@ -6,9 +6,11 @@ import Synchronization
 private let syntheticCallback = URL(string: "volta://tesla-callback?code=SYNTHETIC-CODE-123&state=SYNTHETIC-STATE-456")!
 private let authorizationURL = URL(string: "https://auth.tesla.com/oauth2/v3/authorize?client_id=synthetic&state=SYNTHETIC-STATE-456")!
 
-private func status(available: Bool = true, connected: Bool = false, needsReauth: Bool = false, paused: Bool = false) -> TeslaStatus {
+private func status(available: Bool = true, connected: Bool = false, needsReauth: Bool = false, paused: Bool = false,
+                    commandsEnabled: Bool? = nil, commandScopeRequired: Bool? = nil) -> TeslaStatus {
     TeslaStatus(available: available, connected: connected, needsReauth: needsReauth, linkPending: false,
-                collector: .init(enabled: connected), budget: .init(monthlyLimitUsd: 10, spentUsd: 2.5, paused: paused))
+                collector: .init(enabled: connected), budget: .init(monthlyLimitUsd: 10, spentUsd: 2.5, paused: paused),
+                commandsEnabled: commandsEnabled, commandScopeRequired: commandScopeRequired)
 }
 
 private final class FakeTeslaClient: TeslaAccountClient, Sendable {
@@ -127,6 +129,19 @@ private final class FakeTeslaClient: TeslaAccountClient, Sendable {
         XCTAssertEqual(model.state, .needsReauth)
         model.start(); await model.waitForFlow()
         XCTAssertEqual(model.state, .needsReauth); XCTAssertEqual(client.calls.cancel, 1)
+    }
+
+    func testCommandConsentCancellationKeepsConnectedReadOnlyAccount() async {
+        let client = FakeTeslaClient()
+        client.setStatus(.success(status(connected: true, commandsEnabled: false, commandScopeRequired: true)))
+        let web = FakeWebAuth(); web.result = .failure(TeslaWebAuthError.cancelled)
+        let model = await makeModel(client, web: web)
+        XCTAssertTrue(model.canEnableCommands)
+        model.enableVehicleControls(); await model.waitForFlow()
+        XCTAssertEqual(model.state, .connected)
+        XCTAssertEqual(model.status?.connected, true)
+        XCTAssertEqual(client.calls.cancel, 1)
+        XCTAssertEqual(client.calls.disconnect, 0)
     }
 
     func testDeniedAndExpiredFailWithoutLeakingCallback() async {

@@ -5,13 +5,15 @@ import Synchronization
 final class StubProtocol: URLProtocol, @unchecked Sendable {
     typealias Handler = @Sendable (URLRequest) throws -> (Int, Data)
     static let handler = Mutex<Handler?>(nil)
+    static let responseHeaders = Mutex<[String: String]>([:])
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         do {
             let callback = Self.handler.withLock { $0 }
             let (status, data) = try XCTUnwrap(callback)(request)
-            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+            var headers = Self.responseHeaders.withLock { $0 }; headers["Content-Type"] = "application/json"
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
@@ -20,11 +22,28 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() { }
 }
 
+private func bodyData(_ request: URLRequest) throws -> Data {
+    if let body = request.httpBody { return body }
+    let stream = try XCTUnwrap(request.httpBodyStream)
+    stream.open(); defer { stream.close() }
+    var result = Data(), buffer = [UInt8](repeating: 0, count: 1024)
+    while true {
+        let count = stream.read(&buffer, maxLength: buffer.count)
+        if count < 0 { throw try XCTUnwrap(stream.streamError) }
+        if count == 0 { break }
+        result.append(buffer, count: count)
+    }
+    return result
+}
+
 @MainActor final class APIDataSourceTests: XCTestCase {
-    private func source(handler: @escaping StubProtocol.Handler, unauthorized: @escaping @Sendable () async -> Void = {}) -> APIDataSource {
+    private func source(token: String = "synthetic-token", handler: @escaping StubProtocol.Handler,
+                        unauthorized: @escaping @Sendable () async -> Void = {}) -> APIDataSource {
         StubProtocol.handler.withLock { $0 = handler }
+        StubProtocol.responseHeaders.withLock { $0 = [:] }
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
-        return APIDataSource(baseURL: URL(string: "https://volta.example")!, token: "synthetic-token", session: URLSession(configuration: config), onUnauthorized: unauthorized)
+        return APIDataSource(baseURL: URL(string: "https://volta.example")!, token: token,
+                             session: URLSession(configuration: config), onUnauthorized: unauthorized)
     }
     private func expectError(_ expected: VoltaError, _ operation: () async throws -> Void) async {
         do { try await operation(); XCTFail("Expected error") }
@@ -113,7 +132,87 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let api = source { request in XCTAssertNil(request.value(forHTTPHeaderField: "Authorization")); return (200, data) }
         let health = try await api.health()
         XCTAssertTrue(health.ok)
-        await expectError(.commandsUnavailable) { try await api.command(vehicleID: 1, name: "unlock", params: [:]) }
+    }
+
+    func testCommandCapabilitiesDecodeExactReadinessShape() async throws {
+        let api = source { request in
+            XCTAssertEqual(request.url?.path, "/v1/vehicles/7/commands")
+            return (200, Data(#"{"available":false,"reason":"command_scope_required","commands":[]}"#.utf8))
+        }
+        let result = try await api.commandCapabilities(vehicleID: 7)
+        XCTAssertFalse(result.available)
+        XCTAssertEqual(result.reason, "command_scope_required")
+    }
+
+    func testCommandSendsTypedBodyIntentHeaderAndRequiresValidReceipt() async throws {
+        let intent = UUID()
+        let api = source { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/vehicles/7/commands/seat_heater")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), intent.uuidString)
+            XCTAssertEqual(request.timeoutInterval, 90)
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try bodyData(request)) as? [String: Any])
+            XCTAssertEqual(body["heater"] as? Int, 5)
+            XCTAssertEqual(body["level"] as? Int, 3)
+            return (200, Data(#"{"ok":true,"command":"seat_heater","requestId":"request_123"}"#.utf8))
+        }
+        StubProtocol.responseHeaders.withLock { $0 = ["Idempotency-Replayed": "true"] }
+        let result = try await api.command(vehicleID: 7, command: .seatHeater(heater: 5, level: 3), intentID: intent)
+        XCTAssertEqual(result, VehicleCommandResult(command: "seat_heater", requestID: "request_123", replayed: true))
+    }
+
+    func testCommandRejectsFalseMismatchedOrMalformedSuccess() async {
+        let bodies = [
+            #"{"ok":false,"command":"honk","requestId":"request_1"}"#,
+            #"{"ok":true,"command":"flash","requestId":"request_1"}"#,
+            #"{"ok":true,"command":"honk","requestId":"bad id"}"#,
+            #"{"command":"honk","requestId":"request_1"}"#,
+        ]
+        for body in bodies {
+            let api = source { _ in (200, Data(body.utf8)) }
+            do { _ = try await api.command(vehicleID: 1, command: .honk, intentID: UUID()); XCTFail() }
+            catch let failure as VehicleCommandFailure { XCTAssertEqual(failure.code, "command_outcome_unknown") }
+            catch { XCTFail("unexpected error \(error)") }
+        }
+    }
+
+    func testCommandFailurePreservesHeadersAndSanitizesServerMessage() async {
+        let api = source { _ in
+            (409, Data(#"{"error":{"code":"command_in_progress","message":"private upstream detail"},"requestId":"request_9"}"#.utf8))
+        }
+        StubProtocol.responseHeaders.withLock { $0 = ["Retry-After": "12", "Idempotency-Replayed": "true"] }
+        do { _ = try await api.command(vehicleID: 1, command: .lock, intentID: UUID()); XCTFail() }
+        catch let failure as VehicleCommandFailure {
+            XCTAssertEqual(failure.status, 409)
+            XCTAssertEqual(failure.code, "command_in_progress")
+            XCTAssertEqual(failure.requestID, "request_9")
+            XCTAssertEqual(failure.retryAfter, "12")
+            XCTAssertTrue(failure.replayed)
+            XCTAssertFalse(failure.message.contains("private upstream detail"))
+        } catch { XCTFail("unexpected error \(error)") }
+    }
+
+    func testCommand401DoesNotUnpairReadSession() async {
+        let notified = Mutex(false)
+        let api = source(handler: { _ in
+            (401, Data(#"{"error":{"code":"unauthorized","message":"internal secret mismatch"}}"#.utf8))
+        }, unauthorized: { notified.withLock { $0 = true } })
+        do { _ = try await api.command(vehicleID: 1, command: .lock, intentID: UUID()); XCTFail() }
+        catch let failure as VehicleCommandFailure {
+            XCTAssertEqual(failure.status, 401)
+            XCTAssertEqual(failure.code, "unauthorized")
+            XCTAssertTrue(failure.message.contains("pairing was kept"))
+        } catch { XCTFail("unexpected error \(error)") }
+        XCTAssertFalse(notified.withLock { $0 })
+    }
+
+    func testCommandBackendIdentityIsNormalizedAndDeviceScopedWithoutRawToken() {
+        let first = source(token: "device-token-a") { _ in (200, Data()) }
+        let same = source(token: "device-token-a") { _ in (200, Data()) }
+        let other = source(token: "device-token-b") { _ in (200, Data()) }
+        XCTAssertEqual(first.commandBackendID, same.commandBackendID)
+        XCTAssertNotEqual(first.commandBackendID, other.commandBackendID)
+        XCTAssertFalse(first.commandBackendID.contains("device-token-a"))
     }
     func testCancellationPreserved() async {
         let api = source { _ in throw URLError(.cancelled) }

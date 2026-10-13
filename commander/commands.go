@@ -50,6 +50,37 @@ func ParseCommand(name string, p map[string]any) (Command, error) {
 		return "", errors.New("invalid parameter: " + key)
 	}
 	switch name {
+	case "seat_heater":
+		if len(p) != 2 {
+			return c, errors.New("expected heater and level")
+		}
+		heater, err := number("heater", 0, 5)
+		if err != nil {
+			return c, err
+		}
+		level, err := number("level", 0, 3)
+		if err != nil {
+			return c, err
+		}
+		if math.Trunc(heater) != heater || math.Trunc(level) != level {
+			return c, errors.New("heater and level must be integers")
+		}
+		c.Upstream = "remote_seat_heater_request"
+		// The pinned signed-command proxy expects seat_position, not heater.
+		c.Params = map[string]any{"seat_position": int(heater), "level": int(level)}
+	case "steering_wheel_heat", "defrost":
+		if len(p) != 1 {
+			return c, errors.New("expected on")
+		}
+		on, ok := p["on"].(bool)
+		if !ok {
+			return c, errors.New("on must be a boolean")
+		}
+		c.Params["on"] = on
+		c.Upstream = "remote_steering_wheel_heater_request"
+		if name == "defrost" {
+			c.Upstream = "set_preconditioning_max"
+		}
 	case "set_temps":
 		if len(p) != 2 {
 			return c, errors.New("expected driverTempC and passengerTempC")

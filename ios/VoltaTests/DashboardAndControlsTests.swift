@@ -9,7 +9,12 @@ private final class StubSource: VoltaDataSource, @unchecked Sendable {
     var statusHandler: @Sendable () async throws -> VehicleStatus = { makeStatus() }
     var timelineHandler: @Sendable () async throws -> [TimelineSegment] = { [] }
     var summaryHandler: @Sendable (SummaryRange) async throws -> ActivitySummary = { makeSummary($0) }
-    var commandHandler: @Sendable (String) async throws -> Void = { _ in throw VoltaError.commandsUnavailable }
+    var capability = VehicleCommandCapabilities(available: true, reason: nil,
+                                                commands: Array(VehicleCommand.supportedNames))
+    var backendID = "stub-backend"
+    var commandHandler: @Sendable (VehicleCommand, UUID) async throws -> VehicleCommandResult = { command, _ in
+        VehicleCommandResult(command: command.name, requestID: "request-1", replayed: false)
+    }
     let commands = Recorder()
 
     func vehicles() async throws -> [Vehicle] { try await vehiclesHandler() }
@@ -25,15 +30,20 @@ private final class StubSource: VoltaDataSource, @unchecked Sendable {
     func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { throw VoltaError.notFound }
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { throw VoltaError.notFound }
     func places(vehicleID: Int) async throws -> [Place] { throw VoltaError.notFound }
-    func command(vehicleID: Int, name: String, params: [String: String]) async throws {
-        await commands.append(name)
-        try await commandHandler(name)
+    var commandBackendID: String { backendID }
+    func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities { capability }
+    func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult {
+        await commands.append(command.name, intentID: intentID)
+        return try await commandHandler(command, intentID)
     }
 }
 
 private actor Recorder {
-    private(set) var names: [String] = []
-    func append(_ name: String) { names.append(name) }
+    struct Entry: Equatable { var name: String; var intentID: UUID }
+    private(set) var entries: [Entry] = []
+    var names: [String] { entries.map(\.name) }
+    func append(_ name: String, intentID: UUID) { entries.append(Entry(name: name, intentID: intentID)) }
+    func snapshot() -> [Entry] { entries }
 }
 
 private actor Counter {
@@ -553,69 +563,26 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
 // MARK: - Controls
 
 @MainActor final class ControlsModelTests: XCTestCase {
-    func testCommandsUnavailableBlocksBeforeAnyMutationOrDispatch() async {
-        let source = StubSource()
-        let model = ControlsModel(status: makeStatus(locked: true, climateOn: false, sentry: false, chargeLimit: 80))
-        XCTAssertFalse(model.canSend)
-
-        let sent = [
-            await model.setLocked(false, dataSource: source, vehicleID: 1),
-            await model.setClimate(true, dataSource: source, vehicleID: 1),
-            await model.setSentry(true, dataSource: source, vehicleID: 1),
-            await model.setCharging(true, dataSource: source, vehicleID: 1),
-            await model.adjustChargeLimit(by: 5, dataSource: source, vehicleID: 1),
-            await model.perform(VehicleCommand.honk, label: "Honk", dataSource: source, vehicleID: 1),
-        ]
-        XCTAssertEqual(sent, [false, false, false, false, false, false])
-        XCTAssertEqual(model.locked, true)
-        XCTAssertEqual(model.climateOn, false)
-        XCTAssertEqual(model.sentry, false)
-        XCTAssertEqual(model.chargingState, .disconnected)
-        XCTAssertEqual(model.chargeLimit, 80)
-        XCTAssertNil(model.toast)
-        let names = await source.commands.names
-        XCTAssertTrue(names.isEmpty, "no command may reach the data source")
+    private func coordinator(_ records: [PendingVehicleCommand] = []) -> VehicleCommandCoordinator {
+        VehicleCommandCoordinator(store: VehicleCommandIntentStore(inMemory: records))
     }
 
-    func testRejectedCommandRevertsAndDisablesCommands() async {
-        let source = StubSource()
-        let model = ControlsModel(status: makeStatus(locked: true), commandsAvailable: true)
-        let ok = await model.setLocked(false, dataSource: source, vehicleID: 1)
-        XCTAssertFalse(ok)
-        XCTAssertEqual(model.locked, true, "optimistic change reverted")
-        XCTAssertFalse(model.commandsAvailable)
-        XCTAssertFalse(model.canSend)
-        XCTAssertEqual(model.toast?.isError, true)
-        let names = await source.commands.names
-        XCTAssertEqual(names, [VehicleCommand.unlock])
-    }
-
-    func testSuccessfulCommandKeepsNewState() async {
-        let source = StubSource()
-        source.commandHandler = { _ in }
-        let model = ControlsModel(status: makeStatus(chargeLimit: 80), commandsAvailable: true)
-        let ok = await model.adjustChargeLimit(by: 5, dataSource: source, vehicleID: 1)
-        XCTAssertTrue(ok)
-        XCTAssertEqual(model.chargeLimit, 85)
-        XCTAssertNil(model.busy)
-        let names = await source.commands.names
-        XCTAssertEqual(names, [VehicleCommand.setChargeLimit])
-    }
-
-    func testUnknownStatesStayUnknown() async {
-        let source = StubSource()
-        source.commandHandler = { _ in }
+    func testUnknownObservedStatesRemainUnknownAndOfferTypedActions() async throws {
         let model = ControlsModel(status: makeStatus(locked: nil, climateOn: nil, sentry: nil,
-                                                     chargeLimit: nil, chargingState: nil),
-                                  commandsAvailable: true)
+                                                     chargeLimit: nil, chargingState: nil))
         XCTAssertNil(model.locked)
         XCTAssertNil(model.climateOn)
         XCTAssertNil(model.sentry)
         XCTAssertNil(model.chargeLimit)
         XCTAssertNil(model.chargingState)
-        let adjusted = await model.adjustChargeLimit(by: 5, dataSource: source, vehicleID: 1)
-        XCTAssertFalse(adjusted, "can't step an unknown limit")
-        XCTAssertNil(model.chargeLimit)
+        XCTAssertEqual(try json(.seatHeater(heater: 5, level: 3))["heater"] as? Int, 5)
+        XCTAssertThrowsError(try VehicleCommand.seatHeater(heater: 3, level: 4).encodedBody())
+        let temperatures = try json(.setTemperatures(driverTempC: 20.5, passengerTempC: 21))
+        XCTAssertEqual(temperatures["driverTempC"] as? Double, 20.5)
+        XCTAssertEqual(temperatures["passengerTempC"] as? Double, 21)
+        XCTAssertEqual(try json(.setChargeLimit(percent: 85))["percent"] as? Int, 85)
+        XCTAssertEqual(try json(.steeringWheelHeat(on: true))["on"] as? Bool, true)
+        XCTAssertEqual(try json(.triggerHomeLink(latitude: 37.4, longitude: -122.1))["longitude"] as? Double, -122.1)
     }
 
     func testStateDisplayForUnknownAndKnownValues() {
@@ -631,6 +598,21 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(StateDisplay.charging(.charging).tone, .active)
         XCTAssertEqual(StateDisplay.chargeLimit(nil), "—")
         XCTAssertEqual(StateDisplay.chargeLimit(80), "80%")
+    }
+
+    func testHomeLinkRequiresActualRecentPositionTimestamp() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        var status = makeStatus()
+        status.location = Location(latitude: 37.4, longitude: -122.1, heading: nil, address: nil, placeName: nil)
+        status.updatedAt = now
+        XCTAssertNil(ControlsView.homeLinkCommand(status: status, now: now), "status freshness is not position freshness")
+        status.locationUpdatedAt = now.addingTimeInterval(-301)
+        XCTAssertNil(ControlsView.homeLinkCommand(status: status, now: now))
+        status.locationUpdatedAt = now.addingTimeInterval(1)
+        XCTAssertNil(ControlsView.homeLinkCommand(status: status, now: now), "future position timestamps fail closed")
+        status.locationUpdatedAt = now.addingTimeInterval(-300)
+        XCTAssertEqual(ControlsView.homeLinkCommand(status: status, now: now),
+                       .triggerHomeLink(latitude: 37.4, longitude: -122.1))
     }
 
     func testOlderOverlappingRefreshDoesNotOverwriteNewerStatus() async {
@@ -660,63 +642,145 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(model.status?.locked, false)
     }
 
-    func testCancelledRefreshPublishesNothing() async {
-        let source = StubSource()
-        let started = Counter()
-        let (gate, opener) = AsyncStream<Void>.makeStream()
-        source.statusHandler = {
-            _ = await started.next()
-            for await _ in gate { break }
-            return makeStatus(locked: false)
-        }
+    func testUnavailableCapabilityBlocksBeforeDispatch() async {
+        let source = StubSource(); source.capability = .unavailable
+        let coordinator = coordinator()
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertFalse(coordinator.canStart(.unlock, dataSource: source, vehicleID: 1))
+        let outcome = await coordinator.perform(.unlock, label: "Unlock", dataSource: source, vehicleID: 1)
+        let entries = await source.commands.snapshot()
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    func testLiveSuccessDoesNotPretendObservedStateChanged() async {
+        let source = StubSource(), coordinator = coordinator()
+        source.statusHandler = { makeStatus(locked: true) }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
         let model = ControlsModel(status: makeStatus(locked: true))
-        let task = Task { await model.refresh(dataSource: source, vehicleID: 1) }
-        while await started.value < 1 { await Task.yield() }
-        task.cancel()
-        opener.yield(())
-        await task.value
-        XCTAssertEqual(model.locked, true)
-        XCTAssertNil(model.toast, "cancellation isn't a failure")
+        await model.setLocked(false, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(model.locked, true, "fresh observed telemetry stays authoritative even after acceptance")
+        XCTAssertEqual(coordinator.activity(dataSource: source, vehicleID: 1)?.phase, .success)
     }
 
-    func testRefreshStartedBeforeCommandCannotOverwriteCommandResult() async {
+    func testUnknownPersistsAcrossFileBackedRestartAndReplaysSameKey() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let file = directory.appendingPathComponent("pending.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
         let source = StubSource()
-        source.commandHandler = { _ in }
-        let started = Counter()
-        let (gate, opener) = AsyncStream<Void>.makeStream()
-        source.statusHandler = {
-            _ = await started.next()
-            for await _ in gate { break }
-            return makeStatus(locked: true)
+        source.commandHandler = { _, _ in
+            throw VehicleCommandFailure(status: 504, code: "command_outcome_unknown", requestID: "req-1",
+                                        retryAfter: nil, replayed: false)
         }
-        let model = ControlsModel(status: makeStatus(locked: true), commandsAvailable: true)
-        let refresh = Task { await model.refresh(dataSource: source, vehicleID: 1) }
-        while await started.value < 1 { await Task.yield() }
+        let first = VehicleCommandCoordinator(store: VehicleCommandIntentStore(fileURL: file))
+        await first.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let firstOutcome = await first.perform(.honk, label: "Honk", dataSource: source, vehicleID: 1)
+        let firstEntries = await source.commands.snapshot()
+        XCTAssertEqual(firstOutcome, .unknown)
+        let original = try! XCTUnwrap(firstEntries.first).intentID
 
-        let ok = await model.setLocked(false, dataSource: source, vehicleID: 1)
-        XCTAssertTrue(ok)
-        XCTAssertNil(model.busy)
-
-        opener.yield(())
-        await refresh.value
-        XCTAssertEqual(model.locked, false, "pre-command refresh must not publish")
+        let restarted = VehicleCommandCoordinator(store: VehicleCommandIntentStore(fileURL: file))
+        await restarted.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertFalse(restarted.canStart(.flash, dataSource: source, vehicleID: 1), "unresolved intent gates fresh commands")
+        source.commandHandler = { command, _ in VehicleCommandResult(command: command.name, requestID: "req-1", replayed: true) }
+        let replayOutcome = await restarted.retry(original, dataSource: source, vehicleID: 1)
+        let entries = await source.commands.snapshot()
+        XCTAssertEqual(replayOutcome, .succeeded(simulated: false))
+        XCTAssertEqual(entries.map(\.intentID), [original, original])
     }
 
-    func testRefreshFailureKeepsCurrentStatus() async {
-        let source = StubSource()
-        source.statusHandler = { throw Boom() }
-        let model = ControlsModel(status: makeStatus(locked: true))
-        await model.refresh(dataSource: source, vehicleID: 1)
-        XCTAssertEqual(model.locked, true)
-        XCTAssertEqual(model.status?.locked, true)
+    func testOwnerCanAcknowledgeFreshUnknownAfterCheckingVehicle() async {
+        let record = PendingVehicleCommand(intentID: UUID(), backendID: "stub-backend", vehicleID: 1,
+                                           command: .honk, label: "Honk horn", createdAt: .now)
+        let source = StubSource(), coordinator = coordinator([record])
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertFalse(coordinator.canStart(.flash, dataSource: source, vehicleID: 1))
+        coordinator.acknowledgeCheckedVehicle(record.intentID, dataSource: source, vehicleID: 1)
+        XCTAssertTrue(coordinator.canStart(.flash, dataSource: source, vehicleID: 1))
     }
 
-    func testChargeLimitClampsAtBounds() async {
-        let source = StubSource()
-        source.commandHandler = { _ in }
-        let model = ControlsModel(status: makeStatus(chargeLimit: 100), commandsAvailable: true)
-        let sent = await model.adjustChargeLimit(by: 5, dataSource: source, vehicleID: 1)
-        XCTAssertFalse(sent)
-        XCTAssertEqual(model.chargeLimit, 100)
+    func testDemoResultIsExplicitlySimulated() async {
+        let source = MockDataSource(), coordinator = coordinator()
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: MockDataSource.vehicleID)
+        let outcome = await coordinator.perform(.flash, label: "Flash lights", dataSource: source,
+                                                vehicleID: MockDataSource.vehicleID)
+        XCTAssertEqual(outcome, .succeeded(simulated: true))
+        XCTAssertEqual(coordinator.activity(dataSource: source, vehicleID: MockDataSource.vehicleID)?.phase, .simulated)
+        XCTAssertTrue(coordinator.activity(dataSource: source, vehicleID: MockDataSource.vehicleID)?.message.contains("No vehicle was contacted") == true)
+    }
+
+    func testPendingIsolationUsesBackendAndVehicle() async {
+        let record = PendingVehicleCommand(intentID: UUID(), backendID: "backend-a", vehicleID: 1,
+                                           command: .lock, label: "Lock", createdAt: .now)
+        let coordinator = coordinator([record])
+        let a = StubSource(); a.backendID = "backend-a"
+        let b = StubSource(); b.backendID = "backend-b"
+        await coordinator.refreshCapabilities(dataSource: a, vehicleID: 1)
+        await coordinator.refreshCapabilities(dataSource: a, vehicleID: 2)
+        await coordinator.refreshCapabilities(dataSource: b, vehicleID: 1)
+        XCTAssertFalse(coordinator.canStart(.honk, dataSource: a, vehicleID: 1))
+        XCTAssertTrue(coordinator.canStart(.honk, dataSource: a, vehicleID: 2))
+        XCTAssertTrue(coordinator.canStart(.honk, dataSource: b, vehicleID: 1))
+    }
+
+    func testExpiredIntentCannotReplayUntilOwnerAcknowledgesCheck() async {
+        let record = PendingVehicleCommand(intentID: UUID(), backendID: "stub-backend", vehicleID: 1,
+                                           command: .unlock, label: "Unlock",
+                                           createdAt: .now.addingTimeInterval(-VehicleCommandIntentStore.maximumReplayAge - 1))
+        let source = StubSource(), coordinator = coordinator([record])
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let outcome = await coordinator.retry(record.intentID, dataSource: source, vehicleID: 1)
+        let entries = await source.commands.snapshot()
+        XCTAssertEqual(outcome, .unknown)
+        XCTAssertTrue(entries.isEmpty, "expired receipt must never be replayed")
+        XCTAssertEqual(coordinator.activity(dataSource: source, vehicleID: 1)?.requiresAcknowledgement, true)
+        XCTAssertFalse(coordinator.canStart(.lock, dataSource: source, vehicleID: 1))
+        coordinator.acknowledgeCheckedVehicle(record.intentID, dataSource: source, vehicleID: 1)
+        XCTAssertTrue(coordinator.canStart(.lock, dataSource: source, vehicleID: 1))
+    }
+
+    func testRetryAfterBlocksEarlyReplay() async {
+        let future = Date.now.addingTimeInterval(60)
+        let record = PendingVehicleCommand(intentID: UUID(), backendID: "stub-backend", vehicleID: 1,
+                                           command: .flash, label: "Flash", createdAt: .now, retryNotBefore: future)
+        let source = StubSource(), coordinator = coordinator([record])
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let outcome = await coordinator.retry(record.intentID, dataSource: source, vehicleID: 1)
+        let entries = await source.commands.snapshot()
+        XCTAssertEqual(outcome, .unknown)
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    func testCommandNotSentIsDefinitiveAndAllowsNewDeliberateIntent() async {
+        let source = StubSource(), coordinator = coordinator()
+        source.commandHandler = { _, _ in
+            throw VehicleCommandFailure(status: 503, code: "command_not_sent", requestID: nil,
+                                        retryAfter: nil, replayed: false)
+        }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let outcome = await coordinator.perform(.flash, label: "Flash", dataSource: source, vehicleID: 1)
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertTrue(coordinator.pending(dataSource: source, vehicleID: 1).isEmpty)
+        XCTAssertTrue(coordinator.canStart(.flash, dataSource: source, vehicleID: 1))
+        XCTAssertTrue(coordinator.activity(dataSource: source, vehicleID: 1)?.message.contains("before sending") == true)
+    }
+
+    func testCorruptDurableStoreFailsClosedBeforeNetwork() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("pending.json")
+        try Data("not-json".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = StubSource(), coordinator = VehicleCommandCoordinator(store: VehicleCommandIntentStore(fileURL: file))
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertFalse(coordinator.canStart(.honk, dataSource: source, vehicleID: 1))
+        let outcome = await coordinator.perform(.honk, label: "Honk", dataSource: source, vehicleID: 1)
+        let entries = await source.commands.snapshot()
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    private func json(_ command: VehicleCommand) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: command.encodedBody()) as? [String: Any])
     }
 }

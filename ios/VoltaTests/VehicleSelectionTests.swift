@@ -257,5 +257,4 @@ private struct SelectionSource: VoltaDataSource {
     func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { throw VoltaError.notFound }
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { throw VoltaError.notFound }
     func places(vehicleID: Int) async throws -> [Place] { throw VoltaError.notFound }
-    func command(vehicleID: Int, name: String, params: [String: String]) async throws { throw VoltaError.commandsUnavailable }
 }

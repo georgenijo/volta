@@ -5,6 +5,7 @@ import { ApiError, invalid } from './errors';
 import { Auth } from './auth';
 import { Telemetry } from './telemetry';
 import { TeslaLink, unavailableStatus } from './tesla';
+import { commandName, commandParams, idempotencyKey } from './commands';
 import type { ChargingHistory } from './history';
 import type { DriveDetail } from './drive-detail';
 import { choice, driveId, integer, listInput, page, timeZone } from './validation';
@@ -124,9 +125,41 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
   const billed = () => { if (!history) throw new ApiError(501, 'tesla_link_unavailable', 'Tesla sign-in is not set up on this server'); return history; };
   app.get('/v1/tesla/charging-history', async c => c.json(await billed().summary()));
   app.get('/v1/vehicles/:id/tesla-charging-sessions', async c => c.json(await billed().sessions(integer(c.req.param('id'), 'id'), c.req.query())));
+  app.get('/v1/vehicles/:id/commands', async c => {
+    const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
+    c.header('Cache-Control', 'no-store');
+    return c.json(tesla ? await tesla.commandCapabilities(id) : { available: false, reason: 'commands_unavailable', commands: [] });
+  });
   app.post('/v1/vehicles/:id/commands/:name', async c => {
-    await telemetry.vehicle(integer(c.req.param('id'), 'id'));
-    throw new ApiError(501, 'commands_unavailable', 'Vehicle commands are unavailable in phase 1');
+    const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
+    if (!tesla) throw new ApiError(501, 'commands_unavailable', 'Vehicle commands are unavailable');
+    const name = commandName(c.req.param('name'));
+    const key = idempotencyKey(c.req.header('Idempotency-Key'));
+    if (c.req.header('Content-Type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') throw new ApiError(400, 'invalid_params', 'Expected an application/json body');
+    let text: string;
+    try { text = await c.req.text(); } catch (error) { if (error instanceof Error && error.name === 'BodyLimitError') throw error; throw new ApiError(400, 'invalid_params', 'Expected a JSON body'); }
+    const params = commandParams(name, text);
+    // This must be fresh for every intent/replay: commander stub mode can
+    // return synthetic command success for its own smoke tests.
+    const capability = await tesla.commandCapabilities(id);
+    if (!capability.available) {
+      const reason = capability.reason ?? 'commands_unavailable';
+      const refusal = {
+        commands_unavailable: [501, 'Vehicle commands are unavailable'],
+        authorization_required: [409, 'Connect the Tesla account before using vehicle controls'],
+        reauthorization_required: [409, 'Reconnect the Tesla account before using vehicle controls'],
+        command_scope_required: [409, 'Enable Tesla vehicle-control access before using commands'],
+        vehicle_not_found: [404, 'Vehicle is not configured for commands'],
+        stub_mode: [501, 'Live vehicle commands are unavailable in stub mode'],
+      }[reason] as [400 | 404 | 409 | 501, string];
+      throw new ApiError(refusal[0], reason, refusal[1]);
+    }
+    if (!capability.commands.includes(name)) throw new ApiError(400, 'invalid_command', 'Command is not supported by the configured vehicle command service');
+    const relay = await tesla.command(id, name, params, key);
+    const headers = new Headers({ 'Content-Type': 'application/json; charset=UTF-8', 'Cache-Control': 'no-store' });
+    if (relay.retryAfter) headers.set('Retry-After', relay.retryAfter);
+    if (relay.replayed) headers.set('Idempotency-Replayed', 'true');
+    return new Response(JSON.stringify(relay.body), { status: relay.status, headers });
   });
   return app;
 }

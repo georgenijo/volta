@@ -13,6 +13,7 @@ struct VoltaApp: App {
                 .environment(\.vehicleID, model.selectedVehicleID)
                 .environment(\.units, model.units)
                 .environment(\.vehicleSurfaces, model.refreshSurfaces)
+                .environment(\.vehicleCommandCoordinator, model.commandCoordinator)
                 .preferredColorScheme(.dark)
                 // Layouts are tuned to absolute sizes; larger text sizes wrap labels.
                 .dynamicTypeSize(...DynamicTypeSize.large)

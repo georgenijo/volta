@@ -1,0 +1,10 @@
+# Explicit live-controls overlay, applied after the sign-in/telemetry overlays.
+# Existing read-only consent is retained until the owner grants command scopes.
+# No new ports, public routes, or secrets. Start the existing live proxy too.
+services:
+  commander:
+    environment:
+      COMMANDER_MODE: live
+      COMMANDER_COMMANDS_ENABLED: "true"
+      TESLA_PROXY_URL: https://tesla-command-proxy:4443
+      TESLA_PROXY_CA_FILE: /public/tls-cert.pem

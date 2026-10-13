@@ -41,6 +41,7 @@ type Service struct {
 
 func NewService(c Config, store *Store, client *http.Client, audit *slog.Logger) (*Service, error) {
 	s := &Service{c: c, store: store, oauth: NewOAuth(c, store, client), fleet: &Fleet{c: c, client: client}, audit: audit, commands: make(chan struct{}, 1), collector: collector{cache: map[string]cached{}, served: map[string]time.Time{}, refused: map[string]time.Time{}}, collectorClient: client}
+	s.fleet.reserve = s.reserveCommandCall
 	if c.TelemetryEnabled {
 		s.telemetry = NewTelemetryController(s, client)
 	}
@@ -129,6 +130,7 @@ func (s *Service) PrivateHandler() http.Handler {
 		s.audit.Info("oauth_disconnected", "code", resultCode(result))
 		writeResult(w, result)
 	})
+	mux.HandleFunc("GET /v1/vehicles/{id}/commands", s.handleCommandCapabilities)
 	mux.HandleFunc("POST /v1/vehicles/{id}/commands/{name}", s.handleCommand)
 	mux.HandleFunc("GET /v1/history/charging", s.handleChargingHistory)
 	mux.HandleFunc("GET /v1/telemetry/status", s.handleTelemetryStatus)
@@ -242,7 +244,9 @@ func linkParams(w http.ResponseWriter, r *http.Request, allowed ...string) (map[
 }
 
 type statusView struct {
-	Available bool `json:"available"`
+	CommandsEnabled      bool `json:"commandsEnabled"`
+	CommandScopeRequired bool `json:"commandScopeRequired"`
+	Available            bool `json:"available"`
 	LinkStatus
 	Collector struct {
 		Enabled bool `json:"enabled"`
@@ -258,6 +262,8 @@ type statusView struct {
 
 func (s *Service) linkStatus() statusView {
 	v := statusView{Available: s.c.OAuthEnabled, LinkStatus: s.oauth.Status(), Budget: s.budget()}
+	v.CommandsEnabled = s.c.Enabled
+	v.CommandScopeRequired = s.c.Mode == "live" && s.c.Enabled && v.Connected && !hasCommandScopes(s.store.tokens())
 	v.Collector.Enabled = s.c.CollectorEnabled
 	v.History.Enabled = s.c.HistoryEnabled
 	if v.Connected {
@@ -313,6 +319,9 @@ func (w *statusWriter) WriteHeader(status int) {
 }
 
 func (s *Service) handleCommand(out http.ResponseWriter, r *http.Request) {
+	// Bind success to the process that actually handled the POST, not just a
+	// preceding readiness read that could race a restart into stub mode.
+	out.Header().Set("X-Volta-Command-Mode", s.c.Mode)
 	w := &statusWriter{ResponseWriter: out, status: 200}
 	defer func() { s.audit.Info("command_request", "httpStatus", w.status) }()
 	if !s.c.Enabled {
@@ -365,6 +374,7 @@ func (s *Service) handleCommand(out http.ResponseWriter, r *http.Request) {
 			result.RetryAfter = old.RetryAfter
 		}
 		result.RequestID = requestID
+		w.Header().Set("X-Volta-Command-Mode", old.Mode)
 		w.Header().Set("Idempotency-Replayed", "true")
 		s.audit.Info("command_replayed", "requestId", requestID, "vehicleId", id, "command", name, "code", resultCode(result))
 		writeResult(w, result)
@@ -392,6 +402,10 @@ func (s *Service) handleCommand(out http.ResponseWriter, r *http.Request) {
 		writeResult(w, *authError)
 		return
 	}
+	if s.c.Mode == "live" && !hasCommandScopes(t) {
+		writeResult(w, failure(409, "command_scope_required", "Sign in with Tesla again to allow vehicle controls."))
+		return
+	}
 	if r.Context().Err() != nil {
 		writeResult(w, failure(408, "request_cancelled", "Request was cancelled before command acceptance."))
 		return
@@ -402,7 +416,7 @@ func (s *Service) handleCommand(out http.ResponseWriter, r *http.Request) {
 				delete(d.Receipts, k)
 			}
 		}
-		d.Receipts[receiptKey] = Receipt{Fingerprint: fingerprint, Created: now}
+		d.Receipts[receiptKey] = Receipt{Fingerprint: fingerprint, Created: now, Mode: s.c.Mode}
 		d.Rate[id] = append(rate, now)
 	}); err != nil {
 		writeResult(w, failure(503, "storage_unavailable", "Cannot safely reserve the command."))
@@ -413,7 +427,7 @@ func (s *Service) handleCommand(out http.ResponseWriter, r *http.Request) {
 	result.Command = name
 	result.RequestID = requestID
 	if err = s.store.update(func(d *diskState) {
-		if result.Error != nil && result.Error.Code == "tesla_rate_limited" {
+		if result.Error != nil && (result.Error.Code == "tesla_rate_limited" || commandReservationRefused(result.Error.Code)) {
 			delete(d.Receipts, receiptKey)
 			return
 		}

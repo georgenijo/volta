@@ -104,9 +104,76 @@ temperature units are inferred and need live confirmation. See
 | GET | `/v1/vehicles/{id}/mileage` | `bucket=day\|week\|month` | `[MileageBucket]` |
 | GET | `/v1/vehicles/{id}/firmware` | – | `[FirmwareUpdate]` |
 | GET | `/v1/vehicles/{id}/places` | – | `[Place]` (TeslaMate geofences) |
-| POST | `/v1/vehicles/{id}/commands/{name}` | `{ …params }` | phase 1: 501 `commands_unavailable` |
+| GET | `/v1/vehicles/{id}/commands` | – | `CommandCapability` |
+| POST | `/v1/vehicles/{id}/commands/{name}` | command-specific object | `CommandReceipt` |
 
 `Page<T>`: `{ items: [T], nextCursor: string|null }`. Lists are newest first.
+
+### Vehicle commands
+
+Both command routes require normal paired-device authentication and a valid
+TeslaMate vehicle ID. `CommandCapability` is
+`{available:boolean,reason:string|null,commands:string[]}`. `available` is true
+only when the private commander reports a live, configured, authorized backend
+with command scopes; it is readiness, not proof that a vehicle will execute a
+future command. Unavailable reasons are `commands_unavailable`,
+`authorization_required`, `reauthorization_required`,
+`command_scope_required`, `vehicle_not_found`, or `stub_mode`, and `commands`
+is then empty. A missing, unreachable, old, malformed, or stub commander fails
+closed. Clients enable a control only when the capability is available and its
+name is present in `commands`.
+
+POST repeats the capability check immediately before relay and refuses the
+stable unavailable reason or a command missing from the fresh list. This keeps
+a cached live capability from turning commander's synthetic stub success into
+an apparent vehicle success. The preflight itself makes no Tesla call.
+
+Every POST requires `Content-Type: application/json` and an `Idempotency-Key`
+of 16–128 characters from `[A-Za-z0-9_-]`. The client creates and persists one
+key per confirmed user intent and reuses that same key and body across retries;
+it must never create a new key merely because a response was lost. Unresolved
+intents may be replayed only while they are less than 24 hours old, matching the
+commander receipt lifetime; after that they expire without an automatic resend.
+Bodies are flat objects, at most 4096 bytes, with no duplicate, unknown, extra,
+null, or coerced fields:
+
+| Name | Body |
+|---|---|
+| `lock`, `unlock`, `climate_on`, `climate_off` | `{}` |
+| `charge_start`, `charge_stop`, `open_charge_port`, `close_charge_port` | `{}` |
+| `honk`, `flash`, `sentry_on`, `sentry_off`, `wake_up` | `{}` |
+| `set_temps` | `{driverTempC,passengerTempC}`; numbers 15–28 |
+| `set_charge_limit` | `{percent}`; integer 50–100 |
+| `actuate_trunk` | `{whichTrunk:"front"|"rear"}` |
+| `window_control` | `{command:"vent"|"close"}` |
+| `trigger_homelink` | `{latitude,longitude}`; numbers −90…90 and −180…180 |
+| `seat_heater` | `{heater,level}`; integers 0–5 and 0–3 |
+| `steering_wheel_heat`, `defrost` | `{on:boolean}` |
+
+Seat-heater indices follow Tesla's proxy contract: front left `0`, front right
+`1`, second-row left `2`, second-row left back `3`, second-row center `4`, and
+second-row right `5`. They are not UI seat ordinals. `locate` is intentionally
+not in the relay allowlist or capability list: Locate sound isn’t supported by
+Tesla’s command service. It must not be approximated with the horn.
+
+Success is `CommandReceipt`: `{ok:true,command,requestId}`. The relay preserves
+commander's HTTP status, safe `error.code`, optional `command`/`requestId`,
+`Retry-After`, and `Idempotency-Replayed: true`, while replacing upstream text
+with fixed safe messages. A timeout, lost response, or malformed response after
+sending is `command_outcome_unknown`; the command may have run. Inspect status
+and replay only the same intent key instead of blindly submitting a new UUID.
+`503 command_not_sent` means the deadline elapsed before sending.
+`503 command_budget_unavailable` means accounting failed before the command was
+sent. `429 command_budget_exhausted` means the existing monthly Fleet API lane
+or combined cap is spent. Neither outcome permits an automatic new-key retry.
+
+`GET /v1/tesla/status` also returns the additive booleans `commandsEnabled` and
+`commandScopeRequired`. Older or malformed commander responses safely decode as
+false. A connected read-only account may have `commandScopeRequired: true`;
+starting the explicit control-enablement sign-in upgrades consent without first
+disconnecting that account, and cancelling that sign-in preserves the existing
+read-only connection. Consent upgrades must use the same Tesla account and retain
+the existing charging-history namespace.
 
 ### Shapes
 
@@ -117,7 +184,7 @@ VehicleStatus  { vehicleId, state: online|asleep|offline|driving|charging|updati
                  chargeLimit, chargingState: disconnected|stopped|charging|complete|null,
                  chargerPowerKw, minutesToFull, insideTempC, outsideTempC, climateOn,
                  driverTempSettingC, locked, sentryMode, odometerKm,
-                 location: Location|null, firmware,
+                 location: Location|null, locationUpdatedAt, firmware,
                  packTempMaxC, packTempMinC, energyRemainingKwh, chargePortDoorOpen,
                  chargePortLatch, tpms: { fl, fr, rl, rr }, telemetryFreshness,
                  chargeEnergyAddedKwh, chargerVoltage, chargerCurrentA, fastCharger,
@@ -453,3 +520,13 @@ its events atomically. `PATCH /v1/vehicles/{id}/service-events/{event}` takes th
 completion body; `DELETE` removes that completion and recalculates due from the
 remaining history. Every mutation scopes the item/event to its vehicle. iOS
 exposes these via row menus and asks before deleting history.
+
+### Location age for nearby controls
+
+Vehicle status includes optional `locationUpdatedAt`, the timestamp of the
+position supplying `location`. It remains unchanged when a newer battery,
+charging, or vehicle-state observation advances the overall `updatedAt`.
+HomeLink uses coordinates only when this timestamp is present and no more than
+five minutes old. A missing coordinate pair has `location` and
+`locationUpdatedAt` both null; older servers without the timestamp cannot prove
+nearby-control freshness.

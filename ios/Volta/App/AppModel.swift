@@ -34,6 +34,8 @@ final class AppModel {
     @ObservationIgnored let surfaces: any VehicleSurfaces
     /// Sign in with Tesla. Follows `dataSource`, so any pairing change cancels a running flow.
     let tesla: TeslaLinkModel
+    /// One command coordinator for every surface, keyed by backend and vehicle.
+    let commandCoordinator: VehicleCommandCoordinator
 
     var isDemoMode: Bool { pairingState == .demo }
     var isPaired: Bool { pairingState != .unpaired }
@@ -103,7 +105,7 @@ final class AppModel {
         set { Task { await setAppLockEnabled(newValue) } }
     }
 
-    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil) {
+    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil) {
         let demoIndex = launchArguments.firstIndex(of: "-demo-mode")
         let launchDemo = demoIndex.flatMap { index -> Bool? in
             guard launchArguments.indices.contains(index + 1) else { return nil }
@@ -114,6 +116,7 @@ final class AppModel {
         self.settings = settings; self.tokenStore = tokenStore; self.session = session; self.appLock = appLock
         self.surfaces = surfaces ?? WidgetSync(settings: settings)
         tesla = TeslaLinkModel(webAuth: teslaWebAuth ?? TeslaWebAuthenticator())
+        commandCoordinator = VehicleCommandCoordinator(store: commandIntentStore)
         isLaunchDemo = launchDemo
         if launchDemo || settings.demoMode {
             pairingState = .demo; dataSource = MockDataSource(empty: launchDemo ? false : settings.emptyDemo)
@@ -121,7 +124,12 @@ final class AppModel {
         isLocked = isPaired && settings.appLockEnabled
         updateSurfaces()
         tesla.setClient(dataSource as? any TeslaAccountClient)
-        tesla.onConnected = { [weak self] in await self?.loadVehicles() }
+        tesla.onConnected = { [weak self] in
+            guard let self else { return }
+            await self.loadVehicles()
+            await self.commandCoordinator.refreshCapabilities(dataSource: self.dataSource,
+                                                               vehicleID: self.selectedVehicleID)
+        }
     }
     private func updateSurfaces() { surfaces.setContext(surfaceContext) }
     /// Retry Keychain access when protected data becomes available after prewarm.

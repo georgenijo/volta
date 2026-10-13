@@ -1,9 +1,11 @@
-# Volta commander — Phase 2 groundwork
+# Volta commander — signed vehicle controls
 
 A private, single-account Go service in front of Tesla's official
-`tesla-http-proxy`. Phase 1 continues returning `501 commands_unavailable`.
-The service defaults to **stub mode, commands disabled**. No developer app,
-Tesla credentials, partner registration, virtual key, or deployment is assumed.
+`tesla-http-proxy`. The app and volta-api use its typed, allowlisted command
+contract. The service still defaults to **stub mode, commands disabled**; live
+controls require explicit deployment, Tesla command consent and a paired key.
+`GET /v1/vehicles/{id}/commands` exposes local readiness without waking the car
+or reading Tesla. Stub mode never advertises live controls.
 
 ## Architecture and upstream decision (checked 2026-10-07)
 
@@ -128,8 +130,12 @@ not vehicle execution or Tesla authentication.
   restarts. Replays consume no budget. Wake/retry is one wake, up to 30 seconds
   of state polling at two-second intervals, then at most one command retry.
   Only explicit asleep rejections permit this path; generic failures do not.
-  A logical command can therefore create two command sends plus a wake and
-  state reads. Account for that when setting Tesla's billing cap.
+  Each top-level request reserves estimated spend before sending:
+  commands $0.001, wake $0.02, state reads $0.002. They share the existing Fleet
+  API lane and combined telemetry cap; no cap is raised. Failed/uncertain calls
+  are retained in the estimate; receipt replays cost nothing. Signing-proxy
+  handshakes/retries may add billed calls beyond this estimate; Tesla's configured
+  billing limit remains the backstop.
 - `audit.jsonl` and stdout contain timestamps, event, local vehicle ID,
   command name, a hash-derived request ID, and result code/status. Never tokens,
   OAuth codes/state/verifiers, VINs, parameters, or raw upstream responses.
@@ -304,3 +310,19 @@ known gear, known detailed charge state and valid location; missing core data
 falls back instead of inventing a session transition. Real-car acceptance and
 compatibility with an operator's installed TeslaMate version remain deployment
 gates; unit/SQL tests do not establish those.
+
+## Enabling app controls
+
+Append `compose.commands.yaml` **last** to the existing compose overlay list and
+include `--profile live`. Preserve the installed sign-in/collector/telemetry
+overlays. No new ports or secrets are added. Missing command consent appears as
+**Enable vehicle controls** in the app. Existing read-only credentials remain
+usable during the upgrade, including when the owner cancels or denies consent.
+The readiness hint uses Tesla-issued scope metadata and encrypted legacy token
+claims; Tesla still enforces token validity, pairing and vehicle permissions.
+
+Seat heating, steering heat and maximum defrost use the pinned signing proxy.
+Locate sound is unavailable because upstream does not implement `remote_boombox`;
+it is never replaced with a horn. Verify the private readiness endpoint, then
+have the owner perform a deliberate action. Local readiness and synthetic tests
+are not proof that a physical vehicle executed a command.
