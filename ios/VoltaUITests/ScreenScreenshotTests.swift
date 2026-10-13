@@ -137,6 +137,57 @@ final class ScreenScreenshotTests: XCTestCase {
         try scroll("controls", screenshot: "controls-bottom")
     }
 
+    func testClimateControlsFitAndSend() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try tap("button.controls")
+        try waitForScreen("controls")
+        let climate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Climate controls")).firstMatch
+        for _ in 0..<5 where !climate.isHittable { element("scroll.controls").swipeUp() }
+        XCTAssertTrue(climate.isHittable)
+        climate.tap()
+        try waitForScreen("climate")
+        for control in [app.buttons["Back"], app.buttons["Increase driver target"],
+                        app.buttons["Increase passenger target"], element("button.seat.0.0"),
+                        element("button.seat.0.3")] {
+            XCTAssertTrue(control.isHittable, "Every climate action must fit on screen")
+            XCTAssertGreaterThanOrEqual(control.frame.minX, app.frame.minX)
+            XCTAssertLessThanOrEqual(control.frame.maxX, app.frame.maxX)
+        }
+        app.buttons["Increase driver target"].tap()
+        app.buttons["Set cabin temperatures"].tap()
+        XCTAssertTrue(app.staticTexts["Demo simulated set cabin temperatures. No vehicle was contacted."].waitForExistence(timeout: 5))
+        capture("climate-controls")
+        try tap("button.seat.0.3")
+        XCTAssertTrue(app.staticTexts["Demo simulated set driver seat heat to 3. No vehicle was contacted."].waitForExistence(timeout: 5))
+        capture("climate-seat-command")
+    }
+
+    func testControlRecoveryRequiresFreshConfirmation() throws {
+        defer { app.terminate() }
+        continueAfterFailure = false
+        app.launchArguments = ["-demo-mode", "YES", "-demo-command-outcome-unknown", "-VoltaDisableMotion"]
+        app.launch()
+        try waitForScreen("dashboard")
+        try tap("button.controls")
+        try waitForScreen("controls")
+        let openFrunk = app.buttons["Open"].firstMatch
+        XCTAssertTrue(openFrunk.waitForExistence(timeout: 10))
+        openFrunk.tap()
+        let original = app.alerts["Open the frunk?"]
+        XCTAssertTrue(original.waitForExistence(timeout: 5))
+        original.buttons["Open frunk"].tap()
+        let retry = app.buttons["Retry request"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        retry.tap()
+        let confirmation = app.alerts["Retry open frunk?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirmation.buttons["Retry Open frunk"].exists)
+        capture("controls-retry-confirmation")
+        confirmation.buttons["Cancel"].tap()
+        XCTAssertTrue(retry.exists, "Cancel keeps the unresolved intent visible")
+    }
+
     func testTeslaSignInNoVehicle() throws {
         defer { app.terminate() }
         continueAfterFailure = false

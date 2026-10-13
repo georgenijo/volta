@@ -116,7 +116,7 @@ final class AppModel {
         self.settings = settings; self.tokenStore = tokenStore; self.session = session; self.appLock = appLock
         self.surfaces = surfaces ?? WidgetSync(settings: settings)
         tesla = TeslaLinkModel(webAuth: teslaWebAuth ?? TeslaWebAuthenticator())
-        commandCoordinator = VehicleCommandCoordinator(store: commandIntentStore)
+        commandCoordinator = VehicleCommandCoordinator(store: commandIntentStore ?? (launchDemo ? VehicleCommandIntentStore(inMemory: []) : nil))
         isLaunchDemo = launchDemo
         if launchDemo || settings.demoMode {
             pairingState = .demo; dataSource = MockDataSource(empty: launchDemo ? false : settings.emptyDemo)

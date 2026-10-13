@@ -100,6 +100,7 @@ struct ControlsView: View {
     @State private var model: ControlsModel
     @State private var localCoordinator = VehicleCommandCoordinator()
     @State private var confirmation: CommandConfirmation?
+    @State private var controlNotice: String?
     private let iconInset: CGFloat = 52
 
     init(initialStatus: VehicleStatus?, vehicleName: String?) {
@@ -115,6 +116,10 @@ struct ControlsView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     identity
                     readiness.padding(.top, VoltaSpacing.lg)
+                    if let controlNotice {
+                        InlineBanner(systemImage: "location.slash", message: controlNotice, tint: .voltaAmber)
+                            .padding(.top, VoltaSpacing.md)
+                    }
                     access.padding(.top, VoltaSpacing.xxl)
                     chargingSection.padding(.top, VoltaSpacing.xxl)
                     comfort.padding(.top, VoltaSpacing.xxl)
@@ -191,7 +196,11 @@ struct ControlsView: View {
                     PillButton("Enable vehicle controls", systemImage: "key.horizontal", style: .accent) {
                         Task { await app?.tesla.refresh(); app?.tesla.enableVehicleControls() }
                     }
+                    .disabled(app?.tesla.isBusy == true)
                     Text(TeslaLinkModel.commandScopeDisclosure).font(.footnote).foregroundStyle(Color.voltaTextSecondary)
+                    if let message = app?.tesla.failureMessage {
+                        InlineBanner(systemImage: "exclamationmark.circle", message: message, tint: .voltaAmber)
+                    }
                 }
             }
         } else if coordinator.capability(dataSource: dataSource, vehicleID: vehicleID) == nil {
@@ -301,11 +310,15 @@ struct ControlsView: View {
                 Text("Unavailable").font(.footnote).foregroundStyle(Color.voltaTextTertiary)
             }
             HairlineDivider(leadingInset: iconInset)
-            actionRow(icon: "house.fill", title: "HomeLink", subtitle: homeLinkSubtitle, button: "Activate",
-                      command: homeLinkCommand ?? .triggerHomeLink(latitude: 0, longitude: 0), extraEnabled: homeLinkCommand != nil) {
-                guard let command = homeLinkCommand else { return }
-                confirm(command, label: "Activate HomeLink", title: "Activate HomeLink now?",
-                        message: "This may open or close a nearby garage door using the vehicle’s last location. Confirm the area is clear and you can observe the door.")
+            TimelineView(.periodic(from: .now, by: 10)) { context in
+                let nearby = Self.homeLinkCommand(status: model.status, now: context.date)
+                actionRow(icon: "house.fill", title: "HomeLink",
+                          subtitle: nearby == nil ? "Needs a location observed within 5 minutes" : "Activate a nearby garage door",
+                          button: "Activate", command: nearby ?? .triggerHomeLink(latitude: 0, longitude: 0), extraEnabled: nearby != nil) {
+                    guard let command = homeLinkCommand else { return }
+                    confirm(command, label: "Activate HomeLink", title: "Activate HomeLink now?",
+                            message: "This may open or close a nearby garage door. Confirm the area is clear and you can observe the door.")
+                }
             }
         }
     }
@@ -319,9 +332,6 @@ struct ControlsView: View {
         let age = now.timeIntervalSince(observedAt)
         guard (0...300).contains(age) else { return nil }
         return .triggerHomeLink(latitude: location.latitude, longitude: location.longitude)
-    }
-    private var homeLinkSubtitle: String {
-        homeLinkCommand == nil ? "Needs a vehicle location observed within 5 minutes" : "Uses the vehicle’s recent observed coordinates"
     }
 
     @ViewBuilder
@@ -372,8 +382,15 @@ struct ControlsView: View {
         coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
     }
     private func run(_ command: VehicleCommand, label: String) {
-        Task { await model.send(command, label: label, coordinator: coordinator, dataSource: dataSource,
-                                vehicleID: vehicleID, surfaces: surfaces) }
+        Task {
+            if case .triggerHomeLink = command, homeLinkCommand != command {
+                controlNotice = "The vehicle location changed or expired. Refresh status before activating HomeLink."
+                return
+            }
+            controlNotice = nil
+            await model.send(command, label: label, coordinator: coordinator, dataSource: dataSource,
+                             vehicleID: vehicleID, surfaces: surfaces)
+        }
     }
     private func confirm(_ command: VehicleCommand, label: String, title: String, message: String) {
         guard canSend(command) else { return }
@@ -464,7 +481,7 @@ struct ClimateControlsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VoltaHeader("Climate") {
+                VoltaHeader("Climate", identifier: "screen.climate") {
                     GlassCircleButton(systemImage: "chevron.left", size: 48, accessibilityLabel: "Back") { dismiss() }
                 } trailing: { EmptyView() }
                 .padding(.horizontal, -(VoltaSpacing.screen - 4) + 4)
@@ -495,6 +512,7 @@ struct ClimateControlsView: View {
                     .font(.footnote).foregroundStyle(Color.voltaTextSecondary).padding(.top, VoltaSpacing.xl)
             }.padding(.horizontal, VoltaSpacing.screen + 4)
         }
+        .accessibilityIdentifier("scroll.climate")
         .overlay(alignment: .bottom) {
             VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
                 Task { await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
@@ -538,8 +556,9 @@ struct ClimateControlsView: View {
             HStack(spacing: VoltaSpacing.sm) {
                 ForEach(0...3, id: \.self) { level in
                     let command = VehicleCommand.seatHeater(heater: heater, level: level)
-                    PillButton(level == 0 ? "Off" : "\(level)") { send(command, label: "Set \(title) heat to \(level)") }
+                    PillButton(level == 0 ? "Off" : "\(level)", size: .wide) { send(command, label: "Set \(title) heat to \(level)") }
                         .disabled(!canSend(command)).opacity(canSend(command) ? 1 : 0.45)
+                        .accessibilityIdentifier("button.seat.\(heater).\(level)")
                 }
             }.padding(.leading, 52).padding(.bottom, VoltaSpacing.sm)
         }
@@ -571,7 +590,12 @@ private struct VehicleCommandActivityBanner: View {
     let dataSource: any VoltaDataSource
     let vehicleID: Int
     let refreshObservedStatus: () -> Void
-    @State private var acknowledgeActivity: VehicleCommandCoordinator.Activity?
+    private struct Confirmation: Identifiable {
+        let id = UUID()
+        let activity: VehicleCommandCoordinator.Activity
+        let isRetry: Bool
+    }
+    @State private var confirmation: Confirmation?
 
     var body: some View {
         Group {
@@ -591,33 +615,42 @@ private struct VehicleCommandActivityBanner: View {
                 }
             }
         }
-        .alert(item: $acknowledgeActivity) { activity in
-            Alert(title: Text("Allow new vehicle commands?"),
-                  message: Text("The earlier \(activity.label.lowercased()) action may have run. Only continue if you checked the vehicle. This clears the saved request and allows a new deliberate action."),
-                  primaryButton: .cancel(),
-                  secondaryButton: .destructive(Text("I checked the vehicle")) {
-                      coordinator.acknowledgeCheckedVehicle(activity.id, dataSource: dataSource, vehicleID: vehicleID)
-                  })
+        .alert(item: $confirmation) { item in
+            let activity = item.activity
+            if item.isRetry {
+                return Alert(title: Text("Retry \(activity.label.lowercased())?"),
+                             message: Text("If the original request was not accepted, this can execute it now. " + activity.command.retryCaution),
+                             primaryButton: .cancel(), secondaryButton: .destructive(Text("Retry \(activity.label)")) {
+                    Task {
+                        let result = await coordinator.retry(activity.id, dataSource: dataSource, vehicleID: vehicleID)
+                        if case .succeeded(let simulated) = result, !simulated { refreshObservedStatus() }
+                    }
+                })
+            }
+            return Alert(title: Text("Allow new vehicle commands?"),
+                         message: Text("The earlier \(activity.label.lowercased()) action may have run. Only continue if you checked the vehicle. This clears the saved request and allows a new deliberate action."),
+                         primaryButton: .cancel(), secondaryButton: .destructive(Text("I checked the vehicle")) {
+                coordinator.acknowledgeCheckedVehicle(activity.id, dataSource: dataSource, vehicleID: vehicleID)
+            })
         }
     }
 
     @ViewBuilder private func action(_ activity: VehicleCommandCoordinator.Activity, now: Date) -> some View {
         if activity.requiresAcknowledgement {
-            Button("I checked the vehicle") { acknowledgeActivity = activity }
+            Button("I checked the vehicle") { confirmation = Confirmation(activity: activity, isRetry: false) }
                 .buttonStyle(.borderedProminent).fixedSize()
+                .disabled(coordinator.isBusy(dataSource: dataSource, vehicleID: vehicleID))
         } else if activity.canRetry {
             let remaining = max(0, activity.retryNotBefore?.timeIntervalSince(now) ?? 0)
             VStack(spacing: 4) {
-                Button(remaining > 0 ? "Check in \(Int(ceil(remaining)))s" : "Check again") {
-                    Task {
-                        let result = await coordinator.retry(activity.id, dataSource: dataSource, vehicleID: vehicleID)
-                        if case .succeeded(let simulated) = result, !simulated { refreshObservedStatus() }
-                    }
+                Button(remaining > 0 ? "Retry in \(Int(ceil(remaining)))s" : "Retry request") {
+                    confirmation = Confirmation(activity: activity, isRetry: true)
                 }
                 .buttonStyle(.bordered).fixedSize()
                 .disabled(remaining > 0 || coordinator.isBusy(dataSource: dataSource, vehicleID: vehicleID))
-                Button("I checked the vehicle") { acknowledgeActivity = activity }
+                Button("I checked the vehicle") { confirmation = Confirmation(activity: activity, isRetry: false) }
                     .font(.caption).foregroundStyle(Color.voltaTextSecondary).fixedSize()
+                    .disabled(coordinator.isBusy(dataSource: dataSource, vehicleID: vehicleID))
             }
         } else if coordinator.pending(dataSource: dataSource, vehicleID: vehicleID).isEmpty {
             Button { coordinator.clearActivity(dataSource: dataSource, vehicleID: vehicleID) } label: {

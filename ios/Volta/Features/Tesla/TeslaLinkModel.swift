@@ -76,7 +76,7 @@ final class TeslaLinkModel {
     /// Starts an additive consent upgrade. It does not disconnect or discard
     /// the account that continues serving read-only telemetry.
     func enableVehicleControls() {
-        guard canEnableCommands, let client else { return }
+        guard canEnableCommands || canSignIn, let client else { return }
         begin(client: client)
     }
 
@@ -209,6 +209,9 @@ final class TeslaLinkModel {
             // Leave the sign-in flow first, or the reconciling status is ignored.
             state = .loading
             await loadStatus(generation: current)
+            if status?.commandScopeRequired == true || status?.needsReauth == true {
+                fail("Use the Tesla account already connected to Volta. To switch accounts, disconnect it in Account settings first.", retryable: false)
+            }
         case .server(code: "tesla_link_unavailable", _)?, .notFound?:
             pendingCallback = nil
             state = .notAvailable

@@ -96,6 +96,33 @@ private final class FakeTeslaClient: TeslaAccountClient, Sendable {
         XCTAssertFalse(text.contains("tesla-callback"), file: file, line: line)
     }
 
+    func testControlsConsentActionConnectsAndReauthorizes() async {
+        for initial in [status(), status(needsReauth: true)] {
+            let client = FakeTeslaClient()
+            client.setStatus(.success(initial), .success(status(connected: true)))
+            let web = FakeWebAuth()
+            let model = await makeModel(client, web: web)
+            model.enableVehicleControls()
+            await model.waitForFlow()
+            XCTAssertEqual(client.calls.start, 1)
+            XCTAssertEqual(web.requests.count, 1)
+            XCTAssertEqual(model.state, .connected)
+            XCTAssertEqual(client.calls.disconnect, 0)
+        }
+    }
+
+    func testDifferentAccountConsentUpgradeShowsActionableError() async {
+        let client = FakeTeslaClient()
+        client.setStatus(.success(status(connected: true, commandsEnabled: true, commandScopeRequired: true)))
+        client.setComplete(.failure(VoltaError.server(code: "tesla_already_connected", message: "raw upstream message")))
+        let model = await makeModel(client)
+        model.enableVehicleControls()
+        await model.waitForFlow()
+        XCTAssertTrue(model.failureMessage?.contains("Tesla account already connected") == true)
+        XCTAssertTrue(model.status?.connected == true)
+        XCTAssertEqual(client.calls.disconnect, 0)
+    }
+
     func testSuccessCompletesWithCallbackAndReloadsVehicles() async {
         let client = FakeTeslaClient(); client.setStatus(.success(status()), .success(status(connected: true)))
         let web = FakeWebAuth()

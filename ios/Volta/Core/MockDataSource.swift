@@ -325,6 +325,12 @@ struct MockDataSource: VoltaDataSource {
     func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult {
         try check(vehicleID)
         _ = try command.encodedBody()
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-demo-command-outcome-unknown") {
+            throw VehicleCommandFailure(status: 504, code: "command_outcome_unknown", requestID: nil,
+                                        retryAfter: nil, replayed: false)
+        }
+        #endif
         return VehicleCommandResult(command: command.name, requestID: "demo", replayed: false)
     }
 }

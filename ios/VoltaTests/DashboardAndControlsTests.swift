@@ -567,6 +567,68 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         VehicleCommandCoordinator(store: VehicleCommandIntentStore(inMemory: records))
     }
 
+    func testReplayRefusalCannotDiscardTheOriginalUnknownOutcome() async {
+        let source = StubSource()
+        let record = PendingVehicleCommand(intentID: UUID(), backendID: source.commandBackendID,
+                                           vehicleID: 1, command: .flash, label: "Flash lights", createdAt: .now)
+        let commands = coordinator([record])
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        source.commandHandler = { _, _ in
+            throw VehicleCommandFailure(status: 409, code: "command_scope_required", requestID: nil,
+                                        retryAfter: nil, replayed: false)
+        }
+        let result = await commands.retry(record.intentID, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(result, .unknown)
+        XCTAssertEqual(commands.pending(dataSource: source, vehicleID: 1).map(\.intentID), [record.intentID])
+        XCTAssertEqual(commands.activity(dataSource: source, vehicleID: 1)?.phase, .unknown)
+
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertFalse(commands.canStart(.flash, dataSource: source, vehicleID: 1))
+        source.commandHandler = { _, _ in
+            throw VehicleCommandFailure(status: 409, code: "command_rejected", requestID: "synthetic-receipt",
+                                        retryAfter: nil, replayed: true)
+        }
+        let settled = await commands.retry(record.intentID, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(settled, .failed)
+        XCTAssertTrue(commands.pending(dataSource: source, vehicleID: 1).isEmpty)
+    }
+
+    func testHomeLinkSavedCoordinatesCanNeverBeReplayed() async {
+        let source = StubSource()
+        let record = PendingVehicleCommand(intentID: UUID(), backendID: source.commandBackendID, vehicleID: 1,
+                                           command: .triggerHomeLink(latitude: 37.77, longitude: -122.42),
+                                           label: "Activate HomeLink", createdAt: .now)
+        let commands = coordinator([record])
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertFalse(commands.activity(dataSource: source, vehicleID: 1)?.canRetry ?? true)
+        let result = await commands.retry(record.intentID, dataSource: source, vehicleID: 1)
+        let sent = await source.commands.snapshot()
+        XCTAssertEqual(result, .unknown)
+        XCTAssertTrue(sent.isEmpty)
+        XCTAssertEqual(commands.pending(dataSource: source, vehicleID: 1).count, 1)
+        commands.acknowledgeCheckedVehicle(record.intentID, dataSource: source, vehicleID: 1)
+        XCTAssertTrue(commands.pending(dataSource: source, vehicleID: 1).isEmpty)
+    }
+
+    func testRefreshingAnActiveSendPreservesPendingUIAndPreventsAcknowledgement() async {
+        let source = StubSource(), gate = SectionGate(), commands = coordinator()
+        source.commandHandler = { command, _ in
+            await gate.wait()
+            return VehicleCommandResult(command: command.name, requestID: "synthetic-receipt", replayed: false)
+        }
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let send = Task { await commands.perform(.flash, label: "Flash lights", dataSource: source, vehicleID: 1) }
+        while !commands.isBusy(dataSource: source, vehicleID: 1) { await Task.yield() }
+        let intent = commands.pending(dataSource: source, vehicleID: 1).first!
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertEqual(commands.activity(dataSource: source, vehicleID: 1)?.phase, .pending)
+        commands.acknowledgeCheckedVehicle(intent.intentID, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(commands.pending(dataSource: source, vehicleID: 1).count, 1)
+        await gate.open()
+        _ = await send.value
+        XCTAssertTrue(commands.pending(dataSource: source, vehicleID: 1).isEmpty)
+    }
+
     func testUnknownObservedStatesRemainUnknownAndOfferTypedActions() async throws {
         let model = ControlsModel(status: makeStatus(locked: nil, climateOn: nil, sentry: nil,
                                                      chargeLimit: nil, chargingState: nil))

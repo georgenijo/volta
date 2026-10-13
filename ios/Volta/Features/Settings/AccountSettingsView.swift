@@ -117,7 +117,7 @@ struct VehicleSettingsView: View {
                             ScreenKit.ValueRow(title: "Odometer") { secondary(units.formatDistance(status?.odometerKm, fractionDigits: 0)) }
                             ScreenKit.ValueRow(title: "Software", showsDivider: false) { secondary(status?.firmware ?? vehicle.firmware ?? "—") }
                         }
-                        ScreenKit.GroupCard(title: "Data source", footer: "TeslaMate on your server collects everything Volta shows. Vehicle commands arrive in a later phase.") {
+                        ScreenKit.GroupCard(title: "Data source", footer: "Your server combines TeslaMate history with live telemetry. Vehicle controls use your connected Tesla account.") {
                             ScreenKit.ValueRow(title: "Logger") { secondary("TeslaMate") }
                             ScreenKit.ValueRow(title: "Last update", showsDivider: false) {
                                 secondary(status.map { VoltaFormat.relativeDate($0.updatedAt) } ?? "—")

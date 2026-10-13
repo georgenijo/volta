@@ -64,6 +64,27 @@ enum VehicleCommand: Codable, Equatable, Hashable, Sendable {
         "steering_wheel_heat", "defrost",
     ]
 
+    /// A saved HomeLink location can be stale by the time recovery is attempted.
+    /// The owner must check the vehicle, then start a fresh nearby action.
+    var allowsSavedRetry: Bool {
+        if case .triggerHomeLink = self { return false }
+        return true
+    }
+
+    var retryCaution: String {
+        switch self {
+        case .unlock: "This will remotely unlock all doors. Make sure the vehicle is secure."
+        case .lock: "This will remotely lock all doors."
+        case .actuateTrunk(whichTrunk: .front): "The frunk can only be closed by hand. Make sure nothing is above it."
+        case .actuateTrunk: "Check clearance before actuating the trunk."
+        case .windowControl: "Make sure hands and objects are clear of every window."
+        case .openChargePort: "This remotely opens the charge port door."
+        case .closeChargePort: "Make sure no charging connector is inserted."
+        case .honk: "This can sound the vehicle horn and disturb people nearby."
+        default: "Confirm that you want the vehicle to perform this action now."
+        }
+    }
+
     func encodedBody() throws -> Data {
         let encoder = JSONEncoder()
         switch self {
@@ -278,6 +299,7 @@ final class VehicleCommandCoordinator {
     private(set) var activities: [String: Activity] = [:]
     private var inFlight: Set<String> = []
     private var storageUnavailable = false
+    private var intentRevision = 0
     @ObservationIgnored private let store: VehicleCommandIntentStore
 
     init(store: VehicleCommandIntentStore? = nil) {
@@ -293,6 +315,9 @@ final class VehicleCommandCoordinator {
     }
 
     func pending(dataSource: any VoltaDataSource, vehicleID: Int) -> [PendingVehicleCommand] {
+        // The durable store itself is not observable. Keep views subscribed even
+        // when canStart short-circuits on a pending record before reading inFlight.
+        _ = intentRevision
         do { return try store.all(backendID: dataSource.commandBackendID, vehicleID: vehicleID) }
         catch {
             storageUnavailable = true
@@ -325,6 +350,9 @@ final class VehicleCommandCoordinator {
         } catch {
             if capabilities[id] == nil { capabilities[id] = .unavailable }
         }
+        // Reopening the sheet must not turn an active send into a recoverable
+        // unknown result or expose acknowledgement before it finishes.
+        guard !isBusy(dataSource: dataSource, vehicleID: vehicleID) else { return }
         let saved = pending(dataSource: dataSource, vehicleID: vehicleID)
         if storageUnavailable {
             capabilities[id] = VehicleCommandCapabilities(available: false, reason: "intent_storage_unavailable", commands: [])
@@ -340,8 +368,8 @@ final class VehicleCommandCoordinator {
                                       message: expired
                                         ? "This unresolved request is over 24 hours old and can no longer be replayed. Check the vehicle before allowing new commands."
                                         : "This request has no confirmed result. Check the vehicle or check the saved request again.",
-                                      canRetry: !expired, retryNotBefore: record.retryNotBefore,
-                                      requiresAcknowledgement: expired)
+                                      canRetry: !expired && record.command.allowsSavedRetry, retryNotBefore: record.retryNotBefore,
+                                      requiresAcknowledgement: expired || !record.command.allowsSavedRetry)
         }
     }
 
@@ -356,6 +384,13 @@ final class VehicleCommandCoordinator {
     func retry(_ intentID: UUID, dataSource: any VoltaDataSource, vehicleID: Int) async -> Outcome {
         guard let record = pending(dataSource: dataSource, vehicleID: vehicleID).first(where: { $0.intentID == intentID }) else {
             return .failed
+        }
+        guard record.command.allowsSavedRetry else {
+            activities[key(dataSource: dataSource, vehicleID: vehicleID)] = Activity(
+                id: record.intentID, command: record.command, label: record.label, phase: .unknown,
+                message: "Check the vehicle before a new HomeLink action with a fresh location.",
+                canRetry: false, requiresAcknowledgement: true)
+            return .unknown
         }
         guard !record.isExpired() else {
             let id = key(dataSource: dataSource, vehicleID: vehicleID)
@@ -375,9 +410,10 @@ final class VehicleCommandCoordinator {
     }
 
     func acknowledgeCheckedVehicle(_ intentID: UUID, dataSource: any VoltaDataSource, vehicleID: Int) {
+        guard !isBusy(dataSource: dataSource, vehicleID: vehicleID) else { return }
         guard pending(dataSource: dataSource, vehicleID: vehicleID).contains(where: { $0.intentID == intentID }) else { return }
         do {
-            try store.remove(intentID)
+            try removeIntent(intentID)
             activities.removeValue(forKey: key(dataSource: dataSource, vehicleID: vehicleID))
         } catch {
             storageUnavailable = true
@@ -393,7 +429,7 @@ final class VehicleCommandCoordinator {
         inFlight.insert(id)
         do {
             // This completed atomic write is the gate before any network send.
-            try store.upsert(record)
+            try saveIntent(record)
         } catch {
             storageUnavailable = true
             capabilities[id] = VehicleCommandCapabilities(available: false, reason: "intent_storage_unavailable", commands: [])
@@ -408,7 +444,7 @@ final class VehicleCommandCoordinator {
         defer { inFlight.remove(id) }
         do {
             _ = try await dataSource.command(vehicleID: record.vehicleID, command: record.command, intentID: record.intentID)
-            do { try store.remove(record.intentID) }
+            do { try removeIntent(record.intentID) }
             catch { storageUnavailable = true }
             let simulated = dataSource.simulatesVehicleCommands
             activities[id] = Activity(id: record.intentID, command: record.command, label: record.label,
@@ -418,31 +454,49 @@ final class VehicleCommandCoordinator {
                                       canRetry: false)
             return .succeeded(simulated: simulated)
         } catch let failure as VehicleCommandFailure {
+            // A refusal while trying to recover a saved intent (for example,
+            // expired Tesla consent) says nothing about the original send.
+            // Only a replayed terminal receipt can settle that older intent.
+            let unknown = failure.isUnresolved || (isReplay && !failure.replayed)
             var unresolvedRecord = record
-            if failure.isUnresolved {
+            if unknown {
                 unresolvedRecord.retryNotBefore = Self.retryDate(failure.retryAfter)
-                do { try store.upsert(unresolvedRecord) }
+                do { try saveIntent(unresolvedRecord) }
                 catch { storageUnavailable = true }
             } else {
-                do { try store.remove(record.intentID) }
+                do { try removeIntent(record.intentID) }
                 catch { storageUnavailable = true }
             }
             if ["commands_unavailable", "authorization_required", "reauthorization_required",
                 "command_scope_required", "vehicle_not_found", "stub_mode"].contains(failure.code) {
                 capabilities[id] = VehicleCommandCapabilities(available: false, reason: failure.code, commands: [])
             }
-            let unknown = failure.isUnresolved
             activities[id] = Activity(id: record.intentID, command: record.command, label: record.label,
-                                      phase: unknown ? .unknown : .failure, message: failure.message,
-                                      canRetry: unknown, retryNotBefore: unresolvedRecord.retryNotBefore)
+                                      phase: unknown ? .unknown : .failure,
+                                      message: isReplay && unknown
+                                        ? "The saved request still has no confirmed result. " + failure.message
+                                        : failure.message,
+                                      canRetry: unknown && record.command.allowsSavedRetry, retryNotBefore: unresolvedRecord.retryNotBefore,
+                                      requiresAcknowledgement: unknown && !record.command.allowsSavedRetry)
             return unknown ? .unknown : .failed
         } catch {
             activities[id] = Activity(id: record.intentID, command: record.command, label: record.label,
                                       phase: .unknown,
                                       message: "The outcome is unknown. It may have completed; check the vehicle before trying again.",
-                                      canRetry: true)
+                                      canRetry: record.command.allowsSavedRetry,
+                                      requiresAcknowledgement: !record.command.allowsSavedRetry)
             return .unknown
         }
+    }
+
+    private func saveIntent(_ record: PendingVehicleCommand) throws {
+        try store.upsert(record)
+        intentRevision &+= 1
+    }
+
+    private func removeIntent(_ intentID: UUID) throws {
+        try store.remove(intentID)
+        intentRevision &+= 1
     }
 
     private func key(dataSource: any VoltaDataSource, vehicleID: Int) -> String {
