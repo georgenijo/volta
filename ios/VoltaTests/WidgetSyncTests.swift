@@ -442,6 +442,8 @@ final class ChargingActivityPlannerTests: XCTestCase {
         s.activeChargeId = session
         s.chargeStartedAt = startedAt
         s.chargeEnergyAddedKwh = energy
+        s.telemetryFreshness = TelemetryFreshness(connected: true, lastSeenAt: t0,
+                                                  recordedAt: ["ACChargingEnergyIn": t0, "DCChargingEnergyIn": t0])
         return s
     }
 
@@ -969,15 +971,27 @@ final class ChargingActivityPlannerTests: XCTestCase {
         let learnedTen = try update(planCharging([small], teslaMate(10, startedAt: processStart), latest: nil), "l")
         XCTAssertEqual(learnedTen.teslaMateChargeId, 10)
         // Telemetry returning to the session with the counter it kept through the outage says nothing.
+        var kept = smallAC
+        kept.telemetryFreshness?.recordedAt["ACChargingEnergyIn"] = t0.addingTimeInterval(-20 * 60)
         // (The process's record enriches the activity.)
-        XCTAssertEqual(planCharging([next(small, learnedTen)], smallAC,
+        XCTAssertEqual(planCharging([next(small, learnedTen)], kept,
                                     latest: charge(id: 10, start: processStart, added: 4.5)).start?.state.teslaMateChargeId, 10)
-        // Its next reading judges the learned process.
+        // So does one that rose before the outage, sampled long before the record.
+        kept.chargeEnergyAddedKwh = 2
+        XCTAssertEqual(planCharging([next(small, learnedTen)], kept,
+                                    latest: charge(id: 10, start: processStart, added: 6)).start?.state.teslaMateChargeId, 10)
+        // A reading sampled now judges the learned process.
         let recounted = try update(planCharging([next(small, learnedTen)], resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 2),
                                                 latest: charge(id: 10, start: processStart, added: 20)), "l")
         XCTAssertEqual(recounted.statusSessionId, -906)
         XCTAssertNil(recounted.teslaMateChargeId)
         XCTAssertEqual(recounted.otherChargeIds, [10])
+        // Nor is an earlier process rejected by a counter kept through an outage.
+        var retained = resumed(-915, startedAt: t0.addingTimeInterval(-600), energy: 6)
+        retained.fastCharger = true
+        retained.telemetryFreshness?.recordedAt["DCChargingEnergyIn"] = t0.addingTimeInterval(-8 * 60)
+        XCTAssertNil(try XCTUnwrap(planCharging([], retained, latest: charge(id: 10, start: processStart, added: 25)).start)
+            .state.otherChargeIds)
         // A process just ahead of a counter sampled a little earlier is still learned.
         let sampled = try started(planCharging([], resumed(-909, startedAt: t0.addingTimeInterval(-600), energy: 20),
                                                latest: nil), as: "m")

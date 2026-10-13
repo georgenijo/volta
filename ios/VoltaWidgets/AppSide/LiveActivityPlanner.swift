@@ -86,7 +86,7 @@ enum LiveActivityPlanner {
                 case .unknown:
                     action = .keep
                 case .charging:
-                    switch follow(activity, status: status, latestCharge: latestCharge, charges: charges) {
+                    switch follow(activity, status: status, latestCharge: latestCharge, charges: charges, now: now) {
                     case .enrich(let identity) where canRestart:
                         enriched = (identity, activity.state)
                         action = .dismiss
@@ -113,7 +113,7 @@ enum LiveActivityPlanner {
                     // Follow the charge to its end, which may come in a session it resumed in. Another
                     // charge's session is never followed, and one shown not to continue it is dropped.
                     let followed: ChargeIdentity
-                    switch follow(activity, status: status, latestCharge: latestCharge, charges: charges) {
+                    switch follow(activity, status: status, latestCharge: latestCharge, charges: charges, now: now) {
                     case .same(let identity), .enrich(let identity), .unrelated(let identity), .other(let identity):
                         followed = identity
                     }
@@ -141,7 +141,7 @@ enum LiveActivityPlanner {
                 if let session = liveSession(status) {
                     identity.session = session; identity.sessionStart = status.chargeStartedAt
                     identity.sessionStartObserved = status.chargeStartObserved != false
-                    rejectEarlierProcesses(&identity, status: status, records: page)
+                    rejectEarlierProcesses(&identity, status: status, records: page, now: now)
                 }
                 if liveSession(status) == nil, let process = namedProcess(status), !replaced.contains(process) {
                     identity.teslaMate = process
@@ -166,7 +166,9 @@ enum LiveActivityPlanner {
                 fastCharger: history?.fastCharger,
                 usesMiles: usesMiles)
             var state = chargingState(status: status, identity: identity, recordedEnergy: recorded, previous: nil)
-            state.counterKwh = state.counterKwh ?? enriched?.previous.counterKwh
+            if state.counterKwh == nil {
+                state.counterKwh = enriched?.previous.counterKwh; state.counterAt = enriched?.previous.counterAt
+            }
             // History records DC once any was drawn; its false may only mean none was seen yet.
             state.fastCharger = state.fastCharger ?? enriched?.previous.fastCharger
                 ?? (history?.fastCharger == true ? true : nil)
@@ -236,7 +238,8 @@ enum LiveActivityPlanner {
 
     /// Whether the status still describes the activity's charge.
     static func follow(_ activity: ChargingRunning, status: VehicleStatus, latestCharge: ChargeSummary?,
-                       charges: [ChargeSummary]? = nil) -> ChargeFollow {
+                       charges: [ChargeSummary]? = nil, now: Date? = nil) -> ChargeFollow {
+        let now = now ?? status.updatedAt
         var identity = identity(of: activity, latestCharge: latestCharge)
         let records = charges ?? latestCharge.map { [$0] } ?? []
         let named = status.chargeStartedAt
@@ -250,16 +253,11 @@ enum LiveActivityPlanner {
             }
             forget(known, in: &identity)
         }
-        // A process learned while history was away answers to history that arrives later, judged by
-        // the session's counter only once it has moved past the reading saved: the server keeps the
-        // last counter through an outage, too old for a growing total.
-        let fresh = identity.session != nil && identity.session == liveSession(status)
-            ? status.chargeEnergyAddedKwh.flatMap { now in activity.state.counterKwh.flatMap { now > $0 ? now : nil } }
-            : nil
+        // A process learned while history was away answers to history that arrives later.
+        let tracked = identity.session != nil && identity.session == liveSession(status)
         if let known = identity.teslaMate,
-           !fits(learned: identity, records: records, counter: fresh,
-                 readAt: status.updatedAt, onAC: (chargerKind(status) ?? activity.state.fastCharger) == false,
-                 status: status) {
+           !fits(learned: identity, records: records, counter: tracked ? status.chargeEnergyAddedKwh : nil,
+                 at: counterAt(status), onAC: (chargerKind(status) ?? activity.state.fastCharger) == false, now: now) {
             forget(known, in: &identity)
         }
         let shown = knowingDC(activity.state, attributes: activity.attributes, identity: identity, records: records)
@@ -329,7 +327,7 @@ enum LiveActivityPlanner {
             } else {
                 identity.session = session; identity.sessionStart = named; identity.sessionStartObserved = !resumed
             }
-            rejectEarlierProcesses(&identity, status: status, records: records)
+            rejectEarlierProcesses(&identity, status: status, records: records, now: now)
         } else if let process = teslaMateProcess(status), let named, identity.teslaMate == nil,
                   !identity.others.contains(process) {
             if identity.session != nil {
@@ -346,8 +344,7 @@ enum LiveActivityPlanner {
                     learned.teslaMate = process; learned.teslaMateStart = named; learned.processLearned = true
                     if activity.state.fastCharger == false && records.contains(where: { $0.id == process && $0.fastCharger })
                         || !fits(learned: learned, records: records, counter: activity.state.counterKwh,
-                                 readAt: activity.state.updatedAt, onAC: activity.state.fastCharger == false,
-                                 status: status) {
+                                 at: activity.state.counterAt, onAC: activity.state.fastCharger == false, now: now) {
                         identity.others.insert(process)
                         return .unrelated(identity)
                     }
@@ -388,6 +385,7 @@ enum LiveActivityPlanner {
                      fullAt: status.chargeReadyAt ?? status.minutesToFull.map { status.updatedAt.addingTimeInterval(Double($0) * 60) },
                      energyAddedKwh: live ?? recordedEnergy ?? previous?.energyAddedKwh,
                      counterKwh: live ?? previous?.counterKwh,
+                     counterAt: live != nil ? counterAt(status) : previous?.counterAt,
                      fastCharger: (identity.session != nil && identity.session == liveSession(status) ? chargerKind(status) : nil)
                         ?? previous?.fastCharger,
                      rangeKm: status.estRangeKm ?? status.ratedRangeKm,
@@ -508,21 +506,30 @@ enum LiveActivityPlanner {
     static let maxChargeRateKw = 300.0
     static let maxACChargeRateKw = 20.0
 
-    /// How much older a counter may be than the status it came with: energy is sampled once a
-    /// minute, while the status time moves with every other reading.
-    static let counterSampleAge: TimeInterval = 5 * 60
+    /// When telemetry sampled the status's charge counter, if it said: the server reads the DC
+    /// counter for a session that drew DC and the AC one otherwise.
+    static func counterAt(_ status: VehicleStatus) -> Date? {
+        guard status.chargeEnergyAddedKwh != nil else { return nil }
+        return status.telemetryFreshness?.recordedAt[status.fastCharger == true ? "DCChargingEnergyIn" : "ACChargingEnergyIn"]
+    }
+
+    /// Whether a recorded total is more than the car's counter, sampled at `at`, could have reached
+    /// by `now`: well below it, and beyond what charging could have added since. Without the
+    /// sample's time a retained counter can't be told from a current one, so it can't tell.
+    static func outruns(_ total: Double?, counter: Double?, at: Date?, onAC: Bool, now: Date) -> Bool {
+        guard let total, let counter, let at, !counts(counter, toward: total) else { return false }
+        let hours = (max(0, now.timeIntervalSince(at)) + 60) / 3600  // a minute for clocks and the fetch
+        return total > counter + (onAC ? maxACChargeRateKw : maxChargeRateKw) * hours + counterSlack
+    }
 
     /// Whether history leaves a process learned for the activity's session this charge's: it didn't
-    /// end before the session began, and the counter, shown at `readAt`, isn't well below a total it
-    /// couldn't have caught up with since.
-    static func fits(learned identity: ChargeIdentity, records: [ChargeSummary], counter: Double?, readAt: Date,
-                     onAC: Bool, status: VehicleStatus) -> Bool {
+    /// end before the session began, and its total doesn't outrun the session's counter.
+    static func fits(learned identity: ChargeIdentity, records: [ChargeSummary], counter: Double?, at: Date?,
+                     onAC: Bool, now: Date) -> Bool {
         guard identity.processLearned, let process = identity.teslaMate,
               let record = records.first(where: { $0.id == process }) else { return true }
         if let end = record.end, let start = identity.sessionStart, end <= start { return false }
-        guard let counter, let total = record.energyAddedKwh, !counts(counter, toward: total) else { return true }
-        let hours = (max(0, status.updatedAt.timeIntervalSince(readAt)) + counterSampleAge) / 3600
-        return total <= counter + (onAC ? maxACChargeRateKw : maxChargeRateKw) * hours + counterSlack
+        return !outruns(record.energyAddedKwh, counter: counter, at: at, onAC: onAC, now: now)
     }
 
     /// Whether a history record is this activity's charge: one of its ids, or, while its TeslaMate
@@ -536,15 +543,15 @@ enum LiveActivityPlanner {
     }
 
     /// Remembers each open TeslaMate process on the history page that started before a session
-    /// which began mid-charge as another charge when the session's counter sits well below its
-    /// total or it drew DC while the session charges on AC, so a later fallback to that process
+    /// which began mid-charge as another charge when its total outruns the session's counter or it
+    /// drew DC while the session charges on AC, so a later fallback to that process
     /// doesn't adopt it.
     static func rejectEarlierProcesses(_ identity: inout ChargeIdentity, status: VehicleStatus,
-                                       records: [ChargeSummary]) {
+                                       records: [ChargeSummary], now: Date) {
         guard !identity.sessionStartObserved, identity.teslaMate == nil, let start = identity.sessionStart else { return }
         let onAC = chargerKind(status) == false
         for open in records where open.end == nil && open.id > 0 && open.start < start && !identity.others.contains(open.id)
-            && (status.chargeEnergyAddedKwh != nil && !counts(status.chargeEnergyAddedKwh, toward: open.energyAddedKwh)
+            && (outruns(open.energyAddedKwh, counter: status.chargeEnergyAddedKwh, at: counterAt(status), onAC: onAC, now: now)
                 || onAC && open.fastCharger) {
             identity.others.insert(open.id)
         }
