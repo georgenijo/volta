@@ -34,7 +34,7 @@ struct DashboardView: View {
         }
         .preferredColorScheme(.dark)
         .task(id: vehicleID) {
-            await load()
+            await initialLoad()
             #if DEBUG
             // Screenshot aid: `-dashboardScrollY 420` starts the dashboard scrolled;
             let y = UserDefaults.standard.double(forKey: "dashboardScrollY")
@@ -85,6 +85,14 @@ struct DashboardView: View {
 
     private func load() async {
         await model.load(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
+    }
+
+    /// AppModel already fetched this account's vehicles before MainShell could
+    /// appear. Seed a new dashboard with that list; every later refresh goes
+    /// through `load()` and asks the server for a fresh list.
+    private func initialLoad() async {
+        await model.load(dataSource: dataSource, vehicleID: vehicleID,
+                         initialVehicles: app?.takeInitialDashboardVehicles(vehicleID: vehicleID), surfaces: surfaces)
     }
 
     // MARK: Map

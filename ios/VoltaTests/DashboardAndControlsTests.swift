@@ -5,13 +5,14 @@ import XCTest
 
 /// Data source whose dashboard calls are driven by per-test handlers.
 private final class StubSource: VoltaDataSource, @unchecked Sendable {
+    var vehiclesHandler: @Sendable () async throws -> [Vehicle] = { [Vehicle(id: 1, name: "Friday")] }
     var statusHandler: @Sendable () async throws -> VehicleStatus = { makeStatus() }
     var timelineHandler: @Sendable () async throws -> [TimelineSegment] = { [] }
     var summaryHandler: @Sendable (SummaryRange) async throws -> ActivitySummary = { makeSummary($0) }
     var commandHandler: @Sendable (String) async throws -> Void = { _ in throw VoltaError.commandsUnavailable }
     let commands = Recorder()
 
-    func vehicles() async throws -> [Vehicle] { [Vehicle(id: 1, name: "Friday")] }
+    func vehicles() async throws -> [Vehicle] { try await vehiclesHandler() }
     func status(vehicleID: Int) async throws -> VehicleStatus { try await statusHandler() }
     func summary(vehicleID: Int, range: SummaryRange) async throws -> ActivitySummary { try await summaryHandler(range) }
     func timeline(vehicleID: Int, hours: Int) async throws -> [TimelineSegment] { try await timelineHandler() }
@@ -82,6 +83,150 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         while !condition(), ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(1))
         }
+    }
+
+    func testInitialPreloadedVehiclesAvoidDuplicateVehicleRequest() async {
+        let source = StubSource(), calls = Counter(), model = DashboardModel()
+        source.vehiclesHandler = {
+            _ = await calls.next()
+            return [Vehicle(id: 1, name: "Fetched")]
+        }
+        let preloaded = [Vehicle(id: 1, name: "Preloaded"), Vehicle(id: 2, name: "Second")]
+
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: preloaded)
+
+        let vehicleCalls = await calls.value
+        XCTAssertEqual(vehicleCalls, 0)
+        XCTAssertEqual(model.vehicles.map(\.name), ["Preloaded", "Second"])
+        XCTAssertEqual(model.vehicle?.name, "Preloaded")
+        XCTAssertEqual(model.status?.batteryLevel, 72)
+    }
+
+    func testInvalidPreloadedVehiclesFallBackToFreshListForStatusErrorContext() async {
+        let source = StubSource(), calls = Counter(), model = DashboardModel()
+        source.vehiclesHandler = {
+            _ = await calls.next()
+            return [Vehicle(id: 2, name: "Friday")]
+        }
+        source.statusHandler = { throw VoltaError.server(code: "data_unavailable", message: "none") }
+
+        await model.load(dataSource: source, vehicleID: 2,
+                         initialVehicles: [Vehicle(id: 1, name: "Wrong vehicle")])
+
+        let vehicleCalls = await calls.value
+        XCTAssertEqual(vehicleCalls, 1)
+        XCTAssertEqual(model.phase, .noData)
+        XCTAssertEqual(model.vehicle?.name, "Friday")
+    }
+
+    func testFreshStatusIsNotHeldBySuspendedVehicleListRefresh() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.vehiclesHandler = {
+            await gate.wait()
+            return [Vehicle(id: 1, name: "Refreshed")]
+        }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1) }
+
+        await waitUntil { model.status != nil }
+
+        XCTAssertEqual(model.status?.batteryLevel, 72)
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertNil(model.vehicle, "the suspended list has not published yet")
+
+        await gate.open()
+        await task.value
+        XCTAssertEqual(model.vehicle?.name, "Refreshed")
+    }
+
+    func testVehicleRequestCancellationStillLoadsIndependentHistory() async {
+        let source = StubSource(), model = DashboardModel()
+        source.vehiclesHandler = { throw URLError(.cancelled) }
+        source.timelineHandler = { [segment] }
+        await model.load(dataSource: source, vehicleID: 1)
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertEqual(model.status?.batteryLevel, 72)
+        XCTAssertEqual(model.timeline.count, 1)
+        XCTAssertEqual(model.summaries.count, 3)
+        XCTAssertTrue(model.loadingSections.isEmpty)
+        XCTAssertTrue(model.failedSections.isEmpty)
+    }
+
+    func testAnAlreadyLoadedDashboardIgnoresAnotherSeed() async {
+        let source = StubSource(), calls = Counter(), model = DashboardModel()
+        source.vehiclesHandler = {
+            _ = await calls.next()
+            return [Vehicle(id: 1, name: "Current")]
+        }
+        let seed = [Vehicle(id: 1, name: "Old")]
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: seed)
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: seed)
+        let vehicleCalls = await calls.value
+        XCTAssertEqual(vehicleCalls, 1)
+        XCTAssertEqual(model.vehicle?.name, "Current")
+    }
+
+    func testExplicitRefreshStillFetchesAndUpdatesVehicleListAfterInitialSeed() async {
+        let source = StubSource(), calls = Counter(), model = DashboardModel()
+        source.vehiclesHandler = {
+            _ = await calls.next()
+            return [Vehicle(id: 1, name: "Renamed"), Vehicle(id: 2, name: "Second")]
+        }
+        await model.load(dataSource: source, vehicleID: 1,
+                         initialVehicles: [Vehicle(id: 1, name: "Preloaded")])
+
+        await model.load(dataSource: source, vehicleID: 1)
+
+        let vehicleCalls = await calls.value
+        XCTAssertEqual(vehicleCalls, 1)
+        XCTAssertEqual(model.vehicles.map(\.name), ["Renamed", "Second"])
+        XCTAssertEqual(model.vehicle?.name, "Renamed")
+    }
+
+    func testCancelledRefreshCannotPublishLateVehicleListOrHistory() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        await model.load(dataSource: source, vehicleID: 1,
+                         initialVehicles: [Vehicle(id: 1, name: "Preloaded")])
+        source.statusHandler = { makeStatus(battery: 55) }
+        source.vehiclesHandler = {
+            await gate.wait()
+            return [Vehicle(id: 1, name: "Late")]
+        }
+        source.summaryHandler = { makeSummary($0, km: 99) }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1) }
+        await waitUntil { model.status?.batteryLevel == 55 }
+
+        task.cancel()
+        await gate.open()
+        await task.value
+
+        XCTAssertEqual(model.status?.batteryLevel, 55, "status published before cancellation remains usable")
+        XCTAssertEqual(model.vehicle?.name, "Preloaded")
+        XCTAssertEqual(model.summaries[.today]?.distanceKm, 10, "buffered history must not publish after cancellation")
+        XCTAssertTrue(model.loadingSections.isEmpty)
+    }
+
+    func testSupersededRefreshCannotPublishLateVehicleList() async {
+        let old = StubSource(), gate = SectionGate(), model = DashboardModel()
+        await model.load(dataSource: old, vehicleID: 1,
+                         initialVehicles: [Vehicle(id: 1, name: "Preloaded")])
+        old.statusHandler = { makeStatus(battery: 40) }
+        old.vehiclesHandler = {
+            await gate.wait()
+            return [Vehicle(id: 1, name: "Stale")]
+        }
+        let first = Task { await model.load(dataSource: old, vehicleID: 1) }
+        await waitUntil { model.status?.batteryLevel == 40 }
+
+        let newer = StubSource()
+        newer.statusHandler = { makeStatus(battery: 90) }
+        newer.vehiclesHandler = { [Vehicle(id: 1, name: "Newest")] }
+        await model.load(dataSource: newer, vehicleID: 1)
+        await gate.open()
+        await first.value
+
+        XCTAssertEqual(model.status?.batteryLevel, 90)
+        XCTAssertEqual(model.vehicle?.name, "Newest")
+        XCTAssertEqual(model.vehicles.map(\.name), ["Newest"])
     }
 
     func testStatusBecomesUsableWhileAllHistoryRequestsAreSuspended() async {

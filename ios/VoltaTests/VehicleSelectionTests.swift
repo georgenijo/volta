@@ -57,6 +57,33 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
         XCTAssertFalse(settings.selectedVehicleIsExplicit)
     }
 
+    func testStartupVehicleListIsHandedToDashboardOnlyOnce() async throws {
+        let model = try pairedModel(settings()) { vehiclesJSON() }
+        await model.loadVehicles()
+        XCTAssertEqual(model.takeInitialDashboardVehicles(vehicleID: 2)?.map(\.id), [1, 2])
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2))
+        await model.loadVehicles()
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2), "later account refreshes must not seed a future remount")
+    }
+
+    func testVehicleSwitchDiscardsUnusedStartupHandoff() async throws {
+        let model = try pairedModel(settings()) { vehiclesJSON() }
+        await model.loadVehicles()
+        model.select(model.vehicles[0])
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 1), "a new dashboard after switching fetches current metadata")
+    }
+
+    func testStartupHandoffCannotSurviveAccountChangeOrBackground() async throws {
+        let model = try pairedModel(settings()) { vehiclesJSON() }
+        await model.loadVehicles()
+        model.didEnterBackground()
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2))
+        let other = try pairedModel(settings()) { vehiclesJSON() }
+        await other.loadVehicles()
+        other.tryDemoMode()
+        XCTAssertNil(other.takeInitialDashboardVehicles(vehicleID: 2))
+    }
+
     /// Settings as an earlier build left them: an id without the explicit flag.
     private func savedSettings(_ values: [String: Any]) -> UserSettings {
         let name = "VoltaSelectionTests.\(UUID())"

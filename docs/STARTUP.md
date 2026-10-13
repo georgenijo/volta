@@ -6,6 +6,12 @@ timeline or activity summary must not delay this state. History requests still
 run concurrently and fill their sections as they complete; this does not make
 the server queries themselves faster.
 
+The first dashboard consumes the vehicle list that `AppModel` just loaded,
+avoiding a second `/vehicles` request at startup. This handoff is used once and
+discarded on vehicle selection, account changes, or backgrounding. Later
+dashboard mounts and refreshes fetch a current list. Fresh status can appear
+while that list is pending; a list failure does not discard successful history.
+
 `DashboardModelTests` suspends history requests with explicit gates to verify
 that status and faster sections become usable while slower work remains pending.
 It also covers overlapping loads, cancellation and partial failures. Widget

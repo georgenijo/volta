@@ -7,7 +7,10 @@ final class AppModel {
     private(set) var isLaunchDemo = false
     private(set) var pairingState: PairingState = .unpaired
     private(set) var dataSource: any VoltaDataSource = MockDataSource(empty: true) {
-        didSet { tesla.setClient(dataSource as? any TeslaAccountClient) }
+        didSet {
+            dashboardCanUseInitialVehicles = false
+            tesla.setClient(dataSource as? any TeslaAccountClient)
+        }
     }
     private(set) var vehicles: [Vehicle] = []
     private(set) var hasLoadedVehicles = false
@@ -25,6 +28,7 @@ final class AppModel {
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var lockGeneration = UUID()
     @ObservationIgnored private var authenticateOnActive = false
+    @ObservationIgnored private var dashboardCanUseInitialVehicles = false
     /// Widget snapshot + Live Activities. Told about every pairing, demo and
     /// vehicle change; see `surfaceContext`.
     @ObservationIgnored let surfaces: any VehicleSurfaces
@@ -38,11 +42,20 @@ final class AppModel {
         get { isLaunchDemo ? MockDataSource.vehicleID : settings.selectedVehicleID ?? Vehicle.automaticChoice(in: vehicles)?.id ?? MockDataSource.vehicleID }
         set {
             guard !isLaunchDemo else { return }
+            dashboardCanUseInitialVehicles = false
             settings.selectedVehicleID = newValue; settings.selectedVehicleIsExplicit = true
             updateSurfaces()
         }
     }
     var selectedVehicle: Vehicle? { vehicles.first { $0.id == selectedVehicleID } }
+    /// A one-time handoff from startup loading to the first dashboard. Remounts
+    /// after a vehicle switch must fetch a new list, even within this process.
+    func takeInitialDashboardVehicles(vehicleID: Int) -> [Vehicle]? {
+        defer { dashboardCanUseInitialVehicles = false }
+        guard dashboardCanUseInitialVehicles, isPaired, !isLocked,
+              vehicleID == selectedVehicleID else { return nil }
+        return vehicles
+    }
     /// The user's choice of a car from a list newer than `vehicles` (Dashboard
     /// refreshes its own). An id missing from `vehicles` would leave the surfaces
     /// `.pending`, which keeps the previous car's widget and Live Activities and
@@ -221,6 +234,7 @@ final class AppModel {
         do {
             let vehicles = try await source.vehicles()
             guard generation == currentGeneration else { return }
+            dashboardCanUseInitialVehicles = !hasLoadedVehicles
             self.vehicles = vehicles
             if !isLaunchDemo { resolveSelection() }
             updateSurfaces()
@@ -286,6 +300,7 @@ final class AppModel {
         if isLocked { await unlock() }
     }
     func lock() {
+        dashboardCanUseInitialVehicles = false
         lockGeneration = UUID(); appLock.cancel(); isUnlocking = false
         if !isLaunchDemo && settings.appLockEnabled && isPaired { isLocked = true }
     }

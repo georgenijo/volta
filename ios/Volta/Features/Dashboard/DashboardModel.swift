@@ -81,20 +81,39 @@ final class DashboardModel {
         deviceZone = zone
     }
 
-    /// - Parameter surfaces: receives each successful refresh (widget snapshot,
-    ///   Live Activities). nil in previews and tests.
-    func load(dataSource: any VoltaDataSource, vehicleID: Int, surfaces: (any VehicleSurfaces)? = nil) async {
+    /// - Parameters:
+    ///   - initialVehicles: the app shell's already-loaded list. On a model's
+    ///     first load, a list containing `vehicleID` avoids immediately fetching
+    ///     the same account list again. Later loads always refresh it.
+    ///   - surfaces: receives each successful refresh (widget snapshot, Live
+    ///     Activities). nil in previews and tests.
+    func load(dataSource: any VoltaDataSource, vehicleID: Int, initialVehicles: [Vehicle]? = nil,
+              surfaces: (any VehicleSurfaces)? = nil) async {
         generation += 1
         let token = generation
         if status == nil { phase = .loading }
         loadingSections = [.timeline, .summary(.today), .summary(.sevenDays), .summary(.thirtyDays)]
         defer { if token == generation { loadingSections = [] } }
 
+        // MainShell is only mounted after AppModel has loaded this account's
+        // vehicles. Accept that list only for a genuinely new model and only
+        // when it contains the selected vehicle; an invalid seed falls back to
+        // the server request and preserves the existing missing-vehicle behavior.
+        let seededVehicles: [Vehicle]?
+        if status == nil, self.vehicles.isEmpty, let initialVehicles,
+           initialVehicles.contains(where: { $0.id == vehicleID }) {
+            seededVehicles = initialVehicles
+            vehicles = initialVehicles
+            vehicle = initialVehicles.first { $0.id == vehicleID }
+        } else {
+            seededVehicles = nil
+        }
+
         let todayRequestedAt = Date.now
         let todayRequestedZone = TimeZone.current.identifier
 
         await withTaskGroup(of: SectionResponse.self) { group in
-            async let vehiclesReq = Self.result { try await dataSource.vehicles() }
+            async let vehiclesReq = Self.vehicleResult(dataSource: dataSource, seededVehicles: seededVehicles)
             let issued = surfaces?.nextStatusToken()  // before /status: orders widget publishes
             async let statusReq = Self.result { try await dataSource.status(vehicleID: vehicleID) }
             group.addTask { .timeline(await Self.result { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }) }
@@ -103,16 +122,13 @@ final class DashboardModel {
             }
 
             let statusResult = await statusReq
-            let vehiclesResult = await vehiclesReq
             guard token == generation, !Task.isCancelled,
-                  !Self.isCancellation(statusResult.map { _ in }),
-                  !Self.isCancellation(vehiclesResult.map { _ in }) else { group.cancelAll(); return }
-
-            if case .success(let vehicles) = vehiclesResult {
-                self.vehicles = vehicles
-                vehicle = vehicles.first { $0.id == vehicleID }
-            }
+                  !Self.isCancellation(statusResult.map { _ in }) else { group.cancelAll(); return }
             guard case .success(let newStatus) = statusResult else {
+                let vehiclesResult = await vehiclesReq
+                guard token == generation, !Task.isCancelled,
+                      !Self.isCancellation(vehiclesResult.map { _ in }) else { group.cancelAll(); return }
+                apply(vehiclesResult, selectedVehicleID: vehicleID)
                 if case .failure(let error) = statusResult {
                     let message = Self.message(for: error)
                     if status != nil { refreshError = message }
@@ -124,14 +140,23 @@ final class DashboardModel {
             }
 
             // Battery, range, controls and the map do not depend on history.
-            // Publish these as soon as status arrives, then fill sections in
-            // completion order so one slow summary cannot hold up the others.
+            // Publish these as soon as status arrives. In particular, a normal
+            // vehicle-list refresh must not hold fresh status off screen.
             withAnimation(.smooth) {
                 status = newStatus
                 refreshError = nil
                 lastLoadedAt = .now
                 phase = .loaded
             }
+
+            let vehiclesResult = await vehiclesReq
+            guard token == generation, !Task.isCancelled else { group.cancelAll(); return }
+            // A request-level cancellation is only a list failure. Fresh status
+            // is already visible, so continue consuming independent history.
+            apply(vehiclesResult, selectedVehicleID: vehicleID)
+
+            // Fill history sections in completion order so one slow summary
+            // cannot hold up the others.
             var freshTimeline: [TimelineSegment]?
             var freshToday: TodaySummary?
             var cancelledSection = false
@@ -183,6 +208,18 @@ final class DashboardModel {
                     vehicleName: vehicle?.name, today: freshToday, timeline: freshTimeline), dataSource: dataSource)
             }
         }
+    }
+
+    private func apply(_ result: Result<[Vehicle], any Error>, selectedVehicleID: Int) {
+        guard case .success(let vehicles) = result else { return }
+        self.vehicles = vehicles
+        vehicle = vehicles.first { $0.id == selectedVehicleID }
+    }
+
+    private static func vehicleResult(dataSource: any VoltaDataSource,
+                                      seededVehicles: [Vehicle]?) async -> Result<[Vehicle], any Error> {
+        if let seededVehicles { return .success(seededVehicles) }
+        return await result { try await dataSource.vehicles() }
     }
 
     private static func result<T: Sendable>(_ work: () async throws -> T) async -> Result<T, any Error> {
