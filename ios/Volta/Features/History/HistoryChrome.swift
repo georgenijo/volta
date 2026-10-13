@@ -236,8 +236,11 @@ struct HistorySkeletonList: View {
             .padding(.horizontal, HistoryTheme.gutter)
         }
         .scrollDisabled(true)
-        .opacity(pulse ? 0.45 : 1)
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+        // Only brightness pulses. Animating the whole ScrollView also animates
+        // its initial layout and safe-area adjustments as the tab is mounted.
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { content in
+            content.opacity(pulse ? 0.45 : 1)
+        }
         .onAppear { pulse = true }
         .accessibilityLabel("Loading")
     }

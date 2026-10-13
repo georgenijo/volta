@@ -41,6 +41,9 @@ struct MainShell: View {
                 }
             }
             ShellTabBar(selection: $selection)
+                // Animate the selection capsule, without passing the spring to
+                // a newly mounted screen and its loading placeholders.
+                .animation(.snappy(duration: 0.3), value: selection)
         }
         .background(Color.voltaBackground.ignoresSafeArea())
         .onChange(of: selection) { _, new in visited.insert(new) }
@@ -138,7 +141,7 @@ struct ShellTabBar: View {
     }
 
     private func select(_ tab: MainShell.Tab) {
-        withAnimation(.snappy(duration: 0.3)) { selection = tab }
+        selection = tab
     }
 }
 
