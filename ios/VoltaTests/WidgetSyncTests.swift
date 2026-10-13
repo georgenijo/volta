@@ -968,7 +968,11 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                                latest: charge(id: 10, start: processStart, added: 20)), "l").otherChargeIds, [10])
         let learnedTen = try update(planCharging([small], teslaMate(10, startedAt: processStart), latest: nil), "l")
         XCTAssertEqual(learnedTen.teslaMateChargeId, 10)
-        // Telemetry returning to the session judges the learned process by its fresh counter.
+        // Telemetry returning to the session with the counter it kept through the outage says nothing.
+        // (The process's record enriches the activity.)
+        XCTAssertEqual(planCharging([next(small, learnedTen)], smallAC,
+                                    latest: charge(id: 10, start: processStart, added: 4.5)).start?.state.teslaMateChargeId, 10)
+        // Its next reading judges the learned process.
         let recounted = try update(planCharging([next(small, learnedTen)], resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 2),
                                                 latest: charge(id: 10, start: processStart, added: 20)), "l")
         XCTAssertEqual(recounted.statusSessionId, -906)

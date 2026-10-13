@@ -251,10 +251,13 @@ enum LiveActivityPlanner {
             forget(known, in: &identity)
         }
         // A process learned while history was away answers to history that arrives later, judged by
-        // the session's counter only when it is read afresh: a saved one is too old for a growing total.
-        let tracked = identity.session != nil && identity.session == liveSession(status)
+        // the session's counter only once it has moved past the reading saved: the server keeps the
+        // last counter through an outage, too old for a growing total.
+        let fresh = identity.session != nil && identity.session == liveSession(status)
+            ? status.chargeEnergyAddedKwh.flatMap { now in activity.state.counterKwh.flatMap { now > $0 ? now : nil } }
+            : nil
         if let known = identity.teslaMate,
-           !fits(learned: identity, records: records, counter: tracked ? status.chargeEnergyAddedKwh : nil,
+           !fits(learned: identity, records: records, counter: fresh,
                  readAt: status.updatedAt, onAC: (chargerKind(status) ?? activity.state.fastCharger) == false,
                  status: status) {
             forget(known, in: &identity)
