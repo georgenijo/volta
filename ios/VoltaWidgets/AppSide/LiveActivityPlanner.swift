@@ -101,7 +101,8 @@ enum LiveActivityPlanner {
                                                        previous: previous))
                     case .unrelated(let identity):
                         // Keep the readings and their time; only remember what was learned.
-                        let kept = remembering(identity, in: activity.state)
+                        let kept = remembering(identity, in: knowingDC(activity.state, attributes: activity.attributes,
+                                                                       identity: identity, records: page))
                         action = kept == activity.state ? .keep : .update(kept)
                     case .other(let identity):
                         replaced.formUnion([identity.session, identity.teslaMate, activity.attributes.chargeId].compactMap { $0 })
@@ -180,6 +181,8 @@ enum LiveActivityPlanner {
         var sessionStart: Date?
         var teslaMate: Int?
         var teslaMateStart: Date?
+        /// The process was learned while the session was tracked, so the session is the charge's own.
+        var processLearned = false
         /// False when the session began mid-charge, so the charge started before `sessionStart`.
         var sessionStartObserved = true
         /// The charge continued into `session` after a gap, so that session's record covers only its part.
@@ -210,6 +213,7 @@ enum LiveActivityPlanner {
         let state = activity.state
         var identity = ChargeIdentity(session: state.statusSessionId, sessionStart: state.sessionStartedAt,
                                       teslaMate: state.teslaMateChargeId, teslaMateStart: state.teslaMateStartedAt,
+                                      processLearned: state.teslaMateLearned ?? false,
                                       sessionStartObserved: state.sessionStartObserved ?? true,
                                       sessionResumed: state.sessionResumed ?? false,
                                       resumedAt: state.sessionResumedAt,
@@ -236,11 +240,21 @@ enum LiveActivityPlanner {
         var identity = identity(of: activity, latestCharge: latestCharge)
         let records = charges ?? latestCharge.map { [$0] } ?? []
         let named = status.chargeStartedAt
-        // A process learned while history was away isn't this charge if it drew DC where this charge
-        // was seen on AC.
+        // A process that drew DC where this charge was seen on AC isn't this charge's; when the AC
+        // session was the one taken on part-way, it is the session that isn't.
         if let known = identity.teslaMate, activity.state.fastCharger == false,
            records.contains(where: { $0.id == known && $0.fastCharger }) {
-            identity.others.insert(known); identity.teslaMate = nil; identity.teslaMateStart = nil
+            if identity.session != nil, adoptedAt(identity) != nil, !identity.processLearned {
+                identity.session = nil
+                return .other(identity)
+            }
+            forget(known, in: &identity)
+        }
+        // A process learned while history was away answers to history that arrives later; the counter
+        // read then is too old to judge its total by.
+        if let known = identity.teslaMate,
+           !fits(learned: identity, records: records, counter: nil, readAt: activity.state.updatedAt, status: status) {
+            forget(known, in: &identity)
         }
         let shown = knowingDC(activity.state, attributes: activity.attributes, identity: identity, records: records)
         // A session taken on as this charge part-way answers to history that arrives later, even
@@ -280,7 +294,7 @@ enum LiveActivityPlanner {
                     identity.session = session; identity.sessionResumed = true; identity.resumedAt = named
                 } else {
                     // A session taken on as this charge part-way answers to history that arrives later.
-                    if identity.sessionResumed || !identity.sessionStartObserved && identity.teslaMate != nil,
+                    if adoptedAt(identity) != nil,
                        !continues(identity, from: named, status: status, records: records,
                                   showing: shown) {
                         identity.session = nil  // the session belongs to the charge replacing this one
@@ -320,12 +334,17 @@ enum LiveActivityPlanner {
                 let lag = named.timeIntervalSince(start)
                 // A session that began mid-charge may have joined a process already under way.
                 if teslaMateStartLag.contains(lag) || lag < 0 && !identity.sessionStartObserved {
-                    // Not a process that drew DC when this charge was seen on AC.
-                    if activity.state.fastCharger == false, records.contains(where: { $0.id == process && $0.fastCharger }) {
+                    // Not a process that drew DC when this charge was seen on AC, or one this charge's
+                    // counter can't account for.
+                    var learned = identity
+                    learned.teslaMate = process; learned.teslaMateStart = named; learned.processLearned = true
+                    if activity.state.fastCharger == false && records.contains(where: { $0.id == process && $0.fastCharger })
+                        || !fits(learned: learned, records: records, counter: activity.state.counterKwh,
+                                 readAt: activity.state.updatedAt, status: status) {
                         identity.others.insert(process)
                         return .unrelated(identity)
                     }
-                    identity.teslaMate = process; identity.teslaMateStart = named
+                    identity = learned
                 } else if lag > teslaMateStartLag.upperBound {
                     return .other(identity)
                 } else {
@@ -372,6 +391,7 @@ enum LiveActivityPlanner {
                      sessionStartedAt: identity.sessionStart,
                      teslaMateChargeId: identity.teslaMate,
                      teslaMateStartedAt: identity.teslaMateStart,
+                     teslaMateLearned: identity.processLearned && identity.teslaMate != nil ? true : nil,
                      sessionStartObserved: identity.sessionStartObserved ? nil : false,
                      sessionResumed: identity.sessionResumed ? true : nil,
                      sessionResumedAt: identity.resumedAt,
@@ -395,6 +415,7 @@ enum LiveActivityPlanner {
         state.sessionStartedAt = identity.sessionStart
         state.teslaMateChargeId = identity.teslaMate
         state.teslaMateStartedAt = identity.teslaMateStart
+        state.teslaMateLearned = identity.processLearned && identity.teslaMate != nil ? true : nil
         state.sessionStartObserved = identity.sessionStartObserved ? nil : false
         state.sessionResumed = identity.sessionResumed ? true : nil
         state.sessionResumedAt = identity.resumedAt
@@ -408,7 +429,8 @@ enum LiveActivityPlanner {
     static func knowingDC(_ state: ChargingActivityAttributes.ContentState, attributes: ChargingActivityAttributes,
                           identity: ChargeIdentity, records: [ChargeSummary]) -> ChargingActivityAttributes.ContentState {
         guard state.fastCharger == nil, attributes.fastCharger == true || records.contains(where: {
-            $0.fastCharger && ($0.id == identity.teslaMate || $0.id == identity.session)
+            $0.fastCharger && ($0.id == identity.teslaMate || $0.id == identity.session
+                || identity.earlierSessions.contains($0.id))
         }) else { return state }
         var state = state
         state.fastCharger = true
@@ -441,6 +463,9 @@ enum LiveActivityPlanner {
             // The car's counter runs on through a gap, so it covers every session of this charge; one
             // that ended before this session began was recorded before the counter was read.
             if record.id == identity.session || identity.earlierSessions.contains(record.id) {
+                // An earlier session that drew DC isn't continued by one on AC.
+                if identity.earlierSessions.contains(record.id), record.fastCharger,
+                   (chargerKind(status) ?? state.fastCharger) == false { return false }
                 return record.end.map { $0 <= start } ?? false
                     ? reaches(read, record.energyAddedKwh) : counted
             }
@@ -461,7 +486,30 @@ enum LiveActivityPlanner {
     /// resumed into, or one that joined the activity's TeslaMate process late.
     static func adoptedAt(_ identity: ChargeIdentity) -> Date? {
         if identity.sessionResumed { return identity.resumedAt }
-        return !identity.sessionStartObserved && identity.teslaMate != nil ? identity.sessionStart : nil
+        return !identity.sessionStartObserved && identity.teslaMate != nil && !identity.processLearned
+            ? identity.sessionStart : nil
+    }
+
+    /// Remembers a process as another charge's.
+    static func forget(_ process: Int, in identity: inout ChargeIdentity) {
+        identity.others.insert(process)
+        identity.teslaMate = nil; identity.teslaMateStart = nil; identity.processLearned = false
+    }
+
+    /// The fastest the car adds energy: a process can't have outrun the car's counter by more.
+    static let maxChargeRateKw = 300.0
+
+    /// Whether history leaves a process learned for the activity's session this charge's: it didn't
+    /// end before the session began, and its total isn't more than the counter, read at `readAt`,
+    /// could have reached by the time of the status.
+    static func fits(learned identity: ChargeIdentity, records: [ChargeSummary], counter: Double?, readAt: Date,
+                     status: VehicleStatus) -> Bool {
+        guard identity.processLearned, let process = identity.teslaMate,
+              let record = records.first(where: { $0.id == process }) else { return true }
+        if let end = record.end, let start = identity.sessionStart, end <= start { return false }
+        guard let counter, let total = record.energyAddedKwh else { return true }
+        let hours = max(0, status.updatedAt.timeIntervalSince(readAt)) / 3600
+        return total <= counter + maxChargeRateKw * hours + counterSlack
     }
 
     /// Whether a history record is this activity's charge: one of its ids, or, while its TeslaMate
@@ -609,6 +657,7 @@ enum LiveActivityPlanner {
                      sessionStartedAt: identity.sessionStart,
                      teslaMateChargeId: identity.teslaMate,
                      teslaMateStartedAt: identity.teslaMateStart,
+                     teslaMateLearned: identity.processLearned && identity.teslaMate != nil ? true : nil,
                      sessionStartObserved: identity.sessionStartObserved ? nil : false,
                      sessionResumed: identity.sessionResumed ? true : nil,
                      sessionResumedAt: identity.resumedAt,

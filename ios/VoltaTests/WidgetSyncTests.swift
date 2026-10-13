@@ -825,6 +825,17 @@ final class ChargingActivityPlannerTests: XCTestCase {
                                     latest: charge(id: 11, start: gapEnd, end: t0.addingTimeInterval(-600)))
             .existing["a"], .dismiss)
 
+        // An earlier session later shown to have drawn DC isn't continued by one on AC.
+        var acNext = resumed(-914, startedAt: gapEnd, energy: 12)
+        acNext.fastCharger = false
+        let acContinued = try update(planCharging([a], acNext, latest: nil))
+        XCTAssertEqual(acContinued.earlierSessionIds, [-901])
+        let dcFirst = ChargeSummary(id: -901, start: sessionStart, end: gapEnd.addingTimeInterval(-1800), address: nil,
+                                    placeName: nil, energyAddedKwh: 5, energyUsedKwh: nil, startBatteryLevel: 40,
+                                    endBatteryLevel: nil, durationMin: 30, maxPowerKw: nil, fastCharger: true, cost: nil,
+                                    currency: nil, outsideTempAvgC: nil)
+        XCTAssertEqual(planCharging([next(a, acContinued)], acNext, latest: nil, charges: [dcFirst]).existing["a"], .dismiss)
+
         // A session on another kind of charger is a new charge, even with a rising counter.
         var ac = telemetry(-911, startedAt: sessionStart, energy: 2)
         ac.fastCharger = false
@@ -836,7 +847,7 @@ final class ChargingActivityPlannerTests: XCTestCase {
         dc.fastCharger = false
         XCTAssertEqual(try update(planCharging([home], dc, latest: nil), "h").statusSessionId, -912)
         // The kind survives enrichment while telemetry is quiet, and a DC record establishes it.
-        let homeRecord = charge(id: 20, start: sessionStart.addingTimeInterval(20 * 60))
+        let homeRecord = charge(id: 20, start: sessionStart.addingTimeInterval(20 * 60), added: 2)
         let homeEnriched = try started(planCharging([home], teslaMate(20, startedAt: homeRecord.start), latest: homeRecord), as: "h2")
         XCTAssertEqual(homeEnriched.state.fastCharger, false)
         dc.fastCharger = true
@@ -946,7 +957,33 @@ final class ChargingActivityPlannerTests: XCTestCase {
         XCTAssertNil(acBack.teslaMateChargeId)
         XCTAssertEqual(acBack.statusSessionId, -908)
         XCTAssertEqual(acBack.otherChargeIds, [30])
+        XCTAssertEqual(acLearned.teslaMateLearned, true)
         onAC.chargeEnergyAddedKwh = 25
+        // A process learned for a late session is refused when history shows more than the counter
+        // could account for, or that it ended before the session began; the session stays.
+        let small = try started(planCharging([], resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 1),
+                                             latest: nil), as: "l")
+        XCTAssertEqual(try update(planCharging([small], teslaMate(10, startedAt: processStart),
+                                               latest: charge(id: 10, start: processStart, added: 20)), "l").otherChargeIds, [10])
+        let learnedTen = try update(planCharging([small], teslaMate(10, startedAt: processStart), latest: nil), "l")
+        XCTAssertEqual(learnedTen.teslaMateChargeId, 10)
+        var ended = resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 2)
+        ended.state = .online
+        ended.chargingState = .complete
+        let endedEarlier = charge(id: 10, start: processStart, end: t0.addingTimeInterval(-3600), added: 20)
+        let own = try finish(planCharging([next(small, learnedTen)], ended, latest: endedEarlier, charges: [endedEarlier]), "l")
+        XCTAssertEqual(own.statusSessionId, -906)
+        XCTAssertNil(own.teslaMateChargeId)
+        XCTAssertEqual(own.energyAddedKwh, 2)
+        // A session taken on by a process later shown to have drawn DC is the one that isn't this charge.
+        var acJoin = resumed(-907, startedAt: processStart.addingTimeInterval(90 * 60), energy: 14)
+        acJoin.fastCharger = false
+        let acJoined = try update(planCharging([a], acJoin, latest: charge(id: 10, start: processStart, added: 8)))
+        XCTAssertEqual(acJoined.fastCharger, false)
+        let dcTen = ChargeSummary(id: 10, start: processStart, end: nil, address: nil, placeName: nil, energyAddedKwh: 8,
+                                  energyUsedKwh: nil, startBatteryLevel: 40, endBatteryLevel: nil, durationMin: 30,
+                                  maxPowerKw: nil, fastCharger: true, cost: nil, currency: nil, outsideTempAvgC: nil)
+        XCTAssertEqual(planCharging([next(a, acJoined)], acJoin, latest: dcTen).existing["a"], .dismiss)
         XCTAssertEqual(planCharging([.init(id: "ac", attributes: acStart.attributes, state: acStart.state)],
                                     teslaMate(30, startedAt: processStart), latest: nil).existing["ac"], .keep)
         onAC.fastCharger = true

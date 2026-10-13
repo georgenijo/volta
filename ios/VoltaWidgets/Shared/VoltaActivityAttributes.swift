@@ -46,6 +46,8 @@ struct ChargingActivityAttributes: ActivityAttributes, Hashable, Sendable {
         var sessionStartedAt: Date? = nil
         var teslaMateChargeId: Int? = nil
         var teslaMateStartedAt: Date? = nil
+        /// True when TeslaMate's process was learned after the activity's session, which it may not share.
+        var teslaMateLearned: Bool? = nil
         /// False when the session's start was not seen: it began mid-charge.
         var sessionStartObserved: Bool? = nil
         /// True when the charge continued into this session after a gap.
