@@ -460,7 +460,11 @@ export class FleetDrives {
       if (totalsOnly) row=await this.totals(vehicle,w,gaps,rated);
       else {
       const [locations,payloads,samples,held,bounds]=await Promise.all([
-        this.sql`SELECT * FROM volta_telemetry.drive_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
+        // deriveDrive computes breaks from the resolved gaps. Selecting the
+        // view's unused route_break_before performs a predecessor lookup for
+        // every location and dominates history/summary loading on dense trips.
+        this.sql`SELECT source_ts,latitude,longitude,speed_kph,power_kw,battery_level_pct,soc_pct
+          FROM volta_telemetry.drive_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
         this.sql`SELECT * FROM volta_telemetry.payload_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
         this.sql`SELECT * FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`,
         this.sql`SELECT source_ts,energy_remaining_kwh FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle}

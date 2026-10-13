@@ -29,6 +29,37 @@ against an existing TeslaMate database.
 and `AUTH_DATABASE_URL` (volta_auth), with the snapshot and bootstrap already
 restored. The tests truncate the fixture tables.
 
+### Compare history loading performance
+
+From the repository root, run the old and current implementations against one
+isolated synthetic database:
+
+```sh
+bash server/scripts/benchmark-loads.sh \
+  --compare-ref ae2193873741fc332a01a7d453ac2ba0c2880cb7 \
+  --output-dir /tmp/volta-load-comparison
+```
+
+The benchmark restores the real schema and restricted API roles, creates mixed
+TeslaMate/Fleet history with dense route samples and receiver cadence gaps,
+and exercises authenticated API routing. It measures the three concurrent
+dashboard summaries, drive pages for two date ranges, and complete paginated
+history used by Stats. Each case has one separately recorded warmup and five
+measured samples. Pages contain 100 items, matching the iOS client. A fixed
+reporting clock and response digests check that the
+optimization preserves the returned data. Results include request/page counts;
+these are backend measurements, not iPhone render times or network round trips.
+The fixture includes a short receiver gap every five minutes to reproduce the
+expensive query path; its speedup is specific to this synthetic workload. The
+baseline runs first, then the working tree, with warmups for both. Compare mode
+uses the baseline schema for both versions, so schema-changing optimizations
+need a separate migration-aware benchmark.
+
+The drive projection deliberately excludes the database view's
+`route_break_before` field: computing it performs a predecessor lookup for every
+location. `deriveDrive` already calculates route breaks from resolved loss gaps,
+so this removes duplicate work without caching responses or reducing detail.
+
 To run locally with your own separate synthetic database, put the two runtime
 URLs in ignored `server/.env`, optionally `HOST=127.0.0.1`, `PORT=8080`,
 `CURRENCY=USD`, then:

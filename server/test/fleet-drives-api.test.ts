@@ -75,6 +75,25 @@ test('short Park resumes join one trip and known disconnect protects uncovered T
   expect(list.items.at(-1).durationMin).toBe(22);expect(list.items[1].id).toBe(1);
 });
 
+test('history and detail keep continuous routes across short receiver cadence gaps',async()=>{
+  await trip(0,600);
+  // The database view marks these short gaps, but they are ordinary receiver
+  // cadence rather than lost telemetry. API routes use the resolved loss rule.
+  await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason)
+    SELECT 1,${at(5)}::timestamptz+i*interval '30 seconds',${at(6)}::timestamptz+i*interval '30 seconds','disconnected'
+    FROM generate_series(0,19) i`;
+  const list=await get('/v1/vehicles/1/drives'),detail=await get(`/v1/drives/${list.items[0].id}`);
+  expect(list.items).toHaveLength(1);
+  expect(detail.path).toHaveLength(61);
+  expect(detail.path.every((p:any)=>!p.routeBreakBefore)).toBe(true);
+  expect(list.items[0].route.every((p:any)=>!p.routeBreakBefore)).toBe(true);
+  expect(detail.path[0]).toMatchObject({latitude:37.7,longitude:-122.4,speedKph:30*1.609344,batteryLevel:80,socPct:80});
+  expect(detail.distanceKm).toBeCloseTo(3*1.609344);
+  const summary=await get('/v1/vehicles/1/summary?range=today');
+  expect(summary.distanceKm).toBeCloseTo(detail.distanceKm);
+  expect(summary.driveScore).toBeCloseTo(detail.driveScore);
+});
+
 test('unmeasurable and truncated telemetry cannot erase a recorded TeslaMate trip',async()=>{
   await tm(1,0,600);await trip(200,600);
   await owner`UPDATE volta_telemetry.sessions SET start_reason='first_observed',membership='partial'`;
@@ -314,6 +333,7 @@ test('operator sign calibration unlocks existing same-payload power and regen wi
   await owner`INSERT INTO volta_telemetry.power_calibration(vehicle_id,sign,source,evidence_note) VALUES (1,'discharge_negative','operator_live_gate','synthetic verified sign')`;
   d=await read();expect(d.regenKwh).toBeCloseTo((3000+25)/3600,6);
   expect(d.charts.series.powerKw.map((p:any)=>p.v)).toEqual([10,-10,-10]);
+  expect(d.path[0].powerKw).toBe(10);expect(d.path.at(-1).powerKw).toBe(-10);
   const [points]=await owner`SELECT count(power_kw)::integer AS n FROM volta_telemetry.drive_points WHERE vehicle_id=1`;
   expect(points!.n).toBe(61);
   const [after]=await owner`SELECT count(*)::integer AS n FROM volta_telemetry.samples`;expect(after!.n).toBe(before!.n);
