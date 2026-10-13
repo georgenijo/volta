@@ -9,6 +9,7 @@ struct ActivityStrip: View {
     /// The timeline request failed. With no segments this shows "unavailable"
     /// rather than an empty (idle) strip.
     var failed = false
+    var loading = false
 
     private var unavailable: Bool { failed && segments.isEmpty }
 
@@ -35,7 +36,11 @@ struct ActivityStrip: View {
             strip
                 .frame(height: 34)
                 .overlay {
-                    if unavailable {
+                    if loading && segments.isEmpty {
+                        ProgressView("Loading timeline…")
+                            .font(.caption)
+                            .tint(Color.voltaTextSecondary)
+                    } else if unavailable {
                         Label("Timeline unavailable", systemImage: "exclamationmark.triangle")
                             .font(.caption.weight(.medium))
                             .foregroundStyle(Color.voltaTextSecondary)
@@ -116,6 +121,7 @@ struct ActivityStrip: View {
     }
 
     private var accessibilitySummary: String {
+        if loading && segments.isEmpty { return "Last \(hours) hours: loading timeline" }
         if unavailable { return "Last \(hours) hours: timeline unavailable" }
         let drives = segments.filter { $0.kind == .drive }.count
         let charges = segments.filter { $0.kind == .charge }.count

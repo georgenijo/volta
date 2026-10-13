@@ -5,7 +5,7 @@ import SwiftUI
 ///
 /// Loads may overlap (initial `.task` + pull-to-refresh). Each load takes a
 /// generation number and only the newest one may publish results or errors;
-/// cancelled loads publish nothing.
+/// cancelled loads publish no further results. Already-visible data stays on screen.
 @MainActor
 @Observable
 final class DashboardModel {
@@ -46,6 +46,13 @@ final class DashboardModel {
     /// a section here with no data means "failed", not "empty".
     var failedSections: Set<Section> = []
     var lastLoadedAt: Date?
+    /// Pending history must not look like a successfully loaded empty section.
+    private(set) var loadingSections: Set<Section> = []
+
+    private enum SectionResponse: Sendable {
+        case timeline(Result<[TimelineSegment], any Error>)
+        case summary(SummaryRange, Result<ActivitySummary, any Error>)
+    }
 
     private var generation = 0
 
@@ -80,74 +87,101 @@ final class DashboardModel {
         generation += 1
         let token = generation
         if status == nil { phase = .loading }
+        loadingSections = [.timeline, .summary(.today), .summary(.sevenDays), .summary(.thirtyDays)]
+        defer { if token == generation { loadingSections = [] } }
 
-        async let vehiclesReq = Self.result { try await dataSource.vehicles() }
-        let issued = surfaces?.nextStatusToken()  // before the /status request: orders publishes
-        async let statusReq = Self.result { try await dataSource.status(vehicleID: vehicleID) }
-        async let timelineReq = Self.result { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }
-        let todayRequestedAt = Date.now  // attributes the totals to a reporting day
-        let todayRequestedZone = TimeZone.current.identifier  // the `tz` the request sends
-        async let todayReq = Self.result { try await dataSource.summary(vehicleID: vehicleID, range: .today) }
-        async let weekReq = Self.result { try await dataSource.summary(vehicleID: vehicleID, range: .sevenDays) }
-        async let monthReq = Self.result { try await dataSource.summary(vehicleID: vehicleID, range: .thirtyDays) }
+        let todayRequestedAt = Date.now
+        let todayRequestedZone = TimeZone.current.identifier
 
-        let statusResult = await statusReq
-        let vehiclesResult = await vehiclesReq
-        let timelineResult = await timelineReq
-        let summaryResults: [(SummaryRange, Result<ActivitySummary, any Error>)] =
-            [(.today, await todayReq), (.sevenDays, await weekReq), (.thirtyDays, await monthReq)]
+        await withTaskGroup(of: SectionResponse.self) { group in
+            async let vehiclesReq = Self.result { try await dataSource.vehicles() }
+            let issued = surfaces?.nextStatusToken()  // before /status: orders widget publishes
+            async let statusReq = Self.result { try await dataSource.status(vehicleID: vehicleID) }
+            group.addTask { .timeline(await Self.result { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }) }
+            for range in SummaryRange.allCases {
+                group.addTask { .summary(range, await Self.result { try await dataSource.summary(vehicleID: vehicleID, range: range) }) }
+            }
 
-        // Only the newest, uncancelled load may publish anything.
-        let all: [Result<Void, any Error>] = [statusResult.map { _ in }, vehiclesResult.map { _ in },
-                                              timelineResult.map { _ in }] + summaryResults.map { $0.1.map { _ in } }
-        guard token == generation, !Task.isCancelled,
-              !all.contains(where: { Self.isCancellation($0) }) else { return }
+            let statusResult = await statusReq
+            let vehiclesResult = await vehiclesReq
+            guard token == generation, !Task.isCancelled,
+                  !Self.isCancellation(statusResult.map { _ in }),
+                  !Self.isCancellation(vehiclesResult.map { _ in }) else { group.cancelAll(); return }
 
-        if case .success(let vehicles) = vehiclesResult {
-            self.vehicles = vehicles
-            vehicle = vehicles.first { $0.id == vehicleID }
-        }
-        switch statusResult {
-        case .failure(let error):
-            let message = Self.message(for: error)
-            if status != nil { refreshError = message }
-            else if case .server(code: "data_unavailable", _) = error as? VoltaError { phase = .noData }
-            else { phase = .failed(message) }
-        case .success(let newStatus):
+            if case .success(let vehicles) = vehiclesResult {
+                self.vehicles = vehicles
+                vehicle = vehicles.first { $0.id == vehicleID }
+            }
+            guard case .success(let newStatus) = statusResult else {
+                if case .failure(let error) = statusResult {
+                    let message = Self.message(for: error)
+                    if status != nil { refreshError = message }
+                    else if case .server(code: "data_unavailable", _) = error as? VoltaError { phase = .noData }
+                    else { phase = .failed(message) }
+                }
+                group.cancelAll()
+                return
+            }
+
+            // Battery, range, controls and the map do not depend on history.
+            // Publish these as soon as status arrives, then fill sections in
+            // completion order so one slow summary cannot hold up the others.
             withAnimation(.smooth) {
                 status = newStatus
-                var failed: Set<Section> = []
-                switch timelineResult {
-                case .success(let segments): timeline = segments
-                case .failure: failed.insert(.timeline)
-                }
-                for (range, result) in summaryResults {
-                    switch result {
-                    case .success(let summary) where range == .today:
-                        // Totals whose day ended before publishing are not "Today".
-                        let day = TodaySummary(summary: summary, requestedAt: todayRequestedAt,
-                                               requestedZone: todayRequestedZone).day
-                        deviceZone = TimeZone.current.identifier
-                        let current = day.isCurrent(at: .now, deviceZone: deviceZone)
-                        summaries[.today] = current ? summary : nil
-                        todayDay = current ? day : nil
-                    case .success(let summary): summaries[range] = summary
-                    case .failure: failed.insert(.summary(range))
-                    }
-                }
-                failedSections = failed
                 refreshError = nil
                 lastLoadedAt = .now
                 phase = .loaded
             }
-            let todayResult = summaryResults.first { $0.0 == .today }?.1
-            if let surfaces, let issued { surfaces.publish(VehicleRefresh(
-                status: newStatus,
-                issued: issued,
-                vehicleName: (try? vehiclesResult.get())?.first { $0.id == vehicleID }?.name,
-                today: (try? todayResult?.get()).map { TodaySummary(summary: $0, requestedAt: todayRequestedAt,
-                                                                    requestedZone: todayRequestedZone) },
-                timeline: try? timelineResult.get()), dataSource: dataSource) }
+            var freshTimeline: [TimelineSegment]?
+            var freshToday: TodaySummary?
+            var cancelledSection = false
+            for await response in group {
+                guard token == generation, !Task.isCancelled else { group.cancelAll(); return }
+                switch response {
+                case .timeline(let result):
+                    loadingSections.remove(.timeline)
+                    if Self.isCancellation(result.map { _ in }) {
+                        cancelledSection = true
+                        failedSections.insert(.timeline)
+                        continue
+                    }
+                    switch result {
+                    case .success(let segments):
+                        timeline = segments
+                        freshTimeline = segments
+                        failedSections.remove(.timeline)
+                    case .failure: failedSections.insert(.timeline)
+                    }
+                case .summary(let range, let result):
+                    loadingSections.remove(.summary(range))
+                    if Self.isCancellation(result.map { _ in }) {
+                        cancelledSection = true
+                        failedSections.insert(.summary(range))
+                        continue
+                    }
+                    switch result {
+                    case .success(let summary):
+                        if range == .today {
+                            let today = TodaySummary(summary: summary, requestedAt: todayRequestedAt,
+                                                     requestedZone: todayRequestedZone)
+                            deviceZone = TimeZone.current.identifier
+                            let current = today.day.isCurrent(at: .now, deviceZone: deviceZone)
+                            summaries[.today] = current ? summary : nil
+                            todayDay = current ? today.day : nil
+                            freshToday = today
+                        } else { summaries[range] = summary }
+                        failedSections.remove(.summary(range))
+                    case .failure: failedSections.insert(.summary(range))
+                    }
+                }
+            }
+            // One ordered publication per status request, preserving the
+            // existing widget / Live Activity ordering and reporting-day rules.
+            guard token == generation, !Task.isCancelled, !cancelledSection else { return }
+            if let surfaces, let issued {
+                surfaces.publish(VehicleRefresh(status: newStatus, issued: issued,
+                    vehicleName: vehicle?.name, today: freshToday, timeline: freshTimeline), dataSource: dataSource)
+            }
         }
     }
 

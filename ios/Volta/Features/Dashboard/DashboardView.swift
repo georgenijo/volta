@@ -211,13 +211,15 @@ struct DashboardView: View {
                     HairlineDivider()
                     metricGrid(status)
                         .padding(.top, VoltaSpacing.xl)
-                    ActivityStrip(segments: model.timeline, failed: model.timelineFailed)
+                    ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
+                                  loading: model.loadingSections.contains(.timeline))
                         .padding(.top, VoltaSpacing.xxl + 4)
                     HairlineDivider().padding(.top, VoltaSpacing.xl)
                     // Re-render when today's reporting day ends so its totals drop.
                     TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
                         ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
-                                               failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)))
+                                               failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
+                                               loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
                     }
                     .padding(.top, VoltaSpacing.xl)
                 }
@@ -380,15 +382,16 @@ struct DashboardView: View {
                                                colors: [.voltaGreen, .voltaGreen, .voltaAmber, .voltaRed],
                                                knob: .filled(.voltaGreen)),
                           tint: nil) {
-            Text(Self.efficiencyDetail(model.summaries[.thirtyDays]))
+            Text(Self.efficiencyDetail(model.summaries[.thirtyDays],
+                                       loading: model.loadingSections.contains(.summary(.thirtyDays))))
                 .font(.caption).foregroundStyle(Color.voltaTextSecondary)
         }
     }
 
     /// "No drives" only when the 30-day summary loaded and counted none; a
     /// missing or failed summary, or drives without recorded energy, is unavailable.
-    static func efficiencyDetail(_ summary: ActivitySummary?) -> String {
-        guard let summary else { return "Unavailable" }
+    static func efficiencyDetail(_ summary: ActivitySummary?, loading: Bool = false) -> String {
+        guard let summary else { return loading ? "Loading 30-day average…" : "Unavailable" }
         if summary.efficiencyWhPerKm != nil { return "30-day average" }
         return summary.driveCount == 0 ? "No drives in 30 days" : "Unavailable"
     }
@@ -602,6 +605,7 @@ struct ActivitySummarySection: View {
     var summaries: [SummaryRange: ActivitySummary]
     /// Ranges whose latest load failed (stale data, if any, is still shown).
     var failedRanges: Set<SummaryRange> = []
+    var loadingRanges: Set<SummaryRange> = []
     @Environment(\.units) private var units
     @State private var range: SummaryRange = .today
 
@@ -621,7 +625,12 @@ struct ActivitySummarySection: View {
                 StatColumn(value: summary?.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—",
                            caption: units.efficiencyUnit)
             }
-            if summary == nil, failedRanges.contains(range) {
+            if summary == nil, loadingRanges.contains(range) {
+                ProgressView("Loading \(range.voltaLabel) activity…")
+                    .font(.footnote)
+                    .tint(Color.voltaTextSecondary)
+                    .frame(maxWidth: .infinity)
+            } else if summary == nil, failedRanges.contains(range) {
                 Label("Couldn't load \(range.voltaLabel) activity", systemImage: "exclamationmark.triangle")
                     .font(.footnote)
                     .foregroundStyle(Color.voltaTextSecondary)

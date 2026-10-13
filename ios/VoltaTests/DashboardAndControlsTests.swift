@@ -40,6 +40,20 @@ private actor Counter {
     func next() -> Int { value += 1; return value }
 }
 
+private actor SectionGate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var opened = false
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func open() {
+        opened = true
+        let pending = waiters; waiters = []
+        for waiter in pending { waiter.resume() }
+    }
+}
+
 private struct Boom: Error {}
 
 private func makeStatus(battery: Int = 72, locked: Bool? = true, climateOn: Bool? = false,
@@ -62,7 +76,85 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
 // MARK: - Dashboard
 
 @MainActor final class DashboardModelTests: XCTestCase {
+    /// A bounded wait for cooperative child tasks, not a timing assertion.
+    private func waitUntil(_ condition: @MainActor () -> Bool) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
+    func testStatusBecomesUsableWhileAllHistoryRequestsAreSuspended() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.timelineHandler = { await gate.wait(); return [segment] }
+        source.summaryHandler = { range in await gate.wait(); return makeSummary(range) }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1) }
+        await waitUntil { model.status != nil }
+        XCTAssertEqual(model.status?.batteryLevel, 72)
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertEqual(model.loadingSections, [.timeline, .summary(.today), .summary(.sevenDays), .summary(.thirtyDays)])
+        XCTAssertTrue(model.summaries.isEmpty)
+        XCTAssertTrue(model.failedSections.isEmpty)
+        await gate.open()
+        await task.value
+        XCTAssertEqual(model.timeline.count, 1)
+        XCTAssertEqual(model.summaries.count, 3)
+        XCTAssertTrue(model.loadingSections.isEmpty)
+    }
+
+    func testFastHistorySectionsDoNotWaitForTheMonthSummary() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.timelineHandler = { [segment] }
+        source.summaryHandler = { range in
+            if range == .thirtyDays { await gate.wait() }
+            return makeSummary(range)
+        }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1) }
+        await waitUntil { model.summaries.count == 2 && !model.timeline.isEmpty }
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertNotNil(model.summaries[.today])
+        XCTAssertNotNil(model.summaries[.sevenDays])
+        XCTAssertEqual(model.timeline.count, 1)
+        XCTAssertNil(model.summaries[.thirtyDays])
+        XCTAssertEqual(model.loadingSections, [.summary(.thirtyDays)])
+        await gate.open()
+        await task.value
+        XCTAssertNotNil(model.summaries[.thirtyDays])
+    }
+
+    func testOldHistoryCannotReplaceNewLoadAfterStatusWasPublished() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.summaryHandler = { range in await gate.wait(); return makeSummary(range, km: 5) }
+        let first = Task { await model.load(dataSource: source, vehicleID: 1) }
+        await waitUntil { model.status != nil }
+        let newer = StubSource()
+        newer.statusHandler = { makeStatus(battery: 90) }
+        newer.summaryHandler = { makeSummary($0, km: 40) }
+        await model.load(dataSource: newer, vehicleID: 1)
+        await gate.open()
+        await first.value
+        XCTAssertEqual(model.status?.batteryLevel, 90)
+        XCTAssertEqual(model.summaries[.today]?.distanceKm, 40)
+        XCTAssertTrue(model.loadingSections.isEmpty)
+    }
+
+    func testCancellingAfterStatusKeepsItAndDoesNotPublishLateHistory() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.summaryHandler = { range in await gate.wait(); return makeSummary(range) }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1) }
+        await waitUntil { model.status != nil }
+        task.cancel()
+        await gate.open()
+        await task.value
+        XCTAssertEqual(model.status?.batteryLevel, 72)
+        XCTAssertTrue(model.summaries.isEmpty)
+        XCTAssertTrue(model.failedSections.isEmpty)
+        XCTAssertTrue(model.loadingSections.isEmpty)
+    }
+
     func testEfficiencyCardSaysNoDrivesOnlyForALoadedEmptySummary() {
+        XCTAssertEqual(DashboardView.efficiencyDetail(nil, loading: true), "Loading 30-day average…")
+        XCTAssertEqual(DashboardView.efficiencyDetail(makeSummary(.thirtyDays), loading: true), "30-day average")
         XCTAssertEqual(DashboardView.efficiencyDetail(nil), "Unavailable", "Missing or failed summary is not 'no drives'")
         var empty = makeSummary(.thirtyDays, km: 0); empty.driveCount = 0; empty.efficiencyWhPerKm = nil
         XCTAssertEqual(DashboardView.efficiencyDetail(empty), "No drives in 30 days")
@@ -135,15 +227,29 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(model.phase, .loading)
     }
 
-    func testCancellationErrorFromSectionIsNotTreatedAsFailure() async {
+    func testCancellationOfASectionDoesNotDiscardFreshStatus() async {
         let source = StubSource()
         let model = DashboardModel()
         await model.load(dataSource: source, vehicleID: 1)
         source.statusHandler = { makeStatus(battery: 50) }
         source.timelineHandler = { throw CancellationError() }
         await model.load(dataSource: source, vehicleID: 1)
-        XCTAssertEqual(model.status?.batteryLevel, 72, "cancelled refresh publishes nothing")
-        XCTAssertTrue(model.failedSections.isEmpty)
+        XCTAssertEqual(model.status?.batteryLevel, 50, "independent section cancellation cannot roll back fresh status")
+        XCTAssertEqual(model.failedSections, [.timeline], "a cancelled section isn't a successful empty result")
+    }
+
+    func testIndependentlyCancelledInitialSectionsAreUnavailable() async {
+        let source = StubSource(), model = DashboardModel()
+        source.timelineHandler = { throw URLError(.cancelled) }
+        source.summaryHandler = { range in
+            if range == .sevenDays { throw CancellationError() }
+            return makeSummary(range)
+        }
+        await model.load(dataSource: source, vehicleID: 1)
+        XCTAssertEqual(model.status?.batteryLevel, 72)
+        XCTAssertEqual(model.failedSections, [.timeline, .summary(.sevenDays)])
+        XCTAssertTrue(model.loadingSections.isEmpty)
+        XCTAssertNotNil(model.summaries[.today])
     }
 
     func testPartialFailureKeepsPreviousSectionDataAndReportsIt() async {
