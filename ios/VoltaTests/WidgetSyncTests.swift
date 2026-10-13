@@ -961,12 +961,24 @@ final class ChargingActivityPlannerTests: XCTestCase {
         onAC.chargeEnergyAddedKwh = 25
         // A process learned for a late session is refused when history shows more than the counter
         // could account for, or that it ended before the session began; the session stays.
-        let small = try started(planCharging([], resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 1),
-                                             latest: nil), as: "l")
+        var smallAC = resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 1)
+        smallAC.fastCharger = false
+        let small = try started(planCharging([], smallAC, latest: nil), as: "l")
         XCTAssertEqual(try update(planCharging([small], teslaMate(10, startedAt: processStart),
                                                latest: charge(id: 10, start: processStart, added: 20)), "l").otherChargeIds, [10])
         let learnedTen = try update(planCharging([small], teslaMate(10, startedAt: processStart), latest: nil), "l")
         XCTAssertEqual(learnedTen.teslaMateChargeId, 10)
+        // Telemetry returning to the session judges the learned process by its fresh counter.
+        let recounted = try update(planCharging([next(small, learnedTen)], resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 2),
+                                                latest: charge(id: 10, start: processStart, added: 20)), "l")
+        XCTAssertEqual(recounted.statusSessionId, -906)
+        XCTAssertNil(recounted.teslaMateChargeId)
+        XCTAssertEqual(recounted.otherChargeIds, [10])
+        // A process just ahead of a counter sampled a little earlier is still learned.
+        let sampled = try started(planCharging([], resumed(-909, startedAt: t0.addingTimeInterval(-600), energy: 20),
+                                               latest: nil), as: "m")
+        XCTAssertEqual(planCharging([sampled], teslaMate(11, startedAt: processStart),
+                                    latest: charge(id: 11, start: processStart, added: 22.8)).start?.state.teslaMateChargeId, 11)
         var ended = resumed(-906, startedAt: t0.addingTimeInterval(-600), energy: 2)
         ended.state = .online
         ended.chargingState = .complete

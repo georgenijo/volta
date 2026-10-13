@@ -250,10 +250,13 @@ enum LiveActivityPlanner {
             }
             forget(known, in: &identity)
         }
-        // A process learned while history was away answers to history that arrives later; the counter
-        // read then is too old to judge its total by.
+        // A process learned while history was away answers to history that arrives later, judged by
+        // the session's counter only when it is read afresh: a saved one is too old for a growing total.
+        let tracked = identity.session != nil && identity.session == liveSession(status)
         if let known = identity.teslaMate,
-           !fits(learned: identity, records: records, counter: nil, readAt: activity.state.updatedAt, status: status) {
+           !fits(learned: identity, records: records, counter: tracked ? status.chargeEnergyAddedKwh : nil,
+                 readAt: status.updatedAt, onAC: (chargerKind(status) ?? activity.state.fastCharger) == false,
+                 status: status) {
             forget(known, in: &identity)
         }
         let shown = knowingDC(activity.state, attributes: activity.attributes, identity: identity, records: records)
@@ -340,7 +343,8 @@ enum LiveActivityPlanner {
                     learned.teslaMate = process; learned.teslaMateStart = named; learned.processLearned = true
                     if activity.state.fastCharger == false && records.contains(where: { $0.id == process && $0.fastCharger })
                         || !fits(learned: learned, records: records, counter: activity.state.counterKwh,
-                                 readAt: activity.state.updatedAt, status: status) {
+                                 readAt: activity.state.updatedAt, onAC: activity.state.fastCharger == false,
+                                 status: status) {
                         identity.others.insert(process)
                         return .unrelated(identity)
                     }
@@ -496,20 +500,26 @@ enum LiveActivityPlanner {
         identity.teslaMate = nil; identity.teslaMateStart = nil; identity.processLearned = false
     }
 
-    /// The fastest the car adds energy: a process can't have outrun the car's counter by more.
+    /// The fastest the car adds energy on DC and on AC: a process can't have outrun the car's
+    /// counter by more.
     static let maxChargeRateKw = 300.0
+    static let maxACChargeRateKw = 20.0
+
+    /// How much older a counter may be than the status it came with: energy is sampled once a
+    /// minute, while the status time moves with every other reading.
+    static let counterSampleAge: TimeInterval = 5 * 60
 
     /// Whether history leaves a process learned for the activity's session this charge's: it didn't
-    /// end before the session began, and its total isn't more than the counter, read at `readAt`,
-    /// could have reached by the time of the status.
+    /// end before the session began, and the counter, shown at `readAt`, isn't well below a total it
+    /// couldn't have caught up with since.
     static func fits(learned identity: ChargeIdentity, records: [ChargeSummary], counter: Double?, readAt: Date,
-                     status: VehicleStatus) -> Bool {
+                     onAC: Bool, status: VehicleStatus) -> Bool {
         guard identity.processLearned, let process = identity.teslaMate,
               let record = records.first(where: { $0.id == process }) else { return true }
         if let end = record.end, let start = identity.sessionStart, end <= start { return false }
-        guard let counter, let total = record.energyAddedKwh else { return true }
-        let hours = max(0, status.updatedAt.timeIntervalSince(readAt)) / 3600
-        return total <= counter + maxChargeRateKw * hours + counterSlack
+        guard let counter, let total = record.energyAddedKwh, !counts(counter, toward: total) else { return true }
+        let hours = (max(0, status.updatedAt.timeIntervalSince(readAt)) + counterSampleAge) / 3600
+        return total <= counter + (onAC ? maxACChargeRateKw : maxChargeRateKw) * hours + counterSlack
     }
 
     /// Whether a history record is this activity's charge: one of its ids, or, while its TeslaMate
