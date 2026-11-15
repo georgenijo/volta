@@ -247,16 +247,17 @@ private struct Row: Codable, Hashable, Sendable, Identifiable { var id: Int }
         await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 30, calendar: utc)
         XCTAssertEqual(gate.requests.count, 2)
 
-        // Back later the same day: the first page is fetched again, the rows
-        // stay on screen, and the older page and its cursor are kept.
-        let later = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 600, calendar: utc) }
+        // Back later with nothing new: the rows stay on screen during the
+        // check, and the older page, its cursor and the footer's trigger stand.
+        let trigger = feed.paginationTrigger
+        let same = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 600, calendar: utc) }
         await settle { gate.requests.count == 3 }
         XCTAssertEqual(feed.phase, .loaded)
+        gate.succeed(2, ids: [5, 4], next: "c1")
+        await same.value
         XCTAssertEqual(feed.items.map(\.id), [5, 4, 3])
-        gate.succeed(2, ids: [6, 5], next: "c1b")
-        await later.value
-        XCTAssertEqual(feed.items.map(\.id), [6, 5, 4, 3])
         XCTAssertEqual(feed.nextCursor, "c2")
+        XCTAssertEqual(feed.paginationTrigger, trigger)
 
         // A failed check leaves the list alone.
         let failing = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 1_200, calendar: utc) }
@@ -264,18 +265,28 @@ private struct Row: Codable, Hashable, Sendable, Identifiable { var id: Int }
         gate.fail(3)
         await failing.value
         XCTAssertEqual(feed.phase, .loaded)
-        XCTAssertEqual(feed.items.map(\.id), [6, 5, 4, 3])
+        XCTAssertEqual(feed.items.map(\.id), [5, 4, 3])
+
+        // A changed top replaces the list rather than joining it to older
+        // pages, and the footer's trigger changes so it can page again.
+        let changed = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 1_800, calendar: utc) }
+        await settle { gate.requests.count == 5 }
+        gate.succeed(4, ids: [6, 5], next: "c2")
+        await changed.value
+        XCTAssertEqual(feed.items.map(\.id), [6, 5])
+        XCTAssertEqual(feed.nextCursor, "c2")
+        XCTAssertNotEqual(feed.paginationTrigger, trigger)
 
         // The next day every range has moved: the list starts over.
         let nextDay = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 86_400, calendar: utc) }
-        await settle { gate.requests.count == 5 }
+        await settle { gate.requests.count == 6 }
         XCTAssertEqual(feed.phase, .loading)
-        gate.succeed(4, ids: [8], next: nil)
+        gate.succeed(5, ids: [8], next: nil)
         await nextDay.value
         XCTAssertEqual(feed.items.map(\.id), [8])
     }
 
-    func testLoadIfNeededReplacesAnAgedFirstPage() async {
+    func testAnUnchangedCheckKeepsAPageRequestInFlight() async {
         let gate = Gate()
         let feed = HistoryFeed<Row>()
         let start = Date(timeIntervalSince1970: 1_800_000_000)
@@ -286,14 +297,17 @@ private struct Row: Codable, Hashable, Sendable, Identifiable { var id: Int }
         gate.succeed(0, ids: [5, 4], next: "c1")
         await first.value
 
-        // Only the first page is loaded, so the fresh one replaces it and its cursor.
-        let later = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 600, calendar: utc) }
+        let more = Task { await feed.loadMore() }
         await settle { gate.requests.count == 2 }
-        gate.succeed(1, ids: [6, 5], next: "c1b")
-        await later.value
-        XCTAssertEqual(feed.phase, .loaded)
-        XCTAssertEqual(feed.items.map(\.id), [6, 5])
-        XCTAssertEqual(feed.nextCursor, "c1b")
+        let check = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 600, calendar: utc) }
+        await settle { gate.requests.count == 3 }
+        gate.succeed(2, ids: [5, 4], next: "c1")
+        await check.value
+        gate.succeed(1, ids: [3], next: nil)
+        await more.value
+        XCTAssertEqual(feed.items.map(\.id), [5, 4, 3])
+        XCTAssertNil(feed.nextCursor)
+        XCTAssertFalse(feed.isLoadingMore)
     }
 
     func testLoadIfNeededRetriesAFailedOrCancelledLoad() async {

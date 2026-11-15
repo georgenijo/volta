@@ -28,6 +28,8 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     struct PaginationTrigger: Hashable {
         var cursor: String?
         var blocked: Bool
+        /// Bumped when a check replaces the list under a page request.
+        var epoch = 0
     }
 
     private(set) var items: [Item] = []
@@ -54,6 +56,7 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     private var loadedAt: Date?
     /// A page past the first has been appended since the last reload.
     private var hasLoadedMore = false
+    private var paginationEpoch = 0
     /// How long a reappearing screen trusts its list before checking again.
     static var revalidateAfter: TimeInterval { 60 }
 
@@ -66,7 +69,8 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
 
     var paginationTrigger: PaginationTrigger {
         PaginationTrigger(cursor: nextCursor,
-                          blocked: phase != .loaded || isRefreshing || loadMoreError != nil)
+                          blocked: phase != .loaded || isRefreshing || loadMoreError != nil,
+                          epoch: paginationEpoch)
     }
 
     /// Error to surface at the list footer, if any.
@@ -75,8 +79,8 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     /// Load for a screen that appears. A list that already holds `key`'s rows
     /// stays, so a screen that disappears and comes back (a tab switch) keeps
     /// its loaded pages and scroll position; once it is a minute old its top
-    /// is checked again in place. A new key, or a new day (which moves every
-    /// range), replaces the list.
+    /// is checked again, and the list is replaced only if that changed. A new
+    /// key, or a new day (which moves every range), starts over.
     func loadIfNeeded(key newKey: AnyHashable, range newRange: DateRange, fetch newFetch: @escaping Fetch,
                       now: Date = Date(), calendar: Calendar = .current) async {
         guard newKey == key, phase == .loaded, let loadedAt, calendar.isDate(loadedAt, inSameDayAs: now) else {
@@ -87,27 +91,30 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
         await revalidate(range: newRange, fetch: newFetch, now: now)
     }
 
-    /// Fetches the first page again without disturbing what is on screen.
-    /// Nothing changes if it fails; pull-to-refresh reports errors.
+    /// Fetches the first page again while the list stays on screen. If the
+    /// top of the list is unchanged, nothing else is: loaded pages, cursor
+    /// and a page request in flight all stand. If it changed, the fresh page
+    /// becomes the list, as after a pull-to-refresh; joining it to older
+    /// pages could keep rows the server replaced or leave a gap between
+    /// them. A failed check changes nothing; pull-to-refresh reports errors.
     private func revalidate(range newRange: DateRange, fetch newFetch: @escaping Fetch, now: Date) async {
         guard !isRefreshing else { return }
         let token = listGeneration
         guard let page = try? await newFetch(newRange, nil), token == listGeneration, phase == .loaded else { return }
-        if hasLoadedMore {
-            // Keep the older pages and the cursor that continues them; update
-            // the rows the first page covers and add any newer ones.
-            let fresh = Set(page.items.map(\.id))
-            items = page.items + items.filter { !fresh.contains($0.id) }
-        } else {
-            pageGeneration += 1  // drop a page request made for the old cursor
-            isLoadingMore = false
-            range = newRange
-            fetch = newFetch
-            items = page.items
-            nextCursor = page.nextCursor
-            loadMoreError = nil
-        }
         loadedAt = now
+        let unchanged = hasLoadedMore
+            ? Array(items.prefix(page.items.count)) == page.items
+            : items == page.items && nextCursor == page.nextCursor
+        guard !unchanged else { return }
+        pageGeneration += 1  // drop a page request made for the old list
+        paginationEpoch += 1  // and let the footer ask again, even for the same cursor
+        isLoadingMore = false
+        hasLoadedMore = false
+        range = newRange
+        fetch = newFetch
+        items = page.items
+        nextCursor = page.nextCursor
+        loadMoreError = nil
     }
 
     /// Replaces the list. Keeps existing rows visible during pull-to-refresh;
