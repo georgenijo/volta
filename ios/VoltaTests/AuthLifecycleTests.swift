@@ -297,7 +297,6 @@ private final class MemoryTokenStore: TokenStoring, Sendable {
         await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
         XCTAssertEqual(model.pairingState, .unpaired); XCTAssertTrue(model.needsPairingCode(for: "https://VOLTA.example:443/"))
         XCTAssertFalse(model.needsPairingCode(for: "https://other.example"), "Another address offers Apple sign-in again")
-        XCTAssertFalse(model.serverAddressInDoubt)
         XCTAssertEqual(model.errorMessage, VoltaError.appleSignInUnavailable.errorDescription)
         await model.pair(serverURL: "https://volta.example", code: "ABCD1234", deviceName: "Test")
         XCTAssertEqual(model.pairingState, .paired); XCTAssertFalse(settings.signedInWithApple)
@@ -311,20 +310,22 @@ private final class MemoryTokenStore: TokenStoring, Sendable {
         let model = AppModel(settings: settings(), tokenStore: MemoryTokenStore(), session: session, launchArguments: [])
         await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
         XCTAssertFalse(model.needsPairingCode(for: "https://volta.example")); XCTAssertEqual(model.pairingState, .unpaired)
-        XCTAssertFalse(model.serverAddressInDoubt)
         #if DEBUG
         XCTAssertTrue(AppModel(settings: settings(), tokenStore: MemoryTokenStore(), launchArguments: ["-pairing-code"])
             .needsPairingCode(for: "https://volta.example"))
         #endif
     }
 
-    func testAnUnreachableServerAsksToCheckTheAddress() async throws {
+    func testAnUnreachableServerSaysToCheckTailscale() async throws {
         let session = session { _ in throw URLError(.cannotFindHost) }
         let model = AppModel(settings: settings(), tokenStore: MemoryTokenStore(), session: session, launchArguments: [])
-        await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
-        XCTAssertTrue(model.serverAddressInDoubt); XCTAssertEqual(model.pairingState, .unpaired)
-        XCTAssertNotNil(model.errorMessage)
-        model.tryDemoMode()
-        XCTAssertFalse(model.serverAddressInDoubt, "Leaving the sign-in screen clears the doubt")
+        XCTAssertEqual(model.signInServerURL, VoltaServer.address)
+        await model.signInWithApple(serverURL: model.signInServerURL, identityToken: "synthetic.identity.token", deviceName: "Test")
+        XCTAssertEqual(model.pairingState, .unpaired)
+        XCTAssertEqual(model.errorMessage, "Couldn't reach your Volta server. Check that Tailscale is connected, then try again.")
+        #if DEBUG
+        let fixture = AppModel(settings: settings(), tokenStore: MemoryTokenStore(), launchArguments: ["-serverURL", "https://127.0.0.1:9443"])
+        XCTAssertEqual(fixture.signInServerURL, "https://127.0.0.1:9443")
+        #endif
     }
 }

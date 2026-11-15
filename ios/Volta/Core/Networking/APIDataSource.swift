@@ -28,13 +28,6 @@ struct APIDataSource: VoltaDataSource {
         return url
     }
 
-    /// A server address supplied when the app was built, so a new install
-    /// doesn't need it typed. The public repository builds with none.
-    static func builtInServerURL(_ value: Any? = Bundle.main.object(forInfoDictionaryKey: "VoltaServerURL")) -> String {
-        guard let text = value as? String, let url = try? validatedServerURL(text) else { return "" }
-        return url.absoluteString
-    }
-
     static func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)

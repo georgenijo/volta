@@ -80,9 +80,21 @@ elif [[ -z ${CI:-} ]]; then
   echo "privacy-check: no denylist at $denylist; ran generic checks only" >&2
 fi
 
+# The owner chose to publish one address: the app's server, on exactly this
+# line of this file. Every other occurrence still fails.
+allowed_line='^([0-9a-f]{40}:)?ios/Volta/Core/Networking/VoltaServer\.swift:[0-9]+:    static let address = "https://[A-Za-z0-9.-]+:[0-9]+"$'
+# unallowed: drops the allowed line from $tmp/hits; succeeds if anything remains.
+unallowed() {
+  local rc=0
+  grep -v -E "$allowed_line" "$tmp/hits" >"$tmp/rest" || rc=$?
+  ((rc <= 1)) || die "filter failed (exit $rc)"
+  mv "$tmp/rest" "$tmp/hits"
+  [[ -s $tmp/hits ]]
+}
+
 for target in content paths; do
   # Real tailnet hostnames look like <host>.tail<hex>.ts.net; use example.ts.net.
-  if hits -n -E '\.tail[0-9a-f]{4,}\.ts\.net'; then cat "$tmp/hits"; fail "real tailnet hostname ($target)"; fi
+  if hits -n -E '\.tail[0-9a-f]{4,}\.ts\.net' && unallowed; then cat "$tmp/hits"; fail "real tailnet hostname ($target)"; fi
   # Tailscale addresses (100.64.0.0/10) other than the 100.64.0.0/24 test range.
   # Whole digit-and-dot tokens are extracted without consuming separators, so
   # adjacent addresses are each validated on their own; dots at either end are
@@ -93,7 +105,7 @@ for target in content paths; do
       for (i = 1; i <= 4; i++) if (o[i] !~ /^[0-9]+$/ || length(o[i]) > 3 || o[i] + 0 > 255) next
       if (o[1] == 100 && o[2] >= 64 && o[2] <= 127 && !(o[2] == 64 && o[3] == 0)) { print; bad = 1 }
     } END { exit !bad }' "$tmp/hits"; then fail "tailscale IP ($target)"; fi
-  if [[ -s $tmp/deny ]] && hits -n -i -F -f "$tmp/deny"; then cat "$tmp/hits"; fail "string listed in $denylist ($target)"; fi
+  if [[ -s $tmp/deny ]] && hits -n -i -F -f "$tmp/deny" && unallowed; then cat "$tmp/hits"; fail "string listed in $denylist ($target)"; fi
 done
 
 # The signing team belongs in the untracked ios/Config/Signing.local.xcconfig.

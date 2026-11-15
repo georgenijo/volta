@@ -342,11 +342,8 @@ private func bodyData(_ request: URLRequest) throws -> Data {
         XCTAssertEqual(missing, AppleSignInStatus(available: false, linked: false))
     }
 
-    func testBuiltInServerURLAcceptsOnlyAValidAddress() {
-        XCTAssertEqual(APIDataSource.builtInServerURL("https://volta.example:9443"), "https://volta.example:9443")
-        for value: Any? in [nil, "", "$(VOLTA_SERVER_URL)", "http://volta.example", "https://volta.example/path", 42] {
-            XCTAssertEqual(APIDataSource.builtInServerURL(value), "")
-        }
+    func testTheServerAddressIsValid() throws {
+        XCTAssertEqual(try APIDataSource.validatedServerURL(VoltaServer.address).absoluteString, VoltaServer.address)
     }
 
     func testAppleSignInOutcomeReadsOnlyTheIdentityToken() {

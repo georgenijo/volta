@@ -22,9 +22,8 @@ final class AppModel {
     /// screen asks for a pairing code for these addresses only.
     private var serversWithoutAppleSignIn: Set<String> = []
     private var alwaysNeedsPairingCode = false
-    /// The last sign-in got no answer from its server, so the sign-in screen
-    /// shows the address for correction.
-    private(set) var serverAddressInDoubt = false
+    /// The server the sign-in screen connects to.
+    let signInServerURL: String
     private(set) var isUnlocking = false
     private(set) var isLocked = false
     var errorMessage: String?
@@ -125,10 +124,16 @@ final class AppModel {
         tesla = TeslaLinkModel(webAuth: teslaWebAuth ?? TeslaWebAuthenticator())
         commandCoordinator = VehicleCommandCoordinator(store: commandIntentStore ?? (launchDemo ? VehicleCommandIntentStore(inMemory: []) : nil))
         isLaunchDemo = launchDemo
+        var signInServerURL = VoltaServer.address
         #if DEBUG
+        // UI tests and startup benchmarks sign in to a local fixture.
+        if let index = launchArguments.firstIndex(of: "-serverURL"), launchArguments.indices.contains(index + 1) {
+            signInServerURL = launchArguments[index + 1]
+        }
         // Startup benchmarks pair with a local fixture that has no Apple sign-in.
         alwaysNeedsPairingCode = launchArguments.contains("-pairing-code")
         #endif
+        self.signInServerURL = signInServerURL
         if launchDemo || settings.demoMode {
             pairingState = .demo; dataSource = MockDataSource(empty: launchDemo ? false : settings.emptyDemo)
         } else { restorePairing() }
@@ -181,7 +186,7 @@ final class AppModel {
         guard let url = try? APIDataSource.validatedServerURL(serverURL), let host = url.host?.lowercased() else { return nil }
         return "\(host):\(url.port ?? 443)"
     }
-    private func resetSignInFallbacks() { serversWithoutAppleSignIn = []; serverAddressInDoubt = false }
+    private func resetSignInFallbacks() { serversWithoutAppleSignIn = [] }
     func pair(serverURL: String, code: String, deviceName: String) async {
         await connect(serverURL: serverURL, deviceName: deviceName, withApple: false) { url, name, session in
             let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -240,7 +245,9 @@ final class AppModel {
             switch error as? VoltaError {
             case .appleSignInUnavailable:
                 if let key = Self.serverKey(serverURL) { serversWithoutAppleSignIn.insert(key) }
-            case .unreachable: serverAddressInDoubt = true
+            case .unreachable:
+                errorMessage = "Couldn't reach your Volta server. Check that Tailscale is connected, then try again."
+                return
             default: break
             }
             errorMessage = error.localizedDescription

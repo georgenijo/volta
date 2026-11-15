@@ -16,11 +16,6 @@ matches CoachOS/HomeOS: archive on relevant `main` changes, then internal TestFl
   after validation.
 - Set workflow environment variable `VOLTA_APPLE_TEAM_ID` to the owner's
   ten-character Apple Developer signing team ID. Keep the value out of Git.
-- Set `VOLTA_SERVER_URL` to the API's HTTPS address (host and optional port
-  only). The sign-in screen then shows only Sign in with Apple; without it,
-  the screen also asks for the address until the first sign-in. Keep the
-  value out of Git. Apple's API does not expose workflow environment
-  variables, so set it in App Store Connect.
 - Action: Archive, iOS, configuration `Release`. No simulator, test or screenshot
   actions are needed for this delivery workflow.
 - Post-action: TestFlight Internal Testing, group `Internal` (owner creates or

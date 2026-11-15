@@ -52,7 +52,5 @@
 		<key>UIColorName</key>
 		<string>LaunchBackground</string>
 	</dict>
-	<key>VoltaServerURL</key>
-	<string>$(VOLTA_SERVER_URL)</string>
 </dict>
 </plist>

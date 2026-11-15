@@ -1,26 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// First run: signs this device in to the owner's volta-api server with
-/// Sign in with Apple, and nothing else. The server address comes from the
-/// build or from an earlier sign-in. Other fields appear only when they are
-/// needed: the address when neither source has one or the server didn't
-/// answer, and a pairing code when the server doesn't offer Sign in with Apple.
+/// First run: signs this device in to the owner's volta-api server
+/// (`VoltaServer.address`) with Sign in with Apple, and nothing else. A
+/// pairing code appears only when the server doesn't offer Sign in with Apple.
 struct PairingView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var typedServerURL = ""
     @State private var code = ""
     @State private var isWide = false
-    @State private var showsServerField = false
 
-    /// The build's address wins over a saved one, so a build can move Volta to a new server.
-    private var knownServerURL: String {
-        let builtIn = APIDataSource.builtInServerURL()
-        return builtIn.isEmpty ? model.settings.serverURL : builtIn
-    }
-    private var asksForServer: Bool { knownServerURL.isEmpty || showsServerField }
-    private var serverURL: String { asksForServer ? typedServerURL : knownServerURL }
+    private var serverURL: String { model.signInServerURL }
     private var needsPairingCode: Bool { model.needsPairingCode(for: serverURL) }
     private var deviceName: String { UIDevice.current.name }
     private var canSignIn: Bool { !model.isPairing && !serverURL.isEmpty }
@@ -61,12 +51,6 @@ struct PairingView: View {
         }
         .voltaScreenBackground()
         .scrollDismissesKeyboard(.interactively)
-        // A server that didn't answer may have moved: show its address to correct.
-        .onChange(of: model.serverAddressInDoubt, initial: true) { _, inDoubt in
-            guard inDoubt, !showsServerField else { return }
-            if typedServerURL.isEmpty { typedServerURL = knownServerURL }
-            showsServerField = true
-        }
     }
 
     private func centered<Content: View>(_ content: Content) -> some View {
@@ -82,7 +66,6 @@ struct PairingView: View {
 
     private var controls: some View {
         VStack(spacing: VoltaSpacing.lg) {
-            if asksForServer { serverField }
             if needsPairingCode { codeField }
             if let error = model.errorMessage {
                 InlineBanner(systemImage: "exclamationmark.triangle", message: error, tint: .voltaRed)
@@ -121,15 +104,6 @@ struct PairingView: View {
             }
         }
         .multilineTextAlignment(.center)
-    }
-
-    private var serverField: some View {
-        field("Server URL") {
-            TextField("Server URL", text: $typedServerURL, prompt: Text("https://your-server.tailnet.ts.net"))
-                .keyboardType(.URL).textContentType(.URL)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .accessibilityIdentifier("field.serverURL")
-        }
     }
 
     private var codeField: some View {

@@ -20,7 +20,9 @@ on. Never copy anything from that file into this repository.
 - Use only synthetic data: Bay Area coordinates, `telemetry.example.com`,
   `192.0.2.x` addresses. Never commit real names, addresses, coordinates,
   hostnames, IP addresses, team IDs, emails, VINs, or screenshots
-  (`docs/screens/latest/` is generated output).
+  (`docs/screens/latest/` is generated output). One exception, by the owner's
+  choice: the API address in `ios/Volta/Core/Networking/VoltaServer.swift`,
+  which `scripts/privacy-check.sh` allows on that one line only.
 - Commit as `georgenijo <25929278+georgenijo@users.noreply.github.com>`, set in
   the clone's local git config.
 - Install the privacy hooks with `bash scripts/install-hooks.sh`. They also read

@@ -21,24 +21,6 @@ if [ "${#VOLTA_APPLE_TEAM_ID}" -ne 10 ]; then
     echo 'VOLTA_APPLE_TEAM_ID must contain ten uppercase letters or digits.' >&2
     exit 1
 fi
-# Optional: the server address the sign-in screen starts with. It stays out of
-# Git, so the checked-in default is empty and the screen asks for it.
-VOLTA_SERVER_URL="${VOLTA_SERVER_URL:-}"
-case "$VOLTA_SERVER_URL" in
-    '') ;;
-    https://*)
-        case "${VOLTA_SERVER_URL#https://}" in
-            '' | *[!A-Za-z0-9.:-]*)
-                echo 'VOLTA_SERVER_URL must be an HTTPS address with only a host and an optional port.' >&2
-                exit 1
-                ;;
-        esac
-        ;;
-    *)
-        echo 'VOLTA_SERVER_URL must be an HTTPS address with only a host and an optional port.' >&2
-        exit 1
-        ;;
-esac
 
 cd "$CI_PRIMARY_REPOSITORY_PATH/ios"
 # AppSide supplies types used by the app; a widget-less Cloud build is invalid.
@@ -70,7 +52,6 @@ settings:
   base:
     DEVELOPMENT_TEAM: '$VOLTA_APPLE_TEAM_ID'
     CURRENT_PROJECT_VERSION: '$CI_BUILD_NUMBER'
-    VOLTA_SERVER_URL: '$VOLTA_SERVER_URL'
 EOF
 "$xcodegen_bin" generate --spec "$work_dir/cloud.yml" --project-root "$PWD" --project "$PWD"
 test -f Volta.xcodeproj/xcshareddata/xcschemes/Volta.xcscheme
