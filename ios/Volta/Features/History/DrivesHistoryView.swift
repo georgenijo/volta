@@ -69,11 +69,17 @@ extension DriveSummary {
     }
 }
 
-/// Where the Drives tab can navigate.
+/// Where the Drives tab can navigate. Routes name what they show by ID
+/// (or day) and the tab resolves them against the loaded list, so an open
+/// page follows a refresh and every page deep in a chain is part of the path.
 enum DriveRoute: Hashable {
-    case drive(DriveSummary)
+    case drive(Int)
     case roadtrips
     case heatmap
+    /// The roadtrip that contains this drive.
+    case roadtrip(containing: Int)
+    /// A day on the heatmap calendar (its start).
+    case heatmapDay(Date)
 }
 
 /// Drives tab: range and filter menus, search, route map, day-grouped drive
@@ -129,16 +135,33 @@ struct DrivesHistoryView: View {
             root
         } destination: { route in
             switch route {
-            case .drive(let drive): DriveDetailView(drive: drive)
+            case .drive(let id):
+                if let drive = feed.items.first(where: { $0.id == id }) {
+                    DriveDetailView(drive: drive)
+                } else {
+                    HistoryMissingSelection(systemImage: "steeringwheel", title: "Drive not loaded",
+                                            message: "This drive is no longer in the list for this range.")
+                }
             case .roadtrips: RoadtripsView(drives: visible, partial: feed.hasMore)
             case .heatmap: DrivesHeatmapView(drives: visible, partial: feed.hasMore)
+            case .roadtrip(let id):
+                if let trip = Roadtrip.group(visible).first(where: { $0.drives.contains { $0.id == id } }) {
+                    RoadtripDetailView(trip: trip, partial: feed.hasMore)
+                } else {
+                    HistoryMissingSelection(systemImage: "point.topleft.down.to.point.bottomright.curvepath",
+                                            title: "Roadtrip not loaded",
+                                            message: "This roadtrip is no longer in the drives shown.")
+                }
+            case .heatmapDay(let day):
+                HeatmapDayView(date: day, drives: visible.filter { Calendar.current.isDate($0.start, inSameDayAs: day) },
+                               partial: feed.hasMore)
             }
         } placeholder: {
             HistorySelectionPlaceholder(systemImage: "steeringwheel", title: "No drive selected",
                                         message: "Choose a drive to see its route, charts and cost.")
         }
         .readsHistoryWindow($window)
-        .task(id: range) { await reload(skeleton: true) }
+        .task(id: loadKey) { await load() }
     }
 
     private var root: some View {
@@ -187,11 +210,21 @@ struct DrivesHistoryView: View {
 
     private func open(_ route: DriveRoute) { path.historyOpen(route, split: split) }
 
-    private func reload(skeleton: Bool = false) async {
+    /// The list this screen shows; a tab that comes back to the same key keeps its pages.
+    private var loadKey: HistoryLoadKey { HistoryLoadKey(range: range, vehicleID: vehicleID) }
+
+    private var fetch: HistoryFeed<DriveSummary>.Fetch {
         let ds = dataSource, vid = vehicleID
-        await feed.reload(range: range.dateRange(), fetch: { r, c in
-            try await ds.drives(vehicleID: vid, range: r, cursor: c)
-        }, showSkeleton: skeleton)
+        return { r, c in try await ds.drives(vehicleID: vid, range: r, cursor: c) }
+    }
+
+    /// Loads the list unless it already holds this range and vehicle.
+    private func load() async {
+        await feed.loadIfNeeded(key: loadKey, range: range.dateRange(), fetch: fetch)
+    }
+
+    private func reload(skeleton: Bool = false) async {
+        await feed.reload(key: loadKey, range: range.dateRange(), fetch: fetch, showSkeleton: skeleton)
     }
 
     /// The title in the content while the bars are on the side.
@@ -286,8 +319,8 @@ struct DrivesHistoryView: View {
     private func rows(_ items: [DriveSummary]) -> some View {
         VStack(spacing: 9) {
             ForEach(items) { drive in
-                Button { open(.drive(drive)) } label: {
-                    DriveCard(drive: drive, showsDate: sort != .newest).historySelected(selected == .drive(drive), radius: 18)
+                Button { open(.drive(drive.id)) } label: {
+                    DriveCard(drive: drive, showsDate: sort != .newest).historySelected(selected == .drive(drive.id), radius: 18)
                 }
                 .buttonStyle(VoltaPressStyle())
                 .accessibilityIdentifier("row.drive.\(drive.id)")

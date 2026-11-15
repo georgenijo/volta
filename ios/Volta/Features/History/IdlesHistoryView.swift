@@ -160,7 +160,9 @@ struct IdlesHistoryView: View {
     @State private var showMap = false
     @State private var refreshing = false
     @State private var places = HistoryPlaces()
-    @State private var path: [IdleSummary] = []
+    /// Open sessions by ID, resolved against the loaded list so an open
+    /// session follows a refresh (a live session that has since ended).
+    @State private var path: [Int] = []
     @State private var selectedCluster: HistoryClusterSelection?
     @State private var showingCustomRange = false
     /// The whole tab, which decides between a stack and a split.
@@ -179,7 +181,7 @@ struct IdlesHistoryView: View {
     private var sideBars: EdgeInsets {
         split ? EdgeInsets() : EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0, trailing: window.safeArea.trailing)
     }
-    private var selected: IdleSummary? { split ? path.first : nil }
+    private var selected: Int? { split ? path.first : nil }
 
     private var visible: [IdleSummary] { feed.items }
     /// Finished sessions; the ongoing one has its own band.
@@ -193,14 +195,19 @@ struct IdlesHistoryView: View {
     var body: some View {
         HistoryNavigation(path: $path, split: split, window: window) {
             root
-        } destination: { idle in
-            IdleDetailView(idle: idle)
+        } destination: { id in
+            if let idle = feed.items.first(where: { $0.id == id }) {
+                IdleDetailView(idle: idle)
+            } else {
+                HistoryMissingSelection(systemImage: "parkingsign", title: "Session not loaded",
+                                        message: "This idle session is no longer in the list for this range.")
+            }
         } placeholder: {
             HistorySelectionPlaceholder(systemImage: "parkingsign", title: "No session selected",
                                         message: "Choose an idle session to see where the time and energy went.")
         }
         .readsHistoryWindow($window)
-        .task(id: range) { await reload(skeleton: true) }
+        .task(id: loadKey) { await load() }
     }
 
     private var root: some View {
@@ -241,13 +248,23 @@ struct IdlesHistoryView: View {
         }
     }
 
-    private func open(_ idle: IdleSummary) { path.historyOpen(idle, split: split) }
+    private func open(_ idle: IdleSummary) { path.historyOpen(idle.id, split: split) }
+
+    /// The list this screen shows; a tab that comes back to the same key keeps its pages.
+    private var loadKey: HistoryLoadKey { HistoryLoadKey(range: range, vehicleID: vehicleID) }
+
+    private var fetch: HistoryFeed<IdleSummary>.Fetch {
+        let ds = dataSource, vid = vehicleID
+        return { r, c in try await ds.idles(vehicleID: vid, range: r, cursor: c) }
+    }
+
+    /// Loads the list unless it already holds this range and vehicle.
+    private func load() async {
+        await feed.loadIfNeeded(key: loadKey, range: range.dateRange(), fetch: fetch)
+    }
 
     private func reload(skeleton: Bool = false) async {
-        let ds = dataSource, vid = vehicleID
-        await feed.reload(range: range.dateRange(), fetch: { r, c in
-            try await ds.idles(vehicleID: vid, range: r, cursor: c)
-        }, showSkeleton: skeleton)
+        await feed.reload(key: loadKey, range: range.dateRange(), fetch: fetch, showSkeleton: skeleton)
     }
 
     /// The title in the content while the bars are on the side.
@@ -300,7 +317,7 @@ struct IdlesHistoryView: View {
                     .historySides(sideBars)
                 if let live {
                     Button { open(live) } label: {
-                        IdleLiveBand(idle: live, sides: sideBars).historySelected(selected == live, radius: 0)
+                        IdleLiveBand(idle: live, sides: sideBars).historySelected(selected == live.id, radius: 0)
                     }
                     .buttonStyle(VoltaPressStyle())
                     .accessibilityIdentifier("row.idle.live")
@@ -314,7 +331,7 @@ struct IdlesHistoryView: View {
                     VStack(spacing: 9) {
                         ForEach(group.items) { idle in
                             Button { open(idle) } label: {
-                                IdleRow(idle: idle, rates: rates).historySelected(selected == idle)
+                                IdleRow(idle: idle, rates: rates).historySelected(selected == idle.id)
                             }
                             .buttonStyle(VoltaPressStyle())
                             .accessibilityIdentifier("row.idle.\(idle.id)")

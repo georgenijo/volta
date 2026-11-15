@@ -70,9 +70,10 @@ extension ChargeSummary {
     }
 }
 
-/// Where the Charging tab can navigate.
+/// Where the Charging tab can navigate. A session is named by ID and
+/// resolved against the loaded list, so an open session follows a refresh.
 enum ChargingRoute: Hashable {
-    case charge(ChargeSummary)
+    case charge(Int)
     case insight(MoreRoute)
 }
 
@@ -125,9 +126,9 @@ struct ChargingHistoryView: View {
         model?.settings.rates ?? ElectricityRates(home: nil, dcFast: nil, currency: units.currency)
     }
 
-    private var selectedCharge: ChargeSummary? {
-        guard split, case .charge(let charge) = path.first else { return nil }
-        return charge
+    private var selectedCharge: Int? {
+        guard split, case .charge(let id) = path.first else { return nil }
+        return id
     }
 
     var body: some View {
@@ -135,7 +136,13 @@ struct ChargingHistoryView: View {
             root
         } destination: { route in
             switch route {
-            case .charge(let charge): ChargingDetailView(charge: charge)
+            case .charge(let id):
+                if let charge = feed.items.first(where: { $0.id == id }) {
+                    ChargingDetailView(charge: charge)
+                } else {
+                    HistoryMissingSelection(systemImage: "bolt.fill", title: "Session not loaded",
+                                            message: "This charging session is no longer in the list for this range.")
+                }
             case .insight(.chargerMap): ChargerMapView()
             case .insight: StatsView()
             }
@@ -144,8 +151,8 @@ struct ChargingHistoryView: View {
                                         message: "Choose a charging session to see its curve, cost and details.")
         }
         .readsHistoryWindow($window)
-        .task(id: range) {
-            await reload(skeleton: true)
+        .task(id: loadKey) {
+            await load()
             #if DEBUG
             openDemoCharge()
             #endif
@@ -213,15 +220,25 @@ struct ChargingHistoryView: View {
             default: String(charge.id) == target
             }
         }
-        if let match { open(.charge(match)) }
+        if let match { open(.charge(match.id)) }
     }
     #endif
 
-    private func reload(skeleton: Bool = false) async {
+    /// The list this screen shows; a tab that comes back to the same key keeps its pages.
+    private var loadKey: HistoryLoadKey { HistoryLoadKey(range: range, vehicleID: vehicleID) }
+
+    private var fetch: HistoryFeed<ChargeSummary>.Fetch {
         let ds = dataSource, vid = vehicleID
-        await feed.reload(range: range.dateRange(), fetch: { r, c in
-            try await ds.charges(vehicleID: vid, range: r, cursor: c)
-        }, showSkeleton: skeleton)
+        return { r, c in try await ds.charges(vehicleID: vid, range: r, cursor: c) }
+    }
+
+    /// Loads the list unless it already holds this range and vehicle.
+    private func load() async {
+        await feed.loadIfNeeded(key: loadKey, range: range.dateRange(), fetch: fetch)
+    }
+
+    private func reload(skeleton: Bool = false) async {
+        await feed.reload(key: loadKey, range: range.dateRange(), fetch: fetch, showSkeleton: skeleton)
     }
 
     /// The title in the content while the bars are on the side.
@@ -286,8 +303,8 @@ struct ChargingHistoryView: View {
                         .historySides(sideBars)
                     VStack(spacing: 12) {
                         ForEach(group.items) { charge in
-                            Button { open(.charge(charge)) } label: {
-                                ChargeRow(charge: charge).historySelected(selectedCharge == charge)
+                            Button { open(.charge(charge.id)) } label: {
+                                ChargeRow(charge: charge).historySelected(selectedCharge == charge.id)
                             }
                             .buttonStyle(VoltaPressStyle())
                             .accessibilityIdentifier("row.charge.\(charge.id)")
@@ -344,7 +361,7 @@ struct ChargingHistoryView: View {
         }) { id in
             guard let cluster = grouping.clusters.first(where: { $0.id == id }) else { return }
             if cluster.items.count == 1 {
-                open(.charge(cluster.items[0]))
+                open(.charge(cluster.items[0].id))
             } else {
                 selectedCluster = HistoryClusterSelection(id: cluster.id, title: cluster.title(\.title),
                                                           itemIDs: cluster.items.map(\.id))
@@ -364,7 +381,7 @@ struct ChargingHistoryView: View {
             HistoryClusterSheet(title: selection.title,
                                 items: feed.items.filter { selection.itemIDs.contains($0.id) }) { charge in
                 selectedCluster = nil
-                open(.charge(charge))
+                open(.charge(charge.id))
             } row: { ChargeRow(charge: $0) }
         }
         .task(id: needsPlaces) {

@@ -276,7 +276,7 @@ struct RoadtripsView: View {
                     .padding(.top, 30)
                 OverviewCards(wide: wide) {
                     ForEach(trips) { trip in
-                        NavigationLink { RoadtripDetailView(trip: trip, partial: partial) } label: { RoadtripCard(trip: trip) }
+                        NavigationLink(value: DriveRoute.roadtrip(containing: trip.id)) { RoadtripCard(trip: trip) }
                             .buttonStyle(VoltaPressStyle())
                     }
                 }
@@ -435,7 +435,7 @@ struct RoadtripDetailView: View {
             .padding(.top, 30)
         LazyVStack(spacing: 14) {
             ForEach(trip.drives) { drive in
-                NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive, showsDate: true) }
+                NavigationLink(value: DriveRoute.drive(drive.id)) { DriveCard(drive: drive, showsDate: true) }
                     .buttonStyle(VoltaPressStyle())
             }
         }
@@ -676,8 +676,7 @@ struct DrivesHeatmapView: View {
                     if index < offset { Color.clear.frame(height: 38) } else {
                         let day = calendar.date(byAdding: .day, value: index - offset, to: month)!
                         let value = lookup[day]
-                        let matching = drives.filter { calendar.isDate($0.start, inSameDayAs: day) }
-                        NavigationLink { HeatmapDayView(date: day, drives: matching, partial: partial) } label: {
+                        NavigationLink(value: DriveRoute.heatmapDay(day)) {
                             cell(number: index - offset + 1, ratio: value.map { $0.distanceKm / maxDistance })
                         }.buttonStyle(.plain).accessibilityLabel("\(day.formatted(date: .abbreviated, time: .omitted)), \(value.map { units.formatDistance($0.distanceKm) } ?? (partial ? "No loaded drives" : "No drives in selection"))")
                     }
@@ -701,7 +700,7 @@ struct DrivesHeatmapView: View {
     }
 }
 
-private struct HeatmapDayView: View {
+struct HeatmapDayView: View {
     var date: Date
     var drives: [DriveSummary]
     var partial: Bool
@@ -723,7 +722,7 @@ private struct HeatmapDayView: View {
                     .padding(.top, 30)
                 OverviewCards(wide: wide) {
                     ForEach(drives) { drive in
-                        NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive) }
+                        NavigationLink(value: DriveRoute.drive(drive.id)) { DriveCard(drive: drive) }
                             .buttonStyle(VoltaPressStyle())
                     }
                 }

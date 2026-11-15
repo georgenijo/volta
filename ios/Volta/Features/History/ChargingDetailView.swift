@@ -87,6 +87,9 @@ struct ChargingDetailView: View {
         }
         .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
         .task { await load() }
+        // The list refreshed this session (a live charge that has finished):
+        // fetch its detail again in place, keeping the page.
+        .onChange(of: charge) { Task { await load() } }
         .task { if charge.needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) } }
     }
 

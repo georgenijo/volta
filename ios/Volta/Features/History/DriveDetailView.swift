@@ -61,6 +61,9 @@ struct DriveDetailView: View {
         .task(id: key) { await load(key) }
         .task(id: key) { await lookUpRate(key) }
         .onChange(of: units) { rebuild() }
+        // The list refreshed this drive (one that was still in progress):
+        // fetch its detail again in place, keeping the page.
+        .onChange(of: drive) { reload() }
         .onDisappear { stopReplay() }
     }
 

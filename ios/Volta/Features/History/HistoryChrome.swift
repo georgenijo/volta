@@ -242,11 +242,16 @@ extension View {
 
 // MARK: - Navigation
 
-/// A History tab's navigation. In a compact or tall window: one stack over
-/// `path`, as on any iPhone. In a regular-width window wider than tall (the
-/// inner display opened flat): the list beside the first route, with the rest
-/// of the path pushed inside the detail column. Both layouts read the same
-/// `path`, so folding or unfolding keeps what is open.
+/// A History tab's navigation: one split view that the system collapses into
+/// a single stack in a compact window and expands to the list beside the
+/// selection in a regular-width window wider than tall (the inner display
+/// opened flat). A regular window taller than wide (the inner display
+/// rotated) is told it is compact, so it stays a stack like a phone.
+///
+/// The hierarchy is the same in every layout, so folding and unfolding only
+/// changes how it is shown: open pages keep their state, scroll position and
+/// sheets. `path` holds everything open: its first route is the selection
+/// (the detail column's root) and the rest is pushed on top of it.
 struct HistoryNavigation<Route: Hashable, Root: View, Destination: View, Placeholder: View>: View {
     @Binding var path: [Route]
     var split: Bool
@@ -256,36 +261,48 @@ struct HistoryNavigation<Route: Hashable, Root: View, Destination: View, Placeho
     @ViewBuilder var root: Root
     @ViewBuilder var destination: (Route) -> Destination
     @ViewBuilder var placeholder: Placeholder
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    private var sideBars: EdgeInsets {
+        EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0, trailing: window.safeArea.trailing)
+    }
 
     var body: some View {
-        if split {
-            NavigationSplitView {
-                root
-                    .navigationSplitViewColumnWidth(min: 320, ideal: max(320, window.half), max: max(320, window.half))
-                    // The list column touches no side bar.
-                    .environment(\.historySideBars, EdgeInsets())
-            } detail: {
-                NavigationStack(path: detailPath) {
-                    Group {
-                        if let first = path.first {
-                            // A new selection is a new page with fresh state.
-                            destination(first).id(first)
-                        } else {
-                            placeholder.historyScreenBackground()
-                        }
+        NavigationSplitView(preferredCompactColumn: compactColumn) {
+            root
+                .navigationSplitViewColumnWidth(min: 320, ideal: max(320, window.half), max: max(320, window.half))
+                // Beside the detail, the list column touches no side bar.
+                .environment(\.historySideBars, split ? EdgeInsets() : sideBars)
+                .environment(\.horizontalSizeClass, sizeClass)
+        } detail: {
+            NavigationStack(path: detailPath) {
+                Group {
+                    if let first = path.first {
+                        // A new selection is a new page with fresh state.
+                        destination(first).id(first)
+                    } else {
+                        placeholder.historyScreenBackground()
                     }
-                    .navigationDestination(for: Route.self) { destination($0) }
                 }
-                // The detail column touches the trailing strip only.
-                .environment(\.historySideBars, EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: window.safeArea.trailing))
+                .navigationDestination(for: Route.self) { destination($0) }
             }
-            .navigationSplitViewStyle(.balanced)
-        } else {
-            NavigationStack(path: $path) {
-                root.navigationDestination(for: Route.self) { destination($0) }
-            }
-            .environment(\.historySideBars, EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0,
-                                                       trailing: window.safeArea.trailing))
+            // Beside the list, the detail column touches the trailing strip only.
+            .environment(\.historySideBars, split
+                         ? EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: window.safeArea.trailing) : sideBars)
+            .environment(\.horizontalSizeClass, sizeClass)
+        }
+        .navigationSplitViewStyle(.balanced)
+        // The split view collapses whenever it is told the width is compact.
+        .environment(\.horizontalSizeClass, split ? .regular : .compact)
+    }
+
+    /// Collapsed, the stack shows the list until something is open. Going
+    /// back past the selection closes it.
+    private var compactColumn: Binding<NavigationSplitViewColumn> {
+        Binding {
+            path.isEmpty ? .sidebar : .detail
+        } set: { column in
+            if column == .sidebar, !path.isEmpty { path = [] }
         }
     }
 
@@ -330,6 +347,19 @@ struct HistorySelectionPlaceholder: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("screen.history-placeholder")
+    }
+}
+
+/// An open page whose item is no longer in the loaded list (a refresh or a
+/// new range dropped it): the selection's empty state, with page chrome.
+struct HistoryMissingSelection: View {
+    var systemImage: String
+    var title: String
+    var message: String
+
+    var body: some View {
+        HistorySelectionPlaceholder(systemImage: systemImage, title: title, message: message)
+            .historyPage(nil)
     }
 }
 
