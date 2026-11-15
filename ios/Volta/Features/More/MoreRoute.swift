@@ -1,28 +1,33 @@
 import SwiftUI
 
-/// Every destination reachable from More. Hashable so it can drive a NavigationStack path.
+/// Every destination reachable from More. Hashable so it can drive a NavigationStack path
+/// on a compact window and the sidebar selection on a regular-width one.
 enum MoreRoute: Hashable, Sendable {
     case tires, stats, batteryHealth, batteryClimate, mileage, firmware, specs
     case switchVehicle, settings, maintenance, chargerMap
+
+    /// The page this route opens.
+    @MainActor @ViewBuilder
+    var destination: some View {
+        switch self {
+        case .tires: TiresView()
+        case .stats: StatsView()
+        case .batteryHealth: BatteryHealthView()
+        case .batteryClimate: BatteryClimateView()
+        case .mileage: MileageTrackerView()
+        case .firmware: FirmwareTrackerView()
+        case .specs: SpecsWarrantyView()
+        case .switchVehicle: SwitchVehicleView()
+        case .settings: SettingsView()
+        case .maintenance: MaintenanceView()
+        case .chargerMap: ChargerMapView()
+        }
+    }
 }
 
 extension View {
     /// Registers all More destinations. Attach once inside the NavigationStack.
     func moreDestinations() -> some View {
-        navigationDestination(for: MoreRoute.self) { route in
-            switch route {
-            case .tires: TiresView()
-            case .stats: StatsView()
-            case .batteryHealth: BatteryHealthView()
-            case .batteryClimate: BatteryClimateView()
-            case .mileage: MileageTrackerView()
-            case .firmware: FirmwareTrackerView()
-            case .specs: SpecsWarrantyView()
-            case .switchVehicle: SwitchVehicleView()
-            case .settings: SettingsView()
-            case .maintenance: MaintenanceView()
-            case .chargerMap: ChargerMapView()
-            }
-        }
+        navigationDestination(for: MoreRoute.self) { $0.destination }
     }
 }

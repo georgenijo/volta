@@ -247,38 +247,162 @@ enum ScreenKit {
 // MARK: - Screen scaffolding
 
 extension View {
-    /// Dark background, hidden system bar, VoltaHeader with a glass back button.
-    /// `screen` is the title's `screen.<name>` identifier for UI tests.
-    func screenKitPage(_ title: String, screen: String? = nil, @ViewBuilder trailing: () -> some View = { EmptyView() }) -> some View {
-        modifier(ScreenKitPage(title: title, identifier: screen.map { "screen.\($0)" }, trailing: trailing()))
+    /// Dark background and system navigation: the system back button, and the
+    /// title in the navigation bar while bars are horizontal. When iPhone Duo
+    /// puts the bars on the side the title moves into the content, because a
+    /// title would keep a horizontal bar alive. `screen` is the title's
+    /// `screen.<name>` identifier for UI tests.
+    func screenKitPage(_ title: String, screen: String? = nil) -> some View {
+        modifier(ScreenKitPage(title: title, identifier: screen.map { "screen.\($0)" }))
     }
 }
 
-private struct ScreenKitPage<Trailing: View>: ViewModifier {
+private struct ScreenKitPage: ViewModifier {
     var title: String
     var identifier: String?
-    var trailing: Trailing
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.barsOnSide) private var barsOnSide
 
     func body(content: Content) -> some View {
         content
             .scrollContentBackground(.hidden)
             .safeAreaInset(edge: .top, spacing: 0) {
-                VoltaHeader(title, identifier: identifier) {
-                    GlassCircleButton(systemImage: "chevron.left", accessibilityLabel: "Back") { dismiss() }
-                } trailing: {
-                    trailing
-                }
-                .padding(.bottom, VoltaSpacing.sm)
-                .background {
-                    LinearGradient(colors: [Color.voltaBackground, Color.voltaBackground.opacity(0.92), Color.voltaBackground.opacity(0)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .ignoresSafeArea(edges: .top)
-                }
+                if barsOnSide { ScreenKit.ContentTitle(title: title, identifier: identifier) }
             }
             .voltaScreenBackground()
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle(barsOnSide ? "" : title)
+            .navigationBarTitleDisplayMode(.inline)
+            // Keeps the dark backdrop visible under the bar; the system's scroll
+            // edge effect still keeps the back button legible over content.
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            .toolbar {
+                if !barsOnSide {
+                    ToolbarItem(placement: .principal) {
+                        Text(title)
+                            .font(.voltaScreenTitle)
+                            .foregroundStyle(Color.voltaTextPrimary)
+                            .lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier(identifier ?? "")
+                    }
+                }
+            }
     }
+}
+
+extension ScreenKit {
+    /// A page title drawn in the content, for windows whose bars are on the side.
+    struct ContentTitle: View {
+        var title: String
+        var identifier: String?
+        var body: some View {
+            Text(title)
+                .font(.voltaScreenTitle)
+                .foregroundStyle(Color.voltaTextPrimary)
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier(identifier ?? "")
+                .frame(maxWidth: .infinity)
+                .padding(.top, VoltaSpacing.sm)
+                .padding(.bottom, VoltaSpacing.sm + 4)
+                // Solid behind the title so scrolled content never shows
+                // through it, then a short fade into the content.
+                .background {
+                    VStack(spacing: 0) {
+                        Color.voltaBackground
+                        LinearGradient(colors: [Color.voltaBackground, Color.voltaBackground.opacity(0)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: 14)
+                    }
+                    .padding(.bottom, -14)
+                    .ignoresSafeArea(edges: .top)
+                    .allowsHitTesting(false)
+                }
+        }
+    }
+
+    /// Body of a More page: one scrolling column capped at a readable width,
+    /// or, when the page is regular width and wider than tall, two panes that
+    /// scroll on their own. On iPhone Duo the panes stay clear of the fold and
+    /// take one side each when the device is partly folded.
+    ///
+    /// `splits` false keeps one column, for loading, error and empty states.
+    /// `scroll` is the `scroll.<name>` identifier, placed on the single column
+    /// or on the primary pane.
+    struct Page<Primary: View, Secondary: View>: View {
+        var scroll: String? = nil
+        var splits = true
+        var spacing: CGFloat = 18
+        @ViewBuilder var primary: Primary
+        @ViewBuilder var secondary: Secondary
+
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+        @State private var isWide = false
+
+        var body: some View {
+            Group {
+                if splits && horizontalSizeClass == .regular && isWide {
+                    VoltaPanes {
+                        pane(identifier: scroll) { primary }
+                    } secondary: {
+                        pane(identifier: nil) { secondary }
+                    }
+                    .environment(\.inScreenKitPane, true)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: spacing) {
+                            primary
+                            secondary
+                        }
+                        .modifier(PageInsets())
+                    }
+                    .accessibilityIdentifier(scroll.map { "scroll.\($0)" } ?? "")
+                }
+            }
+            .onGeometryChange(for: Bool.self) { ScreenKit.isWide($0.size) } action: { isWide = $0 }
+        }
+
+        private func pane(identifier: String?, @ViewBuilder _ content: () -> some View) -> some View {
+            ScrollView {
+                VStack(alignment: .leading, spacing: spacing) { content() }
+                    .modifier(PageInsets())
+            }
+            .scrollContentBackground(.hidden)
+            .accessibilityIdentifier(identifier.map { "scroll.\($0)" } ?? "")
+        }
+    }
+
+    /// True for a page wide enough to hold two panes of phone-width content.
+    static func isWide(_ size: CGSize) -> Bool {
+        size.width > size.height && size.width >= 640
+    }
+
+    /// Standard page padding plus the readable-width cap.
+    struct PageInsets: ViewModifier {
+        func body(content: Content) -> some View {
+            content
+                .padding(.horizontal, ScreenKit.horizontalPadding)
+                .padding(.top, 8)
+                .padding(.bottom, ScreenKit.bottomBarClearance)
+                .voltaReadableWidth()
+        }
+    }
+
+    /// Two-column grid for metric tiles. An even count divides cleanly when
+    /// the page sits on both sides of iPhone Duo's fold.
+    static let metricColumns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+}
+
+extension ScreenKit.Page where Secondary == EmptyView {
+    /// A single-part page: always one readable column.
+    init(scroll: String? = nil, spacing: CGFloat = 18, @ViewBuilder content: () -> Primary) {
+        self.init(scroll: scroll, splits: false, spacing: spacing, primary: content, secondary: { EmptyView() })
+    }
+}
+
+extension EnvironmentValues {
+    /// True inside one pane of a two-pane `ScreenKit.Page`, so content such as
+    /// a map can fill the pane instead of taking a fixed share of a column.
+    @Entry var inScreenKitPane = false
 }
 
 /// Load state for screens that fetch once per vehicle.
@@ -313,3 +437,16 @@ struct LoadableContent<Value: Sendable, Content: View>: View {
     }
 }
 
+
+extension ScreenKit {
+    /// Height for a map in a page: a share of the visible height in one column,
+    /// or nearly the whole pane beside a list. Never a fixed phone height.
+    struct MapHeight: ViewModifier {
+        @Environment(\.inScreenKitPane) private var inPane
+        func body(content: Content) -> some View {
+            content.containerRelativeFrame(.vertical) { height, _ in
+                inPane ? max(height - 80, 260) : min(max(height * 0.42, 220), 420)
+            }
+        }
+    }
+}
