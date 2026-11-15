@@ -761,6 +761,16 @@ describe('database privilege boundaries', () => {
     } finally { await owner`DROP SCHEMA recovery_probe CASCADE`; }
   });
   test('same-cluster auth recovery restores grants without changing passwords or role settings', async () => {
+    // The fixture gives both roles a synthetic password. Test files run in no
+    // fixed order, so put the stored verifiers back for the files that follow.
+    const before = await owner`SELECT rolname, rolpassword FROM pg_authid WHERE rolname IN ('volta_reader','volta_auth')`;
+    const restore = async () => {
+      for (const role of before) {
+        if (role.rolpassword !== null && !/^[A-Za-z0-9$:+/=-]+$/.test(role.rolpassword)) throw new Error('Unexpected password verifier format');
+        await owner.unsafe(`ALTER ROLE ${role.rolname} PASSWORD ${role.rolpassword === null ? 'NULL' : `'${role.rolpassword}'`}`);
+      }
+    };
+    try {
     const recovered = await runAdmin('auth-recover.sql', `
       -- Synthetic fixture password only; no real credential is read or logged.
       ALTER ROLE volta_reader PASSWORD 'synthetic-recovery-only';
@@ -778,6 +788,9 @@ describe('database privilege boundaries', () => {
     expect(recovered.code).toBe(0); expect(recovered.out).toContain('roles_preserved=true');
     expect((await authDb`SELECT count(*) FROM volta.devices`).length).toBe(1);
     const code = await auth.createPairingCode(); expect((await pair(code)).status).toBe(200);
+    } finally { await restore(); }
+    const after = await owner`SELECT rolname, rolpassword FROM pg_authid WHERE rolname IN ('volta_reader','volta_auth')`;
+    expect(after).toEqual(before);
   });
   test('both entry scripts reject non-inherited superuser membership and database CREATE', async () => {
     await owner`CREATE ROLE recovery_probe_super SUPERUSER NOLOGIN`;
