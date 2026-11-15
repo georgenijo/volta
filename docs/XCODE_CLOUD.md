@@ -9,8 +9,11 @@ matches CoachOS/HomeOS: archive on relevant `main` changes, then internal TestFl
 - Product/project: `ios/Volta.xcodeproj`, shared scheme `Volta`.
 - Trigger: branch changes on `main`, files matching `ios/**` and
   `scripts/ios-build.sh` (the local generation contract).
-- Environment: pin Xcode **26.6** (local build `17F113`), with the iOS 26 SDK.
-  Upgrade deliberately after validation.
+- Environment: pin Xcode **27.2** (build `27B52`), with the iOS 27 SDK. The
+  layouts that keep content clear of iPhone Duo's fold need this SDK; an
+  Xcode 26 build compiles but leaves them out. GitHub CI still builds with
+  Xcode 26.6, so the older toolchain keeps compiling. Upgrade deliberately
+  after validation.
 - Set workflow environment variable `VOLTA_APPLE_TEAM_ID` to the owner's
   ten-character Apple Developer signing team ID. Keep the value out of Git.
 - Optionally set `VOLTA_SERVER_URL` to the API's HTTPS address (host and
@@ -24,6 +27,9 @@ matches CoachOS/HomeOS: archive on relevant `main` changes, then internal TestFl
   `com.georgenijo.volta.widgets`, App Group `group.com.georgenijo.volta` on both,
   and the Sign in with Apple capability on the app.
   The owner must confirm identifiers, capabilities and provisioning in Apple.
+  Xcode Cloud does not add a capability to an identifier: enable it there
+  before merging a new entitlement, or the archive compiles and then fails at
+  "Exporting for App Store Distribution".
   No certificates, credentials or access grants are stored by these scripts.
 
 Generate locally with the intended team before opening Xcode to discover the
