@@ -54,6 +54,26 @@ final class ScreenScreenshotTests: XCTestCase {
         capture("drives-last-page")
     }
 
+    /// Leaving the tab and coming back keeps the pages already loaded.
+    func testDrivesKeepsPagesAcrossTabs() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try navigate("tab.drives", to: "drives")
+        let container = element("scroll.drives")
+        let last = element("row.drive.60")
+        for _ in 0..<45 {
+            if last.exists && last.isHittable { break }
+            container.swipeUp()
+        }
+        XCTAssertTrue(last.exists && last.isHittable, "Scrolling must load the second page")
+        try tap("tab.dashboard")
+        try waitForScreen("dashboard")
+        try tap("tab.drives")
+        _ = element("drives.never").waitForExistence(timeout: 2)
+        XCTAssertTrue(last.exists && last.isHittable, "Returning to Drives must keep the second page and the scroll position")
+        capture("drives-after-tab-switch")
+    }
+
     func testIdles() throws {
         defer { app.terminate() }
         try launchDemo()

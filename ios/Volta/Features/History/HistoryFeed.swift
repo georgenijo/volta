@@ -45,6 +45,10 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     private var pageGeneration = 0
     /// Query that produced `items` and `nextCursor`.
     private(set) var range = DateRange(from: nil, to: nil)
+    /// What the screen asked for when `items` were loaded (its range preset
+    /// and vehicle). `DateRange` alone moves with the clock, so it can't tell
+    /// a reappearing screen that its list is still the one it wants.
+    private(set) var key: AnyHashable?
     private var fetch: Fetch?
 
     var hasMore: Bool { nextCursor != nil }
@@ -62,9 +66,18 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     /// Error to surface at the list footer, if any.
     var footerError: String? { refreshError ?? loadMoreError }
 
+    /// First load for `key`: skipped while the list already holds `key`'s
+    /// rows, so a screen that disappears and comes back (a tab switch) keeps
+    /// its loaded pages and scroll position. A new key replaces the list.
+    func loadIfNeeded(key newKey: AnyHashable, range newRange: DateRange, fetch newFetch: @escaping Fetch) async {
+        guard newKey != key || phase != .loaded else { return }
+        await reload(key: newKey, range: newRange, fetch: newFetch, showSkeleton: true)
+    }
+
     /// Replaces the list. Keeps existing rows visible during pull-to-refresh;
     /// shows skeletons only when asked or when there is nothing to show yet.
-    func reload(range newRange: DateRange, fetch newFetch: @escaping Fetch, showSkeleton: Bool = false) async {
+    func reload(key newKey: AnyHashable? = nil, range newRange: DateRange, fetch newFetch: @escaping Fetch,
+                showSkeleton: Bool = false) async {
         listGeneration += 1
         pageGeneration += 1  // drop any outstanding page request
         let token = listGeneration
@@ -77,6 +90,7 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
             // Install the new list, its cursor and its query together.
             range = newRange
             fetch = newFetch
+            key = newKey
             items = page.items
             nextCursor = page.nextCursor
             loadMoreError = nil
@@ -131,4 +145,10 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
         loadMoreError = nil
         await loadMore()
     }
+}
+
+/// What a History list was loaded for: its range preset and vehicle.
+struct HistoryLoadKey: Hashable {
+    var range: HistoryRange
+    var vehicleID: Int
 }

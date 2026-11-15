@@ -202,6 +202,47 @@ private struct Row: Codable, Hashable, Sendable, Identifiable { var id: Int }
         XCTAssertFalse(feed.canLoadMore)
     }
 
+    func testLoadIfNeededKeepsPagesForTheSameKey() async {
+        let gate = Gate()
+        let feed = HistoryFeed<Row>()
+        let first = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch) }
+        await settle { gate.requests.count == 1 }
+        gate.succeed(0, ids: [3], next: "c1")
+        await first.value
+        let more = Task { await feed.loadMore() }
+        await settle { gate.requests.count == 2 }
+        gate.succeed(1, ids: [2], next: nil)
+        await more.value
+
+        // The screen comes back (a tab switch): same key, nothing refetched.
+        await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch)
+        XCTAssertEqual(gate.requests.count, 2)
+        XCTAssertEqual(feed.items.map(\.id), [3, 2])
+
+        // A pull-to-refresh keeps the key; a new key replaces the list.
+        let other = Task { await feed.loadIfNeeded(key: "7d", range: range, fetch: gate.fetch) }
+        await settle { gate.requests.count == 3 }
+        XCTAssertEqual(feed.phase, .loading)
+        gate.succeed(2, ids: [9], next: nil)
+        await other.value
+        XCTAssertEqual(feed.items.map(\.id), [9])
+    }
+
+    func testLoadIfNeededRetriesAFailedOrCancelledLoad() async {
+        let gate = Gate()
+        let feed = HistoryFeed<Row>()
+        let first = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch) }
+        await settle { gate.requests.count == 1 }
+        gate.fail(0)
+        await first.value
+        let retry = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch) }
+        await settle { gate.requests.count == 2 }
+        gate.succeed(1, ids: [1], next: nil)
+        await retry.value
+        XCTAssertEqual(feed.phase, .loaded)
+        XCTAssertEqual(feed.key, AnyHashable("30d"))
+    }
+
     func testNewerReloadWinsOverOlderOne() async {
         let gate = Gate()
         let feed = HistoryFeed<Row>()
