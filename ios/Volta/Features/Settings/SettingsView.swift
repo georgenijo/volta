@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Settings index: pushed from More's gear button, or beside More's sidebar
-/// on a regular-width window.
+/// on a regular-width window. Its rows push `MoreRoute` values, so it belongs
+/// in a stack that registers `moreDestinations()`.
 struct SettingsView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
@@ -12,7 +13,7 @@ struct SettingsView: View {
     var body: some View {
         ScreenKit.Page(scroll: "settings", spacing: 0) {
             VStack(spacing: 0) {
-                NavigationLink { AccountSettingsView() } label: { accountHeader }
+                NavigationLink(value: MoreRoute.account) { accountHeader }
                     .buttonStyle(VoltaPressStyle())
                     .accessibilityIdentifier("button.account")
 
@@ -26,16 +27,16 @@ struct SettingsView: View {
 
                 HairlineDivider()
                 row("car.fill", "Vehicle", vehicle.map { [$0.name, $0.model].compactMap { $0 }.joined(separator: " · ") } ?? "Manage your Tesla",
-                    trailing: vehicle == nil ? nil : "Active", trailingTint: ScreenKit.green) { VehicleSettingsView() }
+                    trailing: vehicle == nil ? nil : "Active", trailingTint: ScreenKit.green, to: .vehicleSettings)
                 row("bolt.fill", "Charging", "Electricity rate & costs",
-                    trailing: model.settings.electricityRate.map { VoltaFormat.money($0, currency: model.units.currency) }) { ChargingSettingsView() }
+                    trailing: model.settings.electricityRate.map { VoltaFormat.money($0, currency: model.units.currency) }, to: .chargingSettings)
                     .accessibilityIdentifier("row.settings.charging")
                 row("slider.horizontal.3", "General", "Units, currency & language",
-                    trailing: model.units.distance == .miles ? "Miles" : "Km") { GeneralSettingsView() }
-                row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places") { PlacesView() }
-                row("lock.fill", "Security", "App Lock & privacy", trailing: model.appLockEnabled ? "On" : nil, trailingTint: ScreenKit.green) { SecuritySettingsView() }
-                row("arrow.up.arrow.down", "Data Management", "Export drives & charges") { DataManagementView() }
-                row("questionmark.bubble.fill", "Support", "About Volta & help") { AboutView() }
+                    trailing: model.units.distance == .miles ? "Miles" : "Km", to: .generalSettings)
+                row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places", to: .places)
+                row("lock.fill", "Security", "App Lock & privacy", trailing: model.appLockEnabled ? "On" : nil, trailingTint: ScreenKit.green, to: .security)
+                row("arrow.up.arrow.down", "Data Management", "Export drives & charges", to: .dataManagement)
+                row("questionmark.bubble.fill", "Support", "About Volta & help", to: .support)
 
                 footer
             }
@@ -90,10 +91,9 @@ struct SettingsView: View {
 
     private var pillTint: Color { model.isDemoMode ? ScreenKit.blue : ScreenKit.green }
 
-    private func row<Destination: View>(_ symbol: String, _ title: String, _ subtitle: String,
-                                        trailing: String? = nil, trailingTint: Color = .white,
-                                        @ViewBuilder destination: () -> Destination) -> some View {
-        NavigationLink(destination: destination) {
+    private func row(_ symbol: String, _ title: String, _ subtitle: String,
+                     trailing: String? = nil, trailingTint: Color = .white, to route: MoreRoute) -> some View {
+        NavigationLink(value: route) {
             ScreenKit.CapsRow(symbol: symbol, title: title, subtitle: subtitle, trailing: trailing, trailingTint: trailingTint)
         }
         .buttonStyle(.plain)
@@ -131,9 +131,9 @@ struct SettingsWordmark: View {
 }
 
 #Preview("Populated") {
-    NavigationStack { SettingsView() }.voltaPreviewEnvironment()
+    NavigationStack { SettingsView().moreDestinations() }.voltaPreviewEnvironment()
 }
 
 #Preview("Empty") {
-    NavigationStack { SettingsView() }.voltaPreviewEnvironment(empty: true)
+    NavigationStack { SettingsView().moreDestinations() }.voltaPreviewEnvironment(empty: true)
 }

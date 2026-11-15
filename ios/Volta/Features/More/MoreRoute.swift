@@ -5,6 +5,10 @@ import SwiftUI
 enum MoreRoute: Hashable, Sendable {
     case tires, stats, batteryHealth, batteryClimate, mileage, firmware, specs
     case switchVehicle, settings, maintenance, chargerMap
+    /// Pages Settings pushes. They are routes so they stay in the More
+    /// path and close with Settings when another area is picked.
+    case account, vehicleSettings, chargingSettings, generalSettings
+    case places, security, dataManagement, support
 
     /// The page this route opens.
     @MainActor @ViewBuilder
@@ -21,6 +25,14 @@ enum MoreRoute: Hashable, Sendable {
         case .settings: SettingsView()
         case .maintenance: MaintenanceView()
         case .chargerMap: ChargerMapView()
+        case .account: AccountSettingsView()
+        case .vehicleSettings: VehicleSettingsView()
+        case .chargingSettings: ChargingSettingsView()
+        case .generalSettings: GeneralSettingsView()
+        case .places: PlacesView()
+        case .security: SecuritySettingsView()
+        case .dataManagement: DataManagementView()
+        case .support: AboutView()
         }
     }
 }
