@@ -131,10 +131,10 @@ struct ControlsView: View {
             }
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("scroll.controls")
-            .safeAreaInset(edge: .top, spacing: 0) { header }
             .overlay(alignment: .bottom) { activityBanner }
             .background(Color.voltaBackground.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
+            .toolbarTitleDisplayMode(.inline)
+            .toolbar { toolbar }
             .refreshable { await load() }
         }
         .presentationDragIndicator(.visible)
@@ -153,22 +153,23 @@ struct ControlsView: View {
         await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
     }
 
-    private var header: some View {
-        ZStack {
+    /// System toolbar: Close first, then the title and Refresh, so iPhone Duo
+    /// can place them with its other side controls.
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button { dismiss() } label: { Label("Close", systemImage: "xmark") }
+                .tint(Color.voltaTextPrimary)
+        }
+        ToolbarItem(placement: .principal) {
             Text("CONTROLS").font(.system(.headline, weight: .semibold)).tracking(3)
                 .foregroundStyle(Color.voltaTextPrimary).accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("screen.controls")
-            HStack {
-                GlassCircleButton(systemImage: "xmark", size: 52, accessibilityLabel: "Close") { dismiss() }
-                Spacer()
-                Button { Task { await load() } } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(Color.voltaTextPrimary).frame(width: 52, height: 52).contentShape(Circle())
-                }.glassEffect(.regular.interactive(), in: .circle).accessibilityLabel("Refresh controls")
-            }
         }
-        .padding(.horizontal, VoltaSpacing.screen - 4).padding(.top, VoltaSpacing.xl)
-        .padding(.bottom, VoltaSpacing.md).background(Color.voltaBackground.opacity(0.94))
+        ToolbarItem(placement: .primaryAction) {
+            Button { Task { await load() } } label: { Label("Refresh controls", systemImage: "arrow.clockwise") }
+                .tint(Color.voltaTextPrimary)
+        }
     }
 
     private var identity: some View {
@@ -463,7 +464,6 @@ struct ClimateControlsView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.vehicleCommandCoordinator) private var sharedCoordinator
     @Environment(\.vehicleSurfaces) private var surfaces
     @State private var localCoordinator = VehicleCommandCoordinator()
@@ -481,10 +481,6 @@ struct ClimateControlsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VoltaHeader("Climate", identifier: "screen.climate") {
-                    GlassCircleButton(systemImage: "chevron.left", size: 48, accessibilityLabel: "Back") { dismiss() }
-                } trailing: { EmptyView() }
-                .padding(.horizontal, -(VoltaSpacing.screen - 4) + 4)
                 VStack(spacing: 0) {
                     ListRow(systemImage: "thermometer.medium", title: "Cabin", subtitle: "Observed inside temperature") {
                         Text(units.formatTemperature(model.status?.insideTempC)).foregroundStyle(Color.voltaTextSecondary)
@@ -518,7 +514,14 @@ struct ClimateControlsView: View {
                 Task { await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
             }
         }
-        .background(Color.voltaBackground.ignoresSafeArea()).toolbar(.hidden, for: .navigationBar)
+        .background(Color.voltaBackground.ignoresSafeArea())
+        .toolbarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Climate").font(.voltaScreenTitle).foregroundStyle(Color.voltaTextPrimary)
+                    .accessibilityAddTraits(.isHeader).accessibilityIdentifier("screen.climate")
+            }
+        }
     }
 
     private var temperatureControl: some View {

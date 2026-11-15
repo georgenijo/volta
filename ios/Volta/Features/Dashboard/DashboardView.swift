@@ -136,7 +136,7 @@ struct DashboardView: View {
                                startPoint: .top, endPoint: .bottom)
                     .frame(height: 200)
             }
-            .overlay(Color.voltaBackground.opacity(progress * 0.6))
+            .overlay(Color.voltaBackground.opacity(progress * 0.85))
             .offset(y: -max(scrollOffset, 0) * 0.45 + max(-scrollOffset, 0) * 0.5)
             .scaleEffect(1 + max(-scrollOffset, 0) / 900, anchor: .top)
             // Full width: on iPhone Duo the backdrop continues under the side bar.

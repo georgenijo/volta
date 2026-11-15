@@ -140,6 +140,7 @@ struct MetricCard<Accessory: View>: View {
     var gauge: GradientGauge?
     var tint: Color?
     var accessory: Accessory
+    @State private var isNarrow = false
 
     init(systemImage: String, title: String, value: String, unit: String? = nil,
          badge: Badge? = nil, headerAccessory: AnyView? = nil,
@@ -177,16 +178,18 @@ struct MetricCard<Accessory: View>: View {
                 if let headerAccessory { headerAccessory }
             }
             Spacer(minLength: VoltaSpacing.lg)
-            HStack(alignment: .firstTextBaseline) {
-                BigNumber(value, unit: unit, size: 36)
-                Spacer(minLength: 4)
-                if let badge, !badge.inHeader {
-                    Text(badge.text)
-                        .font(.footnote.weight(.semibold))
-                        .tracking(1)
-                        .foregroundStyle(badge.color)
+            if isNarrow {
+                // Too narrow for the reading and its note side by side.
+                VStack(alignment: .leading, spacing: VoltaSpacing.xs) {
+                    BigNumber(value, unit: unit, size: 36)
+                    HStack(alignment: .firstTextBaseline, spacing: VoltaSpacing.sm) { note }
                 }
-                accessory
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    BigNumber(value, unit: unit, size: 36)
+                    Spacer(minLength: 4)
+                    note
+                }
             }
             if let gauge {
                 gauge.padding(.top, VoltaSpacing.sm)
@@ -195,7 +198,23 @@ struct MetricCard<Accessory: View>: View {
         .padding(VoltaSpacing.lg)
         .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
         .voltaCardBackground(tint: tint)
+        .onGeometryChange(for: Bool.self) { $0.size.width < Self.narrowWidth } action: { isNarrow = $0 }
         .accessibilityElement(children: .combine)
+    }
+
+    /// Below this card width the note moves under the reading instead of
+    /// squeezing it (a half-folded iPhone Duo pane, for example).
+    private static var narrowWidth: CGFloat { 162 }
+
+    @ViewBuilder
+    private var note: some View {
+        if let badge, !badge.inHeader {
+            Text(badge.text)
+                .font(.footnote.weight(.semibold))
+                .tracking(1)
+                .foregroundStyle(badge.color)
+        }
+        accessory
     }
 }
 
