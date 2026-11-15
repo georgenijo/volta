@@ -50,6 +50,7 @@ struct DrivingLiveActivity: Widget {
                 HStack(spacing: 3) {
                     Image(systemName: look.symbol).foregroundStyle(look.tint)
                     Text("\(s.batteryLevel)%").fontWeight(.semibold).opacity(look.dataOpacity)
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .font(.system(size: 14))
             } compactTrailing: {

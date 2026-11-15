@@ -47,6 +47,8 @@ struct ChargingLiveActivity: Widget {
                 HStack(spacing: 3) {
                     Image(systemName: look.symbol).foregroundStyle(look.tint)
                     Text("\(s.batteryLevel)%").fontWeight(.semibold).opacity(look.dataOpacity)
+                        // "100%" must still fit when the island is narrow.
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 .font(.system(size: 14))
             } compactTrailing: {
