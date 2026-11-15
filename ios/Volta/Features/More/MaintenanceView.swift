@@ -14,6 +14,11 @@ struct MaintenanceView: View {
     @State private var deletingEvent: ServiceEvent?
     @State private var mutationError: String?
     @State private var mutating = false
+    /// What the open form has typed. The system rebuilds a sheet's content
+    /// when the window changes size class, as when iPhone Duo folds or
+    /// unfolds, so the draft lives here and outlasts it.
+    @State private var itemDraft = ServiceItemDraft()
+    @State private var eventDraft = ServiceEventDraft()
 
     var body: some View {
         // Wide: the odometer and service items beside the completion history.
@@ -103,30 +108,30 @@ struct MaintenanceView: View {
         .task(id: vehicleID) { await load() }
         .refreshable { await load() }
         .onChange(of: vehicleID) { _, _ in adding = false; completing = nil; editingItem = nil; editingEvent = nil; deletingItem = nil; deletingEvent = nil }
-        .sheet(isPresented: $adding) {
+        .sheet(isPresented: $adding, onDismiss: { itemDraft = .init() }) {
             let id = vehicleID
-            ServiceItemForm { input in
+            ServiceItemForm(draft: $itemDraft) { input in
                 try await dataSource.addService(vehicleID: id, item: input)
                 await load()
             }
         }
-        .sheet(item: $completing) { item in
+        .sheet(item: $completing, onDismiss: { eventDraft = .init() }) { item in
             let id = vehicleID
-            ServiceCompletionForm(item: item, odometerKm: currentOdometer) { event in
+            ServiceCompletionForm(draft: $eventDraft, item: item, odometerKm: currentOdometer) { event in
                 try await dataSource.completeService(vehicleID: id, itemID: item.id, event: event)
                 await load()
             }
         }
-        .sheet(item: $editingItem) { item in
+        .sheet(item: $editingItem, onDismiss: { itemDraft = .init() }) { item in
             let id = vehicleID
-            ServiceItemForm(existing: item) { input in
+            ServiceItemForm(draft: $itemDraft, existing: item) { input in
                 try await dataSource.updateService(vehicleID: id, itemID: item.id, item: input); await load()
             }
         }
-        .sheet(item: $editingEvent) { event in
+        .sheet(item: $editingEvent, onDismiss: { eventDraft = .init() }) { event in
             let id = vehicleID
             if let item = state.value?.items.first(where: { $0.id == event.itemId }) {
-                ServiceCompletionForm(item: item, odometerKm: event.odometerKm, existing: event) { input in
+                ServiceCompletionForm(draft: $eventDraft, item: item, odometerKm: event.odometerKm, existing: event) { input in
                     try await dataSource.updateServiceEvent(vehicleID: id, eventID: event.id, event: input); await load()
                 }
             }
@@ -167,27 +172,41 @@ struct MaintenanceView: View {
     }
 }
 
+/// What the item form has typed; see `MaintenanceView.itemDraft`.
+struct ServiceItemDraft {
+    var preset = 0
+    var name = ServiceItemInput.presets[0].name
+    var distance = ""
+    var months = ""
+    /// The form fills itself from a preset or the edited item once.
+    var filled = false
+}
+
+/// What the completion form has typed; see `MaintenanceView.eventDraft`.
+struct ServiceEventDraft {
+    var date = Date.now
+    var odometer = ""
+    var filled = false
+}
+
 private struct ServiceItemForm: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.units) private var units
+    @Binding var draft: ServiceItemDraft
     var existing: ServiceItem? = nil
     let save: (ServiceItemInput) async throws -> Void
-    @State private var preset = 0
-    @State private var name = ServiceItemInput.presets[0].name
-    @State private var distance = ""
-    @State private var months = ""
     @State private var busy = false
     @State private var error: String?
     var body: some View {
         NavigationStack {
             Form {
-                if existing == nil { Picker("Suggested item", selection: $preset) {
+                if existing == nil { Picker("Suggested item", selection: $draft.preset) {
                     ForEach(0..<ServiceItemInput.presets.count, id: \.self) { index in Text(ServiceItemInput.presets[index].name).tag(index) }
                     Text("Custom").tag(ServiceItemInput.presets.count)
-                }.onChange(of: preset) { _, _ in applyPreset() } }
-                TextField("Service name", text: $name)
-                TextField("Distance interval (\(units.distanceUnit), optional)", text: $distance).keyboardType(.decimalPad)
-                TextField("Month interval (optional)", text: $months).keyboardType(.numberPad)
+                }.onChange(of: draft.preset) { _, _ in applyPreset() } }
+                TextField("Service name", text: $draft.name)
+                TextField("Distance interval (\(units.distanceUnit), optional)", text: $draft.distance).keyboardType(.decimalPad)
+                TextField("Month interval (optional)", text: $draft.months).keyboardType(.numberPad)
                 Text("Set at least one interval. When both are set, the first reached is due. Log a completion to start the interval.").font(.caption)
                 if let error { Text(error).foregroundStyle(ScreenKit.red) }
                 Button(busy ? "Saving…" : existing == nil ? "Add item" : "Save item") { Task { await submit() } }.disabled(busy)
@@ -195,22 +214,24 @@ private struct ServiceItemForm: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) } }
                 .disabled(busy).interactiveDismissDisabled(busy)
                 .onAppear {
+                    guard !draft.filled else { return }
+                    draft.filled = true
                     if let existing {
-                        preset = ServiceItemInput.presets.count; name = existing.name
-                        distance = existing.intervalKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
-                        months = existing.intervalMonths.map(String.init) ?? ""
+                        draft.preset = ServiceItemInput.presets.count; draft.name = existing.name
+                        draft.distance = existing.intervalKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
+                        draft.months = existing.intervalMonths.map(String.init) ?? ""
                     } else { applyPreset() }
                 }
         }.preferredColorScheme(.dark)
     }
     private func applyPreset() {
-        guard preset < ServiceItemInput.presets.count else { name = ""; distance = ""; months = ""; return }
-        let value = ServiceItemInput.presets[preset]; name = value.name
-        distance = value.intervalKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
-        months = value.intervalMonths.map(String.init) ?? ""
+        guard draft.preset < ServiceItemInput.presets.count else { draft.name = ""; draft.distance = ""; draft.months = ""; return }
+        let value = ServiceItemInput.presets[draft.preset]; draft.name = value.name
+        draft.distance = value.intervalKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
+        draft.months = value.intervalMonths.map(String.init) ?? ""
     }
     private func submit() async {
-        guard let input = ServiceFormValidation.item(name: name, distance: distance, months: months, units: units) else { error = "Enter a name and a positive distance or whole month interval."; return }
+        guard let input = ServiceFormValidation.item(name: draft.name, distance: draft.distance, months: draft.months, units: units) else { error = "Enter a name and a positive distance or whole month interval."; return }
         busy = true; error = nil
         do { try await save(input); dismiss() } catch { self.error = error.localizedDescription }
         busy = false
@@ -219,36 +240,40 @@ private struct ServiceItemForm: View {
 private struct ServiceCompletionForm: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.units) private var units
+    @Binding var draft: ServiceEventDraft
     let item: ServiceItem
     let odometerKm: Double?
     var existing: ServiceEvent? = nil
     let save: (ServiceEventInput) async throws -> Void
-    @State private var date = Date.now
-    @State private var odometer = ""
     @State private var busy = false
     @State private var error: String?
     var body: some View {
         NavigationStack {
             Form {
                 Text(item.name).font(.headline)
-                DatePicker("Completed", selection: $date, in: ...Date.now, displayedComponents: .date)
-                TextField("Odometer (\(units.distanceUnit), optional)", text: $odometer).keyboardType(.decimalPad)
+                DatePicker("Completed", selection: $draft.date, in: ...Date.now, displayedComponents: .date)
+                TextField("Odometer (\(units.distanceUnit), optional)", text: $draft.odometer).keyboardType(.decimalPad)
                 Text("Enter the odometer at the service date. The current recorded reading is suggested; adjust it for older service. A blank value leaves distance reminders unknown.").font(.caption)
                 if let error { Text(error).foregroundStyle(ScreenKit.red) }
                 Button(busy ? "Saving…" : "Save completion") { Task { await submit() } }.disabled(busy)
             }.navigationTitle("Record completion")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) } }
                 .disabled(busy).interactiveDismissDisabled(busy)
-                .onAppear { if let existing { date = existing.completedAt }; odometer = odometerKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? "" }
+                .onAppear {
+                    guard !draft.filled else { return }
+                    draft.filled = true
+                    draft.date = existing?.completedAt ?? .now
+                    draft.odometer = odometerKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
+                }
         }.preferredColorScheme(.dark)
     }
     private func submit() async {
         let km: Double?
-        if odometer.trimmingCharacters(in: .whitespaces).isEmpty { km = nil }
-        else if let parsed = ServiceFormValidation.distance(odometer, units: units), parsed >= 0, parsed <= 10000000 { km = parsed }
+        if draft.odometer.trimmingCharacters(in: .whitespaces).isEmpty { km = nil }
+        else if let parsed = ServiceFormValidation.distance(draft.odometer, units: units), parsed >= 0, parsed <= 10000000 { km = parsed }
         else { error = "Enter a valid odometer or leave it blank."; return }
         busy = true; error = nil
-        do { try await save(.init(completedAt: Calendar.current.startOfDay(for: date), odometerKm: km)); dismiss() } catch { self.error = error.localizedDescription }
+        do { try await save(.init(completedAt: Calendar.current.startOfDay(for: draft.date), odometerKm: km)); dismiss() } catch { self.error = error.localizedDescription }
         busy = false
     }
 }
