@@ -7,6 +7,8 @@ struct AccountSettingsView: View {
     @State private var confirmUnpair = false
     @State private var device: Device?
     @State private var isUnpairing = false
+    @State private var appleStatus: AppleSignInStatus?
+    @State private var isLinkingApple = false
 
     var body: some View {
         ScreenKit.Page(spacing: 24) {
@@ -29,11 +31,16 @@ struct AccountSettingsView: View {
                     ScreenKit.ValueRow(title: "Name") {
                         Text(device?.name ?? UIDevice.current.name).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                     }
-                    ScreenKit.ValueRow(title: "Paired", showsDivider: false) {
+                    ScreenKit.ValueRow(title: "Connected") {
                         Text(device.map { $0.createdAt.formatted(date: .abbreviated, time: .omitted) } ?? "—")
                             .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                     }
+                    ScreenKit.ValueRow(title: "Signed in with", showsDivider: false) {
+                        Text(model.settings.signedInWithApple ? "Sign in with Apple" : "Pairing code")
+                            .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                    }
                 }
+                if let appleStatus, appleStatus.available { appleSection(appleStatus) }
             }
             TeslaAccountSection()
             if let error = model.errorMessage {
@@ -57,8 +64,9 @@ struct AccountSettingsView: View {
         .screenKitPage("Account")
         .task(id: model.pairingState) {
             // `/v1/me` exists only on the real API; demo mode has no device record.
-            guard let api = dataSource as? APIDataSource else { device = nil; return }
+            guard let api = dataSource as? APIDataSource else { device = nil; appleStatus = nil; return }
             device = try? await api.me()
+            appleStatus = try? await api.appleSignInStatus()
         }
         .confirmationDialog(dialogTitle, isPresented: $confirmUnpair, titleVisibility: .visible) {
             Button(unpairTitle, role: .destructive) { Task { await unpair() } }
@@ -75,7 +83,47 @@ struct AccountSettingsView: View {
     private var dialogMessage: String {
         if model.isLaunchDemo { return "Your saved pairing and security settings will be preserved." }
         if model.isDemoMode { return "Volta returns to the pairing screen." }
+        if appleStatus?.linked == true { return "The device token is revoked on your server. Sign in with Apple to reconnect." }
         return "The device token is revoked on your server. You'll need a new pairing code to reconnect."
+    }
+
+    /// Enrolling an Apple Account from a paired device lets it sign in on
+    /// other devices without a pairing code.
+    private func appleSection(_ status: AppleSignInStatus) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ScreenKit.GroupCard(title: "Sign in with Apple",
+                                footer: status.linked
+                                    ? "Sign in with Apple on your other devices to connect them without a pairing code."
+                                    : "Enroll your Apple Account to connect your other devices without a pairing code.") {
+                ScreenKit.ValueRow(title: "Apple Account", showsDivider: false) {
+                    HStack(spacing: 6) {
+                        StatusDot(color: status.linked ? ScreenKit.green : ScreenKit.secondary)
+                        Text(status.linked ? "Enrolled" : "Not enrolled").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("row.appleAccount")
+            }
+            if !status.linked {
+                AppleSignInButton(label: .continue) { token in
+                    Task { await linkApple(token) }
+                } onFailure: { model.errorMessage = $0 }
+                .disabled(isLinkingApple).opacity(isLinkingApple ? 0.5 : 1)
+                .accessibilityIdentifier("button.linkApple")
+            }
+        }
+    }
+
+    private func linkApple(_ identityToken: String) async {
+        guard let api = dataSource as? APIDataSource, !isLinkingApple else { return }
+        isLinkingApple = true
+        defer { isLinkingApple = false }
+        do {
+            try await api.linkAppleID(identityToken: identityToken)
+            appleStatus = AppleSignInStatus(available: true, linked: true)
+            model.errorMessage = nil
+        } catch is CancellationError {
+        } catch { model.errorMessage = error.localizedDescription }
     }
 
     /// Paired: revoke on the server first, then disconnect locally (AppModel keeps the

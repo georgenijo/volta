@@ -301,7 +301,7 @@ tables, add `APPLE_BUNDLE_ID=<the app's bundle ID>` to the protected env file,
 and restart the API. The API container needs outbound HTTPS to
 `appleid.apple.com`.
 
-A paired phone enrolls its Apple ID from Settings › Account. With no paired
+A paired phone enrolls its Apple Account from Settings › Account. With no paired
 phone, open a ten-minute enrollment and sign in from the app:
 
 ```sh
@@ -310,7 +310,7 @@ fleet exec ubuntu -- 'cd /opt/volta/deploy/ubuntu && sudo docker compose exec -T
 ```
 
 The enrollment command prints no secret. `apple-reset` forgets every enrolled
-Apple ID; revoke their devices separately.
+Apple Account; revoke their devices separately.
 
 ## Rollback / stop
 

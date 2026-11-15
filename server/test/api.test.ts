@@ -144,31 +144,31 @@ describe('Sign in with Apple', () => {
     expect(await json('/v1/auth/apple')).toEqual({ available: false, linked: false });
     expect(() => new AppleVerifier('not a bundle id')).toThrow();
   });
-  test('an Apple ID that is not enrolled gets no token', async () => {
+  test('an Apple Account that is not enrolled gets no token', async () => {
     const response = await signIn(await identity());
     expect(response.status).toBe(403); expect(await code(response)).toBe('apple_id_not_enrolled');
     expect(await owner`SELECT FROM volta.apple_owners`).toHaveLength(0);
     expect(await auth.devices()).toHaveLength(1);
   });
-  test('an open enrollment enrolls one Apple ID, which then signs in without it', async () => {
+  test('an open enrollment enrolls one Apple Account, which then signs in without it', async () => {
     await appleAuth.openAppleEnrollment();
     const first = await signIn(await identity()); expect(first.status).toBe(200);
     const issued = await first.json() as any; expect(issued.device.name).toBe('Synthetic Duo');
     expect((await appleApp.request('/v1/me', { headers: { Authorization: `Bearer ${issued.token}` } })).status).toBe(200);
     const [stored] = await owner`SELECT subject_hash FROM volta.apple_owners`;
     expect(Buffer.from(stored!.subject_hash).equals(createHash('sha256').update('synthetic.owner').digest())).toBe(true);
-    // The window is spent: another Apple ID is refused, the enrolled one is not.
+    // The window is spent: another Apple Account is refused, the enrolled one is not.
     expect((await signIn(await identity('synthetic.stranger'))).status).toBe(403);
     expect((await signIn(await identity())).status).toBe(200);
     expect(await owner`SELECT FROM volta.apple_owners`).toHaveLength(1);
   });
-  test('an enrolled sign-in leaves an open enrollment for the Apple ID it was opened for', async () => {
+  test('an enrolled sign-in leaves an open enrollment for the Apple Account it was opened for', async () => {
     await appleAuth.openAppleEnrollment(); expect((await signIn(await identity())).status).toBe(200);
     await appleAuth.openAppleEnrollment(); expect((await signIn(await identity())).status).toBe(200);
     expect((await signIn(await identity('synthetic.second'))).status).toBe(200);
     expect(await owner`SELECT FROM volta.apple_owners`).toHaveLength(2);
   });
-  test('an expired enrollment enrolls nobody, and one window admits one of two concurrent Apple IDs', async () => {
+  test('an expired enrollment enrolls nobody, and one window admits one of two concurrent Apple Accounts', async () => {
     await appleAuth.openAppleEnrollment(); await owner`UPDATE volta.apple_enrollment SET expires_at = now() - interval '1 second'`;
     expect((await signIn(await identity())).status).toBe(403);
     await appleAuth.openAppleEnrollment();
@@ -223,7 +223,7 @@ describe('Sign in with Apple', () => {
     // Pairing has its own limit.
     expect((await owner`SELECT key FROM volta.rate_limits ORDER BY key`).map(r => r.key)).toEqual(['apple', 'pair']);
   });
-  test('a paired device enrolls its Apple ID, and a bad token does not disconnect it', async () => {
+  test('a paired device enrolls its Apple Account, and a bad token does not disconnect it', async () => {
     expect(await (await appleApp.request('/v1/auth/apple', { headers: bearer() })).json()).toEqual({ available: true, linked: false });
     expect((await post('/v1/auth/apple/link', { identityToken: await identity() })).status).toBe(401);
     const bad = await post('/v1/auth/apple/link', { identityToken: await identity('synthetic.owner', { key: stranger }) }, bearer());
@@ -245,7 +245,7 @@ describe('Sign in with Apple', () => {
     const rendered = JSON.stringify(logs); expect(rendered).toContain('/v1/auth/apple');
     expect(rendered).not.toContain(identityToken); expect(rendered).not.toContain(issued); expect(rendered).not.toContain('synthetic.owner');
   });
-  test('CLI opens enrollment and forgets enrolled Apple IDs', async () => {
+  test('CLI opens enrollment and forgets enrolled Apple Accounts', async () => {
     const run = async (...args: string[]) => {
       const child = Bun.spawn([process.execPath, 'src/cli.ts', ...args], { cwd: new URL('..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' });
       return { status: await child.exited, out: await new Response(child.stdout).text() };

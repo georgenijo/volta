@@ -40,8 +40,8 @@ TeslaMate logger ── Tesla API (George's Tesla tokens live only in TeslaMate)
    listed and revoked (`volta-api devices`, `volta-api revoke <id>`).
 4. Sign in with Apple is an alternative to the code. The app sends Apple's
    identity token to `POST /v1/auth/apple` and receives the same device token.
-   Only an enrolled Apple ID is accepted: a paired device enrolls its Apple ID
-   from Settings, or `volta-api apple-enroll` lets the next Apple ID to sign in
+   Only an enrolled Apple Account is accepted: a paired device enrolls its Apple Account
+   from Settings, or `volta-api apple-enroll` lets the next Apple Account to sign in
    within 10 minutes enroll itself. See `docs/API.md`.
 4. Optional Face ID app lock (Settings → Security) gates the UI locally.
 

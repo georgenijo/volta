@@ -245,4 +245,40 @@ private final class MemoryTokenStore: TokenStoring, Sendable {
         XCTAssertEqual(freshLaunch.units, .default)
     }
 
+    func testAppleSignInConnectsAndRemembersHowThisDeviceSignedIn() async throws {
+        let pair = try DecodingTests.fixture("pair"); let vehicle = try DecodingTests.fixture("vehicle")
+        let session = session { request in
+            if request.url!.path == "/v1/auth/apple" || request.url!.path == "/v1/auth/pair" { return (200, pair) }
+            return (200, Data("[".utf8) + vehicle + Data("]".utf8))
+        }
+        let settings = settings(); let store = MemoryTokenStore()
+        let model = AppModel(settings: settings, tokenStore: store, session: session)
+        await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: " Test Duo ")
+        XCTAssertEqual(model.pairingState, .paired); XCTAssertEqual(model.selectedVehicle?.name, "Friday")
+        XCTAssertEqual(try store.load(), "synthetic-test-token"); XCTAssertEqual(settings.serverURL, "https://volta.example")
+        XCTAssertTrue(settings.signedInWithApple); XCTAssertNil(model.errorMessage); XCTAssertFalse(model.isPairing)
+        // Pairing with a code afterwards replaces the remembered method.
+        model.unpair()
+        await model.pair(serverURL: "https://volta.example", code: "ABCD1234", deviceName: "Test")
+        XCTAssertEqual(model.pairingState, .paired); XCTAssertFalse(settings.signedInWithApple)
+    }
+
+    func testRefusedAppleSignInStaysSignedOutAndShowsTheServersReason() async throws {
+        let calls = Mutex(0)
+        let session = session { _ in
+            calls.withLock { $0 += 1 }
+            return (403, Data(#"{"error":{"code":"apple_id_not_enrolled","message":"This Apple Account is not enrolled on this server."}}"#.utf8))
+        }
+        let settings = settings(); let store = MemoryTokenStore()
+        let model = AppModel(settings: settings, tokenStore: store, session: session)
+        await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
+        XCTAssertEqual(model.pairingState, .unpaired); XCTAssertNil(try store.load())
+        XCTAssertEqual(model.errorMessage, "This Apple Account is not enrolled on this server.")
+        XCTAssertFalse(settings.signedInWithApple); XCTAssertFalse(model.isPairing); XCTAssertEqual(settings.serverURL, "")
+        // A blank device name or a bad address never reaches the server.
+        await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: "  ")
+        XCTAssertEqual(model.errorMessage, "Enter a device name.")
+        await model.signInWithApple(serverURL: "http://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
+        XCTAssertEqual(model.pairingState, .unpaired); XCTAssertEqual(calls.withLock { $0 }, 1)
+    }
 }

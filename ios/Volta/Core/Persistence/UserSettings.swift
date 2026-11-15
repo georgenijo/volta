@@ -6,6 +6,8 @@ final class UserSettings {
     @ObservationIgnored private let defaults: UserDefaults?
     var units: UnitPreferences { didSet { if let data = try? JSONEncoder().encode(units) { defaults?.set(data, forKey: "units") } } }
     var serverURL: String { didSet { defaults?.set(serverURL, forKey: "serverURL") } }
+    /// This device's token came from Sign in with Apple, not a pairing code.
+    var signedInWithApple: Bool { didSet { defaults?.set(signedInWithApple, forKey: "signedInWithApple") } }
     var appLockEnabled: Bool { didSet { defaults?.set(appLockEnabled, forKey: "appLockEnabled") } }
     var selectedVehicleID: Int? { didSet { defaults?.set(selectedVehicleID, forKey: "selectedVehicleID") } }
     /// The user picked `selectedVehicleID`; only automatic choices may move to
@@ -27,6 +29,7 @@ final class UserSettings {
         self.defaults = defaults
         units = defaults?.data(forKey: "units").flatMap { try? JSONDecoder().decode(UnitPreferences.self, from: $0) } ?? .default
         serverURL = defaults?.string(forKey: "serverURL") ?? ""
+        signedInWithApple = defaults?.bool(forKey: "signedInWithApple") ?? false
         appLockEnabled = defaults?.bool(forKey: "appLockEnabled") ?? false
         let selectedVehicleID = defaults?.object(forKey: "selectedVehicleID") as? Int
         self.selectedVehicleID = selectedVehicleID

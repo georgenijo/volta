@@ -30,6 +30,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.georgenijo.volta
+        VOLTA_SERVER_URL: ''
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: '1'
@@ -39,6 +40,8 @@ targets:
       properties:
         com.apple.security.application-groups:
           - group.com.georgenijo.volta
+        com.apple.developer.applesignin:
+          - Default
     info:
       path: Volta/Info.plist
       properties:
@@ -51,6 +54,8 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         NSFaceIDUsageDescription: Unlock Volta to view your private vehicle history.
+        # Optional server address for the sign-in screen, set at build time.
+        VoltaServerURL: "$(VOLTA_SERVER_URL)"
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
   VoltaTests:

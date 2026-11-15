@@ -42,8 +42,8 @@ try {
     case 'pair': if (args.length) throw new RangeError(usage); console.log(`Pairing code (valid 10 minutes, single use): ${await new Auth(sql!).createPairingCode()}`); break;
     case 'devices': if (args.length) throw new RangeError(usage); console.log(JSON.stringify(await new Auth(sql!).devices(), null, 2)); break;
     case 'revoke': if (args.length !== 1) throw new RangeError(usage); await new Auth(sql!).revoke(integer(args[0], 'device id')); console.log('Device revoked'); break;
-    case 'apple-enroll': if (args.length) throw new RangeError(usage); await new Auth(sql!).openAppleEnrollment(); console.log('Enrollment is open for 10 minutes. The next Apple ID to sign in from the app is enrolled; later sign-ins with it need no code.'); break;
-    case 'apple-reset': if (args.length) throw new RangeError(usage); console.log(`Forgot ${await new Auth(sql!).resetApple()} enrolled Apple ID(s). Devices they signed in stay connected until revoked.`); break;
+    case 'apple-enroll': if (args.length) throw new RangeError(usage); await new Auth(sql!).openAppleEnrollment(); console.log('Enrollment is open for 10 minutes. The next Apple Account to sign in from the app is enrolled; later sign-ins with it need no code.'); break;
+    case 'apple-reset': if (args.length) throw new RangeError(usage); console.log(`Forgot ${await new Auth(sql!).resetApple()} enrolled Apple Account(s). Devices they signed in stay connected until revoked.`); break;
     // Exactly one Tesla call; nothing is stored. Prints counts only, never VINs or IDs.
     case 'history-probe': {
       const o = options(args, ['since', 'until', 'page', 'page-size']);

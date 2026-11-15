@@ -46,18 +46,18 @@ export class Auth {
     if (result.error) throw result.error;
     return result.value!;
   }
-  /** Whether this server accepts Sign in with Apple, and whether an Apple ID is enrolled. */
+  /** Whether this server accepts Sign in with Apple, and whether an Apple Account is enrolled. */
   async appleStatus() {
     if (!this.apple) return { available: false, linked: false };
     const [row] = await this.sql`SELECT EXISTS (SELECT FROM volta.apple_owners) AS linked`;
     return { available: true, linked: row?.linked === true };
   }
-  /** Lets the next Apple ID that signs in within ten minutes enroll itself. */
+  /** Lets the next Apple Account that signs in within ten minutes enroll itself. */
   async openAppleEnrollment() {
     await this.sql`INSERT INTO volta.apple_enrollment (expires_at) VALUES (now() + interval '10 minutes')
       ON CONFLICT (id) DO UPDATE SET expires_at = excluded.expires_at`;
   }
-  /** Forgets every enrolled Apple ID. Devices they signed in keep their tokens until revoked. */
+  /** Forgets every enrolled Apple Account. Devices they signed in keep their tokens until revoked. */
   async resetApple() {
     return this.sql.begin(async transaction => {
       const tx = transaction as unknown as DB;
@@ -88,7 +88,7 @@ export class Auth {
       ON CONFLICT (token_hash) DO NOTHING RETURNING token_hash`;
     return used.length === 1;
   }
-  /** Issues a device token to an enrolled Apple ID, or to the first one to sign in while enrollment is open. */
+  /** Issues a device token to an enrolled Apple Account, or to the first one to sign in while enrollment is open. */
   async appleSignIn(body: unknown) {
     const apple = await this.appleGate();
     const { identityToken, deviceName } = fields(body);
@@ -99,9 +99,9 @@ export class Auth {
       if (!await this.consumeAppleToken(tx, identityToken)) return { error: new ApiError(401, 'invalid_apple_token', 'Apple sign-in could not be verified; try again') };
       const [owner] = await tx`SELECT subject_hash FROM volta.apple_owners WHERE subject_hash = ${subject}`;
       if (!owner) {
-        // One open window enrolls one Apple ID; a concurrent second sign-in finds it gone.
+        // One open window enrolls one Apple Account; a concurrent second sign-in finds it gone.
         const opened = await tx`DELETE FROM volta.apple_enrollment WHERE expires_at > now() RETURNING id`;
-        if (!opened.length) return { error: new ApiError(403, 'apple_id_not_enrolled', 'This Apple ID is not enrolled on this server. Link it from a paired device, or run `bun run cli apple-enroll` on the server and sign in again within ten minutes.') };
+        if (!opened.length) return { error: new ApiError(403, 'apple_id_not_enrolled', 'This Apple Account is not enrolled on this server. Link it from a paired device, or run `bun run cli apple-enroll` on the server and sign in again within ten minutes.') };
         await tx`INSERT INTO volta.apple_owners (subject_hash) VALUES (${subject}) ON CONFLICT (subject_hash) DO NOTHING`;
       }
       const token = randomBytes(32).toString('base64url');
@@ -111,7 +111,7 @@ export class Auth {
     if (result.error) throw result.error;
     return result.value!;
   }
-  /** Enrolls the Apple ID that a paired device just signed in with. */
+  /** Enrolls the Apple Account that a paired device just signed in with. */
   async appleLink(body: unknown) {
     const apple = await this.appleGate();
     const { identityToken } = fields(body);

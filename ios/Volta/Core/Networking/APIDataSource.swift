@@ -28,6 +28,13 @@ struct APIDataSource: VoltaDataSource {
         return url
     }
 
+    /// A server address supplied when the app was built, so a new install
+    /// doesn't need it typed. The public repository builds with none.
+    static func builtInServerURL(_ value: Any? = Bundle.main.object(forInfoDictionaryKey: "VoltaServerURL")) -> String {
+        guard let text = value as? String, let url = try? validatedServerURL(text) else { return "" }
+        return url.absoluteString
+    }
+
     static func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
@@ -117,6 +124,28 @@ struct APIDataSource: VoltaDataSource {
         let data = try await source.request("auth/pair", method: "POST", body: body, authenticated: false)
         do { return try makeDecoder().decode(PairResponse.self, from: data) }
         catch { throw VoltaError.transport("The pairing response could not be decoded.") }
+    }
+    /// Exchanges Apple's identity token for a device token. The server accepts only an enrolled Apple Account.
+    static func signInWithApple(baseURL: URL, identityToken: String, deviceName: String, session: URLSession? = nil) async throws -> PairResponse {
+        let body = try JSONEncoder().encode(["identityToken": identityToken, "deviceName": deviceName])
+        let source = APIDataSource(baseURL: baseURL, token: "", session: session)
+        let data: Data
+        do { data = try await source.request("auth/apple", method: "POST", body: body, authenticated: false) }
+        // A server older than this route has no such path, or asks for a device token first.
+        catch VoltaError.notFound, VoltaError.server(code: "unauthorized", message: _) {
+            throw VoltaError.transport("This server doesn't offer Sign in with Apple yet. Use a pairing code.")
+        }
+        do { return try makeDecoder().decode(PairResponse.self, from: data) }
+        catch { throw VoltaError.transport("The sign-in response could not be decoded.") }
+    }
+    /// Servers that predate Sign in with Apple have no such route, which means unavailable.
+    func appleSignInStatus() async throws -> AppleSignInStatus {
+        do { return try await get("auth/apple") }
+        catch VoltaError.notFound { return AppleSignInStatus(available: false, linked: false) }
+    }
+    /// Enrolls the Apple Account behind `identityToken`, so it can sign in on other devices.
+    func linkAppleID(identityToken: String) async throws {
+        _ = try await request("auth/apple/link", method: "POST", body: try JSONEncoder().encode(["identityToken": identityToken]))
     }
     func health() async throws -> HealthResponse {
         let data = try await request("health", authenticated: false)

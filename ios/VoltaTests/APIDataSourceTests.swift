@@ -1,4 +1,5 @@
 import XCTest
+import AuthenticationServices
 import Synchronization
 @testable import Volta
 
@@ -275,4 +276,83 @@ private func bodyData(_ request: URLRequest) throws -> Data {
         }
     }
 
+    func testAppleSignInSendsTheIdentityTokenWithoutADeviceToken() async throws {
+        let data = try DecodingTests.fixture("pair")
+        StubProtocol.handler.withLock { $0 = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/auth/apple")
+            let body = try JSONSerialization.jsonObject(with: bodyData(request)) as? [String: String]
+            XCTAssertEqual(body, ["identityToken": "synthetic.identity.token", "deviceName": "Test"])
+            return (200, data)
+        } }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+        let result = try await APIDataSource.signInWithApple(baseURL: URL(string: "https://volta.example")!, identityToken: "synthetic.identity.token",
+                                                             deviceName: "Test", session: URLSession(configuration: config))
+        XCTAssertEqual(result.token, "synthetic-test-token")
+    }
+
+    func testAppleSignInExplainsAServerThatPredatesIt() async {
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+        let older: [(Int, String)] = [(404, #"{"error":{"code":"not_found","message":"Resource not found"}}"#),
+                                      (401, #"{"error":{"code":"unauthorized","message":"Valid device token required"}}"#)]
+        for (status, body) in older {
+            StubProtocol.handler.withLock { $0 = { _ in (status, Data(body.utf8)) } }
+            await expectError(.transport("This server doesn't offer Sign in with Apple yet. Use a pairing code.")) {
+                _ = try await APIDataSource.signInWithApple(baseURL: URL(string: "https://volta.example")!, identityToken: "synthetic.identity.token",
+                                                            deviceName: "Test", session: URLSession(configuration: config))
+            }
+        }
+        // A current server's own refusals pass through unchanged.
+        StubProtocol.handler.withLock { $0 = { _ in (401, Data(#"{"error":{"code":"invalid_apple_token","message":"Apple sign-in could not be verified; try again"}}"#.utf8)) } }
+        await expectError(.server(code: "invalid_apple_token", message: "Apple sign-in could not be verified; try again")) {
+            _ = try await APIDataSource.signInWithApple(baseURL: URL(string: "https://volta.example")!, identityToken: "synthetic.identity.token",
+                                                        deviceName: "Test", session: URLSession(configuration: config))
+        }
+    }
+
+    func testLinkingAnAppleAccountKeepsThisDeviceWhenTheTokenIsRefused() async throws {
+        let notified = Mutex(false)
+        let refused = source(handler: { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-token")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/auth/apple/link")
+            let body = try JSONSerialization.jsonObject(with: bodyData(request)) as? [String: String]
+            XCTAssertEqual(body, ["identityToken": "synthetic.identity.token"])
+            return (400, Data(#"{"error":{"code":"invalid_apple_token","message":"Apple sign-in could not be verified; try again"}}"#.utf8))
+        }, unauthorized: { notified.withLock { $0 = true } })
+        await expectError(.server(code: "invalid_apple_token", message: "Apple sign-in could not be verified; try again")) {
+            try await refused.linkAppleID(identityToken: "synthetic.identity.token")
+        }
+        XCTAssertFalse(notified.withLock { $0 })
+        let linked = source { _ in (204, Data()) }
+        try await linked.linkAppleID(identityToken: "synthetic.identity.token")
+    }
+
+    func testAppleSignInStatusTreatsAnOlderServerAsUnavailable() async throws {
+        let current = source { request in
+            XCTAssertEqual(request.httpMethod, "GET"); XCTAssertEqual(request.url?.path, "/v1/auth/apple")
+            return (200, Data(#"{"available":true,"linked":false}"#.utf8))
+        }
+        let status = try await current.appleSignInStatus()
+        XCTAssertEqual(status, AppleSignInStatus(available: true, linked: false))
+        let older = source { _ in (404, Data()) }
+        let missing = try await older.appleSignInStatus()
+        XCTAssertEqual(missing, AppleSignInStatus(available: false, linked: false))
+    }
+
+    func testBuiltInServerURLAcceptsOnlyAValidAddress() {
+        XCTAssertEqual(APIDataSource.builtInServerURL("https://volta.example:9443"), "https://volta.example:9443")
+        for value: Any? in [nil, "", "$(VOLTA_SERVER_URL)", "http://volta.example", "https://volta.example/path", 42] {
+            XCTAssertEqual(APIDataSource.builtInServerURL(value), "")
+        }
+    }
+
+    func testAppleSignInOutcomeReadsOnlyTheIdentityToken() {
+        XCTAssertEqual(AppleSignIn.outcome(.success(Data("synthetic.identity.token".utf8))), .token("synthetic.identity.token"))
+        XCTAssertEqual(AppleSignIn.outcome(.success(nil)), .failed("Apple didn't return a sign-in token. Try again."))
+        XCTAssertEqual(AppleSignIn.outcome(.success(Data())), .failed("Apple didn't return a sign-in token. Try again."))
+        XCTAssertEqual(AppleSignIn.outcome(.failure(ASAuthorizationError(.canceled))), .cancelled)
+        guard case .failed = AppleSignIn.outcome(.failure(ASAuthorizationError(.failed))) else { return XCTFail("Expected a failure") }
+    }
 }

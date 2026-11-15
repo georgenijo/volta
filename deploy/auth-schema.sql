@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS volta.apple_owners (
   subject_hash bytea PRIMARY KEY CHECK (octet_length(subject_hash) = 32),
   created_at timestamptz NOT NULL DEFAULT now()
 );
--- At most one open window in which the next Apple ID to sign in enrolls itself.
+-- At most one open window in which the next Apple Account to sign in enrolls itself.
 CREATE TABLE IF NOT EXISTS volta.apple_enrollment (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
   expires_at timestamptz NOT NULL

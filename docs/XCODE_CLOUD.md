@@ -13,12 +13,16 @@ matches CoachOS/HomeOS: archive on relevant `main` changes, then internal TestFl
   Upgrade deliberately after validation.
 - Set workflow environment variable `VOLTA_APPLE_TEAM_ID` to the owner's
   ten-character Apple Developer signing team ID. Keep the value out of Git.
+- Optionally set `VOLTA_SERVER_URL` to the API's HTTPS address (host and
+  optional port only). The sign-in screen then starts with it filled in, so a
+  new install needs only Sign in with Apple. Keep the value out of Git.
 - Action: Archive, iOS, configuration `Release`. No simulator, test or screenshot
   actions are needed for this delivery workflow.
 - Post-action: TestFlight Internal Testing, group `Internal` (owner creates or
   selects it in App Store Connect).
 - Automatic signing: select the owner's Apple team; app `com.georgenijo.volta`, embedded widget
-  `com.georgenijo.volta.widgets`, App Group `group.com.georgenijo.volta` on both.
+  `com.georgenijo.volta.widgets`, App Group `group.com.georgenijo.volta` on both,
+  and the Sign in with Apple capability on the app.
   The owner must confirm identifiers, capabilities and provisioning in Apple.
   No certificates, credentials or access grants are stored by these scripts.
 

@@ -15,6 +15,12 @@ struct PairResponse: Codable, Sendable {
     var device: Device
 }
 
+/// Whether the server accepts Sign in with Apple, and whether an Apple Account is enrolled on it.
+struct AppleSignInStatus: Codable, Hashable, Sendable {
+    var available: Bool
+    var linked: Bool
+}
+
 struct Vehicle: Codable, Hashable, Sendable, Identifiable {
     var id: Int
     var name: String

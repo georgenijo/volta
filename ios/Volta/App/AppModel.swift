@@ -158,9 +158,28 @@ final class AppModel {
     private func handleUnauthorized(generation: UUID) {
         guard self.generation == generation, pairingState == .paired else { return }
         unpair()
-        errorMessage = "This device token was revoked or expired. Pair again to reconnect."
+        errorMessage = "This device token was revoked or expired. Sign in again to reconnect."
     }
     func pair(serverURL: String, code: String, deviceName: String) async {
+        await connect(serverURL: serverURL, deviceName: deviceName, withApple: false) { url, name, session in
+            let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard code.count == 8, code.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }), !name.isEmpty else {
+                throw VoltaError.transport("Enter the eight-character code and a device name.")
+            }
+            return try await APIDataSource.pair(baseURL: url, code: code, deviceName: name, session: session)
+        }
+    }
+    /// Connects with the identity token from Sign in with Apple. The server
+    /// issues the same device token as pairing, to an enrolled Apple Account only.
+    func signInWithApple(serverURL: String, identityToken: String, deviceName: String) async {
+        await connect(serverURL: serverURL, deviceName: deviceName, withApple: true) { url, name, session in
+            guard !name.isEmpty else { throw VoltaError.transport("Enter a device name.") }
+            return try await APIDataSource.signInWithApple(baseURL: url, identityToken: identityToken, deviceName: name, session: session)
+        }
+    }
+    /// Obtains a device token with `issue`, stores it, and switches to the server.
+    private func connect(serverURL: String, deviceName: String, withApple: Bool,
+                         issue: (URL, String, URLSession?) async throws -> PairResponse) async {
         guard !isLaunchDemo, pairingState == .unpaired, !isPairing else { return }
         errorMessage = nil
         let currentGeneration = generation
@@ -168,12 +187,8 @@ final class AppModel {
         defer { if generation == currentGeneration { isPairing = false } }
         do {
             let url = try APIDataSource.validatedServerURL(serverURL)
-            let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             let name = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard code.count == 8, code.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }), !name.isEmpty else {
-                throw VoltaError.transport("Enter the eight-character code and a device name.")
-            }
-            let response = try await APIDataSource.pair(baseURL: url, code: code, deviceName: name, session: session)
+            let response = try await issue(url, name, session)
             guard currentGeneration == generation else {
                 if !response.token.isEmpty { try? await APIDataSource(baseURL: url, token: response.token, session: session).revoke() }
                 return
@@ -187,6 +202,7 @@ final class AppModel {
                 throw storageError
             }
             settings.serverURL = url.absoluteString
+            settings.signedInWithApple = withApple
             settings.demoMode = false
             needsCredentialRetry = false; hasLoadedVehicles = false
             settings.selectedVehicleID = nil; settings.selectedVehicleIsExplicit = false

@@ -20,6 +20,7 @@ final class StartupBenchmarkTests: XCTestCase {
         XCTAssertTrue(server.waitForExistence(timeout: 10), "Use a fresh, unpaired benchmark simulator")
         server.tap()
         server.typeText("https://127.0.0.1:9443")
+        app.buttons["button.pairingMethod"].tap()
         let code = app.textFields["field.pairingCode"]
         code.tap()
         code.typeText("BENCH123")
