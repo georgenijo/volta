@@ -1,84 +1,335 @@
 import SwiftUI
 
-// MARK: - Header
+// MARK: - Toolbar
 
-/// Top bar from the references: range pill (with optional filter menu) on the
-/// left, centered title, a group of circular glass buttons on the right.
-struct HistoryHeader<Filter: View, Trailing: View>: View {
-    var title: String
+// History screens put their controls in the system toolbar, so iPhone Duo can
+// move them to the side strip with the tabs. Every item has a title and a
+// symbol; the system shows the title in overflow menus and expanded forms.
+
+/// Date range menu for a toolbar item: presets and a custom range.
+struct HistoryRangeMenu: View {
     @Binding var range: HistoryRange
-    var filterActive: Bool
-    @ViewBuilder var filterMenu: Filter
-    @ViewBuilder var trailing: Trailing
-
-    @State private var showingCustomRange = false
+    /// In a horizontal bar the range shows as "30D" next to the calendar, as
+    /// before. In the side strip only the symbol fits, so the content shows the range.
+    var showsValue: Bool
+    var customRange: () -> Void
 
     var body: some View {
-        VoltaHeader(title) {
-            GlassPill(height: 44) { rangeControls }
-        } trailing: {
-            GlassPill(height: 44) { trailing }
-        }
-        .padding(.bottom, 6)
-        .sheet(isPresented: $showingCustomRange) {
-            CustomRangeSheet(range: $range)
-                .presentationDetents([.medium])
-                .presentationBackground(HistoryTheme.card)
-        }
-    }
-
-    private var rangeControls: some View {
-        HStack(spacing: 18) {
-            Menu {
-                Picker("Range", selection: $range) {
-                    ForEach(HistoryRange.presets, id: \.self) { preset in
-                        Text(preset.menuTitle).tag(preset)
-                    }
+        Menu {
+            Picker("Range", selection: $range) {
+                ForEach(HistoryRange.presets, id: \.self) { preset in
+                    Text(preset.menuTitle).tag(preset)
                 }
-                Divider()
-                Button("Custom range…", systemImage: "calendar") { showingCustomRange = true }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "calendar")
-                    Text(range.label)
-                        .font(.system(size: 15, weight: .semibold))
-                        .monospacedDigit()
-                }
-                .frame(height: 44)
-                .contentShape(.rect)
             }
-            .accessibilityLabel("Date range, \(range.menuTitle)")
-            if Filter.self != EmptyView.self {
-                Menu {
-                    filterMenu
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease")
-                        .foregroundStyle(filterActive ? HistoryTheme.blue : .white)
-                        .frame(height: 44)
-                        .contentShape(.rect)
-                }
-                .accessibilityLabel("Filter")
+            Divider()
+            Button("Custom range…", systemImage: "calendar.badge.plus", action: customRange)
+        } label: {
+            if showsValue {
+                Label(range.label, systemImage: "calendar")
+                    .labelStyle(.titleAndIcon)
+                    .monospacedDigit()
+            } else {
+                Label("Range, \(range.menuTitle)", systemImage: "calendar")
+            }
+        }
+        .tint(Color.voltaTextPrimary)
+        .accessibilityLabel("Date range, \(range.menuTitle)")
+        .accessibilityIdentifier("button.history.range")
+    }
+}
+
+/// Filter menu for a toolbar item; blue while a filter is applied.
+struct HistoryFilterMenu<Content: View>: View {
+    var isActive: Bool
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        Menu {
+            content
+        } label: {
+            Label(isActive ? "Filter, on" : "Filter",
+                  systemImage: isActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+        }
+        .tint(isActive ? HistoryTheme.blue : Color.voltaTextPrimary)
+        .accessibilityIdentifier("button.history.filter")
+    }
+}
+
+/// A toolbar button with a title and a symbol; blue while `isOn`.
+struct HistoryToolbarButton: View {
+    var title: String
+    var systemImage: String
+    var isOn = false
+    var identifier: String? = nil
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .tint(isOn ? HistoryTheme.blue : Color.voltaTextPrimary)
+        .accessibilityIdentifier(identifier ?? "")
+    }
+}
+
+/// The screen title in the bar while the bars are horizontal. With bars on
+/// the side a title would keep a horizontal bar alive, so screens draw
+/// `HistoryInlineTitle` in their content instead.
+struct HistoryBarTitle: ToolbarContent {
+    var title: String?
+    var barsOnSide: Bool
+
+    var body: some ToolbarContent {
+        if !barsOnSide, let title {
+            ToolbarItem(placement: .principal) {
+                Text(title)
+                    .font(.voltaScreenTitle)
+                    .foregroundStyle(Color.voltaTextPrimary)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
             }
         }
     }
 }
 
-/// Icon button meant to live inside the header's trailing glass capsule.
-struct HistoryHeaderButton: View {
-    var systemImage: String
-    var label: String
-    var isOn: Bool = false
-    var action: () -> Void
+/// The screen title drawn in the content while the bars are on the side.
+struct HistoryInlineTitle: View {
+    var title: String
+    var subtitle: String? = nil
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .foregroundStyle(isOn ? HistoryTheme.blue : .white)
-                .frame(minWidth: 28, minHeight: 44)
-                .contentShape(.rect)
-                .contentTransition(.symbolEffect(.replace))
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(title)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(Color.voltaTextPrimary)
+                .accessibilityAddTraits(.isHeader)
+            if let subtitle {
+                Text(subtitle.uppercased())
+                    .font(.system(size: 10, weight: .semibold)).tracking(1.6)
+                    .foregroundStyle(HistoryTheme.secondary)
+            }
+            Spacer(minLength: 0)
         }
-        .accessibilityLabel(label)
+        .lineLimit(1).minimumScaleFactor(0.8)
+        .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+    }
+}
+
+extension ToolbarContent {
+    /// Keeps the most used items out of the overflow menu longest (iOS 27).
+    @ToolbarContentBuilder
+    func historyPriority(_ high: Bool = true) -> some ToolbarContent {
+        if #available(iOS 27.0, *) {
+            visibilityPriority(high ? .high : .low)
+        } else {
+            self
+        }
+    }
+}
+
+extension View {
+    /// Pushed History page chrome: the system back button, the title in the
+    /// bar while the bars are horizontal, and an optional clear bar over a map.
+    func historyPage(_ title: String?, clearBar: Bool = false) -> some View {
+        modifier(HistoryPageChrome(title: title, clearBar: clearBar))
+    }
+
+    /// The custom range sheet the range menu opens.
+    func historyRangeSheet(isPresented: Binding<Bool>, range: Binding<HistoryRange>) -> some View {
+        sheet(isPresented: isPresented) {
+            CustomRangeSheet(range: range)
+                .presentationDetents([.medium])
+                .presentationBackground(HistoryTheme.card)
+        }
+    }
+
+    /// Marks the row whose detail fills the second column of a split layout.
+    func historySelected(_ isSelected: Bool, radius: CGFloat = 22) -> some View {
+        overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .strokeBorder(HistoryTheme.blue.opacity(0.85), lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct HistoryPageChrome: ViewModifier {
+    var title: String?
+    var clearBar: Bool
+    @Environment(\.barsOnSide) private var barsOnSide
+
+    func body(content: Content) -> some View {
+        content
+            .historyScreenBackground()
+            .toolbarTitleDisplayMode(.inline)
+            .toolbarBackgroundVisibility(clearBar ? .hidden : .automatic, for: .navigationBar)
+            .toolbar { HistoryBarTitle(title: title, barsOnSide: barsOnSide) }
+    }
+}
+
+// MARK: - Layout
+
+enum HistoryLayout {
+    /// Narrowest page that puts its map beside its content, so two panes keep
+    /// a phone-like column each (the inner display with the list hidden).
+    static let panesMinWidth: CGFloat = 700
+    /// Narrowest page that lays cards in two columns.
+    static let twoColumnMinWidth: CGFloat = 640
+}
+
+/// The window a History tab fills, measured once at the tab root.
+struct HistoryWindow: Equatable {
+    var size: CGSize = .zero
+    var safeArea = EdgeInsets()
+
+    /// Wider than tall (iPhone Duo's inner display opened flat).
+    var isWide: Bool { size.width > size.height }
+    /// Half the window, bars included: where the inner display folds.
+    var half: CGFloat { (size.width + safeArea.leading + safeArea.trailing) / 2 }
+    /// Height left between the top and bottom bars (`size` is already inside the safe area).
+    var contentHeight: CGFloat { size.height }
+
+    /// A hero map's visible height: a share of the content height inside
+    /// `limits`, so a short window (the 678 pt outer display) still shows
+    /// content below the map.
+    func reveal(_ share: CGFloat, _ limits: ClosedRange<CGFloat>) -> CGFloat {
+        guard contentHeight > 0 else { return limits.upperBound }
+        return min(max(contentHeight * share, limits.lowerBound), limits.upperBound)
+    }
+}
+
+extension EnvironmentValues {
+    /// The side bars (iPhone Duo's strip) along this column's edges, from the
+    /// tab's window. Scroll views with a hero map run under them and pad their
+    /// text by these insets. Read from the tab, not from the page itself: a
+    /// page that pads by its own insets changes them, and the layout loops.
+    @Entry var historySideBars = EdgeInsets()
+}
+
+extension EdgeInsets {
+    /// The horizontal edges that have a bar.
+    var barEdges: Edge.Set {
+        var edges: Edge.Set = []
+        if leading > 0 { edges.insert(.leading) }
+        if trailing > 0 { edges.insert(.trailing) }
+        return edges
+    }
+}
+
+extension View {
+    /// Keeps content clear of the side bars inside a scroll view that runs
+    /// under them so its hero map can (see `\.historySideBars`).
+    func historySides(_ bars: EdgeInsets) -> some View {
+        padding(.leading, bars.leading).padding(.trailing, bars.trailing)
+    }
+
+    /// Publishes the size and safe area of the space this view is given.
+    /// Measured on a container that stays inside the safe area, so content
+    /// that runs under the bars (and pads itself by these insets) can't feed
+    /// back into the measurement.
+    func readsHistoryWindow(_ window: Binding<HistoryWindow>) -> some View {
+        ZStack { self }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onGeometryChange(for: HistoryWindow.self) { proxy in
+                HistoryWindow(size: proxy.size, safeArea: proxy.safeAreaInsets)
+            } action: { window.wrappedValue = $0 }
+    }
+}
+
+// MARK: - Navigation
+
+/// A History tab's navigation. In a compact or tall window: one stack over
+/// `path`, as on any iPhone. In a regular-width window wider than tall (the
+/// inner display opened flat): the list beside the first route, with the rest
+/// of the path pushed inside the detail column. Both layouts read the same
+/// `path`, so folding or unfolding keeps what is open.
+struct HistoryNavigation<Route: Hashable, Root: View, Destination: View, Placeholder: View>: View {
+    @Binding var path: [Route]
+    var split: Bool
+    /// The tab's window; the list column ends at its middle, where the inner
+    /// display folds, so it keeps its width as the device folds and unfolds.
+    var window: HistoryWindow
+    @ViewBuilder var root: Root
+    @ViewBuilder var destination: (Route) -> Destination
+    @ViewBuilder var placeholder: Placeholder
+
+    var body: some View {
+        if split {
+            NavigationSplitView {
+                root
+                    .navigationSplitViewColumnWidth(min: 320, ideal: max(320, window.half), max: max(320, window.half))
+                    // The list column touches no side bar.
+                    .environment(\.historySideBars, EdgeInsets())
+            } detail: {
+                NavigationStack(path: detailPath) {
+                    Group {
+                        if let first = path.first {
+                            // A new selection is a new page with fresh state.
+                            destination(first).id(first)
+                        } else {
+                            placeholder.historyScreenBackground()
+                        }
+                    }
+                    .navigationDestination(for: Route.self) { destination($0) }
+                }
+                // The detail column touches the trailing strip only.
+                .environment(\.historySideBars, EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: window.safeArea.trailing))
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else {
+            NavigationStack(path: $path) {
+                root.navigationDestination(for: Route.self) { destination($0) }
+            }
+            .environment(\.historySideBars, EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0,
+                                                       trailing: window.safeArea.trailing))
+        }
+    }
+
+    /// What the detail column pushes on top of the selection.
+    private var detailPath: Binding<[Route]> {
+        Binding {
+            Array(path.dropFirst())
+        } set: { tail in
+            path = Array(path.prefix(1)) + tail
+        }
+    }
+}
+
+extension Array where Element: Hashable {
+    /// Opens a History route: pushed onto a stack, or the new selection of a split.
+    mutating func historyOpen(_ route: Element, split: Bool) {
+        if split { self = [route] } else { append(route) }
+    }
+}
+
+/// The detail column before anything is selected.
+struct HistorySelectionPlaceholder: View {
+    var systemImage: String
+    var title: String
+    var message: String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(HistoryTheme.tertiary)
+            Text(title)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(.white)
+            Text(message)
+                .font(.system(size: 14))
+                .foregroundStyle(HistoryTheme.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+        }
+        .padding(VoltaSpacing.xl)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("screen.history-placeholder")
     }
 }
 

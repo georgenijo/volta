@@ -69,11 +69,22 @@ extension DriveSummary {
     }
 }
 
-/// Drives tab: range pill + filter, search, day-grouped drive cards.
+/// Where the Drives tab can navigate.
+enum DriveRoute: Hashable {
+    case drive(DriveSummary)
+    case roadtrips
+    case heatmap
+}
+
+/// Drives tab: range and filter menus, search, route map, day-grouped drive
+/// cards. On a wide regular-width window the list and the selected drive sit
+/// side by side.
 struct DrivesHistoryView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    @Environment(\.barsOnSide) private var barsOnSide
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(AppModel.self) private var model: AppModel?
 
     @State private var feed = HistoryFeed<DriveSummary>()
@@ -82,9 +93,21 @@ struct DrivesHistoryView: View {
     @State private var sort: DriveSort = .newest
     @State private var searching = false
     @State private var query = ""
+    @State private var path: [DriveRoute] = []
+    @State private var showingCustomRange = false
+    /// The whole tab, which decides between a stack and a split.
+    @State private var window = HistoryWindow()
+    /// The list's own area, inside the system bars.
+    @State private var page = HistoryWindow()
 
     init(range: HistoryRange = .all) {
         _range = State(initialValue: range)
+    }
+
+    private var split: Bool { sizeClass == .regular && window.isWide }
+    /// Side bars along the list's edges: none in a split, whose list column touches no bar.
+    private var sideBars: EdgeInsets {
+        split ? EdgeInsets() : EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0, trailing: window.safeArea.trailing)
     }
 
     private var visible: [DriveSummary] { Self.visible(feed.items, filter: filter, query: query, sort: sort) }
@@ -99,22 +122,50 @@ struct DrivesHistoryView: View {
         }
     }
 
+    private var selected: DriveRoute? { split ? path.first : nil }
+
     var body: some View {
-        NavigationStack {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // The header floats over the list so the route map runs behind it.
-                .safeAreaInset(edge: .top, spacing: 0) { header }
-                .historyScreenBackground()
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(for: DriveSummary.self) { DriveDetailView(drive: $0) }
+        HistoryNavigation(path: $path, split: split, window: window) {
+            root
+        } destination: { route in
+            switch route {
+            case .drive(let drive): DriveDetailView(drive: drive)
+            case .roadtrips: RoadtripsView(drives: visible, partial: feed.hasMore)
+            case .heatmap: DrivesHeatmapView(drives: visible, partial: feed.hasMore)
+            }
+        } placeholder: {
+            HistorySelectionPlaceholder(systemImage: "steeringwheel", title: "No drive selected",
+                                        message: "Choose a drive to see its route, charts and cost.")
         }
+        .readsHistoryWindow($window)
         .task(id: range) { await reload(skeleton: true) }
     }
 
-    private var header: some View {
-        VStack(spacing: 0) {
-            HistoryHeader(title: "Drives", range: $range, filterActive: filter != .all || sort != .newest) {
+    private var root: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .readsHistoryWindow($page)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if searching {
+                    HistorySearchField(text: $query, prompt: "Search cities or addresses") {
+                        withAnimation(.snappy) { searching = false }
+                    }
+                    .padding(.top, 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .historyScreenBackground()
+            .toolbarTitleDisplayMode(.inline)
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            .toolbar { toolbar }
+            .historyRangeSheet(isPresented: $showingCustomRange, range: $range)
+    }
+
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        HistoryBarTitle(title: "Drives", barsOnSide: barsOnSide)
+        ToolbarItemGroup(placement: .topBarLeading) {
+            HistoryRangeMenu(range: $range, showsValue: !barsOnSide) { showingCustomRange = true }
+            HistoryFilterMenu(isActive: filter != .all || sort != .newest) {
                 Picker("Distance", selection: $filter) {
                     ForEach(DriveFilter.allCases) { f in
                         Label(f.title(units), systemImage: f.systemImage).tag(f)
@@ -123,26 +174,18 @@ struct DrivesHistoryView: View {
                 Picker("Sort", selection: $sort) {
                     ForEach(DriveSort.allCases) { Text($0.title).tag($0) }
                 }
-            } trailing: {
-                HistoryHeaderButton(systemImage: "magnifyingglass", label: "Search", isOn: searching) {
-                    withAnimation(.snappy) { searching.toggle(); if !searching { query = "" } }
-                }
-            }
-            if searching {
-                HistorySearchField(text: $query, prompt: "Search cities or addresses") {
-                    withAnimation(.snappy) { searching = false }
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        // A soft scrim keeps the title legible over the map and scrolled cards.
-        .background {
-            LinearGradient(colors: [HistoryTheme.background.opacity(0.85), HistoryTheme.background.opacity(0)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
+        .historyPriority()
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            HistoryToolbarButton(title: "Search", systemImage: "magnifyingglass", isOn: searching,
+                                 identifier: "button.history.search") {
+                withAnimation(.snappy) { searching.toggle(); if !searching { query = "" } }
+            }
         }
     }
+
+    private func open(_ route: DriveRoute) { path.historyOpen(route, split: split) }
 
     private func reload(skeleton: Bool = false) async {
         let ds = dataSource, vid = vehicleID
@@ -151,20 +194,30 @@ struct DrivesHistoryView: View {
         }, showSkeleton: skeleton)
     }
 
+    /// The title in the content while the bars are on the side.
+    @ViewBuilder private var inlineTitle: some View {
+        if barsOnSide {
+            HistoryInlineTitle(title: "Drives", subtitle: range.menuTitle)
+                .padding(.horizontal, HistoryTheme.gutter)
+                .padding(.top, VoltaSpacing.sm)
+        }
+    }
+
     @ViewBuilder private var content: some View {
         switch feed.phase {
         case .loading:
-            HistorySkeletonList()
+            HistorySkeletonList().safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .failed(let message):
             HistoryErrorState(title: "Couldn't load drives", message: message) {
                 Task { await reload(skeleton: true) }
             }
+            .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .loaded:
             list
         }
     }
 
-    /// Status bar plus floating header: how far the hero map reaches up behind them.
+    /// Status bar plus system bar and search: how far the hero map reaches up behind them.
     @State private var topInset: CGFloat = 0
 
     private var list: some View {
@@ -172,42 +225,57 @@ struct DrivesHistoryView: View {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 let mapped = visible.contains { drive in DriveRouteSegments.runs(drive.drawableRoute).contains { $0.count > 1 } }
                 if mapped {
-                    DrivesRouteMap(drives: visible, height: 300 + max(topInset - 124, 0), fullBleed: true,
-                                   topInset: max(topInset - 60, 0), legalInset: 56)
+                    let reveal = page.reveal(0.23, 150...180)
+                    DrivesRouteMap(drives: visible, height: reveal + topInset, fullBleed: true,
+                                   topInset: topInset + (barsOnSide ? 40 : 0), legalInset: 56)
                         .padding(.top, -topInset)
                         .allowsHitTesting(false)
+                        .overlay(alignment: .topLeading) { inlineTitle.historySides(sideBars) }
+                } else {
+                    inlineTitle.historySides(sideBars)
                 }
-                hero.padding(.horizontal, DrivesLayout.margin)
-                    .padding(.top, mapped ? -6 : 18).padding(.bottom, 40)
-                HStack(spacing: 13) {
-                    NavigationLink { RoadtripsView(drives: visible, partial: feed.hasMore) } label: { DriveShortcut(title: "Roadtrips", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
-                        .accessibilityIdentifier("button.drives.roadtrips")
-                    NavigationLink { DrivesHeatmapView(drives: visible, partial: feed.hasMore) } label: { DriveShortcut(title: "Heatmap", systemImage: "square.grid.3x3.fill") }
-                        .accessibilityIdentifier("button.drives.heatmap")
-                }.buttonStyle(VoltaPressStyle()).padding(.horizontal, DrivesLayout.margin).padding(.bottom, 15)
-                if visible.isEmpty && !feed.hasMore {
-                    HistoryEmptyState(systemImage: "road.lanes", title: feed.items.isEmpty ? "No drives \(range.emptyPhrase ?? "yet")" : "No matching drives",
-                                      message: feed.items.isEmpty ? "Try a different range or wait for your next drive." : "Try a different search or distance filter.")
-                        .padding(.horizontal, HistoryTheme.gutter)
+                Group {
+                    hero.padding(.horizontal, DrivesLayout.margin)
+                        .padding(.top, mapped ? -6 : 18).padding(.bottom, 40)
+                    HStack(spacing: 13) {
+                        Button { open(.roadtrips) } label: { DriveShortcut(title: "Roadtrips", systemImage: "point.topleft.down.to.point.bottomright.curvepath") }
+                            .historySelected(selected == .roadtrips, radius: 17)
+                            .accessibilityIdentifier("button.drives.roadtrips")
+                        Button { open(.heatmap) } label: { DriveShortcut(title: "Heatmap", systemImage: "square.grid.3x3.fill") }
+                            .historySelected(selected == .heatmap, radius: 17)
+                            .accessibilityIdentifier("button.drives.heatmap")
+                    }.buttonStyle(VoltaPressStyle()).padding(.horizontal, DrivesLayout.margin).padding(.bottom, 15)
+                    if visible.isEmpty && !feed.hasMore {
+                        HistoryEmptyState(systemImage: "road.lanes", title: feed.items.isEmpty ? "No drives \(range.emptyPhrase ?? "yet")" : "No matching drives",
+                                          message: feed.items.isEmpty ? "Try a different range or wait for your next drive." : "Try a different search or distance filter.")
+                            .padding(.horizontal, HistoryTheme.gutter)
+                    }
                 }
+                .voltaReadableWidth()
+                .historySides(sideBars)
                 if sort == .newest {
                     ForEach(DayGroup.group(visible, by: \.start)) { group in
                         Section {
                             rows(group.items).padding(.bottom, 14)
                         } header: {
-                            DriveDayHeader(group: group)
+                            DriveDayHeader(group: group, sides: sideBars)
                         }
                     }
                 } else {
                     SectionLabel(sort.title, trailing: "\(visible.count) drives")
                         .padding(.horizontal, DrivesLayout.margin)
                         .padding(.top, 14).padding(.bottom, 12)
+                        .voltaReadableWidth()
+                        .historySides(sideBars)
                     rows(visible)
                 }
                 HistoryPageFooter(feed: feed) { await reload() }
                     .padding(.horizontal, HistoryTheme.gutter)
+                    .historySides(sideBars)
             }
         }
+        // Under the side bars, so the route map reaches the edges; the rest keeps clear of them.
+        .ignoresSafeArea(edges: sideBars.barEdges)
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.top } action: { _, inset in topInset = inset }
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
@@ -218,12 +286,16 @@ struct DrivesHistoryView: View {
     private func rows(_ items: [DriveSummary]) -> some View {
         VStack(spacing: 9) {
             ForEach(items) { drive in
-                NavigationLink(value: drive) { DriveCard(drive: drive, showsDate: sort != .newest) }
-                    .buttonStyle(VoltaPressStyle())
-                    .accessibilityIdentifier("row.drive.\(drive.id)")
+                Button { open(.drive(drive)) } label: {
+                    DriveCard(drive: drive, showsDate: sort != .newest).historySelected(selected == .drive(drive), radius: 18)
+                }
+                .buttonStyle(VoltaPressStyle())
+                .accessibilityIdentifier("row.drive.\(drive.id)")
             }
         }
         .padding(.horizontal, DrivesLayout.cardInset)
+        .voltaReadableWidth()
+        .historySides(sideBars)
     }
 
     /// Totals follow the active filter and search, like the list below them.

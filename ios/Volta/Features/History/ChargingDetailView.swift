@@ -39,6 +39,7 @@ struct ChargingDetailView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    @Environment(\.historySideBars) private var sideBars
     /// Optional so previews without an app model still render.
     @Environment(AppModel.self) private var model: AppModel?
     @State private var loader = HistoryDetailLoader<ChargeDetail>()
@@ -51,20 +52,54 @@ struct ChargingDetailView: View {
         case voltage = "Volts", current = "Amps"
     }
 
-    /// The map runs under the status bar and header to about 40% of the screen.
-    private static let mapHeight: CGFloat = 365
     /// The bottom of the map that fades into the page; MapKit's attribution sits above it.
     private static let mapFade: CGFloat = 56
     static let margin: CGFloat = 28
 
+    @State private var page = HistoryWindow()
+
     /// The detail's summary when loaded (it may carry fields the list row lacks).
     private var summary: ChargeSummary { loader.detail?.summary ?? charge }
 
+    /// Wide enough for the map beside the session (the inner display with the list hidden).
+    private var usesPanes: Bool { page.isWide && page.size.width >= HistoryLayout.panesMinWidth }
+
     var body: some View {
+        Group {
+            if usesPanes {
+                VoltaPanes {
+                    mapBackdrop(top: page.safeArea.top)
+                        .ignoresSafeArea()
+                } secondary: {
+                    scroll(showsMap: false)
+                }
+            } else {
+                scroll(showsMap: true)
+            }
+        }
+        .readsHistoryWindow($page)
+        .historyPage(nil, clearBar: true)
+        .toolbar { toolbar }
+        .fullScreenCover(isPresented: $showingMap) {
+            if let coordinate = location.coordinate {
+                ChargeLocationMap(coordinate: coordinate, title: ChargePlace.title(summary), subtitle: ChargePlace.subtitle(summary))
+            }
+        }
+        .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
+        .task { await load() }
+        .task { if charge.needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) } }
+    }
+
+    /// The page as one column, with the map at the top when `showsMap`.
+    private func scroll(showsMap: Bool) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    mapBackdrop
+                    if showsMap {
+                        // Runs under the status bar and system bar, then about a third of the page.
+                        mapBackdrop(top: page.safeArea.top)
+                            .frame(height: page.safeArea.top + page.reveal(0.34, 170...250))
+                    }
                     VStack(alignment: .leading, spacing: 0) {
                         hero
                         VStack(alignment: .leading, spacing: 52) {
@@ -80,28 +115,20 @@ struct ChargingDetailView: View {
                         Color.clear.frame(height: 1).id(ScrollTarget.bottom)
                     }
                     .padding(.horizontal, Self.margin)
-                    .padding(.top, 10)
+                    .padding(.top, showsMap ? 10 : VoltaSpacing.lg)
+                    .voltaReadableWidth()
+                    .historySides(showsMap ? sideBars : EdgeInsets())
                 }
             }
             .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("scroll.charge-detail")
-            .ignoresSafeArea(edges: .top)
-            .overlay(alignment: .top) { header }
+            // With the map: under the bars, so it reaches the edges; the text keeps clear of them.
+            .ignoresSafeArea(edges: showsMap ? sideBars.barEdges.union(.top) : [])
             #if DEBUG
             .task(id: loader.detail != nil) { await debugScroll(proxy) }
             #endif
         }
-        .historyScreenBackground()
-        .toolbar(.hidden, for: .navigationBar)
-        .fullScreenCover(isPresented: $showingMap) {
-            if let coordinate = location.coordinate {
-                ChargeLocationMap(coordinate: coordinate, title: ChargePlace.title(summary), subtitle: ChargePlace.subtitle(summary))
-            }
-        }
-        .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
-        .task { await load() }
-        .task { if charge.needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) } }
     }
 
     private enum ScrollTarget: Hashable { case curve, bottom }
@@ -112,7 +139,7 @@ struct ChargingDetailView: View {
         guard loader.detail != nil, let target = UserDefaults.standard.string(forKey: "demoDetailScroll") else { return }
         try? await Task.sleep(for: .milliseconds(600))
         switch target {
-        // Below the floating header rather than under it.
+        // Below the bar rather than under it.
         case "curve": proxy.scrollTo(ScrollTarget.curve, anchor: UnitPoint(x: 0.5, y: 0.15))
         case "bottom": proxy.scrollTo(ScrollTarget.bottom, anchor: .bottom)
         default: break
@@ -132,55 +159,39 @@ struct ChargingDetailView: View {
     private var location: HistoryLocation { summary.location(places.state) }
     private var rates: ElectricityRates { model?.settings.rates ?? ElectricityRates(home: nil, dcFast: nil, currency: units.currency) }
 
-    // MARK: Header
+    // MARK: Toolbar
 
-    private var header: some View {
-        ZStack(alignment: .top) {
-            LinearGradient(colors: [HistoryTheme.background.opacity(0.55), HistoryTheme.background.opacity(0)],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: 120)
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
-            HStack(spacing: 10) {
-                ChargeBackButton()
-                Spacer(minLength: 0)
-                Button { editingRate = true } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "tag").font(.system(size: 14, weight: .medium))
-                        Text("Price").font(.system(size: 14, weight: .semibold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14).frame(height: 44)
-                    .contentShape(.capsule)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .capsule)
-                .accessibilityLabel("Electricity rate")
-                .accessibilityIdentifier("charge.price")
-                if location.coordinate != nil {
-                    GlassCircleButton(systemImage: "arrow.up.left.and.arrow.down.right", size: 44, accessibilityLabel: "Expand map") {
-                        showingMap = true
-                    }
-                    .accessibilityIdentifier("charge.map.expand")
-                }
+    /// System toolbar items, so iPhone Duo can move them to the side strip.
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { editingRate = true } label: {
+                Label("Electricity rate", systemImage: "tag")
             }
-            .padding(.horizontal, HistoryTheme.gutter - 6)
-            .padding(.bottom, 8)
+            .tint(Color.voltaTextPrimary)
+            .accessibilityIdentifier("charge.price")
+            if location.coordinate != nil {
+                Button { showingMap = true } label: {
+                    Label("Expand map", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
+                .tint(Color.voltaTextPrimary)
+                .accessibilityIdentifier("charge.map.expand")
+            }
         }
+        .historyPriority()
     }
 
     // MARK: Map backdrop
 
     /// Private MapKit tiles centred on the recorded or geofence coordinate,
     /// under the header. Nothing is geocoded or searched.
-    private var mapBackdrop: some View {
+    private func mapBackdrop(top: CGFloat) -> some View {
         Group {
             switch location {
             case .known:
                 if let coordinate = location.coordinate {
                     // Centred below the header; the Maps logo and Legal link stay above the fade.
                     GreyTileMap(framing: .camera(coordinate, distance: 1500),
-                                insets: EdgeInsets(top: 100, leading: 0, bottom: Self.mapFade, trailing: 0),
+                                insets: EdgeInsets(top: top, leading: 0, bottom: Self.mapFade, trailing: 0),
                                 dim: 0.1) { ChargePin() }
                     .allowsHitTesting(false)
                     .overlay {
@@ -203,7 +214,13 @@ struct ChargingDetailView: View {
                 .frame(height: Self.mapFade)
                 .allowsHitTesting(false)
         }
-        .frame(height: Self.mapHeight)
+        .overlay(alignment: .top) {
+            // Keeps the bar's buttons legible over the tiles.
+            LinearGradient(colors: [HistoryTheme.background.opacity(0.55), HistoryTheme.background.opacity(0)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: top + 20)
+                .allowsHitTesting(false)
+        }
         .clipped()
     }
 
@@ -645,13 +662,6 @@ struct ChargingDetailView: View {
 }
 
 // MARK: - Pieces
-
-private struct ChargeBackButton: View {
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        GlassCircleButton(systemImage: "chevron.left", size: 44, accessibilityLabel: "Back") { dismiss() }
-    }
-}
 
 /// Plain red location dot with a white ring.
 private struct ChargePin: View {

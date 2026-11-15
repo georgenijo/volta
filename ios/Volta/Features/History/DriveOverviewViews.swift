@@ -259,37 +259,29 @@ struct RoadtripsView: View {
 
     var body: some View {
         let trips = trips
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                hero(trips)
-                OverviewFootnote("Drives linked by stops of up to 2 hours, covering at least \(units.formatDistance(100)). Closed drives only.")
-                    .padding(.top, 18)
-                if partial {
-                    Text("Loaded drives only · groups may change when more history is loaded")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 6)
-                }
-                if trips.isEmpty {
-                    HistoryEmptyState(systemImage: "road.lanes", title: "No roadtrips in loaded drives",
-                                      message: "Long drives and multi-stop chains covering at least \(units.formatDistance(100)) appear here.")
-                        .padding(.top, 30)
-                } else {
-                    OverviewSectionHeader(title: "Trips", trailing: trips.count == 1 ? "1 trip" : "\(trips.count) trips")
-                        .padding(.top, 30)
-                    LazyVStack(spacing: 14) {
-                        ForEach(trips) { trip in
-                            NavigationLink { RoadtripDetailView(trip: trip, partial: partial) } label: { RoadtripCard(trip: trip) }
-                                .buttonStyle(VoltaPressStyle())
-                        }
+        OverviewScroll(title: "Roadtrips", identifier: "scroll.roadtrips") { wide in
+            hero(trips)
+            OverviewFootnote("Drives linked by stops of up to 2 hours, covering at least \(units.formatDistance(100)). Closed drives only.")
+                .padding(.top, 18)
+            if partial {
+                Text("Loaded drives only · groups may change when more history is loaded")
+                    .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 6)
+            }
+            if trips.isEmpty {
+                HistoryEmptyState(systemImage: "road.lanes", title: "No roadtrips in loaded drives",
+                                  message: "Long drives and multi-stop chains covering at least \(units.formatDistance(100)) appear here.")
+                    .padding(.top, 30)
+            } else {
+                OverviewSectionHeader(title: "Trips", trailing: trips.count == 1 ? "1 trip" : "\(trips.count) trips")
+                    .padding(.top, 30)
+                OverviewCards(wide: wide) {
+                    ForEach(trips) { trip in
+                        NavigationLink { RoadtripDetailView(trip: trip, partial: partial) } label: { RoadtripCard(trip: trip) }
+                            .buttonStyle(VoltaPressStyle())
                     }
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
         }
-        .scrollIndicators(.hidden)
-        .accessibilityIdentifier("scroll.roadtrips")
-        .screenKitPage("Roadtrips")
     }
 
     private func hero(_ trips: [Roadtrip]) -> some View {
@@ -392,51 +384,132 @@ struct RoadtripDetailView: View {
     var trip: Roadtrip
     var partial: Bool
     @Environment(\.units) private var units
+    @State private var page = HistoryWindow()
+
+    /// Wide enough for the route beside the legs (the inner display with the list hidden).
+    private var usesPanes: Bool { page.isWide && page.size.width >= HistoryLayout.panesMinWidth }
 
     var body: some View {
-        let first = trip.drives[0], last = trip.drives[trip.drives.count - 1]
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                DrivesRouteMap(drives: trip.drives, height: 250)
-                    .padding(.horizontal, -ScreenKit.horizontalPadding)
-                OverviewHero(eyebrow: "\(first.startPlace) → \(last.endPlace)",
-                             value: VoltaFormat.number(units.distanceValue(km: trip.distanceKm)),
-                             unit: units.distanceUnit, size: 72, identifier: "screen.roadtrip")
-                    .padding(.top, 4)
-                VStack(alignment: .leading, spacing: 14) {
-                    HistoryFlowStats(items: [
-                        ("clock", VoltaFormat.duration(trip.durationMin)),
-                        ("road.lanes", "\(trip.drives.count) \(trip.drives.count == 1 ? "drive" : "drives")"),
-                    ])
-                    HistoryFlowStats(items: [
-                        ("bolt.fill", trip.energyKwh.map { VoltaFormat.energy($0) } ?? "— kWh"),
-                        ("leaf.fill", units.formatEfficiency(trip.efficiencyWhPerKm)),
-                    ])
+        Group {
+            if usesPanes {
+                VoltaPanes {
+                    DrivesRouteMap(drives: trip.drives, height: max(page.size.height, 250))
+                        .frame(maxHeight: .infinity)
+                } secondary: {
+                    OverviewScroll(title: "Roadtrip", identifier: "scroll.roadtrip", page: false) { _ in summary }
                 }
-                .padding(.top, 20)
-                if partial {
-                    Text("Loaded history · this chain may be incomplete")
-                        .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 14)
-                }
-                OverviewSectionHeader(title: "Legs", trailing: first.start.formatted(.dateTime.month(.abbreviated).day().year()))
-                    .padding(.top, 30)
-                LazyVStack(spacing: 14) {
-                    ForEach(trip.drives) { drive in
-                        NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive, showsDate: true) }
-                            .buttonStyle(VoltaPressStyle())
-                    }
+                .historyPage("Roadtrip")
+            } else {
+                OverviewScroll(title: "Roadtrip", identifier: "scroll.roadtrip") { _ in
+                    DrivesRouteMap(drives: trip.drives, height: page.reveal(0.36, 170...250))
+                        .overviewBleed()
+                    summary
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
         }
-        .scrollIndicators(.hidden)
-        .accessibilityIdentifier("scroll.roadtrip")
-        .screenKitPage("Roadtrip")
+        .readsHistoryWindow($page)
+    }
+
+    @ViewBuilder private var summary: some View {
+        let first = trip.drives[0], last = trip.drives[trip.drives.count - 1]
+        OverviewHero(eyebrow: "\(first.startPlace) → \(last.endPlace)",
+                     value: VoltaFormat.number(units.distanceValue(km: trip.distanceKm)),
+                     unit: units.distanceUnit, size: 72, identifier: "screen.roadtrip")
+            .padding(.top, 4)
+        VStack(alignment: .leading, spacing: 14) {
+            HistoryFlowStats(items: [
+                ("clock", VoltaFormat.duration(trip.durationMin)),
+                ("road.lanes", "\(trip.drives.count) \(trip.drives.count == 1 ? "drive" : "drives")"),
+            ])
+            HistoryFlowStats(items: [
+                ("bolt.fill", trip.energyKwh.map { VoltaFormat.energy($0) } ?? "— kWh"),
+                ("leaf.fill", units.formatEfficiency(trip.efficiencyWhPerKm)),
+            ])
+        }
+        .padding(.top, 20)
+        if partial {
+            Text("Loaded history · this chain may be incomplete")
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 14)
+        }
+        OverviewSectionHeader(title: "Legs", trailing: first.start.formatted(.dateTime.month(.abbreviated).day().year()))
+            .padding(.top, 30)
+        LazyVStack(spacing: 14) {
+            ForEach(trip.drives) { drive in
+                NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive, showsDate: true) }
+                    .buttonStyle(VoltaPressStyle())
+            }
+        }
     }
 }
 
 // MARK: - Overview chrome
+
+/// A scrolling overview page: the title in the bar, or in the content while
+/// the bars are on the side; a readable column on a phone, a wider one that
+/// lays cards in two columns (one each side of the fold) on the inner display.
+private struct OverviewScroll<Content: View>: View {
+    var title: String
+    var identifier: String
+    /// False inside a pane, whose page already carries the chrome.
+    var page = true
+    @ViewBuilder var content: (_ wide: Bool) -> Content
+    @Environment(\.barsOnSide) private var barsOnSide
+    @Environment(\.historySideBars) private var sideBars
+    @State private var width: CGFloat = 0
+
+    private var wide: Bool { width >= HistoryLayout.twoColumnMinWidth }
+
+    var body: some View {
+        let scroll = ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if barsOnSide {
+                    HistoryInlineTitle(title: title).padding(.bottom, VoltaSpacing.md)
+                }
+                content(wide)
+            }
+            .padding(.horizontal, VoltaSpacing.screen)
+            .padding(.top, 8)
+            .padding(.bottom, VoltaSpacing.tabBarClearance)
+            .voltaReadableWidth(wide ? 1100 : VoltaLayout.readableWidth)
+            .historySides(sideBars)
+        }
+        // Under the side bars, so a map can reach the edge (`overviewBleed`).
+        .ignoresSafeArea(edges: sideBars.barEdges)
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier(identifier)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        if page { scroll.historyPage(title) } else { scroll }
+    }
+}
+
+private struct OverviewBleed: ViewModifier {
+    @Environment(\.historySideBars) private var sideBars
+    func body(content: Content) -> some View {
+        content
+            .padding(.leading, -(VoltaSpacing.screen + sideBars.leading))
+            .padding(.trailing, -(VoltaSpacing.screen + sideBars.trailing))
+    }
+}
+
+private extension View {
+    /// Runs a map in an `OverviewScroll` to the screen edges, under the side bars.
+    func overviewBleed() -> some View { modifier(OverviewBleed()) }
+}
+
+/// Cards in one column, or two even columns when `wide`.
+private struct OverviewCards<Content: View>: View {
+    var wide: Bool
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if wide {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14, alignment: .top), GridItem(.flexible(), alignment: .top)],
+                      spacing: 14) { content }
+        } else {
+            LazyVStack(spacing: 14) { content }
+        }
+    }
+}
 
 /// Eyebrow over a big white numeral, carrying the screen's `screen.<name>` identifier.
 private struct OverviewHero: View {
@@ -481,7 +554,7 @@ private struct OverviewSectionHeader: View {
             }
             .padding(.bottom, 14)
             Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
-                .padding(.horizontal, -ScreenKit.horizontalPadding)
+                .padding(.horizontal, -VoltaSpacing.screen)
         }
         .padding(.bottom, 18)
     }
@@ -518,33 +591,26 @@ struct DrivesHeatmapView: View {
 
     var body: some View {
         let days = days
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                hero(days)
-                if drives.contains(where: { !($0.route ?? []).isEmpty }) {
-                    DrivesRouteMap(drives: drives, height: 300, tint: { EfficiencyLight.color($0.efficiencyWhPerKm) })
-                        .padding(.horizontal, -ScreenKit.horizontalPadding)
-                        .padding(.top, 12)
-                    legend.padding(.top, 8)
-                }
-                OverviewSectionHeader(title: "Calendar", trailing: "Distance per day")
-                    .padding(.top, 30)
-                VStack(spacing: 14) {
-                    ForEach(months, id: \.self) { month in monthGrid(month, days: days) }
-                }
-                if days.isEmpty {
-                    Text("No drives to show in this selection").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
-                }
-                OverviewFootnote(partial ? "Loaded drives only · blank dates may have unloaded history" : "Distance per day · blank dates have no drives in this selection")
-                    .padding(.top, 14)
+        OverviewScroll(title: "Heatmap", identifier: "scroll.heatmap") { wide in
+            hero(days)
+            if drives.contains(where: { !($0.route ?? []).isEmpty }) {
+                DrivesRouteMap(drives: drives, height: wide ? 340 : 280, tint: { EfficiencyLight.color($0.efficiencyWhPerKm) })
+                    .overviewBleed()
+                    .padding(.top, 12)
+                legend.padding(.top, 8)
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+            OverviewSectionHeader(title: "Calendar", trailing: "Distance per day")
+                .padding(.top, 30)
+            // Two months side by side on a wide page, so no month straddles the fold.
+            OverviewCards(wide: wide) {
+                ForEach(months, id: \.self) { month in monthGrid(month, days: days) }
+            }
+            if days.isEmpty {
+                Text("No drives to show in this selection").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+            }
+            OverviewFootnote(partial ? "Loaded drives only · blank dates may have unloaded history" : "Distance per day · blank dates have no drives in this selection")
+                .padding(.top, 14)
         }
-        .scrollIndicators(.hidden)
-        .accessibilityIdentifier("scroll.heatmap")
-        .screenKitPage("Heatmap")
     }
 
     private func hero(_ days: [DriveDay]) -> some View {
@@ -642,33 +708,26 @@ private struct HeatmapDayView: View {
     @Environment(\.units) private var units
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                OverviewHero(eyebrow: date.formatted(.dateTime.weekday(.wide)) + (partial ? " · loaded" : ""),
-                             value: VoltaFormat.number(units.distanceValue(km: drives.reduce(0) { $0 + $1.distanceKm })),
-                             unit: units.distanceUnit, identifier: "screen.heatmap-day")
-                if partial {
-                    Text("Loaded history only").font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 10)
-                }
-                if drives.isEmpty {
-                    Text("No drives loaded for this day in the current selection")
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary).padding(.top, 18)
-                } else {
-                    OverviewSectionHeader(title: "Drives", trailing: drives.count == 1 ? "1 drive" : "\(drives.count) drives")
-                        .padding(.top, 30)
-                    LazyVStack(spacing: 14) {
-                        ForEach(drives) { drive in
-                            NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive) }
-                                .buttonStyle(VoltaPressStyle())
-                        }
+        OverviewScroll(title: date.formatted(date: .abbreviated, time: .omitted), identifier: "scroll.heatmap-day") { wide in
+            OverviewHero(eyebrow: date.formatted(.dateTime.weekday(.wide)) + (partial ? " · loaded" : ""),
+                         value: VoltaFormat.number(units.distanceValue(km: drives.reduce(0) { $0 + $1.distanceKm })),
+                         unit: units.distanceUnit, identifier: "screen.heatmap-day")
+            if partial {
+                Text("Loaded history only").font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 10)
+            }
+            if drives.isEmpty {
+                Text("No drives loaded for this day in the current selection")
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary).padding(.top, 18)
+            } else {
+                OverviewSectionHeader(title: "Drives", trailing: drives.count == 1 ? "1 drive" : "\(drives.count) drives")
+                    .padding(.top, 30)
+                OverviewCards(wide: wide) {
+                    ForEach(drives) { drive in
+                        NavigationLink { DriveDetailView(drive: drive) } label: { DriveCard(drive: drive) }
+                            .buttonStyle(VoltaPressStyle())
                     }
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
         }
-        .scrollIndicators(.hidden)
-        .screenKitPage(date.formatted(date: .abbreviated, time: .omitted))
     }
 }

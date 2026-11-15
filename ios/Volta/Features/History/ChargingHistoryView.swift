@@ -70,12 +70,21 @@ extension ChargeSummary {
     }
 }
 
-/// Charging tab: map hero under the floating header, totals, shortcuts and
-/// day-grouped session cards.
+/// Where the Charging tab can navigate.
+enum ChargingRoute: Hashable {
+    case charge(ChargeSummary)
+    case insight(MoreRoute)
+}
+
+/// Charging tab: map hero under the system bar, totals, shortcuts and
+/// day-grouped sessions. On a wide regular-width window the list and the
+/// selected session sit side by side.
 struct ChargingHistoryView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    @Environment(\.barsOnSide) private var barsOnSide
+    @Environment(\.horizontalSizeClass) private var sizeClass
     /// Optional so previews without an app model still render.
     @Environment(AppModel.self) private var model: AppModel?
 
@@ -86,17 +95,26 @@ struct ChargingHistoryView: View {
     @State private var query = ""
     @State private var showMap = false
     @State private var places = HistoryPlaces()
-    @State private var path: [ChargeSummary] = []
+    @State private var path: [ChargingRoute] = []
     @State private var selectedCluster: HistoryClusterSelection?
-    @State private var insight: MoreRoute?
-    @State private var headerHeight: CGFloat = 60
+    @State private var showingCustomRange = false
+    @State private var searchHeight: CGFloat = 0
+    /// The whole tab, which decides between a stack and a split.
+    @State private var window = HistoryWindow()
+    /// The list's own area, inside the system bars.
+    @State private var page = HistoryWindow()
 
     /// Totals and shortcuts share the detail screen's side margin.
     private static let margin = ChargingDetailView.margin
-    private static let mapHeight: CGFloat = 296
 
     init(range: HistoryRange = .thirtyDays) {
         _range = State(initialValue: range)
+    }
+
+    private var split: Bool { sizeClass == .regular && window.isWide }
+    /// Side bars along the list's edges: none in a split, whose list column touches no bar.
+    private var sideBars: EdgeInsets {
+        split ? EdgeInsets() : EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0, trailing: window.safeArea.trailing)
     }
 
     private var visible: [ChargeSummary] {
@@ -107,45 +125,25 @@ struct ChargingHistoryView: View {
         model?.settings.rates ?? ElectricityRates(home: nil, dcFast: nil, currency: units.currency)
     }
 
+    private var selectedCharge: ChargeSummary? {
+        guard split, case .charge(let charge) = path.first else { return nil }
+        return charge
+    }
+
     var body: some View {
-        NavigationStack(path: $path) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .top) {
-                    VStack(spacing: 0) {
-                        HistoryHeader(title: "Charging", range: $range, filterActive: filter != .all) {
-                            Picker("Location", selection: $filter) {
-                                ForEach(ChargeFilter.allCases) { f in
-                                    Label(f.title, systemImage: f.systemImage).tag(f)
-                                }
-                            }
-                        } trailing: {
-                            HistoryHeaderButton(systemImage: "magnifyingglass", label: "Search", isOn: searching) {
-                                withAnimation(.snappy) { searching.toggle(); if !searching { query = "" } }
-                            }
-                            HistoryHeaderButton(systemImage: showMap ? "list.bullet" : "map", label: showMap ? "List" : "Map") {
-                                withAnimation(.snappy) { showMap.toggle() }
-                            }
-                        }
-                        if searching {
-                            HistorySearchField(text: $query, prompt: "Search locations") {
-                                withAnimation(.snappy) { searching = false }
-                            }
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                        }
-                    }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
-                }
-                .historyScreenBackground()
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(for: ChargeSummary.self) { ChargingDetailView(charge: $0) }
-                .navigationDestination(item: $insight) { route in
-                    switch route {
-                    case .chargerMap: ChargerMapView()
-                    default: StatsView()
-                    }
-                }
+        HistoryNavigation(path: $path, split: split, window: window) {
+            root
+        } destination: { route in
+            switch route {
+            case .charge(let charge): ChargingDetailView(charge: charge)
+            case .insight(.chargerMap): ChargerMapView()
+            case .insight: StatsView()
+            }
+        } placeholder: {
+            HistorySelectionPlaceholder(systemImage: "bolt.fill", title: "No session selected",
+                                        message: "Choose a charging session to see its curve, cost and details.")
         }
+        .readsHistoryWindow($window)
         .task(id: range) {
             await reload(skeleton: true)
             #if DEBUG
@@ -153,6 +151,55 @@ struct ChargingHistoryView: View {
             #endif
         }
     }
+
+    private var root: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .readsHistoryWindow($page)
+            .overlay(alignment: .top) {
+                if searching {
+                    HistorySearchField(text: $query, prompt: "Search locations") {
+                        withAnimation(.snappy) { searching = false }
+                    }
+                    .padding(.top, 4)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height + 4 } action: { searchHeight = $0 }
+                    .onDisappear { searchHeight = 0 }
+                }
+            }
+            .historyScreenBackground()
+            .toolbarTitleDisplayMode(.inline)
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            .toolbar { toolbar }
+            .historyRangeSheet(isPresented: $showingCustomRange, range: $range)
+    }
+
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        HistoryBarTitle(title: "Charging", barsOnSide: barsOnSide)
+        ToolbarItemGroup(placement: .topBarLeading) {
+            HistoryRangeMenu(range: $range, showsValue: !barsOnSide) { showingCustomRange = true }
+            HistoryFilterMenu(isActive: filter != .all) {
+                Picker("Location", selection: $filter) {
+                    ForEach(ChargeFilter.allCases) { f in
+                        Label(f.title, systemImage: f.systemImage).tag(f)
+                    }
+                }
+            }
+        }
+        .historyPriority()
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            HistoryToolbarButton(title: "Search", systemImage: "magnifyingglass", isOn: searching,
+                                 identifier: "button.history.search") {
+                withAnimation(.snappy) { searching.toggle(); if !searching { query = "" } }
+            }
+            HistoryToolbarButton(title: showMap ? "List" : "Map", systemImage: showMap ? "list.bullet" : "map",
+                                 isOn: showMap, identifier: "button.history.map") {
+                withAnimation(.snappy) { showMap.toggle() }
+            }
+        }
+    }
+
+    private func open(_ route: ChargingRoute) { path.historyOpen(route, split: split) }
 
     #if DEBUG
     /// Screenshot aid (DEBUG): `-demoOpenCharge fast|home|<id>` opens that
@@ -166,7 +213,7 @@ struct ChargingHistoryView: View {
             default: String(charge.id) == target
             }
         }
-        if let match { path.append(match) }
+        if let match { open(.charge(match)) }
     }
     #endif
 
@@ -177,28 +224,40 @@ struct ChargingHistoryView: View {
         }, showSkeleton: skeleton)
     }
 
+    /// The title in the content while the bars are on the side.
+    @ViewBuilder private var inlineTitle: some View {
+        if barsOnSide {
+            HistoryInlineTitle(title: "Charging", subtitle: range.menuTitle)
+                .padding(.horizontal, HistoryTheme.gutter)
+                .padding(.top, VoltaSpacing.sm)
+        }
+    }
+
     @ViewBuilder private var content: some View {
         switch feed.phase {
         case .loading:
-            HistorySkeletonList().padding(.top, headerHeight)
+            HistorySkeletonList().padding(.top, searchHeight).safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .failed(let message):
             HistoryErrorState(title: "Couldn't load charges", message: message) {
                 Task { await reload(skeleton: true) }
             }
-            .padding(.top, headerHeight)
+            .padding(.top, searchHeight)
+            .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .loaded:
             if feed.items.isEmpty {
                 HistoryEmptyState(systemImage: "bolt.slash",
                                   title: range.emptyPhrase.map { "No charges \($0)" } ?? "No charges yet",
                                   message: "Try a different range or wait for your next charge.")
-                    .padding(.top, headerHeight)
+                    .padding(.top, searchHeight)
+                    .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
             } else if visible.isEmpty && !feed.hasMore {
                 HistoryEmptyState(systemImage: "line.3.horizontal.decrease",
                                   title: "No matching charges",
                                   message: "Try a different search or location filter.")
-                    .padding(.top, headerHeight)
+                    .padding(.top, searchHeight)
+                    .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
             } else if showMap {
-                mapView.padding(.top, headerHeight)
+                mapView.padding(.top, searchHeight)
             } else {
                 list
             }
@@ -207,35 +266,48 @@ struct ChargingHistoryView: View {
 
     private var list: some View {
         let needsPlaces = visible.contains { $0.needsPlaces }
+        let top = page.safeArea.top
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 SessionsMapHero(coordinates: visible.compactMap { $0.location(places.state).coordinate },
-                                height: Self.mapHeight) {
+                                height: top + page.reveal(barsOnSide ? 0.28 : 0.24, 140...190), topInset: top + (barsOnSide ? 44 : 0)) {
                     withAnimation(.snappy) { showMap = true }
                 }
+                .overlay(alignment: .topLeading) { inlineTitle.padding(.top, top).historySides(sideBars) }
                 ChargingHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
-                             charges: visible, partial: feed.hasMore) { insight = $0 }
+                             charges: visible, partial: feed.hasMore) { open(.insight($0)) }
                     .padding(.horizontal, Self.margin)
                     .padding(.bottom, 29)
+                    .voltaReadableWidth()
+                    .historySides(sideBars)
                 ForEach(DayGroup.group(visible, by: \.start)) { group in
                     ChargeDayHeader(day: group.day, title: group.title, trailing: dayTrailing(group.items))
+                        .voltaReadableWidth()
+                        .historySides(sideBars)
                     VStack(spacing: 12) {
                         ForEach(group.items) { charge in
-                            NavigationLink(value: charge) { ChargeRow(charge: charge) }
-                                .buttonStyle(VoltaPressStyle())
-                                .accessibilityIdentifier("row.charge.\(charge.id)")
+                            Button { open(.charge(charge)) } label: {
+                                ChargeRow(charge: charge).historySelected(selectedCharge == charge)
+                            }
+                            .buttonStyle(VoltaPressStyle())
+                            .accessibilityIdentifier("row.charge.\(charge.id)")
                         }
                     }
                     .padding(.horizontal, HistoryTheme.gutter)
                     .padding(.top, 14).padding(.bottom, 26)
+                    .voltaReadableWidth()
+                    .historySides(sideBars)
                 }
                 HistoryPageFooter(feed: feed) { await reload() }
                     .padding(.horizontal, HistoryTheme.gutter)
+                    .historySides(sideBars)
             }
         }
-        .ignoresSafeArea(edges: .top)
+        // Under the bars, so the map reaches the edges; the rest keeps clear of them.
+        .ignoresSafeArea(edges: sideBars.barEdges.union(.top))
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
+        .accessibilityIdentifier("scroll.charging")
         .refreshable { await reload() }
         .task(id: needsPlaces) {
             if needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) }
@@ -272,7 +344,7 @@ struct ChargingHistoryView: View {
         }) { id in
             guard let cluster = grouping.clusters.first(where: { $0.id == id }) else { return }
             if cluster.items.count == 1 {
-                path.append(cluster.items[0])
+                open(.charge(cluster.items[0]))
             } else {
                 selectedCluster = HistoryClusterSelection(id: cluster.id, title: cluster.title(\.title),
                                                           itemIDs: cluster.items.map(\.id))
@@ -280,16 +352,19 @@ struct ChargingHistoryView: View {
         }
         // Above the map, not over it, so the camera never frames pins underneath.
         .safeAreaInset(edge: .top, spacing: 0) {
-            HistoryMapScopeBar(feed: feed, period: range.periodLabel, noun: "sessions", count: visible.count) { await reload() }
-                .padding(.horizontal, HistoryTheme.gutter)
-                .padding(.vertical, 8)
-                .background(HistoryTheme.background)
+            VStack(alignment: .leading, spacing: 8) {
+                inlineTitle
+                HistoryMapScopeBar(feed: feed, period: range.periodLabel, noun: "sessions", count: visible.count) { await reload() }
+                    .padding(.horizontal, HistoryTheme.gutter)
+            }
+            .padding(.vertical, 8)
+            .background(HistoryTheme.background)
         }
         .sheet(item: $selectedCluster) { selection in
             HistoryClusterSheet(title: selection.title,
                                 items: feed.items.filter { selection.itemIDs.contains($0.id) }) { charge in
                 selectedCluster = nil
-                path.append(charge)
+                open(.charge(charge))
             } row: { ChargeRow(charge: $0) }
         }
         .task(id: needsPlaces) {
@@ -306,6 +381,8 @@ struct SessionsMapHero: View {
     var coordinates: [CLLocationCoordinate2D]
     var height: CGFloat
     var fade: CGFloat = 80
+    /// Space at the top the camera keeps clear: the status bar and system bar.
+    var topInset: CGFloat = 110
     var pin: Color = HistoryTheme.pin
     var expand: () -> Void
 
@@ -329,9 +406,9 @@ struct SessionsMapHero: View {
             HistoryTheme.background
             if let region {
                 let spots = spots
-                // Framed below the header; the Maps logo and Legal link stay above the fade.
+                // Framed below the bar; the Maps logo and Legal link stay above the fade.
                 GreyTileMap(framing: .region(region, pins: spots),
-                            insets: EdgeInsets(top: 110, leading: 0, bottom: fade, trailing: 0), dim: 0.65) {
+                            insets: EdgeInsets(top: topInset, leading: 0, bottom: fade, trailing: 0), dim: 0.65) {
                     Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
                 }
                 .allowsHitTesting(false)
@@ -343,10 +420,10 @@ struct SessionsMapHero: View {
             }
         }
         .overlay(alignment: .top) {
-            // Keeps the floating header legible over the tiles.
+            // Keeps the bar and title legible over the tiles.
             LinearGradient(colors: [HistoryTheme.background.opacity(0.6), HistoryTheme.background.opacity(0)],
                            startPoint: .top, endPoint: .bottom)
-                .frame(height: 130)
+                .frame(height: topInset + 20)
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .bottom) {
@@ -357,6 +434,8 @@ struct SessionsMapHero: View {
         }
         .frame(height: height)
         .clipped()
+        // Full width: on iPhone Duo the tiles continue under the side strip.
+        .ignoresSafeArea(edges: .horizontal)
         .accessibilityHidden(true)
     }
 }

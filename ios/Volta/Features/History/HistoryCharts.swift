@@ -242,7 +242,8 @@ struct HistoryStatGrid: View {
                                     Text(item.label).voltaLabelStyle()
                                         .tracking(1.1)
                                         .lineLimit(1)
-                                        .minimumScaleFactor(0.8)
+                                        // Three columns on the 382 pt outer display: shrink, don't truncate.
+                                        .minimumScaleFactor(0.65)
                                 }
                                 .foregroundStyle(HistoryTheme.secondary)
                                 HistoryValue(value: item.value, unit: item.unit, size: 20)
@@ -260,20 +261,6 @@ struct HistoryStatGrid: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
             }
-        }
-    }
-}
-
-/// Detail-screen top bar: back button, centered title.
-struct HistoryDetailHeader: View {
-    var title: String
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VoltaHeader(title) {
-            GlassCircleButton(systemImage: "chevron.left", size: 48, accessibilityLabel: "Back") { dismiss() }
-        } trailing: {
-            Color.clear.frame(width: 48, height: 48)
         }
     }
 }

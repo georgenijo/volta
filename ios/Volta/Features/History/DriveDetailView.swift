@@ -6,6 +6,8 @@ struct DriveDetailView: View {
 
     @Environment(\.dataSource) private var dataSource
     @Environment(\.units) private var units
+    @Environment(\.historySideBars) private var sideBars
+    @Environment(\.barsOnSide) private var barsOnSide
     @Environment(\.vehicleID) private var vehicleID
     /// Optional so previews without an app model still render; nil = no local persistence.
     @Environment(AppModel.self) private var model: AppModel?
@@ -31,14 +33,45 @@ struct DriveDetailView: View {
     private var key: LoadKey { LoadKey(driveID: drive.id, vehicleID: vehicleID, server: model?.settings.serverURL) }
     private var summary: DriveSummary { loader.detail?.summary ?? drive }
 
-    private static let mapHeight: CGFloat = 400
     /// Wattly's text margin on a 402 pt wide phone.
     static let margin: CGFloat = 28
 
+    @State private var page = HistoryWindow()
+
+    /// Wide enough for the route beside the charts (the inner display with the list hidden).
+    private var usesPanes: Bool { page.isWide && page.size.width >= HistoryLayout.panesMinWidth }
+
     var body: some View {
+        Group {
+            if usesPanes {
+                // Scrub a chart on one side, watch the route on the other.
+                VoltaPanes {
+                    routeMap.ignoresSafeArea()
+                } secondary: {
+                    scroll(showsMap: false)
+                }
+            } else {
+                scroll(showsMap: true)
+            }
+        }
+        .readsHistoryWindow($page)
+        .historyPage(nil, clearBar: true)
+        .toolbar { toolbar }
+        .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
+        .task(id: key) { await load(key) }
+        .task(id: key) { await lookUpRate(key) }
+        .onChange(of: units) { rebuild() }
+        .onDisappear { stopReplay() }
+    }
+
+    private func scroll(showsMap: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                routeMap
+                if showsMap {
+                    // Under the status bar and system bar, then about two fifths of the page.
+                    routeMap
+                        .frame(height: page.safeArea.top + page.reveal(0.4, 200...300))
+                }
                 VStack(alignment: .leading, spacing: 0) {
                     TripHero(summary: summary, units: units)
                     Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 22)
@@ -54,20 +87,16 @@ struct DriveDetailView: View {
                     }
                 }
                 .padding(.horizontal, Self.margin)
+                .padding(.top, showsMap ? 0 : VoltaSpacing.lg)
+                .voltaReadableWidth()
+                .historySides(showsMap ? sideBars : EdgeInsets())
             }
         }
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.drive-detail")
-        .ignoresSafeArea(edges: .top)
-        .overlay(alignment: .top) { header }
-        .historyScreenBackground()
-        .toolbar(.hidden, for: .navigationBar)
-        .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
-        .task(id: key) { await load(key) }
-        .task(id: key) { await lookUpRate(key) }
-        .onChange(of: units) { rebuild() }
-        .onDisappear { stopReplay() }
+        // With the map: under the bars, so it reaches the edges; the text keeps clear of them.
+        .ignoresSafeArea(edges: showsMap ? sideBars.barEdges.union(.top) : [])
     }
 
     // MARK: Cost
@@ -169,75 +198,58 @@ struct DriveDetailView: View {
         return timeline.points[index]
     }
 
-    // MARK: Header
+    // MARK: Toolbar
 
-    private var header: some View {
-        ZStack(alignment: .top) {
-            LinearGradient(stops: [.init(color: HistoryTheme.background, location: 0),
-                                   .init(color: HistoryTheme.background.opacity(0.7), location: 0.5),
-                                   .init(color: HistoryTheme.background.opacity(0), location: 1)],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: 140)
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
-            HStack(spacing: 10) {
-                BackPill()
-                Spacer(minLength: 0)
-                // Not GlassPill: its interactive glass swallowed taps on these
-                // buttons in this overlay (verified on the simulator).
-                headerPill {
-                    ForEach(TripMapMode.allCases) { m in
-                        Button { mode = m } label: {
-                            Image(systemName: m.systemImage)
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(mode == m ? Color.black : .white.opacity(0.85))
-                                .frame(width: 34, height: 34)
-                                .background(Circle().fill(mode == m ? HistoryTheme.green : .clear))
-                                .contentShape(Circle())
+    /// System toolbar items, so iPhone Duo can move them to the side strip.
+    /// Route color modes are one group, replay and share another.
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if barsOnSide {
+                // The strip shares its height with the tabs: one menu keeps
+                // replay and share out of the overflow menu.
+                Menu {
+                    Picker("Color route by", selection: $mode) {
+                        ForEach(TripMapMode.allCases) { m in
+                            Label(m.title, systemImage: m.systemImage).tag(m)
                         }
-                        .accessibilityLabel("Color route by \(m.title.lowercased())")
-                        .accessibilityAddTraits(mode == m ? .isSelected : [])
-                        .accessibilityIdentifier("trip.mode.\(m.rawValue)")
                     }
+                } label: {
+                    Label("Color route by \(mode.title.lowercased())", systemImage: mode.systemImage)
                 }
-                headerPill {
-                    Button(action: toggleReplay) {
-                        headerIcon(isPlaying ? "pause.fill" : "play.fill")
+                .tint(HistoryTheme.green)
+                .accessibilityIdentifier("trip.mode")
+            } else {
+                ForEach(TripMapMode.allCases) { m in
+                    Button { mode = m } label: {
+                        Label("Color route by \(m.title.lowercased())", systemImage: m.systemImage)
                     }
-                    .disabled((snapshot?.timeline.points.count ?? 0) < 2)
-                    .accessibilityLabel(isPlaying ? "Pause replay" : "Replay trip")
-                    .accessibilityIdentifier("trip.play")
-                    if let shareImage {
-                        ShareLink(item: shareImage, preview: SharePreview("Trip summary", image: shareImage)) {
-                            headerIcon("square.and.arrow.up")
-                        }
-                        .accessibilityLabel("Share trip summary")
-                        .accessibilityIdentifier("trip.share")
-                    } else {
-                        headerIcon("square.and.arrow.up")
-                            .foregroundStyle(HistoryTheme.tertiary)
-                            .accessibilityHidden(true)
-                    }
+                    .tint(mode == m ? HistoryTheme.green : Color.voltaTextPrimary)
+                    .accessibilityAddTraits(mode == m ? .isSelected : [])
+                    .accessibilityIdentifier("trip.mode.\(m.rawValue)")
                 }
             }
-            .padding(.horizontal, 16)
         }
-    }
-
-    private func headerPill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 4) { content() }
-            .foregroundStyle(.white)
-            .buttonStyle(.plain)
-            .padding(.horizontal, 5)
-            .frame(height: 44)
-            .glassEffect(.regular, in: .capsule)
-    }
-
-    private func headerIcon(_ systemImage: String) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 17, weight: .semibold))
-            .frame(width: 40, height: 34)
-            .contentShape(Rectangle())
+        .historyPriority()
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button(action: toggleReplay) {
+                Label(isPlaying ? "Pause replay" : "Replay trip", systemImage: isPlaying ? "pause.fill" : "play.fill")
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .tint(Color.voltaTextPrimary)
+            .disabled((snapshot?.timeline.points.count ?? 0) < 2)
+            .accessibilityIdentifier("trip.play")
+            if let shareImage {
+                ShareLink(item: shareImage, preview: SharePreview("Trip summary", image: shareImage)) {
+                    Label("Share trip summary", systemImage: "square.and.arrow.up")
+                }
+                .tint(Color.voltaTextPrimary)
+                .accessibilityIdentifier("trip.share")
+            } else {
+                Button {} label: { Label("Share trip summary", systemImage: "square.and.arrow.up") }
+                    .disabled(true)
+            }
+        }
+        .historyPriority()
     }
 
     // MARK: Map
@@ -251,7 +263,7 @@ struct DriveDetailView: View {
                 case .route, .single:
                     if let snapshot, let route = snapshot.routes[mode] {
                         TripMapView(timeline: snapshot.timeline, route: route, mode: mode, highlight: highlight,
-                                    bottomInset: 64)
+                                    bottomInset: 64, underEdges: sideBars.barEdges.union(.vertical))
                     } else {
                         mapPlaceholder(nil)
                     }
@@ -278,7 +290,14 @@ struct DriveDetailView: View {
                     .accessibilityIdentifier("trip.map.caption")
             }
         }
-        .frame(height: Self.mapHeight)
+        .overlay(alignment: .top) {
+            // Keeps the bar's buttons legible over the route.
+            LinearGradient(colors: [HistoryTheme.background.opacity(0.7), HistoryTheme.background.opacity(0)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: page.safeArea.top + 30)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+        }
     }
 
     private func mapPlaceholder(_ message: String?, loading: Bool = false, retry: Bool = false) -> some View {
@@ -556,26 +575,6 @@ struct DriveDetailView: View {
         let tz = TimeZone.current
         rows.append(("Time zone", tz.abbreviation(for: summary.start) ?? tz.identifier))
         return rows
-    }
-}
-
-/// "‹ Back" text pill.
-private struct BackPill: View {
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        Button { dismiss() } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
-                Text("Back").font(.system(size: 17, weight: .regular))
-            }
-            .foregroundStyle(.white)
-            .padding(.leading, 12).padding(.trailing, 16)
-            .frame(height: 44)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular, in: .capsule)
-        .accessibilityLabel("Back")
     }
 }
 

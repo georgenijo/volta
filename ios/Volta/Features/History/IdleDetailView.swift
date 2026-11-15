@@ -7,31 +7,50 @@ struct IdleDetailView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    @Environment(\.barsOnSide) private var barsOnSide
     @State private var places = HistoryPlaces()
+    @State private var page = HistoryWindow()
+
+    /// Wide enough for two columns (the inner display with the list hidden).
+    private var usesPanes: Bool { page.isWide && page.size.width >= HistoryLayout.panesMinWidth }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HistoryDetailHeader(title: "Parked")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    hero
-                    HistoryLocationCard(location: idle.location(places.state), address: idle.address,
-                                        systemImage: "parkingsign", tint: HistoryTheme.blue) {
-                        Task { await places.retry(dataSource: dataSource, vehicleID: vehicleID) }
-                    }
-                    stats
-                    breakdownCard
-                    timesCard
+        Group {
+            if usesPanes {
+                VoltaPanes {
+                    column { hero; location }
+                } secondary: {
+                    column(titled: false) { stats; breakdownCard; timesCard }
                 }
-                .padding(.horizontal, HistoryTheme.gutter)
-                .padding(.top, 8)
+            } else {
+                column { hero; location; stats; breakdownCard; timesCard }
             }
-            .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
-            .scrollIndicators(.hidden)
         }
-        .historyScreenBackground()
-        .toolbar(.hidden, for: .navigationBar)
+        .readsHistoryWindow($page)
+        .historyPage("Parked")
         .task { if idle.needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) } }
+    }
+
+    private func column<Content: View>(titled: Bool = true, @ViewBuilder _ content: () -> Content) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if barsOnSide && titled { HistoryInlineTitle(title: "Parked") }
+                content()
+            }
+            .padding(.horizontal, HistoryTheme.gutter)
+            .padding(.top, 8)
+            .voltaReadableWidth()
+        }
+        .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("scroll.idle-detail")
+    }
+
+    private var location: some View {
+        HistoryLocationCard(location: idle.location(places.state), address: idle.address,
+                            systemImage: "parkingsign", tint: HistoryTheme.blue) {
+            Task { await places.retry(dataSource: dataSource, vehicleID: vehicleID) }
+        }
     }
 
     private var hero: some View {

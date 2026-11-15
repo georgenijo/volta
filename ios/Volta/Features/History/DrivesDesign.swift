@@ -214,6 +214,8 @@ struct DailyDistance: Hashable {
 
 struct DriveDayHeader: View {
     var group: DayGroup<DriveSummary>
+    /// Side bars the pinned header runs under; its text keeps clear of them.
+    var sides = EdgeInsets()
     @Environment(\.units) private var units
 
     var body: some View {
@@ -233,6 +235,8 @@ struct DriveDayHeader: View {
             }
             .padding(.horizontal, DrivesLayout.margin)
             .padding(.top, 14).padding(.bottom, 12)
+            .voltaReadableWidth()
+            .padding(.leading, sides.leading).padding(.trailing, sides.trailing)
             Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
         }
         .frame(maxWidth: .infinity)

@@ -143,12 +143,15 @@ extension IdleSummary {
     }
 }
 
-/// Idles tab: map hero under the floating header, parked totals, the live
-/// session, then day-grouped idle cards.
+/// Idles tab: map hero under the system bar, parked totals, the live
+/// session, then day-grouped idle cards. On a wide regular-width window the
+/// list and the selected session sit side by side.
 struct IdlesHistoryView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
+    @Environment(\.barsOnSide) private var barsOnSide
+    @Environment(\.horizontalSizeClass) private var sizeClass
     /// Optional so previews without an app model still render.
     @Environment(AppModel.self) private var model: AppModel?
 
@@ -159,14 +162,24 @@ struct IdlesHistoryView: View {
     @State private var places = HistoryPlaces()
     @State private var path: [IdleSummary] = []
     @State private var selectedCluster: HistoryClusterSelection?
-    @State private var headerHeight: CGFloat = 60
+    @State private var showingCustomRange = false
+    /// The whole tab, which decides between a stack and a split.
+    @State private var window = HistoryWindow()
+    /// The list's own area, inside the system bars.
+    @State private var page = HistoryWindow()
 
     private static let margin = ChargingDetailView.margin
-    private static let mapHeight: CGFloat = 238
 
     init(range: HistoryRange = .thirtyDays) {
         _range = State(initialValue: range)
     }
+
+    private var split: Bool { sizeClass == .regular && window.isWide }
+    /// Side bars along the list's edges: none in a split, whose list column touches no bar.
+    private var sideBars: EdgeInsets {
+        split ? EdgeInsets() : EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0, trailing: window.safeArea.trailing)
+    }
+    private var selected: IdleSummary? { split ? path.first : nil }
 
     private var visible: [IdleSummary] { feed.items }
     /// Finished sessions; the ongoing one has its own band.
@@ -178,35 +191,57 @@ struct IdlesHistoryView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .top) {
-                    HistoryHeader(title: "Idles", range: $range, filterActive: false) {
-                        EmptyView()
-                    } trailing: {
-                        HistoryHeaderButton(systemImage: showMap ? "list.bullet" : "mappin.and.ellipse",
-                                            label: showMap ? "List" : "Map", isOn: showMap) {
-                            withAnimation(.snappy) { showMap.toggle() }
-                        }
-                        HistoryHeaderButton(systemImage: "arrow.clockwise", label: "Refresh") {
-                            Task {
-                                refreshing = true
-                                await reload()
-                                refreshing = false
-                            }
-                        }
-                        .symbolEffect(.rotate, isActive: refreshing)
-                        .disabled(refreshing)
-                    }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
-                }
-                .historyScreenBackground()
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(for: IdleSummary.self) { IdleDetailView(idle: $0) }
+        HistoryNavigation(path: $path, split: split, window: window) {
+            root
+        } destination: { idle in
+            IdleDetailView(idle: idle)
+        } placeholder: {
+            HistorySelectionPlaceholder(systemImage: "parkingsign", title: "No session selected",
+                                        message: "Choose an idle session to see where the time and energy went.")
         }
+        .readsHistoryWindow($window)
         .task(id: range) { await reload(skeleton: true) }
     }
+
+    private var root: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .readsHistoryWindow($page)
+            .historyScreenBackground()
+            .toolbarTitleDisplayMode(.inline)
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            .toolbar { toolbar }
+            .historyRangeSheet(isPresented: $showingCustomRange, range: $range)
+    }
+
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        HistoryBarTitle(title: "Idles", barsOnSide: barsOnSide)
+        ToolbarItemGroup(placement: .topBarLeading) {
+            HistoryRangeMenu(range: $range, showsValue: !barsOnSide) { showingCustomRange = true }
+        }
+        .historyPriority()
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            HistoryToolbarButton(title: showMap ? "List" : "Map", systemImage: showMap ? "list.bullet" : "mappin.and.ellipse",
+                                 isOn: showMap, identifier: "button.history.map") {
+                withAnimation(.snappy) { showMap.toggle() }
+            }
+            Button {
+                Task {
+                    refreshing = true
+                    await reload()
+                    refreshing = false
+                }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+                    .symbolEffect(.rotate, isActive: refreshing)
+            }
+            .tint(Color.voltaTextPrimary)
+            .disabled(refreshing)
+            .accessibilityIdentifier("button.idles.refresh")
+        }
+    }
+
+    private func open(_ idle: IdleSummary) { path.historyOpen(idle, split: split) }
 
     private func reload(skeleton: Bool = false) async {
         let ds = dataSource, vid = vehicleID
@@ -215,22 +250,31 @@ struct IdlesHistoryView: View {
         }, showSkeleton: skeleton)
     }
 
+    /// The title in the content while the bars are on the side.
+    @ViewBuilder private var inlineTitle: some View {
+        if barsOnSide {
+            HistoryInlineTitle(title: "Idles", subtitle: range.menuTitle)
+                .padding(.horizontal, HistoryTheme.gutter)
+                .padding(.top, VoltaSpacing.sm)
+        }
+    }
+
     @ViewBuilder private var content: some View {
         switch feed.phase {
         case .loading:
-            HistorySkeletonList().padding(.top, headerHeight)
+            HistorySkeletonList().safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .failed(let message):
             HistoryErrorState(title: "Couldn't load idles", message: message) {
                 Task { await reload(skeleton: true) }
             }
-            .padding(.top, headerHeight)
+            .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .loaded:
             if feed.items.isEmpty {
                 HistoryEmptyState(systemImage: "parkingsign", title: "No Idle Sessions",
                                   message: "We'll track when your car is parked for more than 10 minutes.")
-                    .padding(.top, headerHeight)
+                    .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
             } else if showMap {
-                mapView.padding(.top, headerHeight)
+                mapView
             } else {
                 list
             }
@@ -240,43 +284,58 @@ struct IdlesHistoryView: View {
     private var list: some View {
         let needsPlaces = visible.contains { $0.needsPlaces }
         let locations = finished.map { $0.location(places.state).coordinate }
+        let top = page.safeArea.top
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                SessionsMapHero(coordinates: locations.compactMap { $0 }, height: Self.mapHeight, fade: 64,
-                                pin: HistoryTheme.blue) {
+                SessionsMapHero(coordinates: locations.compactMap { $0 }, height: top + page.reveal(0.16, 110...130), fade: 64,
+                                topInset: top + (barsOnSide ? 44 : 0), pin: HistoryTheme.blue) {
                     withAnimation(.snappy) { showMap = true }
                 }
+                .overlay(alignment: .topLeading) { inlineTitle.padding(.top, top).historySides(sideBars) }
                 IdlesHero(period: range.periodLabel, idles: finished, places: placeCount(locations),
                           partial: feed.hasMore, rates: rates)
                     .padding(.horizontal, Self.margin)
                     .padding(.bottom, 31)
+                    .voltaReadableWidth()
+                    .historySides(sideBars)
                 if let live {
-                    NavigationLink(value: live) { IdleLiveBand(idle: live) }
-                        .buttonStyle(VoltaPressStyle())
-                        .accessibilityIdentifier("row.idle.live")
+                    Button { open(live) } label: {
+                        IdleLiveBand(idle: live, sides: sideBars).historySelected(selected == live, radius: 0)
+                    }
+                    .buttonStyle(VoltaPressStyle())
+                    .accessibilityIdentifier("row.idle.live")
                 }
                 ForEach(DayGroup.group(finished, by: \.start)) { group in
                     ChargeDayHeader(day: group.day, title: group.title, trailing: dayTrailing(group.items),
                                     tint: .white.opacity(0.9))
                         .padding(.top, 34)
+                        .voltaReadableWidth()
+                        .historySides(sideBars)
                     VStack(spacing: 9) {
                         ForEach(group.items) { idle in
-                            NavigationLink(value: idle) { IdleRow(idle: idle, rates: rates) }
-                                .buttonStyle(VoltaPressStyle())
-                                .accessibilityIdentifier("row.idle.\(idle.id)")
+                            Button { open(idle) } label: {
+                                IdleRow(idle: idle, rates: rates).historySelected(selected == idle)
+                            }
+                            .buttonStyle(VoltaPressStyle())
+                            .accessibilityIdentifier("row.idle.\(idle.id)")
                         }
                     }
                     .padding(.horizontal, HistoryTheme.gutter)
                     .padding(.top, 14)
+                    .voltaReadableWidth()
+                    .historySides(sideBars)
                 }
                 HistoryPageFooter(feed: feed) { await reload() }
                     .padding(.horizontal, HistoryTheme.gutter)
                     .padding(.top, 20)
+                    .historySides(sideBars)
             }
         }
-        .ignoresSafeArea(edges: .top)
+        // Under the bars, so the map and live band reach the edges; the rest keeps clear of them.
+        .ignoresSafeArea(edges: sideBars.barEdges.union(.top))
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
+        .accessibilityIdentifier("scroll.idles")
         .refreshable { await reload() }
         .task(id: needsPlaces) {
             if needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) }
@@ -313,7 +372,7 @@ struct IdlesHistoryView: View {
         }) { id in
             guard let cluster = grouping.clusters.first(where: { $0.id == id }) else { return }
             if cluster.items.count == 1 {
-                path.append(cluster.items[0])
+                open(cluster.items[0])
             } else {
                 selectedCluster = HistoryClusterSelection(id: cluster.id, title: cluster.title(\.placeLabel),
                                                           itemIDs: cluster.items.map(\.id))
@@ -321,16 +380,19 @@ struct IdlesHistoryView: View {
         }
         // Above the map, not over it, so the camera never frames pins underneath.
         .safeAreaInset(edge: .top, spacing: 0) {
-            HistoryMapScopeBar(feed: feed, period: range.periodLabel, noun: "sessions", count: visible.count) { await reload() }
-                .padding(.horizontal, HistoryTheme.gutter)
-                .padding(.vertical, 8)
-                .background(HistoryTheme.background)
+            VStack(alignment: .leading, spacing: 8) {
+                inlineTitle
+                HistoryMapScopeBar(feed: feed, period: range.periodLabel, noun: "sessions", count: visible.count) { await reload() }
+                    .padding(.horizontal, HistoryTheme.gutter)
+            }
+            .padding(.vertical, 8)
+            .background(HistoryTheme.background)
         }
         .sheet(item: $selectedCluster) { selection in
             HistoryClusterSheet(title: selection.title,
                                 items: feed.items.filter { selection.itemIDs.contains($0.id) }) { idle in
                 selectedCluster = nil
-                path.append(idle)
+                open(idle)
             } row: { IdleRow(idle: $0, rates: rates) }
         }
         .task(id: needsPlaces) {
@@ -488,6 +550,8 @@ struct DrainGauge: View {
 /// and time parked so far.
 struct IdleLiveBand: View {
     var idle: IdleSummary
+    /// Side bars the band runs under; its text keeps clear of them.
+    var sides = EdgeInsets()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -527,7 +591,10 @@ struct IdleLiveBand: View {
             }
             .padding(.leading, 24).padding(.trailing, 28)
             .padding(.top, 21).padding(.bottom, 19)
+            .frame(maxWidth: VoltaLayout.readableWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
+        .padding(.leading, sides.leading).padding(.trailing, sides.trailing)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(LinearGradient(colors: [Color(hex: 0x2D5040), Color(hex: 0x1D2A24)], startPoint: .leading, endPoint: .trailing))
         .accessibilityElement(children: .combine)

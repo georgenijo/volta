@@ -237,17 +237,23 @@ struct TripMapView: View {
     var highlight: DrivePoint?
     /// Bottom safe-area padding so MapKit's legal label clears the page fade.
     var bottomInset: CGFloat = 0
+    /// Safe-area edges the map runs under. In a split view's detail column,
+    /// leave out the edge under the list column, or the camera frames the
+    /// route partly behind it.
+    var underEdges: Edge.Set = .all
 
     @State private var position: MapCameraPosition
     /// The map's visible rect, from the latest camera change; nil until MapKit reports one.
     @State private var visible: MKMapRect?
 
-    init(timeline: TripTimeline, route: TripRoute, mode: TripMapMode, highlight: DrivePoint?, bottomInset: CGFloat = 0) {
+    init(timeline: TripTimeline, route: TripRoute, mode: TripMapMode, highlight: DrivePoint?, bottomInset: CGFloat = 0,
+         underEdges: Edge.Set = .all) {
         self.timeline = timeline
         self.route = route
         self.mode = mode
         self.highlight = highlight
         self.bottomInset = bottomInset
+        self.underEdges = underEdges
         _position = State(initialValue: TripRoute.framing(timeline.points))
     }
 
@@ -261,16 +267,16 @@ struct TripMapView: View {
             .brightness(-0.06)
             .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
             .safeAreaPadding(.bottom, bottomInset)
-            .ignoresSafeArea()
+            .ignoresSafeArea(edges: underEdges)
             // Darker than MapKit's dark style so labels recede behind the route.
-            .overlay { Color.black.opacity(0.36).ignoresSafeArea().allowsHitTesting(false) }
+            .overlay { Color.black.opacity(0.36).ignoresSafeArea(edges: underEdges).allowsHitTesting(false) }
             .overlay {
                 GeometryReader { geo in
                     if let visible {
                         TripRouteCanvas(projection: projection(visible: visible, size: geo.size), stops: TripPalette.stops(mode))
                     }
                 }
-                .ignoresSafeArea()
+                .ignoresSafeArea(edges: underEdges)
                 .allowsHitTesting(false)
             }
             .accessibilityElement(children: .ignore)
