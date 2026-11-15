@@ -81,13 +81,26 @@ elif [[ -z ${CI:-} ]]; then
 fi
 
 # The owner chose to publish one address: the app's server, on exactly this
-# line of this file. Every other occurrence still fails.
-allowed_line='^([0-9a-f]{40}:)?ios/Volta/Core/Networking/VoltaServer\.swift:[0-9]+:    static let address = "https://[A-Za-z0-9.-]+:[0-9]+"$'
+# line of this file, pinned by the line's git blob hash so no other address
+# can match. Every other occurrence still fails.
+allowed_path='ios/Volta/Core/Networking/VoltaServer.swift'
+allowed_hash='672094ff835b7a26f518847dc2e138ca441d0266'
 # unallowed: drops the allowed line from $tmp/hits; succeeds if anything remains.
 unallowed() {
-  local rc=0
-  grep -v -E "$allowed_line" "$tmp/hits" >"$tmp/rest" || rc=$?
-  ((rc <= 1)) || die "filter failed (exit $rc)"
+  local line rest number
+  : >"$tmp/rest"
+  while IFS= read -r line || [[ -n $line ]]; do
+    rest=$line
+    # Commit mode prefixes each hit with the scanned revision; strip only that.
+    if [[ -n ${rev:-} ]]; then rest=${rest#"$rev:"}; fi
+    if [[ $target == content && $rest == "$allowed_path":* ]]; then
+      rest=${rest#"$allowed_path":}; number=${rest%%:*}
+      if [[ $number =~ ^[0-9]+$ ]] && [[ $(printf '%s' "${rest#*:}" | git hash-object --stdin) == "$allowed_hash" ]]; then
+        continue
+      fi
+    fi
+    printf '%s\n' "$line" >>"$tmp/rest"
+  done <"$tmp/hits"
   mv "$tmp/rest" "$tmp/hits"
   [[ -s $tmp/hits ]]
 }
