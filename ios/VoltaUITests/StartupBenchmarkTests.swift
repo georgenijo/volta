@@ -14,18 +14,15 @@ final class StartupBenchmarkTests: XCTestCase {
     func testPairFixture() throws {
         try requireBenchmark()
         let app = XCUIApplication()
+        // The fixture has no Apple sign-in, so start on the pairing-code form.
+        app.launchArguments = ["-serverURL", "https://127.0.0.1:9443", "-pairing-code"]
         app.launch()
         defer { app.terminate() }
-        let server = app.textFields["field.serverURL"]
-        XCTAssertTrue(server.waitForExistence(timeout: 10), "Use a fresh, unpaired benchmark simulator")
-        server.tap()
-        server.typeText("https://127.0.0.1:9443")
-        app.buttons["button.pairingMethod"].tap()
         let code = app.textFields["field.pairingCode"]
+        XCTAssertTrue(code.waitForExistence(timeout: 10), "Use a fresh, unpaired benchmark simulator")
         code.tap()
         code.typeText("BENCH123")
-        app.swipeUp()
-        app.buttons["Pair this device"].tap()
+        app.buttons["Connect"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["screen.dashboard"].firstMatch.waitForExistence(timeout: 30))
     }
 

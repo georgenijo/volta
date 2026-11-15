@@ -289,8 +289,9 @@ fleet exec ubuntu -- 'cd /opt/volta/deploy/ubuntu && sudo docker compose exec -T
 fleet exec ubuntu -- 'cd /opt/volta/deploy/ubuntu && sudo docker compose exec -T api bun run cli revoke 1'
 ```
 
-The pairing code is a temporary secret; do not publish command output. Give it to
-the phone's pairing screen within ten minutes. Device tokens are stored only as
+The pairing code is a temporary secret; do not publish command output. The app
+asks for a code only when the server doesn't offer Sign in with Apple; enter it
+within ten minutes. Device tokens are stored only as
 hashes in `volta.devices`; the phone stores its raw token in Keychain. Commands
 remain501 `commands_unavailable` in phase1.
 

@@ -292,13 +292,14 @@ private func bodyData(_ request: URLRequest) throws -> Data {
         XCTAssertEqual(result.token, "synthetic-test-token")
     }
 
-    func testAppleSignInExplainsAServerThatPredatesIt() async {
+    func testAppleSignInExplainsAServerWithoutIt() async {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
-        let older: [(Int, String)] = [(404, #"{"error":{"code":"not_found","message":"Resource not found"}}"#),
-                                      (401, #"{"error":{"code":"unauthorized","message":"Valid device token required"}}"#)]
-        for (status, body) in older {
+        let without: [(Int, String)] = [(404, #"{"error":{"code":"not_found","message":"Resource not found"}}"#),
+                                        (401, #"{"error":{"code":"unauthorized","message":"Valid device token required"}}"#),
+                                        (501, #"{"error":{"code":"apple_sign_in_unavailable","message":"Sign in with Apple is not configured on this server"}}"#)]
+        for (status, body) in without {
             StubProtocol.handler.withLock { $0 = { _ in (status, Data(body.utf8)) } }
-            await expectError(.transport("This server doesn't offer Sign in with Apple yet. Use a pairing code.")) {
+            await expectError(.appleSignInUnavailable) {
                 _ = try await APIDataSource.signInWithApple(baseURL: URL(string: "https://volta.example")!, identityToken: "synthetic.identity.token",
                                                             deviceName: "Test", session: URLSession(configuration: config))
             }

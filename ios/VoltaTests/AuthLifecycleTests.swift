@@ -281,4 +281,35 @@ private final class MemoryTokenStore: TokenStoring, Sendable {
         await model.signInWithApple(serverURL: "http://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
         XCTAssertEqual(model.pairingState, .unpaired); XCTAssertEqual(calls.withLock { $0 }, 1)
     }
+
+    func testAServerWithoutAppleSignInAsksForAPairingCode() async throws {
+        let pair = try DecodingTests.fixture("pair"); let vehicle = try DecodingTests.fixture("vehicle")
+        let session = session { request in
+            if request.url!.path == "/v1/auth/apple" {
+                return (501, Data(#"{"error":{"code":"apple_sign_in_unavailable","message":"Sign in with Apple is not configured on this server"}}"#.utf8))
+            }
+            if request.url!.path == "/v1/auth/pair" { return (200, pair) }
+            return (200, Data("[".utf8) + vehicle + Data("]".utf8))
+        }
+        let settings = settings(); let store = MemoryTokenStore()
+        let model = AppModel(settings: settings, tokenStore: store, session: session, launchArguments: [])
+        XCTAssertFalse(model.needsPairingCode)
+        await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
+        XCTAssertEqual(model.pairingState, .unpaired); XCTAssertTrue(model.needsPairingCode)
+        XCTAssertEqual(model.errorMessage, VoltaError.appleSignInUnavailable.errorDescription)
+        await model.pair(serverURL: "https://volta.example", code: "ABCD1234", deviceName: "Test")
+        XCTAssertEqual(model.pairingState, .paired); XCTAssertFalse(settings.signedInWithApple)
+    }
+
+    func testOtherSignInFailuresKeepAppleSignInOnly() async throws {
+        let session = session { _ in
+            (403, Data(#"{"error":{"code":"apple_id_not_enrolled","message":"This Apple Account is not enrolled on this server."}}"#.utf8))
+        }
+        let model = AppModel(settings: settings(), tokenStore: MemoryTokenStore(), session: session, launchArguments: [])
+        await model.signInWithApple(serverURL: "https://volta.example", identityToken: "synthetic.identity.token", deviceName: "Test")
+        XCTAssertFalse(model.needsPairingCode); XCTAssertEqual(model.pairingState, .unpaired)
+        #if DEBUG
+        XCTAssertTrue(AppModel(settings: settings(), tokenStore: MemoryTokenStore(), launchArguments: ["-pairing-code"]).needsPairingCode)
+        #endif
+    }
 }

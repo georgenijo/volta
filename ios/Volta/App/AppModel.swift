@@ -18,6 +18,9 @@ final class AppModel {
     private(set) var isConfiguringAppLock = false
     private(set) var isLoadingVehicles = false
     private(set) var isPairing = false
+    /// The server answered that it doesn't offer Sign in with Apple, so the
+    /// sign-in screen asks for a pairing code instead.
+    private(set) var needsPairingCode = false
     private(set) var isUnlocking = false
     private(set) var isLocked = false
     var errorMessage: String?
@@ -118,6 +121,10 @@ final class AppModel {
         tesla = TeslaLinkModel(webAuth: teslaWebAuth ?? TeslaWebAuthenticator())
         commandCoordinator = VehicleCommandCoordinator(store: commandIntentStore ?? (launchDemo ? VehicleCommandIntentStore(inMemory: []) : nil))
         isLaunchDemo = launchDemo
+        #if DEBUG
+        // Startup benchmarks pair with a local fixture that has no Apple sign-in.
+        needsPairingCode = launchArguments.contains("-pairing-code")
+        #endif
         if launchDemo || settings.demoMode {
             pairingState = .demo; dataSource = MockDataSource(empty: launchDemo ? false : settings.emptyDemo)
         } else { restorePairing() }
@@ -212,7 +219,11 @@ final class AppModel {
             updateSurfaces()
             await loadVehicles()
         } catch is CancellationError { }
-        catch { if generation == currentGeneration { errorMessage = error.localizedDescription } }
+        catch {
+            guard generation == currentGeneration else { return }
+            if error as? VoltaError == .appleSignInUnavailable { needsPairingCode = true }
+            errorMessage = error.localizedDescription
+        }
     }
     func tryDemoMode(empty: Bool = false) {
         generation = UUID(); lockGeneration = UUID(); appLock.cancel()

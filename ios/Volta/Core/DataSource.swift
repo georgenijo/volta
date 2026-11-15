@@ -35,6 +35,7 @@ protocol VoltaDataSource: Sendable {
 
 enum VoltaError: LocalizedError, Equatable {
     case commandsUnavailable
+    case appleSignInUnavailable
     case unauthorized
     case notFound
     case server(code: String, message: String)
@@ -43,6 +44,7 @@ enum VoltaError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .commandsUnavailable: "Vehicle commands aren't connected yet."
+        case .appleSignInUnavailable: "Your server doesn't offer Sign in with Apple yet. Enter a pairing code from your server instead."
         case .unauthorized: "This device is no longer paired."
         case .notFound: "Not found."
         case .server(_, let message): message

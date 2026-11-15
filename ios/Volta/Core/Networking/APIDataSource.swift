@@ -131,9 +131,11 @@ struct APIDataSource: VoltaDataSource {
         let source = APIDataSource(baseURL: baseURL, token: "", session: session)
         let data: Data
         do { data = try await source.request("auth/apple", method: "POST", body: body, authenticated: false) }
-        // A server older than this route has no such path, or asks for a device token first.
-        catch VoltaError.notFound, VoltaError.server(code: "unauthorized", message: _) {
-            throw VoltaError.transport("This server doesn't offer Sign in with Apple yet. Use a pairing code.")
+        // A server older than this route has no such path, or asks for a device
+        // token first; a current one without APPLE_BUNDLE_ID says so with 501.
+        catch VoltaError.notFound, VoltaError.server(code: "unauthorized", message: _),
+              VoltaError.server(code: "apple_sign_in_unavailable", message: _) {
+            throw VoltaError.appleSignInUnavailable
         }
         do { return try makeDecoder().decode(PairResponse.self, from: data) }
         catch { throw VoltaError.transport("The sign-in response could not be decoded.") }
