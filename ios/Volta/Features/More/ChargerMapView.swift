@@ -7,6 +7,7 @@ struct ChargerMapView: View {
     @State private var state: Loadable<[ChargerLocation]> = .loading
     @State private var generation = UUID()
     @State private var selected: ChargerLocation?
+    @State private var loadedVehicle: Int?
     var body: some View {
         // Wide: the map fills one pane beside the list of places.
         ScreenKit.Page(splits: !(state.value ?? []).isEmpty) {
@@ -52,7 +53,10 @@ struct ChargerMapView: View {
             }
         }
         .screenKitPage("Charger Map")
-        .task(id: vehicleID) { selected = nil; await load() }
+        // The task starts again when the page moves, as when iPhone Duo folds;
+        // only another vehicle closes the open place and reloads.
+        .task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load() } }
+        .onChange(of: vehicleID) { _, _ in selected = nil }
         .refreshable { await load() }
         .navigationDestination(item: $selected) { location in ChargerLocationSessionsView(location: location) }
     }
@@ -61,6 +65,7 @@ struct ChargerMapView: View {
         do {
             let locations = try await dataSource.chargerLocations(vehicleID: id)
             guard !Task.isCancelled, generation == token, vehicleID == id else { return }
+            loadedVehicle = id
             state = .loaded(locations)
         } catch {
             guard !Task.isCancelled, generation == token, vehicleID == id else { return }
