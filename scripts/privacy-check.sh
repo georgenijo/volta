@@ -88,6 +88,9 @@ allowed_hash='672094ff835b7a26f518847dc2e138ca441d0266'
 # unallowed: drops the allowed line from $tmp/hits; succeeds if anything remains.
 unallowed() {
   local line rest number
+  # Bash cannot hold a NUL in a variable, so a hit containing one could hide
+  # text past it; grant no exception at all then.
+  if ! tr -d '\000' <"$tmp/hits" | cmp -s - "$tmp/hits"; then [[ -s $tmp/hits ]]; return; fi
   : >"$tmp/rest"
   while IFS= read -r line || [[ -n $line ]]; do
     rest=$line
