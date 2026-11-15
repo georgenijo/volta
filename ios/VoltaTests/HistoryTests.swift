@@ -286,6 +286,34 @@ private struct Row: Codable, Hashable, Sendable, Identifiable { var id: Int }
         XCTAssertEqual(feed.items.map(\.id), [8])
     }
 
+    /// A fresh page that ends the list is the whole list, however much of
+    /// the cached list it happens to match.
+    func testATerminalFreshPageReplacesAPaginatedList() async {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        for fresh in [[Int](), [5], [5, 4]] {
+            let gate = Gate()
+            let feed = HistoryFeed<Row>()
+            let first = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start, calendar: utc) }
+            await settle { gate.requests.count == 1 }
+            gate.succeed(0, ids: [5, 4], next: "c1")
+            await first.value
+            let more = Task { await feed.loadMore() }
+            await settle { gate.requests.count == 2 }
+            gate.succeed(1, ids: [3], next: "c2")
+            await more.value
+
+            let check = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 600, calendar: utc) }
+            await settle { gate.requests.count == 3 }
+            gate.succeed(2, ids: fresh, next: nil)
+            await check.value
+            XCTAssertEqual(feed.items.map(\.id), fresh)
+            XCTAssertNil(feed.nextCursor)
+            XCTAssertEqual(feed.phase, .loaded)
+        }
+    }
+
     func testAnUnchangedCheckKeepsAPageRequestInFlight() async {
         let gate = Gate()
         let feed = HistoryFeed<Row>()

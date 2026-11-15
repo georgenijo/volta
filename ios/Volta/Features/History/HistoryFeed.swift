@@ -102,7 +102,10 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
         let token = listGeneration
         guard let page = try? await newFetch(newRange, nil), token == listGeneration, phase == .loaded else { return }
         loadedAt = now
-        let unchanged = hasLoadedMore
+        // A fresh page that continues can only be compared with the rows it
+        // covers. One that ends the list, or is empty, is the whole list.
+        let coversTop = hasLoadedMore && page.nextCursor != nil && !page.items.isEmpty
+        let unchanged = coversTop
             ? Array(items.prefix(page.items.count)) == page.items
             : items == page.items && nextCursor == page.nextCursor
         guard !unchanged else { return }
