@@ -297,12 +297,14 @@ struct HistoryNavigation<Route: Hashable, Root: View, Destination: View, Placeho
     }
 
     /// Collapsed, the stack shows the list until something is open. Going
-    /// back past the selection closes it.
+    /// back past the selection closes it. The system also reports the list
+    /// column on a pop inside the detail stack, before it shortens the path;
+    /// only a pop from the selection itself leaves the detail column.
     private var compactColumn: Binding<NavigationSplitViewColumn> {
         Binding {
             path.isEmpty ? .sidebar : .detail
         } set: { column in
-            if column == .sidebar, !path.isEmpty { path = [] }
+            if column == .sidebar, path.count == 1 { path = [] }
         }
     }
 
