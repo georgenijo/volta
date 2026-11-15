@@ -55,8 +55,9 @@ struct PairingView: View {
         }
         // Measured without the keyboard, so typing never switches layouts.
         .background {
-            Color.clear.ignoresSafeArea(.keyboard)
+            Color.clear
                 .onGeometryChange(for: Bool.self) { ScreenKit.isWide($0.size) } action: { isWide = $0 }
+                .ignoresSafeArea(.keyboard)
         }
         .voltaScreenBackground()
         .scrollDismissesKeyboard(.interactively)
