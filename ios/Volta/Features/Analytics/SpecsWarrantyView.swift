@@ -50,24 +50,20 @@ struct SpecsWarrantyView: View {
     }
 
     var body: some View {
-        ScrollView {
+        // Wide: the car and its specs beside warranty coverage.
+        ScreenKit.Page(scroll: "specs", splits: state.value != nil, spacing: 22) {
             LoadableContent(state: state, retry: load) { snapshot in
-                VStack(alignment: .leading, spacing: 22) {
-                    if let vehicle = snapshot.vehicle {
-                        hero(vehicle, odometer: snapshot.odometerKm)
-                        specs(vehicle)
-                    } else {
-                        EmptyState(systemImage: "car", title: "No vehicle", message: "TeslaMate hasn't reported a vehicle yet.")
-                            .padding(.vertical, 40)
-                    }
-                    warranty(odometerKm: snapshot.odometerKm)
+                if let vehicle = snapshot.vehicle {
+                    hero(vehicle, odometer: snapshot.odometerKm)
+                    specs(vehicle)
+                } else {
+                    EmptyState(systemImage: "car", title: "No vehicle", message: "TeslaMate hasn't reported a vehicle yet.")
+                        .padding(.vertical, 40)
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+        } secondary: {
+            if let snapshot = state.value { warranty(odometerKm: snapshot.odometerKm) }
         }
-        .accessibilityIdentifier("scroll.specs")
         .screenKitPage("Specs & Warranty", screen: "specs")
         .task(id: vehicleID) { await load() }
         .task(id: storageKey) {

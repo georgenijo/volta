@@ -11,24 +11,21 @@ struct MileageTrackerView: View {
     @State private var selected: Date?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                ScreenKit.Segmented(options: MileageBucketSize.allCases.map { ($0, $0.rawValue.capitalized) }, selection: $bucket)
-                LoadableContent(state: state, retry: load) { buckets in
-                    if buckets.isEmpty {
-                        EmptyState(systemImage: "gauge.with.needle", title: "No mileage yet",
-                                   message: "Your distance per \(bucket.rawValue) appears after your first drive.")
-                            .padding(.top, 40)
-                    } else {
-                        content(buckets.sorted { $0.start < $1.start })
-                    }
+        // Wide: the chart and totals beside the history list.
+        ScreenKit.Page(scroll: "mileage", splits: !sortedBuckets.isEmpty) {
+            ScreenKit.Segmented(options: MileageBucketSize.allCases.map { ($0, $0.rawValue.capitalized) }, selection: $bucket)
+            LoadableContent(state: state, retry: load) { buckets in
+                if buckets.isEmpty {
+                    EmptyState(systemImage: "gauge.with.needle", title: "No mileage yet",
+                               message: "Your distance per \(bucket.rawValue) appears after your first drive.")
+                        .padding(.top, 40)
+                } else {
+                    overview(sortedBuckets)
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+        } secondary: {
+            if !sortedBuckets.isEmpty { history(sortedBuckets) }
         }
-        .accessibilityIdentifier("scroll.mileage")
         .screenKitPage("Mileage Tracker", screen: "mileage")
         .task(id: TaskKey(vehicleID: vehicleID, bucket: bucket)) { await load() }
     }
@@ -38,8 +35,13 @@ struct MileageTrackerView: View {
     /// Most recent N buckets to keep bars legible.
     private var visibleCount: Int { bucket == .day ? 30 : bucket == .week ? 16 : 12 }
 
+    /// Oldest first.
+    private var sortedBuckets: [MileageBucket] {
+        (state.value ?? []).sorted { $0.start < $1.start }
+    }
+
     @ViewBuilder
-    private func content(_ all: [MileageBucket]) -> some View {
+    private func overview(_ all: [MileageBucket]) -> some View {
         let visible = Array(all.suffix(visibleCount))
         let total = all.reduce(0) { $0 + $1.distanceKm }
         let drives = all.reduce(0) { $0 + $1.driveCount }
@@ -54,8 +56,14 @@ struct MileageTrackerView: View {
                 // Bars span each bucket's explicit interval, the same intervals selection uses.
                 Chart(AnalyticsMath.intervals(visible, size: bucket), id: \.bucket.start) { entry in
                     let b = entry.bucket
-                    BarMark(xStart: .value("Start", entry.interval.start), xEnd: .value("End", entry.interval.end),
-                            y: .value("Distance", units.distanceValue(km: b.distanceKm)))
+                    // A bar mark with an x interval and one y draws a thin band at that
+                    // height, so each bucket is a rectangle from zero, inset a little
+                    // at each end so neighbouring buckets stay apart.
+                    let inset = entry.interval.duration * 0.12
+                    RectangleMark(xStart: .value("Start", entry.interval.start.addingTimeInterval(inset)),
+                                  xEnd: .value("End", entry.interval.end.addingTimeInterval(-inset)),
+                                  yStart: .value("Zero", 0.0),
+                                  yEnd: .value("Distance", units.distanceValue(km: b.distanceKm)))
                         .foregroundStyle(b.start == focus?.start ? AnyShapeStyle(ScreenKit.blue.gradient) : AnyShapeStyle(ScreenKit.blue.opacity(0.35)))
                         .clipShape(.rect(cornerRadius: 3))
                     if b.start == visible.first?.start {
@@ -73,13 +81,15 @@ struct MileageTrackerView: View {
             }
         }
 
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: ScreenKit.metricColumns, spacing: 12) {
             ScreenKit.Metric(label: "Total", value: VoltaFormat.number(units.distanceValue(km: total), digits: 0), unit: units.distanceUnit,
                              caption: "\(drives) drives", symbol: "road.lanes")
             ScreenKit.Metric(label: "Avg / \(bucket.rawValue)", value: VoltaFormat.number(units.distanceValue(km: average), digits: 0),
                              unit: units.distanceUnit, caption: "\(all.count) \(bucket.rawValue)s", symbol: "chart.bar")
         }
+    }
 
+    private func history(_ all: [MileageBucket]) -> some View {
         ScreenKit.GroupCard(title: "History") {
             let rows = Array(all.reversed().prefix(visibleCount))
             ForEach(Array(rows.enumerated()), id: \.element.start) { index, b in

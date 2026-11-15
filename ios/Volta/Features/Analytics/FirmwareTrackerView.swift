@@ -7,27 +7,31 @@ struct FirmwareTrackerView: View {
     @State private var state: Loadable<[FirmwareUpdate]> = .loading
 
     var body: some View {
-        ScrollView {
+        // Wide: current version and cadence beside the timeline.
+        ScreenKit.Page(scroll: "firmware", splits: !sortedUpdates.isEmpty) {
             LoadableContent(state: state, retry: load) { updates in
                 if updates.isEmpty {
                     EmptyState(systemImage: "cpu", title: "No updates recorded",
                                message: "Software updates appear here as TeslaMate sees them install.")
                         .padding(.top, 60)
                 } else {
-                    content(updates.sorted { $0.installedAt > $1.installedAt })
+                    summary(sortedUpdates)
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+        } secondary: {
+            if !sortedUpdates.isEmpty { timeline(sortedUpdates) }
         }
-        .accessibilityIdentifier("scroll.firmware")
         .screenKitPage("Firmware Tracker", screen: "firmware")
         .task(id: vehicleID) { await load() }
     }
 
+    /// Newest first.
+    private var sortedUpdates: [FirmwareUpdate] {
+        (state.value ?? []).sorted { $0.installedAt > $1.installedAt }
+    }
+
     @ViewBuilder
-    private func content(_ updates: [FirmwareUpdate]) -> some View {
+    private func summary(_ updates: [FirmwareUpdate]) -> some View {
         let current = updates[0]
         let gaps = zip(updates, updates.dropFirst()).map { $0.installedAt.timeIntervalSince($1.installedAt) / 86_400 }
         let avgGap = gaps.isEmpty ? nil : gaps.reduce(0, +) / Double(gaps.count)
@@ -43,12 +47,16 @@ struct FirmwareTrackerView: View {
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: ScreenKit.metricColumns, spacing: 12) {
                 ScreenKit.Metric(label: "Past year", value: "\(lastYear)", unit: lastYear == 1 ? "update" : "updates", symbol: "arrow.down.circle")
                 ScreenKit.Metric(label: "Cadence", value: avgGap.map { VoltaFormat.number($0, digits: 0) } ?? "—", unit: "days",
                                  caption: "Average between updates", symbol: "calendar")
             }
+        }
+    }
 
+    private func timeline(_ updates: [FirmwareUpdate]) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
             SectionLabel("Timeline").padding(.top, 10).padding(.horizontal, 4)
             VStack(spacing: 0) {
                 ForEach(Array(updates.enumerated()), id: \.element.version) { index, update in

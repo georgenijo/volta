@@ -9,55 +9,50 @@ struct AccountSettingsView: View {
     @State private var isUnpairing = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                if model.isDemoMode {
-                    ScreenKit.GroupCard(title: "Mode", footer: "Synthetic history generated on this iPhone. Nothing is sent anywhere.") {
-                        ScreenKit.ValueRow(title: "Data", showsDivider: false) {
-                            Text("Demo").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
-                        }
-                    }
-                } else {
-                    ScreenKit.GroupCard(title: "Server", footer: "Reached privately over Tailscale. The API is never exposed to the public internet.") {
-                        ScreenKit.ValueRow(title: "Server URL", subtitle: model.settings.serverURL.isEmpty ? "—" : model.settings.serverURL, showsDivider: true) {
-                            StatusDot(color: ScreenKit.green)
-                        }
-                        ScreenKit.ValueRow(title: "Connection", showsDivider: false) {
-                            Text("Tailnet · HTTPS").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
-                        }
-                    }
-                    ScreenKit.GroupCard(title: "This device", footer: "This iPhone holds only a Volta device token in the Keychain — never your Tesla credentials.") {
-                        ScreenKit.ValueRow(title: "Name") {
-                            Text(device?.name ?? UIDevice.current.name).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
-                        }
-                        ScreenKit.ValueRow(title: "Paired", showsDivider: false) {
-                            Text(device.map { $0.createdAt.formatted(date: .abbreviated, time: .omitted) } ?? "—")
-                                .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
-                        }
+        ScreenKit.Page(spacing: 24) {
+            if model.isDemoMode {
+                ScreenKit.GroupCard(title: "Mode", footer: "Synthetic history generated on this iPhone. Nothing is sent anywhere.") {
+                    ScreenKit.ValueRow(title: "Data", showsDivider: false) {
+                        Text("Demo").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
                     }
                 }
-                TeslaAccountSection()
-                if let error = model.errorMessage {
-                    InlineBanner(systemImage: "exclamationmark.triangle", message: error, tint: ScreenKit.amber) { model.errorMessage = nil }
-                }
-                Button(role: .destructive) { confirmUnpair = true } label: {
-                    HStack {
-                        if isUnpairing { ProgressView().tint(ScreenKit.red) } else { Image(systemName: "xmark.circle") }
-                        Text(unpairTitle)
+            } else {
+                ScreenKit.GroupCard(title: "Server", footer: "Reached privately over Tailscale. The API is never exposed to the public internet.") {
+                    ScreenKit.ValueRow(title: "Server URL", subtitle: model.settings.serverURL.isEmpty ? "—" : model.settings.serverURL, showsDivider: true) {
+                        StatusDot(color: ScreenKit.green)
                     }
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(ScreenKit.red)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .voltaCardBackground(radius: VoltaRadius.wideButton)
+                    ScreenKit.ValueRow(title: "Connection", showsDivider: false) {
+                        Text("Tailnet · HTTPS").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                    }
                 }
-                .buttonStyle(VoltaPressStyle())
-                .disabled(isUnpairing)
-                .accessibilityIdentifier("button.unpair")
+                ScreenKit.GroupCard(title: "This device", footer: "This iPhone holds only a Volta device token in the Keychain — never your Tesla credentials.") {
+                    ScreenKit.ValueRow(title: "Name") {
+                        Text(device?.name ?? UIDevice.current.name).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                    }
+                    ScreenKit.ValueRow(title: "Paired", showsDivider: false) {
+                        Text(device.map { $0.createdAt.formatted(date: .abbreviated, time: .omitted) } ?? "—")
+                            .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                    }
+                }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+            TeslaAccountSection()
+            if let error = model.errorMessage {
+                InlineBanner(systemImage: "exclamationmark.triangle", message: error, tint: ScreenKit.amber) { model.errorMessage = nil }
+            }
+            Button(role: .destructive) { confirmUnpair = true } label: {
+                HStack {
+                    if isUnpairing { ProgressView().tint(ScreenKit.red) } else { Image(systemName: "xmark.circle") }
+                    Text(unpairTitle)
+                }
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(ScreenKit.red)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .voltaCardBackground(radius: VoltaRadius.wideButton)
+            }
+            .buttonStyle(VoltaPressStyle())
+            .disabled(isUnpairing)
+            .accessibilityIdentifier("button.unpair")
         }
         .screenKitPage("Account")
         .task(id: model.pairingState) {
@@ -101,36 +96,33 @@ struct VehicleSettingsView: View {
     @State private var state: Loadable<(Vehicle?, VehicleStatus?)> = .loading
 
     var body: some View {
-        ScrollView {
-            LoadableContent(state: state, retry: load) { value in
-                let (vehicle, status) = value
-                if let vehicle {
-                    VStack(alignment: .leading, spacing: 24) {
-                        ScreenKit.GroupCard(title: vehicle.name) {
-                            ScreenKit.ValueRow(title: "Model") { secondary([vehicle.model, vehicle.trim].compactMap { $0 }.joined(separator: " ")) }
-                            ScreenKit.ValueRow(title: "Status") {
-                                HStack(spacing: 6) {
-                                    StatusDot(color: status?.state == .offline ? ScreenKit.red : status?.state == .asleep ? ScreenKit.secondary : ScreenKit.green)
-                                    secondary(status?.state.rawValue.capitalized ?? "—")
-                                }
+        ScreenKit.Page {
+        LoadableContent(state: state, retry: load) { value in
+            let (vehicle, status) = value
+            if let vehicle {
+                VStack(alignment: .leading, spacing: 24) {
+                    ScreenKit.GroupCard(title: vehicle.name) {
+                        ScreenKit.ValueRow(title: "Model") { secondary([vehicle.model, vehicle.trim].compactMap { $0 }.joined(separator: " ")) }
+                        ScreenKit.ValueRow(title: "Status") {
+                            HStack(spacing: 6) {
+                                StatusDot(color: status?.state == .offline ? ScreenKit.red : status?.state == .asleep ? ScreenKit.secondary : ScreenKit.green)
+                                secondary(status?.state.rawValue.capitalized ?? "—")
                             }
-                            ScreenKit.ValueRow(title: "Odometer") { secondary(units.formatDistance(status?.odometerKm, fractionDigits: 0)) }
-                            ScreenKit.ValueRow(title: "Software", showsDivider: false) { secondary(status?.firmware ?? vehicle.firmware ?? "—") }
                         }
-                        ScreenKit.GroupCard(title: "Data source", footer: "Your server combines TeslaMate history with live telemetry. Vehicle controls use your connected Tesla account.") {
-                            ScreenKit.ValueRow(title: "Logger") { secondary("TeslaMate") }
-                            ScreenKit.ValueRow(title: "Last update", showsDivider: false) {
-                                secondary(status.map { VoltaFormat.relativeDate($0.updatedAt) } ?? "—")
-                            }
+                        ScreenKit.ValueRow(title: "Odometer") { secondary(units.formatDistance(status?.odometerKm, fractionDigits: 0)) }
+                        ScreenKit.ValueRow(title: "Software", showsDivider: false) { secondary(status?.firmware ?? vehicle.firmware ?? "—") }
+                    }
+                    ScreenKit.GroupCard(title: "Data source", footer: "Your server combines TeslaMate history with live telemetry. Vehicle controls use your connected Tesla account.") {
+                        ScreenKit.ValueRow(title: "Logger") { secondary("TeslaMate") }
+                        ScreenKit.ValueRow(title: "Last update", showsDivider: false) {
+                            secondary(status.map { VoltaFormat.relativeDate($0.updatedAt) } ?? "—")
                         }
                     }
-                } else {
-                    EmptyState(systemImage: "car", title: "No vehicle", message: "TeslaMate hasn't reported a vehicle yet.").padding(.top, 60)
                 }
+            } else {
+                EmptyState(systemImage: "car", title: "No vehicle", message: "TeslaMate hasn't reported a vehicle yet.").padding(.top, 60)
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+        }
         }
         .screenKitPage("Vehicle")
         .task(id: vehicleID) { await load() }
@@ -163,31 +155,25 @@ struct ChargingSettingsView: View {
     @State private var editingRate = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                rateCard
-                LoadableContent(state: state, retry: load) { places in
-                    let priced = places.filter { $0.costPerKwh != nil }
-                    ScreenKit.GroupCard(title: "Server prices",
-                                        footer: "Set a cost per kWh on a geofence in TeslaMate to price sessions there. Recorded prices always win over your rate.") {
-                        if priced.isEmpty {
-                            ScreenKit.ValueRow(title: "No priced places", subtitle: "Costs come from TeslaMate geofences", showsDivider: false) { EmptyView() }
-                        } else {
-                            ForEach(Array(priced.enumerated()), id: \.element.id) { index, place in
-                                ScreenKit.ValueRow(title: place.name, showsDivider: index < priced.count - 1) {
-                                    Text("\(VoltaFormat.money(place.costPerKwh, currency: units.currency))/kWh")
-                                        .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
-                                }
+        ScreenKit.Page(scroll: "settings-charging", spacing: 24) {
+            rateCard
+            LoadableContent(state: state, retry: load) { places in
+                let priced = places.filter { $0.costPerKwh != nil }
+                ScreenKit.GroupCard(title: "Server prices",
+                                    footer: "Set a cost per kWh on a geofence in TeslaMate to price sessions there. Recorded prices always win over your rate.") {
+                    if priced.isEmpty {
+                        ScreenKit.ValueRow(title: "No priced places", subtitle: "Costs come from TeslaMate geofences", showsDivider: false) { EmptyView() }
+                    } else {
+                        ForEach(Array(priced.enumerated()), id: \.element.id) { index, place in
+                            ScreenKit.ValueRow(title: place.name, showsDivider: index < priced.count - 1) {
+                                Text("\(VoltaFormat.money(place.costPerKwh, currency: units.currency))/kWh")
+                                    .font(.system(size: 15)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
                             }
                         }
                     }
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
         }
-        .accessibilityIdentifier("scroll.settings-charging")
         .screenKitPage("Charging", screen: "settings-charging")
         .electricityRateSheet(isPresented: $editingRate, settings: model.settings)
         .task(id: vehicleID) { await load() }
@@ -246,52 +232,47 @@ struct GeneralSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                ScreenKit.GroupCard(title: "Units", footer: "Your server stores metric values; Volta converts for display.") {
-                    ScreenKit.ValueRow(title: "Distance") {
-                        ScreenKit.Segmented(options: [(UnitPreferences.Distance.miles, "mi"), (.kilometers, "km")], selection: distance)
-                            .frame(width: 150)
-                    }
-                    ScreenKit.ValueRow(title: "Temperature") {
-                        ScreenKit.Segmented(options: [(UnitPreferences.Temperature.fahrenheit, "°F"), (.celsius, "°C")], selection: temperature)
-                            .frame(width: 150)
-                    }
-                    ScreenKit.ValueRow(title: "Tire pressure") {
-                        ScreenKit.Segmented(options: [(UnitPreferences.Pressure.psi, "psi"), (.bar, "bar")], selection: pressure)
-                            .frame(width: 150)
-                    }
-                    ScreenKit.ValueRow(title: "Currency", showsDivider: false) {
-                        Picker("Currency", selection: currency) {
-                            ForEach(currencyOptions, id: \.self) { Text($0).tag($0) }
-                        }
-                        .pickerStyle(.menu)
-                        .tint(ScreenKit.secondary)
-                    }
+        ScreenKit.Page(spacing: 24) {
+            ScreenKit.GroupCard(title: "Units", footer: "Your server stores metric values; Volta converts for display.") {
+                ScreenKit.ValueRow(title: "Distance") {
+                    ScreenKit.Segmented(options: [(UnitPreferences.Distance.miles, "mi"), (.kilometers, "km")], selection: distance)
+                        .frame(width: 150)
                 }
-                ScreenKit.GroupCard(title: "Live Activities", footer: "Charging always shows on the Lock Screen and in the Dynamic Island. Driving is optional.") {
-                    ScreenKit.ValueRow(title: "Show while driving", showsDivider: false) {
-                        Toggle("Show while driving", isOn: drivingLiveActivity)
-                            .labelsHidden()
-                            .tint(.voltaBlue)
-                    }
+                ScreenKit.ValueRow(title: "Temperature") {
+                    ScreenKit.Segmented(options: [(UnitPreferences.Temperature.fahrenheit, "°F"), (.celsius, "°C")], selection: temperature)
+                        .frame(width: 150)
                 }
-                ScreenKit.GroupCard(title: "Language", footer: "Volta follows your iPhone's language.") {
-                    Button {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                    } label: {
-                        ScreenKit.ValueRow(title: "App language", showsDivider: false) {
-                            Text(Locale.current.localizedString(forLanguageCode: Locale.current.language.languageCode?.identifier ?? "en")?.uppercased() ?? "ENGLISH")
-                                .font(.system(size: 14, weight: .semibold)).tracking(1.2).foregroundStyle(.white)
-                            ScreenKit.Chevron()
-                        }
+                ScreenKit.ValueRow(title: "Tire pressure") {
+                    ScreenKit.Segmented(options: [(UnitPreferences.Pressure.psi, "psi"), (.bar, "bar")], selection: pressure)
+                        .frame(width: 150)
+                }
+                ScreenKit.ValueRow(title: "Currency", showsDivider: false) {
+                    Picker("Currency", selection: currency) {
+                        ForEach(currencyOptions, id: \.self) { Text($0).tag($0) }
                     }
-                    .buttonStyle(.plain)
+                    .pickerStyle(.menu)
+                    .tint(ScreenKit.secondary)
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+            ScreenKit.GroupCard(title: "Live Activities", footer: "Charging always shows on the Lock Screen and in the Dynamic Island. Driving is optional.") {
+                ScreenKit.ValueRow(title: "Show while driving", showsDivider: false) {
+                    Toggle("Show while driving", isOn: drivingLiveActivity)
+                        .labelsHidden()
+                        .tint(.voltaBlue)
+                }
+            }
+            ScreenKit.GroupCard(title: "Language", footer: "Volta follows your iPhone's language.") {
+                Button {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                } label: {
+                    ScreenKit.ValueRow(title: "App language", showsDivider: false) {
+                        Text(Locale.current.localizedString(forLanguageCode: Locale.current.language.languageCode?.identifier ?? "en")?.uppercased() ?? "ENGLISH")
+                            .font(.system(size: 14, weight: .semibold)).tracking(1.2).foregroundStyle(.white)
+                        ScreenKit.Chevron()
+                    }
+                }
+                .buttonStyle(.plain)
+            }
         }
         .screenKitPage("General")
     }

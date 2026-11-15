@@ -16,86 +16,88 @@ struct MaintenanceView: View {
     @State private var mutating = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                LoadableContent(state: state, retry: load) { data in
-                    Card {
-                        VStack(alignment: .leading, spacing: 12) {
-                            SectionLabel("Recorded odometer")
-                            if let km = data.odometerKm {
-                                ScreenKit.Numeral(value: VoltaFormat.number(units.distanceValue(km: km), digits: 0), unit: units.distanceUnit, size: 48)
-                                if let date = data.recordedAt {
-                                    Text("\(data.source == "fleet_telemetry" ? "Telemetry" : "TeslaMate") · \(VoltaFormat.dateTime(date))")
-                                        .font(.caption).foregroundStyle(ScreenKit.secondary)
-                                }
-                            } else {
-                                Text("No odometer recorded yet. You can still log service dates.").foregroundStyle(ScreenKit.secondary)
+        // Wide: the odometer and service items beside the completion history.
+        ScreenKit.Page(splits: state.value != nil) {
+            LoadableContent(state: state, retry: load) { data in
+                Card {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionLabel("Recorded odometer")
+                        if let km = data.odometerKm {
+                            ScreenKit.Numeral(value: VoltaFormat.number(units.distanceValue(km: km), digits: 0), unit: units.distanceUnit, size: 48)
+                            if let date = data.recordedAt {
+                                Text("\(data.source == "fleet_telemetry" ? "Telemetry" : "TeslaMate") · \(VoltaFormat.dateTime(date))")
+                                    .font(.caption).foregroundStyle(ScreenKit.secondary)
                             }
-                        }
-                    }
-                    Text("Personal reminders, not a service recommendation. Set intervals for your vehicle. Suggested intervals to add: rotation 6,250 mi, filter 2 years, brake fluid check 4 years, wipers 1 year. Add an item and record its last completion to start reminders. Due status appears here when you open Maintenance.")
-                        .font(.caption).foregroundStyle(ScreenKit.secondary)
-                    Button { adding = true } label: { Label("Add service item", systemImage: "plus.circle.fill").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent).tint(ScreenKit.mint)
-                    if data.items.isEmpty {
-                        EmptyState(systemImage: "wrench.and.screwdriver", title: "Start your service log", message: "Add a suggested or custom item, then record the last service date and odometer to establish its next due point.")
-                    }
-                    if let mutationError { Text(mutationError).foregroundStyle(ScreenKit.red) }
-                    ForEach(data.items) { item in
-                        Card {
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Text(item.name).font(.headline)
-                                    Spacer()
-                                    Menu {
-                                        Button("Edit item") { editingItem = item }
-                                        Button("Delete item and history", role: .destructive) { deletingItem = item }
-                                    } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
-                                    if let progress = item.progress {
-                                        ZStack {
-                                            Circle().stroke(ScreenKit.hairline, lineWidth: 4)
-                                            Circle().trim(from: 0, to: progress).stroke(progress >= 1 ? ScreenKit.amber : ScreenKit.mint, style: StrokeStyle(lineWidth: 4, lineCap: .round)).rotationEffect(.degrees(-90))
-                                            Text("\(Int(progress * 100))%").font(.system(size: 10, weight: .semibold))
-                                        }.frame(width: 44, height: 44)
-                                    }
-                                }
-                                Text(interval(item)).font(.caption).foregroundStyle(ScreenKit.secondary)
-                                if let km = item.remainingKm {
-                                    Text(km > 0 ? "Due in \(units.formatDistance(km, fractionDigits: 0))" : "Distance interval reached · \(units.formatDistance(-km, fractionDigits: 0)) past due")
-                                } else if item.intervalKm != nil {
-                                    Text("Distance due unknown — record a service odometer and wait for a current reading.").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                }
-                                if let days = item.remainingDays {
-                                    Text(days > 0 ? "Due in \(days) days" : days == 0 ? "Due today" : "\(-days) days past due")
-                                    if let date = item.nextDate { Text("Next: \(date.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary) }
-                                } else if item.intervalMonths != nil {
-                                    Text("Date due unknown — record the last completion.").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                }
-                                if let progress = item.progress { ProgressView(value: progress).tint(progress >= 1 ? ScreenKit.amber : ScreenKit.mint) }
-                                Button("Record completion") { completing = item }.buttonStyle(.bordered)
-                            }
-                        }
-                    }
-                    SectionLabel("Service history")
-                    if data.events.isEmpty { Text("No completions logged yet.").foregroundStyle(ScreenKit.secondary) }
-                    ForEach(data.events) { event in
-                        Card {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(data.items.first { $0.id == event.itemId }?.name ?? "Service").font(.headline)
-                                    Spacer()
-                                    Menu {
-                                        Button("Correct completion") { editingEvent = event }
-                                        Button("Delete completion", role: .destructive) { deletingEvent = event }
-                                    } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
-                                }
-                                Text(event.completedAt.formatted(date: .abbreviated, time: .omitted))
-                                Text(event.odometerKm.map { units.formatDistance($0, fractionDigits: 0) } ?? "Odometer not recorded").foregroundStyle(ScreenKit.secondary)
-                            }
+                        } else {
+                            Text("No odometer recorded yet. You can still log service dates.").foregroundStyle(ScreenKit.secondary)
                         }
                     }
                 }
-            }.padding(.horizontal, ScreenKit.horizontalPadding).padding(.bottom, ScreenKit.bottomBarClearance)
+                Text("Personal reminders, not a service recommendation. Set intervals for your vehicle. Suggested intervals to add: rotation 6,250 mi, filter 2 years, brake fluid check 4 years, wipers 1 year. Add an item and record its last completion to start reminders. Due status appears here when you open Maintenance.")
+                    .font(.caption).foregroundStyle(ScreenKit.secondary)
+                Button { adding = true } label: { Label("Add service item", systemImage: "plus.circle.fill").frame(maxWidth: .infinity) }
+                    .buttonStyle(.borderedProminent).tint(ScreenKit.mint)
+                if data.items.isEmpty {
+                    EmptyState(systemImage: "wrench.and.screwdriver", title: "Start your service log", message: "Add a suggested or custom item, then record the last service date and odometer to establish its next due point.")
+                }
+                if let mutationError { Text(mutationError).foregroundStyle(ScreenKit.red) }
+                ForEach(data.items) { item in
+                    Card {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text(item.name).font(.headline)
+                                Spacer()
+                                Menu {
+                                    Button("Edit item") { editingItem = item }
+                                    Button("Delete item and history", role: .destructive) { deletingItem = item }
+                                } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
+                                if let progress = item.progress {
+                                    ZStack {
+                                        Circle().stroke(ScreenKit.hairline, lineWidth: 4)
+                                        Circle().trim(from: 0, to: progress).stroke(progress >= 1 ? ScreenKit.amber : ScreenKit.mint, style: StrokeStyle(lineWidth: 4, lineCap: .round)).rotationEffect(.degrees(-90))
+                                        Text("\(Int(progress * 100))%").font(.system(size: 10, weight: .semibold))
+                                    }.frame(width: 44, height: 44)
+                                }
+                            }
+                            Text(interval(item)).font(.caption).foregroundStyle(ScreenKit.secondary)
+                            if let km = item.remainingKm {
+                                Text(km > 0 ? "Due in \(units.formatDistance(km, fractionDigits: 0))" : "Distance interval reached · \(units.formatDistance(-km, fractionDigits: 0)) past due")
+                            } else if item.intervalKm != nil {
+                                Text("Distance due unknown — record a service odometer and wait for a current reading.").font(.caption).foregroundStyle(ScreenKit.secondary)
+                            }
+                            if let days = item.remainingDays {
+                                Text(days > 0 ? "Due in \(days) days" : days == 0 ? "Due today" : "\(-days) days past due")
+                                if let date = item.nextDate { Text("Next: \(date.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary) }
+                            } else if item.intervalMonths != nil {
+                                Text("Date due unknown — record the last completion.").font(.caption).foregroundStyle(ScreenKit.secondary)
+                            }
+                            if let progress = item.progress { ProgressView(value: progress).tint(progress >= 1 ? ScreenKit.amber : ScreenKit.mint) }
+                            Button("Record completion") { completing = item }.buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+        } secondary: {
+            if let data = state.value {
+                SectionLabel("Service history")
+                if data.events.isEmpty { Text("No completions logged yet.").foregroundStyle(ScreenKit.secondary) }
+                ForEach(data.events) { event in
+                    Card {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(data.items.first { $0.id == event.itemId }?.name ?? "Service").font(.headline)
+                                Spacer()
+                                Menu {
+                                    Button("Correct completion") { editingEvent = event }
+                                    Button("Delete completion", role: .destructive) { deletingEvent = event }
+                                } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
+                            }
+                            Text(event.completedAt.formatted(date: .abbreviated, time: .omitted))
+                            Text(event.odometerKm.map { units.formatDistance($0, fractionDigits: 0) } ?? "Odometer not recorded").foregroundStyle(ScreenKit.secondary)
+                        }
+                    }
+                }
+            }
         }
         .screenKitPage("Maintenance")
         .task(id: vehicleID) { await load() }

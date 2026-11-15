@@ -27,36 +27,38 @@ struct BatteryClimateView: View {
     @State private var state: Loadable<Snapshot> = .loading
 
     var body: some View {
-        ScrollView {
+        // Wide: the sweet spot and band chart beside every drive and the range table.
+        ScreenKit.Page(scroll: "battery-climate", splits: !usableDrives.isEmpty) {
             LoadableContent(state: state, retry: load) { snapshot in
-                let usable = snapshot.drives.filter { $0.outsideTempAvgC != nil && ($0.energyUsedKwh ?? 0) > 0 && $0.distanceKm > 0.5 }
-                VStack(alignment: .leading, spacing: 18) {
-                    // Shown with or without content: an empty page can be incomplete too.
-                    if !snapshot.isComplete {
-                        InlineBanner(systemImage: "exclamationmark.triangle",
-                                     message: "Partial history: not every drive from the past year could be loaded.",
-                                     tint: ScreenKit.amber)
-                    }
-                    if usable.isEmpty {
-                        EmptyState(systemImage: "thermometer.medium", title: "No climate data yet",
-                                   message: "Drives with an outside temperature reading will show how weather changes your efficiency.")
-                            .padding(.top, 60)
-                    } else {
-                        content(usable, capacity: snapshot.capacityKwh)
-                    }
+                // Shown with or without content: an empty page can be incomplete too.
+                if !snapshot.isComplete {
+                    InlineBanner(systemImage: "exclamationmark.triangle",
+                                 message: "Partial history: not every drive from the past year could be loaded.",
+                                 tint: ScreenKit.amber)
+                }
+                if usableDrives.isEmpty {
+                    EmptyState(systemImage: "thermometer.medium", title: "No climate data yet",
+                               message: "Drives with an outside temperature reading will show how weather changes your efficiency.")
+                        .padding(.top, 60)
+                } else {
+                    summary(usableDrives)
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+        } secondary: {
+            if !usableDrives.isEmpty { detail(usableDrives, capacity: state.value?.capacityKwh) }
         }
-        .accessibilityIdentifier("scroll.battery-climate")
         .screenKitPage("Battery Climate", screen: "battery-climate")
         .task(id: vehicleID) { await load() }
     }
 
+    /// Drives with a temperature, energy and distance to compare.
+    private var usableDrives: [DriveSummary] {
+        (state.value?.drives ?? []).filter { $0.outsideTempAvgC != nil && ($0.energyUsedKwh ?? 0) > 0 && $0.distanceKm > 0.5 }
+    }
+
+    /// Sweet spot and efficiency by temperature band.
     @ViewBuilder
-    private func content(_ drives: [DriveSummary], capacity: Double?) -> some View {
+    private func summary(_ drives: [DriveSummary]) -> some View {
         let bands = Self.bands(drives, units: units)
         let best = bands.filter { $0.drives >= 1 }.min { $0.whPerKm < $1.whPerKm }
         let worst = bands.filter { $0.drives >= 1 }.max { $0.whPerKm < $1.whPerKm }
@@ -103,7 +105,15 @@ struct BatteryClimateView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
+        }
+    }
 
+    /// Every drive as a dot, and full-charge range per band.
+    @ViewBuilder
+    private func detail(_ drives: [DriveSummary], capacity: Double?) -> some View {
+        let bands = Self.bands(drives, units: units)
+
+        VStack(alignment: .leading, spacing: 18) {
             Card(padding: 20) {
                 VStack(alignment: .leading, spacing: 14) {
                     SectionLabel("Every drive")

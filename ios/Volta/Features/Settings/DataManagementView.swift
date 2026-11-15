@@ -96,58 +96,53 @@ struct DataManagementView: View {
     @State private var prepareTask: Task<Void, Never>?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Card(padding: 20) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "square.and.arrow.up.on.square").font(.system(size: 22)).foregroundStyle(ScreenKit.blue)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Export history").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                                Text("All drives and charges as one JSON file, metric units.")
-                                    .font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
-                            }
-                        }
-                        if let export {
-                            HStack(spacing: 18) {
-                                stat("\(export.drives)", "drives")
-                                stat("\(export.charges)", "charges")
-                                stat(ByteCountFormatter.string(fromByteCount: Int64(export.bytes), countStyle: .file), "")
-                            }
-                            Button { isSharing = true } label: {
-                                Label("Share export", systemImage: "square.and.arrow.up")
-                                    .font(.system(.callout, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 15)
-                                    .background(Color.voltaBlue, in: .rect(cornerRadius: VoltaRadius.wideButton, style: .continuous))
-                            }
-                            .buttonStyle(VoltaPressStyle())
-                        } else {
-                            PillButton(isExporting ? "Preparing…" : "Prepare export", systemImage: "doc.badge.arrow.up",
-                                       size: .wide, style: .accent, isBusy: isExporting) {
-                                startExport()
-                            }
-                            .disabled(isExporting)
+        ScreenKit.Page(spacing: 24) {
+            Card(padding: 20) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "square.and.arrow.up.on.square").font(.system(size: 22)).foregroundStyle(ScreenKit.blue)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Export history").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                            Text("All drives and charges as one JSON file, metric units.")
+                                .font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
                         }
                     }
-                }
-                if let errorMessage {
-                    InlineBanner(systemImage: "exclamationmark.triangle", message: errorMessage, tint: ScreenKit.amber) { self.errorMessage = nil }
-                }
-                ScreenKit.GroupCard(title: "Where your data lives",
-                                    footer: "Volta keeps no copy of your history on this iPhone beyond what's on screen.") {
-                    ScreenKit.ValueRow(title: "History", subtitle: "TeslaMate Postgres on your server") {
-                        Image(systemName: "server.rack").foregroundStyle(ScreenKit.green)
-                    }
-                    ScreenKit.ValueRow(title: "Settings", subtitle: "This iPhone", showsDivider: false) {
-                        Image(systemName: "iphone").foregroundStyle(ScreenKit.secondary)
+                    if let export {
+                        HStack(spacing: 18) {
+                            stat("\(export.drives)", "drives")
+                            stat("\(export.charges)", "charges")
+                            stat(ByteCountFormatter.string(fromByteCount: Int64(export.bytes), countStyle: .file), "")
+                        }
+                        Button { isSharing = true } label: {
+                            Label("Share export", systemImage: "square.and.arrow.up")
+                                .font(.system(.callout, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .background(Color.voltaBlue, in: .rect(cornerRadius: VoltaRadius.wideButton, style: .continuous))
+                        }
+                        .buttonStyle(VoltaPressStyle())
+                    } else {
+                        PillButton(isExporting ? "Preparing…" : "Prepare export", systemImage: "doc.badge.arrow.up",
+                                   size: .wide, style: .accent, isBusy: isExporting) {
+                            startExport()
+                        }
+                        .disabled(isExporting)
                     }
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+            if let errorMessage {
+                InlineBanner(systemImage: "exclamationmark.triangle", message: errorMessage, tint: ScreenKit.amber) { self.errorMessage = nil }
+            }
+            ScreenKit.GroupCard(title: "Where your data lives",
+                                footer: "Volta keeps no copy of your history on this iPhone beyond what's on screen.") {
+                ScreenKit.ValueRow(title: "History", subtitle: "TeslaMate Postgres on your server") {
+                    Image(systemName: "server.rack").foregroundStyle(ScreenKit.green)
+                }
+                ScreenKit.ValueRow(title: "Settings", subtitle: "This iPhone", showsDivider: false) {
+                    Image(systemName: "iphone").foregroundStyle(ScreenKit.secondary)
+                }
+            }
         }
         .screenKitPage("Data Management")
         .sheet(isPresented: $isSharing, onDismiss: discardExport) {

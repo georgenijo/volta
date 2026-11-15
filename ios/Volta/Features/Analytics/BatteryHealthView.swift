@@ -9,31 +9,34 @@ struct BatteryHealthView: View {
     @State private var state: Loadable<BatteryHealth> = .loading
 
     var body: some View {
-        ScrollView {
+        // Wide: health and capacity beside the range trend and drain.
+        ScreenKit.Page(scroll: "battery-health", splits: hasData) {
             LoadableContent(state: state, retry: load) { health in
                 if health.healthPercent == nil && health.history.isEmpty {
                     EmptyState(systemImage: "battery.100percent", title: "Not enough data yet",
                                     message: "Battery health appears after a few charges to a high state of charge.")
                 } else {
-                    content(health)
+                    hero(health)
+                    capacity(health)
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+        } secondary: {
+            if hasData, let health = state.value { details(health) }
         }
-        .accessibilityIdentifier("scroll.battery-health")
         .screenKitPage("Battery Health", screen: "battery-health")
         .task(id: vehicleID) { await load() }
     }
 
+    private var hasData: Bool {
+        guard let h = state.value else { return false }
+        return !(h.healthPercent == nil && h.history.isEmpty)
+    }
+
     @ViewBuilder
-    private func content(_ h: BatteryHealth) -> some View {
+    private func details(_ h: BatteryHealth) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            hero(h)
-            capacity(h)
             if h.history.count > 1 { trend(h) }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: ScreenKit.metricColumns, spacing: 12) {
                 ScreenKit.Metric(label: "Range at 100%",
                                  value: h.ratedRangeAt100Km.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
                                  unit: units.distanceUnit, caption: "Rated", symbol: "road.lanes")

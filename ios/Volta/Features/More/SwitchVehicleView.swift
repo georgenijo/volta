@@ -9,7 +9,7 @@ struct SwitchVehicleView: View {
     @State private var state: Loadable<[Vehicle]> = .loading
 
     var body: some View {
-        ScrollView {
+        ScreenKit.Page {
             LoadableContent(state: state, retry: load) { vehicles in
                 if vehicles.isEmpty {
                     EmptyState(systemImage: "car", title: "No vehicles", message: "TeslaMate hasn't reported a vehicle to your server yet.")
@@ -34,11 +34,9 @@ struct SwitchVehicleView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, ScreenKit.horizontalPadding)
-                    .padding(.top, 12)
+                    .padding(.top, 4)
                 }
             }
-            .padding(.bottom, ScreenKit.bottomBarClearance)
         }
         .screenKitPage("Switch Vehicle")
         .task(id: vehicleID) { await load() }

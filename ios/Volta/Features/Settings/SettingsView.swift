@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Settings index, pushed from More's gear button.
+/// Settings index: pushed from More's gear button, or beside More's sidebar
+/// on a regular-width window.
 struct SettingsView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
@@ -9,7 +10,7 @@ struct SettingsView: View {
     @State private var placeCount: Int?
 
     var body: some View {
-        ScrollView {
+        ScreenKit.Page(scroll: "settings", spacing: 0) {
             VStack(spacing: 0) {
                 NavigationLink { AccountSettingsView() } label: { accountHeader }
                     .buttonStyle(VoltaPressStyle())
@@ -38,10 +39,10 @@ struct SettingsView: View {
 
                 footer
             }
-            .padding(.top, 4)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+            // Rows run edge to edge on a phone; the page supplies the side padding.
+            .padding(.horizontal, -ScreenKit.horizontalPadding)
+            .padding(.top, -4)
         }
-        .accessibilityIdentifier("scroll.settings")
         .screenKitPage("Settings")
         .task(id: vehicleID) {
             let source = dataSource, id = vehicleID

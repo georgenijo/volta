@@ -8,49 +8,53 @@ struct ChargerMapView: View {
     @State private var generation = UUID()
     @State private var selected: ChargerLocation?
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                LoadableContent(state: state, retry: load) { locations in
-                    Text("Your recorded charging places · TeslaMate history").font(.caption).foregroundStyle(ScreenKit.secondary)
-                    if locations.isEmpty {
-                        EmptyState(systemImage: "mappin.and.ellipse", title: "No charging places yet", message: "Locations appear after TeslaMate records a charging session. This map shows your own history.")
+        // Wide: the map fills one pane beside the list of places.
+        ScreenKit.Page(splits: !(state.value ?? []).isEmpty) {
+            LoadableContent(state: state, retry: load) { locations in
+                Text("Your recorded charging places · TeslaMate history").font(.caption).foregroundStyle(ScreenKit.secondary)
+                if locations.isEmpty {
+                    EmptyState(systemImage: "mappin.and.ellipse", title: "No charging places yet", message: "Locations appear after TeslaMate records a charging session. This map shows your own history.")
+                } else {
+                    let mapped = locations.filter(\.hasCoordinate)
+                    if !mapped.isEmpty {
+                        Map {
+                            ForEach(mapped) { location in
+                                Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude!, longitude: location.longitude!)) {
+                                    Button { selected = location } label: {
+                                        Image(systemName: "bolt.fill").padding(12).foregroundStyle(.white).background(ScreenKit.blue, in: Circle())
+                                    }.accessibilityLabel("\(location.name), \(location.sessionCount) sessions")
+                                }
+                            }
+                        }.mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
+                            .modifier(ScreenKit.MapHeight())
+                            .clipShape(.rect(cornerRadius: 22))
                     } else {
-                        let mapped = locations.filter(\.hasCoordinate)
-                        if !mapped.isEmpty {
-                            Map {
-                                ForEach(mapped) { location in
-                                    Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude!, longitude: location.longitude!)) {
-                                        Button { selected = location } label: {
-                                            Image(systemName: "bolt.fill").padding(12).foregroundStyle(.white).background(ScreenKit.blue, in: Circle())
-                                        }.accessibilityLabel("\(location.name), \(location.sessionCount) sessions")
-                                    }
-                                }
-                            }.mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
-                                .frame(height: 300).clipShape(.rect(cornerRadius: 22))
-                        } else {
-                            Text("TeslaMate has not recorded coordinates for these places. Their sessions are available below.").foregroundStyle(ScreenKit.secondary)
-                        }
-                        ForEach(locations) { location in
-                            Button { selected = location } label: {
-                                Card {
-                                    VStack(alignment: .leading, spacing: 12) {
-                                        HStack { Text(location.name).font(.headline); Spacer(); Image(systemName: "chevron.right") }
-                                        Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                        Text(location.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Total energy unknown — some sessions lack readings")
-                                        Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                        Text(ChargerPresentation.cost(location.cost, currency: location.currency)).font(.caption)
-                                        if !location.hasCoordinate { Text("Coordinates not recorded").font(.caption).foregroundStyle(ScreenKit.secondary) }
-                                    }.frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                            }.buttonStyle(.plain)
-                        }
+                        Text("TeslaMate has not recorded coordinates for these places. Their sessions are available below.").foregroundStyle(ScreenKit.secondary)
                     }
                 }
-            }.padding(.horizontal, ScreenKit.horizontalPadding).padding(.bottom, ScreenKit.bottomBarClearance)
-        }.screenKitPage("Charger Map")
-            .task(id: vehicleID) { selected = nil; await load() }
-            .refreshable { await load() }
-            .navigationDestination(item: $selected) { location in ChargerLocationSessionsView(location: location) }
+            }
+        } secondary: {
+            if let locations = state.value, !locations.isEmpty {
+                ForEach(locations) { location in
+                    Button { selected = location } label: {
+                        Card {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack { Text(location.name).font(.headline); Spacer(); Image(systemName: "chevron.right") }
+                                Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary)
+                                Text(location.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Total energy unknown — some sessions lack readings")
+                                Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.caption).foregroundStyle(ScreenKit.secondary)
+                                Text(ChargerPresentation.cost(location.cost, currency: location.currency)).font(.caption)
+                                if !location.hasCoordinate { Text("Coordinates not recorded").font(.caption).foregroundStyle(ScreenKit.secondary) }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+        .screenKitPage("Charger Map")
+        .task(id: vehicleID) { selected = nil; await load() }
+        .refreshable { await load() }
+        .navigationDestination(item: $selected) { location in ChargerLocationSessionsView(location: location) }
     }
     @MainActor private func load() async {
         let id = vehicleID, token = UUID(); generation = token; state = .loading
@@ -75,26 +79,24 @@ struct ChargerLocationSessionsView: View {
     @State private var pageError: String?
     @State private var generation = UUID()
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                LoadableContent(state: state, retry: { await load(reset: true) }) { sessions in
-                    if sessions.isEmpty { Text("No sessions remain at this recorded location.").foregroundStyle(ScreenKit.secondary) }
-                    ForEach(sessions) { session in
-                        NavigationLink { ChargingDetailView(charge: session) } label: {
-                            Card {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(VoltaFormat.dateTime(session.start)).font(.headline)
-                                    Text(session.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Energy not recorded")
-                                    Text(ChargerPresentation.cost(session.cost, currency: session.currency)).font(.caption).foregroundStyle(ScreenKit.secondary)
-                                    if session.end == nil { Text("Session in progress").font(.caption).foregroundStyle(ScreenKit.blue) }
-                                }.frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }.buttonStyle(.plain)
-                    }
-                    if let pageError { Text(pageError).foregroundStyle(ScreenKit.red) }
-                    if cursor != nil { Button(paging ? "Loading…" : "Load more sessions") { Task { await load(reset: false) } }.disabled(paging) }
+        ScreenKit.Page(spacing: 16) {
+            LoadableContent(state: state, retry: { await load(reset: true) }) { sessions in
+                if sessions.isEmpty { Text("No sessions remain at this recorded location.").foregroundStyle(ScreenKit.secondary) }
+                ForEach(sessions) { session in
+                    NavigationLink { ChargingDetailView(charge: session) } label: {
+                        Card {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(VoltaFormat.dateTime(session.start)).font(.headline)
+                                Text(session.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Energy not recorded")
+                                Text(ChargerPresentation.cost(session.cost, currency: session.currency)).font(.caption).foregroundStyle(ScreenKit.secondary)
+                                if session.end == nil { Text("Session in progress").font(.caption).foregroundStyle(ScreenKit.blue) }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }.buttonStyle(.plain)
                 }
-            }.padding(.horizontal, ScreenKit.horizontalPadding).padding(.bottom, ScreenKit.bottomBarClearance)
+                if let pageError { Text(pageError).foregroundStyle(ScreenKit.red) }
+                if cursor != nil { Button(paging ? "Loading…" : "Load more sessions") { Task { await load(reset: false) } }.disabled(paging) }
+            }
         }.screenKitPage(location.name).task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load(reset: true) } }
     }
     @MainActor private func load(reset: Bool) async {

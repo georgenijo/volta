@@ -33,42 +33,44 @@ struct StatsView: View {
     @State private var state: Loadable<Snapshot> = .loading
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                ScreenKit.Segmented(options: Period.allCases.map { ($0, $0.rawValue) }, selection: $period)
-                LoadableContent(state: state, retry: load) { snapshot in
-                    // Shown with or without content: an empty page can be incomplete too.
-                    if !snapshot.isComplete {
-                        InlineBanner(systemImage: "exclamationmark.triangle",
-                                     message: "Partial history: the server returned more pages than Volta could load, so these totals are incomplete.",
-                                     tint: ScreenKit.amber)
-                    }
-                    if snapshot.drives.isEmpty && snapshot.charges.isEmpty {
-                        EmptyState(systemImage: "chart.xyaxis.line", title: "No activity",
-                                        message: "Drives and charges in the last \(period.days) days will be summarized here.")
-                    } else {
-                        content(snapshot)
-                    }
+        // Wide: the period, distance and totals beside the energy and cost charts.
+        ScreenKit.Page(scroll: "stats", splits: hasActivity) {
+            ScreenKit.Segmented(options: Period.allCases.map { ($0, $0.rawValue) }, selection: $period)
+            LoadableContent(state: state, retry: load) { snapshot in
+                // Shown with or without content: an empty page can be incomplete too.
+                if !snapshot.isComplete {
+                    InlineBanner(systemImage: "exclamationmark.triangle",
+                                 message: "Partial history: the server returned more pages than Volta could load, so these totals are incomplete.",
+                                 tint: ScreenKit.amber)
+                }
+                if snapshot.drives.isEmpty && snapshot.charges.isEmpty {
+                    EmptyState(systemImage: "chart.xyaxis.line", title: "No activity",
+                                    message: "Drives and charges in the last \(period.days) days will be summarized here.")
+                } else {
+                    overview(snapshot)
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+        } secondary: {
+            if hasActivity, let snapshot = state.value { breakdown(snapshot) }
         }
-        .accessibilityIdentifier("scroll.stats")
         .screenKitPage("Stats", screen: "stats")
         .task(id: TaskKey(vehicleID: vehicleID, period: period)) { await load() }
     }
 
     private struct TaskKey: Hashable { var vehicleID: Int; var period: Period }
 
+    private var hasActivity: Bool {
+        guard let s = state.value else { return false }
+        return !(s.drives.isEmpty && s.charges.isEmpty)
+    }
+
+    /// Distance hero and the four totals.
     @ViewBuilder
-    private func content(_ s: Snapshot) -> some View {
+    private func overview(_ s: Snapshot) -> some View {
         let totals = AnalyticsMath.totals(drives: s.drives, charges: s.charges, fallbackCurrency: units.currency)
         let distance = totals.distanceKm
-        let single = totals.singleCost
         // Per-bucket cost bars only make sense in one currency.
-        let buckets = buckets(s, costCurrency: single?.currency)
+        let buckets = buckets(s, costCurrency: totals.singleCost?.currency)
 
         // Hero: total distance
         Card(padding: 20) {
@@ -90,7 +92,7 @@ struct StatsView: View {
             }
         }
 
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: ScreenKit.metricColumns, spacing: 12) {
             // Efficiency is a ratio over drives where both energy and distance are known.
             ScreenKit.Metric(label: "Efficiency", value: totals.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—",
                              unit: units.efficiencyUnit,
@@ -103,6 +105,14 @@ struct StatsView: View {
             ScreenKit.Metric(label: "Charge cost", value: costValue(totals.costs), caption: costCaption(totals),
                              symbol: "dollarsign.circle")
         }
+    }
+
+    /// Energy and charging cost charts.
+    @ViewBuilder
+    private func breakdown(_ s: Snapshot) -> some View {
+        let totals = AnalyticsMath.totals(drives: s.drives, charges: s.charges, fallbackCurrency: units.currency)
+        let single = totals.singleCost
+        let buckets = buckets(s, costCurrency: single?.currency)
 
         Card(padding: 20) {
             VStack(alignment: .leading, spacing: 14) {

@@ -9,29 +9,28 @@ struct PlacesView: View {
     @State private var state: Loadable<[Place]> = .loading
 
     var body: some View {
-        ScrollView {
+        // Wide: the map fills one pane beside the list of geofences.
+        ScreenKit.Page(splits: !(state.value ?? []).isEmpty, spacing: 22) {
             LoadableContent(state: state, retry: load) { places in
                 if places.isEmpty {
                     EmptyState(systemImage: "mappin.slash", title: "No saved places",
                                message: "Add geofences in TeslaMate and they'll appear here, named in your drives and charges.")
                         .padding(.top, 60)
                 } else {
-                    VStack(alignment: .leading, spacing: 22) {
-                        map(places)
-                        ScreenKit.GroupCard(title: "Geofences", footer: "Managed in TeslaMate on your server.") {
-                            ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
-                                ScreenKit.ValueRow(title: place.name, subtitle: subtitle(place), showsDivider: index < places.count - 1) {
-                                    Text(place.costPerKwh.map { "\(VoltaFormat.money($0, currency: units.currency))/kWh" } ?? "—")
-                                        .font(.system(size: 14, weight: .medium)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
-                                }
-                            }
+                    map(places)
+                }
+            }
+        } secondary: {
+            if let places = state.value, !places.isEmpty {
+                ScreenKit.GroupCard(title: "Geofences", footer: "Managed in TeslaMate on your server.") {
+                    ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
+                        ScreenKit.ValueRow(title: place.name, subtitle: subtitle(place), showsDivider: index < places.count - 1) {
+                            Text(place.costPerKwh.map { "\(VoltaFormat.money($0, currency: units.currency))/kWh" } ?? "—")
+                                .font(.system(size: 14, weight: .medium)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
                         }
                     }
                 }
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
         }
         .screenKitPage("Places")
         .task(id: vehicleID) { await load() }
@@ -57,7 +56,7 @@ struct PlacesView: View {
         }
         .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
         .environment(\.colorScheme, .dark)
-        .frame(height: 220)
+        .modifier(ScreenKit.MapHeight())
         .clipShape(.rect(cornerRadius: VoltaRadius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: VoltaRadius.card, style: .continuous).strokeBorder(Color.voltaHairline, lineWidth: 1))
     }

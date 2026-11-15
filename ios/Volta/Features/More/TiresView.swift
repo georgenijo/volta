@@ -8,28 +8,31 @@ struct TiresView: View {
     @State private var generation = 0
 
     var body: some View {
-        ScrollView {
+        ScreenKit.Page {
             LoadableContent(state: state, retry: load) { status in
                 VStack(spacing: 24) {
                     if let freshness = status.telemetryFreshness {
                         Text(freshness.label).font(.caption).foregroundStyle(Color.voltaTextSecondary)
                     }
                     Card(padding: 20) {
-                        ZStack {
-                            carOutline.frame(width: 110, height: 250)
-                            HStack {
-                                VStack(spacing: 100) {
-                                    tire("Front left", reading: status.tpms?.fl)
-                                    tire("Rear left", reading: status.tpms?.rl)
-                                }
-                                Spacer(minLength: 110)
-                                VStack(spacing: 100) {
-                                    tire("Front right", reading: status.tpms?.fr)
-                                    tire("Rear right", reading: status.tpms?.rr)
-                                }
+                        // Readings sit beside the car's wheels; the car scales
+                        // with the card instead of fixing the row's width.
+                        HStack(spacing: 12) {
+                            VStack {
+                                tire("Front left", reading: status.tpms?.fl)
+                                Spacer(minLength: 24)
+                                tire("Rear left", reading: status.tpms?.rl)
+                            }
+                            carOutline
+                                .aspectRatio(110 / 250, contentMode: .fit)
+                                .frame(maxWidth: 120)
+                            VStack {
+                                tire("Front right", reading: status.tpms?.fr)
+                                Spacer(minLength: 24)
+                                tire("Rear right", reading: status.tpms?.rr)
                             }
                         }
-                        .frame(minHeight: 320)
+                        .frame(height: 280)
                     }
                     if [status.tpms?.fl.pressureBar, status.tpms?.fr.pressureBar,
                         status.tpms?.rl.pressureBar, status.tpms?.rr.pressureBar].allSatisfy({ $0 == nil }) {
@@ -39,10 +42,10 @@ struct TiresView: View {
                     Text("Amber marks readings below 2.5 bar (36 psi). Check the door placard for your vehicle’s recommended cold pressure. This guide is not a vehicle TPMS warning.")
                         .font(.footnote).foregroundStyle(Color.voltaTextSecondary)
                 }
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("screen.tires")
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
         }
         .screenKitPage("Tires")
         .task(id: vehicleID) { state = .loading; await load() }
@@ -54,11 +57,16 @@ struct TiresView: View {
             .fill(Color.voltaRaised)
             .overlay { RoundedRectangle(cornerRadius: 36).stroke(Color.voltaTextTertiary, lineWidth: 2) }
             .overlay {
-                VStack(spacing: 16) {
-                    RoundedRectangle(cornerRadius: 14).fill(Color.voltaBackground).frame(height: 42)
-                    RoundedRectangle(cornerRadius: 12).stroke(Color.voltaHairline).frame(height: 75)
-                    RoundedRectangle(cornerRadius: 12).fill(Color.voltaBackground).frame(height: 35)
-                }.padding(15)
+                // Windshield, roof and rear window in the original 250 pt proportions.
+                GeometryReader { proxy in
+                    let unit = proxy.size.height / 250
+                    VStack(spacing: 16 * unit) {
+                        RoundedRectangle(cornerRadius: 14 * unit).fill(Color.voltaBackground).frame(height: 42 * unit)
+                        RoundedRectangle(cornerRadius: 12 * unit).stroke(Color.voltaHairline).frame(height: 75 * unit)
+                        RoundedRectangle(cornerRadius: 12 * unit).fill(Color.voltaBackground).frame(height: 35 * unit)
+                    }
+                    .padding(15 * unit)
+                }
             }
             .accessibilityHidden(true)
     }
@@ -68,6 +76,7 @@ struct TiresView: View {
             Text(title.uppercased()).font(.system(size: 10, weight: .medium)).tracking(1)
             Text(reading?.pressureBar.map { VoltaFormat.number(units.pressureValue(bar: $0), digits: units.pressure == .bar ? 1 : 0) } ?? "—")
                 .font(.system(size: 30, weight: .semibold)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
                 .foregroundStyle(reading?.isLow == true ? Color.voltaAmber : Color.voltaTextPrimary)
             Text(units.pressureUnit).font(.caption)
             if let date = reading?.updatedAt {

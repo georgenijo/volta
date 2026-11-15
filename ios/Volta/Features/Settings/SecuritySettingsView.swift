@@ -7,28 +7,23 @@ struct SecuritySettingsView: View {
     @State private var biometry: LABiometryType = .none
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                ScreenKit.GroupCard(title: "App lock", footer: "Locks Volta whenever it leaves the foreground. Unlock with \(biometryName) or your passcode.") {
-                    ToggleRow(systemImage: biometrySymbol, title: "Require \(biometryName)",
-                              subtitle: model.isConfiguringAppLock ? "Confirming…" : model.appLockEnabled ? "Volta is locked when closed" : "Off",
-                              isOn: Binding(get: { model.appLockEnabled }, set: { on in Task { await model.setAppLockEnabled(on) } }))
-                        .padding(.horizontal, 16)
-                        .disabled(model.isConfiguringAppLock)
-                        .accessibilityIdentifier("toggle.appLock")
-                }
-                if let errorMessage = model.errorMessage {
-                    InlineBanner(systemImage: "exclamationmark.triangle", message: errorMessage, tint: ScreenKit.amber) { model.errorMessage = nil }
-                }
-                ScreenKit.GroupCard(title: "Privacy") {
-                    privacyRow("server.rack", "Your data stays on your server", "Drives, charges and locations live in your TeslaMate database.")
-                    privacyRow("key", "No Tesla credentials on this phone", "Tesla tokens stay inside TeslaMate on your server.")
-                    privacyRow("network.badge.shield.half.filled", "Private network only", "Volta talks to your server over Tailscale. No analytics, no trackers.", last: true)
-                }
+        ScreenKit.Page(spacing: 24) {
+            ScreenKit.GroupCard(title: "App lock", footer: "Locks Volta whenever it leaves the foreground. Unlock with \(biometryName) or your passcode.") {
+                ToggleRow(systemImage: biometrySymbol, title: "Require \(biometryName)",
+                          subtitle: model.isConfiguringAppLock ? "Confirming…" : model.appLockEnabled ? "Volta is locked when closed" : "Off",
+                          isOn: Binding(get: { model.appLockEnabled }, set: { on in Task { await model.setAppLockEnabled(on) } }))
+                    .padding(.horizontal, 16)
+                    .disabled(model.isConfiguringAppLock)
+                    .accessibilityIdentifier("toggle.appLock")
             }
-            .padding(.horizontal, ScreenKit.horizontalPadding)
-            .padding(.top, 8)
-            .padding(.bottom, ScreenKit.bottomBarClearance)
+            if let errorMessage = model.errorMessage {
+                InlineBanner(systemImage: "exclamationmark.triangle", message: errorMessage, tint: ScreenKit.amber) { model.errorMessage = nil }
+            }
+            ScreenKit.GroupCard(title: "Privacy") {
+                privacyRow("server.rack", "Your data stays on your server", "Drives, charges and locations live in your TeslaMate database.")
+                privacyRow("key", "No Tesla credentials on this phone", "Tesla tokens stay inside TeslaMate on your server.")
+                privacyRow("network.badge.shield.half.filled", "Private network only", "Volta talks to your server over Tailscale. No analytics, no trackers.", last: true)
+            }
         }
         .screenKitPage("Security")
         .onAppear {
