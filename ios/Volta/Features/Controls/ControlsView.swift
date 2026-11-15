@@ -360,7 +360,7 @@ struct ControlsView: View {
                            command: VehicleCommand, extraEnabled: Bool = true,
                            action: @escaping () -> Void) -> some View {
         ListRow(systemImage: icon, title: title, subtitle: subtitle) {
-            PillButton(button, action: action).opacity(canSend(command) && extraEnabled ? 1 : 0.45)
+            PillButton(button, action: action)
                 .disabled(!canSend(command) || !extraEnabled)
         }
     }
@@ -377,7 +377,7 @@ struct ControlsView: View {
     }
 
     private func commandButton(_ title: String, command: VehicleCommand, action: @escaping () -> Void) -> some View {
-        PillButton(title, size: .wide, action: action).opacity(canSend(command) ? 1 : 0.45).disabled(!canSend(command))
+        PillButton(title, size: .wide, action: action).disabled(!canSend(command))
     }
     private func canSend(_ command: VehicleCommand) -> Bool {
         coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
@@ -533,21 +533,23 @@ struct ClimateControlsView: View {
             PillButton("Set cabin temperatures", size: .wide, style: .accent) {
                 send(command, label: "Set cabin temperatures")
             }
-            .disabled(!canSend(command)).opacity(canSend(command) ? 1 : 0.45)
+            .disabled(!canSend(command))
             .padding(.leading, 52)
         }.padding(.bottom, VoltaSpacing.md)
     }
 
     private func temperatureRow(title: String, value: Binding<Double>) -> some View {
         ListRow(systemImage: "dial.medium", title: title, subtitle: "15–28 °C") {
-            HStack(spacing: VoltaSpacing.sm) {
+            HStack(spacing: 0) {
                 Button { value.wrappedValue = max(15, value.wrappedValue - 0.5) } label: {
-                    Image(systemName: "minus.circle.fill")
+                    Image(systemName: "minus.circle.fill").imageScale(.large)
+                        .frame(width: 44, height: 44).contentShape(.rect)
                 }.accessibilityLabel("Decrease \(title.lowercased())")
                 Text(units.formatTemperature(value.wrappedValue)).monospacedDigit()
                     .frame(minWidth: 58)
                 Button { value.wrappedValue = min(28, value.wrappedValue + 0.5) } label: {
-                    Image(systemName: "plus.circle.fill")
+                    Image(systemName: "plus.circle.fill").imageScale(.large)
+                        .frame(width: 44, height: 44).contentShape(.rect)
                 }.accessibilityLabel("Increase \(title.lowercased())")
             }.foregroundStyle(Color.voltaTextPrimary)
         }
@@ -560,7 +562,7 @@ struct ClimateControlsView: View {
                 ForEach(0...3, id: \.self) { level in
                     let command = VehicleCommand.seatHeater(heater: heater, level: level)
                     PillButton(level == 0 ? "Off" : "\(level)", size: .wide) { send(command, label: "Set \(title) heat to \(level)") }
-                        .disabled(!canSend(command)).opacity(canSend(command) ? 1 : 0.45)
+                        .disabled(!canSend(command))
                         .accessibilityIdentifier("button.seat.\(heater).\(level)")
                 }
             }.padding(.leading, 52).padding(.bottom, VoltaSpacing.sm)
@@ -572,9 +574,9 @@ struct ClimateControlsView: View {
             ListRow(systemImage: icon, title: title, subtitle: "Observed state unavailable")
             HStack(spacing: VoltaSpacing.lg) {
                 PillButton("Off", size: .wide) { send(off, label: "Turn off \(title.lowercased())") }
-                    .disabled(!canSend(off)).opacity(canSend(off) ? 1 : 0.45)
+                    .disabled(!canSend(off))
                 PillButton("On", size: .wide) { send(on, label: "Turn on \(title.lowercased())") }
-                    .disabled(!canSend(on)).opacity(canSend(on) ? 1 : 0.45)
+                    .disabled(!canSend(on))
             }.padding(.leading, 52).padding(.bottom, VoltaSpacing.sm)
         }
     }
@@ -658,6 +660,7 @@ private struct VehicleCommandActivityBanner: View {
         } else if coordinator.pending(dataSource: dataSource, vehicleID: vehicleID).isEmpty {
             Button { coordinator.clearActivity(dataSource: dataSource, vehicleID: vehicleID) } label: {
                 Image(systemName: "xmark").foregroundStyle(Color.voltaTextSecondary)
+                    .frame(width: 44, height: 44).contentShape(.rect)
             }.accessibilityLabel("Dismiss result")
         }
     }

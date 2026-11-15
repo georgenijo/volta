@@ -198,7 +198,7 @@ struct DashboardView: View {
                                       .init(color: .voltaBackground.opacity(0.95), location: 0.6),
                                       .init(color: .clear, location: 1)],
                               startPoint: .top, endPoint: .bottom)
-            .frame(height: 130)
+            .frame(height: 170)
             .ignoresSafeArea(edges: [.top, .horizontal])
             .opacity(fade)
             .allowsHitTesting(false)
@@ -581,6 +581,7 @@ struct RangeBar: View {
     var level: Int
     var limit: Int?
     var charging: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -594,7 +595,7 @@ struct RangeBar: View {
                                          startPoint: .leading, endPoint: .trailing))
                     .frame(width: fill)
                     .shadow(color: (charging ? Color.voltaGreen : .voltaBlue).opacity(0.7), radius: 6)
-                    .phaseAnimator(charging ? [0.6, 1] : [1]) { view, phase in
+                    .phaseAnimator(charging && !reduceMotion ? [0.6, 1] : [1]) { view, phase in
                         view.opacity(phase)
                     } animation: { _ in .easeInOut(duration: 1.2) }
                 if let limit, limit < 100 {
@@ -679,7 +680,7 @@ struct QuickControlsRow: View {
                  color: doors.tone == .active ? .voltaRed.opacity(0.85) : neutral(doors),
                  label: "Doors: \(doors.text)")
             let climate = StateDisplay.climate(status.climateOn)
-            item("fan", color: climate.tone == .active ? .voltaGreen : neutral(climate),
+            item(climate.symbol, color: climate.tone == .active ? .voltaGreen : neutral(climate),
                  label: "Climate: \(climate.text)")
             item("car.side.front.open", color: .voltaTextPrimary.opacity(0.75), label: "Frunk")
             item("car.side.rear.open", color: .voltaTextPrimary.opacity(0.75), label: "Trunk")

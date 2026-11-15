@@ -17,6 +17,7 @@ struct PillButton: View {
     var style: Style
     var isBusy: Bool
     var action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
 
     init(_ title: String, systemImage: String? = nil, size: Size = .compact,
          style: Style = .neutral, isBusy: Bool = false, action: @escaping () -> Void) {
@@ -46,7 +47,7 @@ struct PillButton: View {
             .background {
                 RoundedRectangle(cornerRadius: size == .wide ? VoltaRadius.wideButton : VoltaRadius.control,
                                  style: .continuous)
-                    .fill(style == .accent ? Color.voltaBlue : Color.voltaRaised)
+                    .fill(style == .accent ? Color.voltaBlueFill : Color.voltaRaised)
                     .overlay {
                         RoundedRectangle(cornerRadius: size == .wide ? VoltaRadius.wideButton : VoltaRadius.control,
                                          style: .continuous)
@@ -56,6 +57,7 @@ struct PillButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(VoltaPressStyle())
+        .opacity(isEnabled ? 1 : 0.45)
     }
 }
 

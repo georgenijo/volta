@@ -16,11 +16,11 @@ final class StartupBenchmarkTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         defer { app.terminate() }
-        let server = app.textFields["https://your-server.tailnet.ts.net"]
+        let server = app.textFields["field.serverURL"]
         XCTAssertTrue(server.waitForExistence(timeout: 10), "Use a fresh, unpaired benchmark simulator")
         server.tap()
         server.typeText("https://127.0.0.1:9443")
-        let code = app.textFields["8-character code"]
+        let code = app.textFields["field.pairingCode"]
         code.tap()
         code.typeText("BENCH123")
         app.swipeUp()

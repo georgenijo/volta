@@ -109,7 +109,7 @@ struct LiveChargingSheet: View {
                 .padding(.horizontal, 12).padding(.vertical, 7)
                 .background(Color.black.opacity(0.6), in: .capsule)
                 Spacer()
-                GlassCircleButton(systemImage: "xmark", size: 38, accessibilityLabel: "Close") { dismiss() }
+                GlassCircleButton(systemImage: "xmark", size: 44, accessibilityLabel: "Close") { dismiss() }
                     .accessibilityIdentifier("button.liveCharge.close")
             }
             .padding(.horizontal, VoltaSpacing.lg)
@@ -244,17 +244,9 @@ struct LiveChargingSheet: View {
             HStack {
                 Text("Charge current").font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
                 Spacer()
-                HStack(spacing: VoltaSpacing.lg) {
-                    Image(systemName: "minus")
-                    Text(status.chargerCurrentA.map { "\(VoltaFormat.number($0, digits: 0)) A" } ?? "— A")
-                        .font(.system(.body, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(Color.voltaTextPrimary)
-                    Image(systemName: "plus")
-                }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.voltaTextTertiary)
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Color.voltaRaised, in: .capsule)
+                Text(status.chargerCurrentA.map { "\(VoltaFormat.number($0, digits: 0)) A" } ?? "— A")
+                    .font(.system(.body, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(Color.voltaTextPrimary)
             }
             Text("Open vehicle controls to stop charging or change the charge limit.")
                 .font(.caption).foregroundStyle(Color.voltaTextSecondary)

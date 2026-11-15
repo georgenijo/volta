@@ -27,10 +27,14 @@ extension Color {
     static let voltaHairline = Color.white.opacity(0.08)
 
     static let voltaTextPrimary = Color.white
-    static let voltaTextSecondary = Color(hex: 0x8E8E8E)
-    static let voltaTextTertiary = Color(hex: 0x5E5E5E)
+    /// 6.1:1 on a card, 5.2:1 on a raised control.
+    static let voltaTextSecondary = Color(hex: 0x9E9E9E)
+    /// Quietest gray that still reads as text: 4.6:1 on a card.
+    static let voltaTextTertiary = Color(hex: 0x888888)
 
     static let voltaBlue = Color(hex: 0x3B82F6)
+    /// Fill behind white button labels: 5.2:1, where `voltaBlue` gives 3.7:1.
+    static let voltaBlueFill = Color(hex: 0x2563EB)
     static let voltaGreen = Color(hex: 0x5ECB93)
     static let voltaAmber = Color(hex: 0xF59E0B)
     static let voltaRed = Color(hex: 0xEF4444)
@@ -45,6 +49,7 @@ extension ShapeStyle where Self == Color {
     static var voltaTextSecondary: Color { .voltaTextSecondary }
     static var voltaTextTertiary: Color { .voltaTextTertiary }
     static var voltaBlue: Color { .voltaBlue }
+    static var voltaBlueFill: Color { .voltaBlueFill }
     static var voltaGreen: Color { .voltaGreen }
     static var voltaAmber: Color { .voltaAmber }
     static var voltaRed: Color { .voltaRed }

@@ -173,7 +173,11 @@ struct InlineBanner: View {
                     Image(systemName: "xmark")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Color.voltaTextSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
                 }
+                .padding(.vertical, -VoltaSpacing.md)
+                .padding(.trailing, -VoltaSpacing.md)
                 .accessibilityLabel("Dismiss")
             }
         }

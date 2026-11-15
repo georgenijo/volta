@@ -9,10 +9,11 @@ Owned by Screens A. Other screens read and use it; ask Screens A for changes
 |---|---|
 | `Color.voltaBackground` | `#171717` app background. Use `.voltaScreenBackground()` on screens. |
 | `Color.voltaCard` | `#202020` card surface |
-| `Color.voltaRaised` | `#23262B` pill buttons, steppers, selected segment |
+| `Color.voltaRaised` | `#2C2C2C` pill buttons, steppers, selected segment |
 | `Color.voltaHairline` | white @ 8%, borders and dividers |
-| `Color.voltaTextPrimary / Secondary / Tertiary` | white / `#8A8F98` / `#5C6068` |
-| `Color.voltaBlue / Green / Amber / Red` | `#3B82F6` selection, range / `#22C55E` online, on / `#F59E0B` warm, warnings / `#EF4444` alerts |
+| `Color.voltaTextPrimary / Secondary / Tertiary` | white / `#9E9E9E` / `#888888`. All three meet 4.5:1 on the background and on cards |
+| `Color.voltaBlue / Green / Amber / Red` | `#3B82F6` selection, range / `#5ECB93` online, on / `#F59E0B` warm, warnings / `#EF4444` alerts |
+| `Color.voltaBlueFill` | `#2563EB` fill behind white button labels (5.2:1; `voltaBlue` gives 3.7:1) |
 | `Color(hex: 0xRRGGBB)` | literal helper |
 | `VoltaSpacing.xxs…xxl` | 2, 4, 8, 12, 16, 24, 32 |
 | `VoltaSpacing.screen` | 20, horizontal screen inset |

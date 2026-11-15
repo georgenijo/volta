@@ -24,15 +24,21 @@ struct VoltaApp: App {
 private struct VoltaRootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
-    private let background = Color(red: 0.055, green: 0.059, blue: 0.067)
+    @State private var confirmsDisconnect = false
     private var needsPrivacy: Bool { model.isPaired && model.appLockEnabled && scenePhase != .active }
     var body: some View {
         Group {
             if model.needsCredentialRetry {
-                VStack(spacing: 20) {
+                VStack(spacing: VoltaSpacing.xl) {
+                    Image(systemName: "lock.shield").font(.system(size: 44)).foregroundStyle(Color.voltaBlue)
+                        .accessibilityHidden(true)
                     Text(model.errorMessage ?? "Unlock your iPhone to access Volta.")
-                    Button("Retry secure storage") { model.restorePairing() }
-                }.padding(32)
+                        .font(.callout).foregroundStyle(Color.voltaTextSecondary).multilineTextAlignment(.center)
+                    PillButton("Try Again", systemImage: "arrow.clockwise", style: .accent) { model.restorePairing() }
+                }
+                .padding(VoltaSpacing.xxl)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .voltaScreenBackground()
             } else if !model.isPaired { PairingView() }
             else if model.vehicles.isEmpty {
                 VStack(spacing: 20) {
@@ -42,10 +48,10 @@ private struct VoltaRootView: View {
                         TeslaSignInPanel(note: "No vehicles yet · waiting for your server to record one.", error: model.errorMessage)
                         HStack(spacing: 18) {
                             PillButton("Retry", systemImage: "arrow.clockwise") { Task { await model.loadVehicles() } }
-                            Button(model.isLaunchDemo ? "Exit launch demo" : "Disconnect") { model.unpair() }
-                                .font(.system(size: 15, weight: .semibold))
+                            Button(model.isLaunchDemo ? "Exit demo" : "Disconnect") { disconnect { model.unpair() } }
+                                .font(.callout.weight(.semibold))
                                 .foregroundStyle(Color.voltaTextSecondary)
-                                .padding(.vertical, 9)
+                                .frame(minHeight: 44)
                                 .contentShape(.rect)
                                 .buttonStyle(VoltaPressStyle())
                         }
@@ -72,24 +78,43 @@ private struct VoltaRootView: View {
         .accessibilityHidden(model.isLocked || needsPrivacy)
         .overlay {
             if needsPrivacy {
-                background.ignoresSafeArea().overlay {
-                    Image(systemName: "bolt.shield.fill").font(.system(size: 52)).foregroundStyle(.blue)
+                Color.voltaBackground.ignoresSafeArea().overlay {
+                    Image(systemName: "bolt.shield.fill").font(.system(size: 52)).foregroundStyle(Color.voltaBlue)
                 }
             } else if model.isLocked {
                 ZStack {
-                    background.ignoresSafeArea()
-                    VStack(spacing: 24) {
-                        Image(systemName: "lock.shield").font(.system(size: 56)).foregroundStyle(.blue)
-                        Text("Volta is locked").font(.title.bold())
-                        if let error = model.errorMessage { Text(error).foregroundStyle(.secondary).multilineTextAlignment(.center) }
-                        Button("Unlock with Face ID or passcode") { Task { await model.unlock() } }
-                            .buttonStyle(.borderedProminent).disabled(model.isUnlocking)
-                        Button(model.isLaunchDemo ? "Exit launch demo" : "Disconnect this device") { model.disconnectLockedDevice() }
-                            .foregroundStyle(.secondary)
-                        Text(model.isLaunchDemo ? "Your saved pairing and security settings will be preserved." : "Disconnecting removes your stored device token.").font(.footnote).foregroundStyle(.secondary)
-                    }.padding(32)
+                    Color.voltaBackground.ignoresSafeArea()
+                    VStack(spacing: VoltaSpacing.xl) {
+                        Image(systemName: "lock.shield").font(.system(size: 56)).foregroundStyle(Color.voltaBlue)
+                            .accessibilityHidden(true)
+                        Text("Volta is locked").font(.title.bold()).foregroundStyle(Color.voltaTextPrimary)
+                        if let error = model.errorMessage {
+                            Text(error).font(.callout).foregroundStyle(Color.voltaTextSecondary).multilineTextAlignment(.center)
+                        }
+                        PillButton("Unlock with Face ID or Passcode", systemImage: "faceid", size: .wide, style: .accent,
+                                   isBusy: model.isUnlocking) { Task { await model.unlock() } }
+                            .disabled(model.isUnlocking)
+                        Button(model.isLaunchDemo ? "Exit demo" : "Disconnect this device") {
+                            disconnect { model.disconnectLockedDevice() }
+                        }
+                        .font(.callout.weight(.medium)).foregroundStyle(Color.voltaTextSecondary)
+                        .frame(minHeight: 44).contentShape(.rect)
+                        Text(model.isLaunchDemo ? "Your saved pairing and security settings will be preserved." : "Disconnecting removes your stored device token.")
+                            .font(.footnote).foregroundStyle(Color.voltaTextSecondary).multilineTextAlignment(.center)
+                    }
+                    .padding(VoltaSpacing.xxl).frame(maxWidth: 440)
                 }
             }
+        }
+        // Disconnecting deletes the device token; reconnecting needs a new
+        // pairing code from the server, so ask first.
+        .confirmationDialog("Disconnect this device?", isPresented: $confirmsDisconnect, titleVisibility: .visible) {
+            Button("Disconnect", role: .destructive) {
+                if model.isLocked { model.disconnectLockedDevice() } else { model.unpair() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Volta forgets this device's token. You'll need a new pairing code from your server to connect again.")
         }
         .task(id: model.pairingState) {
             if model.needsCredentialRetry { model.restorePairing() }
@@ -100,5 +125,11 @@ private struct VoltaRootView: View {
             if phase == .background { model.didEnterBackground() }
             else if phase == .active { Task { await model.becameActive(); await model.refreshTesla() } }
         }
+    }
+
+    /// Leaving the launch demo loses nothing, so it runs at once; a real
+    /// disconnect asks first.
+    private func disconnect(_ exitDemo: () -> Void) {
+        if model.isLaunchDemo { exitDemo() } else { confirmsDisconnect = true }
     }
 }
