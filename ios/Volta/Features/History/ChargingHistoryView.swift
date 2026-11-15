@@ -72,7 +72,7 @@ extension ChargeSummary {
 
 /// Where the Charging tab can navigate. A session is named by ID and
 /// resolved against the loaded list, so an open session follows a refresh.
-enum ChargingRoute: Hashable {
+enum ChargingRoute: Hashable, Sendable {
     case charge(Int)
     case insight(MoreRoute)
 }
@@ -143,8 +143,10 @@ struct ChargingHistoryView: View {
                     HistoryMissingSelection(systemImage: "bolt.fill", title: "Session not loaded",
                                             message: "This charging session is no longer in the list for this range.")
                 }
-            case .insight(.chargerMap): ChargerMapView()
-            case .insight: StatsView()
+            case .insight(let route):
+                // Charger Map's own pushes join this tab's path.
+                route.destination
+                    .environment(\.pushMoreRoute) { [path = $path] next in path.wrappedValue.append(.insight(next)) }
             }
         } placeholder: {
             HistorySelectionPlaceholder(systemImage: "bolt.fill", title: "No session selected",

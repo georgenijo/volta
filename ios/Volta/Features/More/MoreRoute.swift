@@ -9,6 +9,8 @@ enum MoreRoute: Hashable, Sendable {
     /// path and close with Settings when another area is picked.
     case account, vehicleSettings, chargingSettings, generalSettings
     case places, security, dataManagement, support
+    /// Pages Charger Map pushes: a place's sessions, then one session.
+    case chargerPlace(ChargerLocation), chargerSession(ChargeSummary)
 
     /// The page this route opens.
     @MainActor @ViewBuilder
@@ -33,8 +35,18 @@ enum MoreRoute: Hashable, Sendable {
         case .security: SecuritySettingsView()
         case .dataManagement: DataManagementView()
         case .support: AboutView()
+        case .chargerPlace(let location): ChargerLocationSessionsView(location: location)
+        case .chargerSession(let session): ChargingDetailView(charge: session)
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Pushes a More page onto the stack that owns the current page. Charger
+    /// Map opens from More and from the Charging tab; pushing through the
+    /// owner keeps its pages in that tab's path, which is what survives a
+    /// fold and what Back walks.
+    @Entry var pushMoreRoute: (@MainActor @Sendable (MoreRoute) -> Void)? = nil
 }
 
 extension View {

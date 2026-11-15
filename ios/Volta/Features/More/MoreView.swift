@@ -45,6 +45,7 @@ struct MoreView: View {
                     if let selection {
                         // A new selection is a new page with fresh state.
                         selection.destination.id(selection)
+                            .environment(\.pushMoreRoute, pushRoute)
                     } else {
                         EmptyState(systemImage: "square.grid.2x2", title: "Choose an area",
                                    message: "Stats, battery, tires, maintenance and settings open here.")
@@ -52,7 +53,8 @@ struct MoreView: View {
                             .voltaScreenBackground()
                     }
                 }
-                .moreDestinations()
+                // Set on each page: a pushed page does not inherit it from the stack.
+                .navigationDestination(for: MoreRoute.self) { $0.destination.environment(\.pushMoreRoute, pushRoute) }
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -286,6 +288,12 @@ struct MoreView: View {
                 compactColumn = .detail
             }
         })
+    }
+
+    /// Pushes a page onto the open area's stack, for pages that push further
+    /// pages of their own (Charger Map).
+    private var pushRoute: @MainActor @Sendable (MoreRoute) -> Void {
+        { [detailPathBinding] route in detailPathBinding.wrappedValue.append(route) }
     }
 
     /// Opens an area afresh, the way tapping a row pushes it on compact.

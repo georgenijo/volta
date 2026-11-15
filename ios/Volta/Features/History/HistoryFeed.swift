@@ -50,6 +50,12 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     /// a reappearing screen that its list is still the one it wants.
     private(set) var key: AnyHashable?
     private var fetch: Fetch?
+    /// When the top of the list was last fetched.
+    private var loadedAt: Date?
+    /// A page past the first has been appended since the last reload.
+    private var hasLoadedMore = false
+    /// How long a reappearing screen trusts its list before checking again.
+    static var revalidateAfter: TimeInterval { 60 }
 
     var hasMore: Bool { nextCursor != nil }
 
@@ -66,18 +72,48 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
     /// Error to surface at the list footer, if any.
     var footerError: String? { refreshError ?? loadMoreError }
 
-    /// First load for `key`: skipped while the list already holds `key`'s
-    /// rows, so a screen that disappears and comes back (a tab switch) keeps
-    /// its loaded pages and scroll position. A new key replaces the list.
-    func loadIfNeeded(key newKey: AnyHashable, range newRange: DateRange, fetch newFetch: @escaping Fetch) async {
-        guard newKey != key || phase != .loaded else { return }
-        await reload(key: newKey, range: newRange, fetch: newFetch, showSkeleton: true)
+    /// Load for a screen that appears. A list that already holds `key`'s rows
+    /// stays, so a screen that disappears and comes back (a tab switch) keeps
+    /// its loaded pages and scroll position; once it is a minute old its top
+    /// is checked again in place. A new key, or a new day (which moves every
+    /// range), replaces the list.
+    func loadIfNeeded(key newKey: AnyHashable, range newRange: DateRange, fetch newFetch: @escaping Fetch,
+                      now: Date = Date(), calendar: Calendar = .current) async {
+        guard newKey == key, phase == .loaded, let loadedAt, calendar.isDate(loadedAt, inSameDayAs: now) else {
+            await reload(key: newKey, range: newRange, fetch: newFetch, showSkeleton: true, now: now)
+            return
+        }
+        guard now.timeIntervalSince(loadedAt) >= Self.revalidateAfter else { return }
+        await revalidate(range: newRange, fetch: newFetch, now: now)
+    }
+
+    /// Fetches the first page again without disturbing what is on screen.
+    /// Nothing changes if it fails; pull-to-refresh reports errors.
+    private func revalidate(range newRange: DateRange, fetch newFetch: @escaping Fetch, now: Date) async {
+        guard !isRefreshing else { return }
+        let token = listGeneration
+        guard let page = try? await newFetch(newRange, nil), token == listGeneration, phase == .loaded else { return }
+        if hasLoadedMore {
+            // Keep the older pages and the cursor that continues them; update
+            // the rows the first page covers and add any newer ones.
+            let fresh = Set(page.items.map(\.id))
+            items = page.items + items.filter { !fresh.contains($0.id) }
+        } else {
+            pageGeneration += 1  // drop a page request made for the old cursor
+            isLoadingMore = false
+            range = newRange
+            fetch = newFetch
+            items = page.items
+            nextCursor = page.nextCursor
+            loadMoreError = nil
+        }
+        loadedAt = now
     }
 
     /// Replaces the list. Keeps existing rows visible during pull-to-refresh;
     /// shows skeletons only when asked or when there is nothing to show yet.
     func reload(key newKey: AnyHashable? = nil, range newRange: DateRange, fetch newFetch: @escaping Fetch,
-                showSkeleton: Bool = false) async {
+                showSkeleton: Bool = false, now: Date = Date()) async {
         listGeneration += 1
         pageGeneration += 1  // drop any outstanding page request
         let token = listGeneration
@@ -91,6 +127,8 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
             range = newRange
             fetch = newFetch
             key = newKey
+            loadedAt = now
+            hasLoadedMore = false
             items = page.items
             nextCursor = page.nextCursor
             loadMoreError = nil
@@ -132,6 +170,7 @@ final class HistoryFeed<Item: Codable & Hashable & Sendable & Identifiable> {
             let known = Set(items.map(\.id))
             items.append(contentsOf: page.items.filter { !known.contains($0.id) })
             nextCursor = page.nextCursor
+            hasLoadedMore = true
             isLoadingMore = false
         } catch {
             guard token == pageGeneration else { return }

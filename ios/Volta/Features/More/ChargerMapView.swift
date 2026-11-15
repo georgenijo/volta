@@ -6,7 +6,7 @@ struct ChargerMapView: View {
     @Environment(\.vehicleID) private var vehicleID
     @State private var state: Loadable<[ChargerLocation]> = .loading
     @State private var generation = UUID()
-    @State private var selected: ChargerLocation?
+    @Environment(\.pushMoreRoute) private var push
     @State private var loadedVehicle: Int?
     var body: some View {
         // Wide: the map fills one pane beside the list of places.
@@ -21,7 +21,7 @@ struct ChargerMapView: View {
                         Map {
                             ForEach(mapped) { location in
                                 Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude!, longitude: location.longitude!)) {
-                                    Button { selected = location } label: {
+                                    Button { push?(.chargerPlace(location)) } label: {
                                         Image(systemName: "bolt.fill").padding(12).foregroundStyle(.white).background(ScreenKit.blue, in: Circle())
                                     }.accessibilityLabel("\(location.name), \(location.sessionCount) sessions")
                                 }
@@ -37,7 +37,7 @@ struct ChargerMapView: View {
         } secondary: {
             if let locations = state.value, !locations.isEmpty {
                 ForEach(locations) { location in
-                    Button { selected = location } label: {
+                    Button { push?(.chargerPlace(location)) } label: {
                         Card {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack { Text(location.name).font(.headline); Spacer(); Image(systemName: "chevron.right") }
@@ -54,11 +54,9 @@ struct ChargerMapView: View {
         }
         .screenKitPage("Charger Map")
         // The task starts again when the page moves, as when iPhone Duo folds;
-        // only another vehicle closes the open place and reloads.
+        // only another vehicle reloads.
         .task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load() } }
-        .onChange(of: vehicleID) { _, _ in selected = nil }
         .refreshable { await load() }
-        .navigationDestination(item: $selected) { location in ChargerLocationSessionsView(location: location) }
     }
     @MainActor private func load() async {
         let id = vehicleID, token = UUID(); generation = token; state = .loading
@@ -83,12 +81,13 @@ struct ChargerLocationSessionsView: View {
     @State private var paging = false
     @State private var pageError: String?
     @State private var generation = UUID()
+    @Environment(\.pushMoreRoute) private var push
     var body: some View {
         ScreenKit.Page(spacing: 16) {
             LoadableContent(state: state, retry: { await load(reset: true) }) { sessions in
                 if sessions.isEmpty { Text("No sessions remain at this recorded location.").foregroundStyle(ScreenKit.secondary) }
                 ForEach(sessions) { session in
-                    NavigationLink { ChargingDetailView(charge: session) } label: {
+                    Button { push?(.chargerSession(session)) } label: {
                         Card {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(VoltaFormat.dateTime(session.start)).font(.headline)

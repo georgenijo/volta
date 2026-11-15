@@ -228,6 +228,74 @@ private struct Row: Codable, Hashable, Sendable, Identifiable { var id: Int }
         XCTAssertEqual(feed.items.map(\.id), [9])
     }
 
+    func testLoadIfNeededChecksAnAgedListInPlace() async {
+        let gate = Gate()
+        let feed = HistoryFeed<Row>()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)  // 08:00 UTC
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let first = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start, calendar: utc) }
+        await settle { gate.requests.count == 1 }
+        gate.succeed(0, ids: [5, 4], next: "c1")
+        await first.value
+        let more = Task { await feed.loadMore() }
+        await settle { gate.requests.count == 2 }
+        gate.succeed(1, ids: [3], next: "c2")
+        await more.value
+
+        // Back within the minute: nothing is fetched.
+        await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 30, calendar: utc)
+        XCTAssertEqual(gate.requests.count, 2)
+
+        // Back later the same day: the first page is fetched again, the rows
+        // stay on screen, and the older page and its cursor are kept.
+        let later = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 600, calendar: utc) }
+        await settle { gate.requests.count == 3 }
+        XCTAssertEqual(feed.phase, .loaded)
+        XCTAssertEqual(feed.items.map(\.id), [5, 4, 3])
+        gate.succeed(2, ids: [6, 5], next: "c1b")
+        await later.value
+        XCTAssertEqual(feed.items.map(\.id), [6, 5, 4, 3])
+        XCTAssertEqual(feed.nextCursor, "c2")
+
+        // A failed check leaves the list alone.
+        let failing = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 1_200, calendar: utc) }
+        await settle { gate.requests.count == 4 }
+        gate.fail(3)
+        await failing.value
+        XCTAssertEqual(feed.phase, .loaded)
+        XCTAssertEqual(feed.items.map(\.id), [6, 5, 4, 3])
+
+        // The next day every range has moved: the list starts over.
+        let nextDay = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 86_400, calendar: utc) }
+        await settle { gate.requests.count == 5 }
+        XCTAssertEqual(feed.phase, .loading)
+        gate.succeed(4, ids: [8], next: nil)
+        await nextDay.value
+        XCTAssertEqual(feed.items.map(\.id), [8])
+    }
+
+    func testLoadIfNeededReplacesAnAgedFirstPage() async {
+        let gate = Gate()
+        let feed = HistoryFeed<Row>()
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let first = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start, calendar: utc) }
+        await settle { gate.requests.count == 1 }
+        gate.succeed(0, ids: [5, 4], next: "c1")
+        await first.value
+
+        // Only the first page is loaded, so the fresh one replaces it and its cursor.
+        let later = Task { await feed.loadIfNeeded(key: "30d", range: range, fetch: gate.fetch, now: start + 600, calendar: utc) }
+        await settle { gate.requests.count == 2 }
+        gate.succeed(1, ids: [6, 5], next: "c1b")
+        await later.value
+        XCTAssertEqual(feed.phase, .loaded)
+        XCTAssertEqual(feed.items.map(\.id), [6, 5])
+        XCTAssertEqual(feed.nextCursor, "c1b")
+    }
+
     func testLoadIfNeededRetriesAFailedOrCancelledLoad() async {
         let gate = Gate()
         let feed = HistoryFeed<Row>()
