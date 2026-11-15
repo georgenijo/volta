@@ -35,7 +35,7 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | Shell (A) | `tab.charging` | Charging tab button |
 | Shell (A) | `tab.drives` | Drives tab button |
 | Shell (A) | `tab.idles` | Idles tab button |
-| Shell (A) | `button.more` | Circular More button |
+| Shell (A) | `tab.more` | More tab button |
 | Dashboard (A) | `button.controls` | Opens Controls sheet |
 | More (C) | `button.settings` | Pushes Settings from More |
 | Dashboard (A) | `screen.dashboard`, `scroll.dashboard` | Loaded heading and main scroll view |

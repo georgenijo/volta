@@ -318,7 +318,7 @@ final class ScreenScreenshotTests: XCTestCase {
     }
 
     private func openMore() throws {
-        try navigate("button.more", to: "more")
+        try navigate("tab.more", to: "more")
     }
 
     /// A cold CI simulator can report a tab hittable before its first synthesized

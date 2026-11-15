@@ -73,9 +73,10 @@ The API binds only to the tailnet; it is never exposed publicly.
 - `VoltaApp` (frame) shows `PairingView` (frame) until a device token exists,
   then `MainShell()` (Screens A) with `.environment(\.dataSource, …)` and
   `.environment(\.units, …)` injected.
-- `MainShell` hosts the floating bottom bar: Dashboard (car), Charging (bolt),
-  Drives (steering wheel), Idles (P), and a separate circular "…" button that
-  opens More. Screens A owns the bar; it embeds `ChargingHistoryView()`,
+- `MainShell` is a system tab view: Dashboard (car), Charging (bolt), Drives
+  (steering wheel), Idles (P) and More (grid). The system places the bar,
+  at the bottom on most iPhones and on the side on iPhone Duo. Screens A
+  owns the shell; it embeds `ChargingHistoryView()`,
   `DrivesHistoryView()`, `IdlesHistoryView()` (Screens B) and `MoreView()`
   (Screens C). Those four type names are fixed; until they exist, Screens A
   may use local placeholders that it deletes once integrated.

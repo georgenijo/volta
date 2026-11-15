@@ -16,7 +16,7 @@ Owned by Screens A. Other screens read and use it; ask Screens A for changes
 | `Color(hex: 0xRRGGBB)` | literal helper |
 | `VoltaSpacing.xxs…xxl` | 2, 4, 8, 12, 16, 24, 32 |
 | `VoltaSpacing.screen` | 20, horizontal screen inset |
-| `VoltaSpacing.tabBarClearance` | 110, bottom content inset so the floating tab bar doesn't cover content |
+| `VoltaSpacing.tabBarClearance` | 24, breathing room below the last item of a scrolling screen (the system tab bar already insets scroll content) |
 | `VoltaRadius.card / control / wideButton` | 20 / 12 / 14 |
 | `Font.voltaNumeral(size)` | heavy SF Pro numerals (prefer `BigNumber`) |
 | `Font.voltaLabel`, `.voltaCardTitle`, `.voltaRowTitle`, `.voltaRowSubtitle`, `.voltaScreenTitle`, `.voltaUnit` | text styles (all Dynamic Type aware) |
@@ -51,9 +51,21 @@ All tokens also work as `ShapeStyle` shorthands: `.foregroundStyle(.voltaTextSec
 
 - Screens use `.voltaScreenBackground()` and `.preferredColorScheme(.dark)` is
   set app-wide by `MainShell`.
-- History/More screens own their `NavigationStack` and hide the system nav
-  bar; `MainShell` embeds them bare and floats the tab bar over them. Add
-  `.contentMargins(.bottom, VoltaSpacing.tabBarClearance, for: .scrollContent)`
-  (or equivalent) to scroll views.
+- `MainShell` is a system `TabView`; screens own their `NavigationStack`. The
+  system places the tab bar and toolbars: at the bottom and top on most
+  iPhones, and in a strip on the side on iPhone Duo's outer display and its
+  inner display opened flat. Do not draw bars or pin controls to an edge.
+- Screen controls are system toolbar items, each a `Label` with a title and a
+  symbol, tinted `Color.voltaTextPrimary`. Use the system back button.
+- A title in the navigation bar keeps a horizontal bar alive. Put it in the
+  bar only when `@Environment(\.barsOnSide)` is false, and draw it in the
+  content otherwise (see `DashboardView`).
+- Branch on size classes and the window's shape, never on a device or screen
+  size. At regular width use the room: `VoltaPanes` for two parts side by
+  side (the system keeps both clear of the fold), a split view for list and
+  detail, and `voltaReadableWidth()` to cap a single column.
+- Backdrops that run to the screen edge ignore the top and horizontal safe
+  areas, so they continue under a side bar.
+- Scroll views add `VoltaSpacing.tabBarClearance` below their last item.
 - Section label → content spacing: 12–16pt. Between sections: 28–32pt.
 - Show "—" for nil values (`null` means "not recorded", never zero).
