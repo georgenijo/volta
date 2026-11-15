@@ -268,6 +268,8 @@ struct TripMapView: View {
             .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
             .safeAreaPadding(.bottom, bottomInset)
             .ignoresSafeArea(edges: underEdges)
+            // MapKit draws into any safe area it touches; keep it to the edges asked for.
+            .clipped()
             // Darker than MapKit's dark style so labels recede behind the route.
             .overlay { Color.black.opacity(0.36).ignoresSafeArea(edges: underEdges).allowsHitTesting(false) }
             .overlay {

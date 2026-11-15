@@ -333,7 +333,12 @@ final class ScreenScreenshotTests: XCTestCase {
     }
 
     private func element(_ identifier: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        // The system tab bar does not reliably carry SwiftUI's tab identifiers,
+        // so `tab.<name>` is found by the tab's title.
+        if identifier.hasPrefix("tab.") {
+            return app.tabBars.buttons[identifier.dropFirst(4).capitalized].firstMatch
+        }
+        return app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
     private func waitForScreen(_ name: String) throws {

@@ -540,7 +540,7 @@ struct ChargingHero: View {
             .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("screen.charging")
             HistoryHeroNotes(notes: totals.notes).padding(.top, 8)
-            HStack(spacing: 13) {
+            HStack(spacing: 10) {
                 ChargingShortcut(title: "Costs & Locations") {
                     Text("$").font(.system(size: 16, weight: .semibold)).foregroundStyle(HistoryTheme.green)
                 } action: { open(.chargerMap) }
@@ -563,15 +563,16 @@ private struct ChargingShortcut<Icon: View>: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                icon
-                Text(title).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white)
-                    .lineLimit(1).minimumScaleFactor(0.8)
+            HStack(spacing: 8) {
+                icon.fixedSize()
+                // Sized to its text: on a narrow window the longer title takes the wider pill.
+                Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
+                    .lineLimit(1).fixedSize()
                 Spacer(minLength: 4)
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 12, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
             }
-            .padding(.leading, 12.5).padding(.trailing, 14)
+            .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 45)
             .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 1))
             .contentShape(.rect(cornerRadius: 20))

@@ -39,7 +39,7 @@ final class StartupBenchmarkTests: XCTestCase {
             let start = ProcessInfo.processInfo.systemUptime
             app.launch()
             let launchReturned = ProcessInfo.processInfo.systemUptime - start
-            let shell = app.buttons["tab.dashboard"]
+            let shell = app.tabBars.buttons["Dashboard"]
             XCTAssertTrue(shell.waitForExistence(timeout: 30))
             let shellReady = ProcessInfo.processInfo.systemUptime - start
             let dashboard = app.descendants(matching: .any)["screen.dashboard"].firstMatch

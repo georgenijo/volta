@@ -31,11 +31,11 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 
 | Owner | Identifier | Element / behavior |
 | --- | --- | --- |
-| Shell (A) | `tab.dashboard` | Dashboard tab button |
-| Shell (A) | `tab.charging` | Charging tab button |
-| Shell (A) | `tab.drives` | Drives tab button |
-| Shell (A) | `tab.idles` | Idles tab button |
-| Shell (A) | `tab.more` | More tab button |
+| Shell (A) | `tab.dashboard` | Dashboard tab; tests find it by its title in the tab bar |
+| Shell (A) | `tab.charging` | Charging tab; tests find it by its title in the tab bar |
+| Shell (A) | `tab.drives` | Drives tab; tests find it by its title in the tab bar |
+| Shell (A) | `tab.idles` | Idles tab; tests find it by its title in the tab bar |
+| Shell (A) | `tab.more` | More tab; tests find it by its title in the tab bar |
 | Dashboard (A) | `button.controls` | Opens Controls sheet |
 | More (C) | `button.settings` | Pushes Settings from More |
 | Dashboard (A) | `screen.dashboard`, `scroll.dashboard` | Loaded heading and main scroll view |
