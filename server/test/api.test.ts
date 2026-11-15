@@ -182,6 +182,33 @@ describe('Sign in with Apple', () => {
     expect(responses.map(r => r.status).sort()).toEqual([200, 401]);
     const replay = await signIn(once); expect(replay.status).toBe(401); expect(await code(replay)).toBe('invalid_apple_token');
   });
+  test('a used token is refused when its signature is spelled differently', async () => {
+    // The last base64url character of an RS256 signature carries four unused bits.
+    const respell = (identityToken: string) => {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+      const value = alphabet.indexOf(identityToken.at(-1)!);
+      return identityToken.slice(0, -1) + alphabet[value ^ 1];
+    };
+    await appleAuth.openAppleEnrollment();
+    const used = await identity(); expect((await signIn(used)).status).toBe(200);
+    expect(respell(used)).not.toBe(used);
+    const again = await signIn(respell(used)); expect(again.status).toBe(401); expect(await code(again)).toBe('invalid_apple_token');
+    const linked = await identity(); expect((await post('/v1/auth/apple/link', { identityToken: linked }, bearer())).status).toBe(204);
+    expect((await post('/v1/auth/apple/link', { identityToken: respell(linked) }, bearer())).status).toBe(400);
+    expect((await signIn(respell(linked))).status).toBe(401);
+    // The respelled token is itself valid when it is the first use.
+    expect((await signIn(respell(await identity()))).status).toBe(200);
+    // A used token is remembered for longer than it can still verify (660 s plus whole-second rounding).
+    const [kept] = await owner`SELECT min(extract(epoch FROM expires_at - now())) AS seconds FROM volta.apple_tokens`;
+    expect(Number(kept!.seconds)).toBeGreaterThan(700);
+  });
+  test('two first sign-ins by the same Apple Account in one window both succeed', async () => {
+    await appleAuth.openAppleEnrollment();
+    const responses = await Promise.all([signIn(await identity()), signIn(await identity())]);
+    expect(responses.map(r => r.status)).toEqual([200, 200]);
+    expect(await owner`SELECT FROM volta.apple_owners`).toHaveLength(1);
+    expect((await signIn(await identity('synthetic.stranger'))).status).toBe(403);
+  });
   test('tokens for another app, issuer, key or algorithm, and stale tokens, are refused', async () => {
     await appleAuth.openAppleEnrollment();
     const now = Math.floor(Date.now() / 1000);

@@ -16,6 +16,8 @@ options:
 settings:
   base:
     CODE_SIGN_STYLE: Automatic
+    # Empty here; Xcode Cloud's settings overlay may supply the server address.
+    VOLTA_SERVER_URL: ''
     MARKETING_VERSION: '1.0'
     CURRENT_PROJECT_VERSION: '1'
     SWIFT_VERSION: '6.0'
@@ -30,7 +32,6 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.georgenijo.volta
-        VOLTA_SERVER_URL: ''
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: '1'

@@ -80,11 +80,16 @@ export class Auth {
       throw new ApiError(503, 'apple_unreachable', 'Apple could not be reached to verify the sign-in; try again');
     }
   }
-  // An identity token is accepted once. It is remembered for as long as it could still verify.
+  // An identity token is accepted once. It is known by what Apple signed, not
+  // by its text: the same signature can be written in more than one base64url
+  // spelling. A token can verify from one tolerance before its issue time to
+  // one tolerance after its maximum age, and verification compares whole
+  // seconds, so it is remembered for that span plus a minute.
   private async consumeAppleToken(tx: DB, identityToken: string) {
+    const signed = identityToken.slice(0, identityToken.lastIndexOf('.'));
     await tx`DELETE FROM volta.apple_tokens WHERE expires_at <= now()`;
     const used = await tx`INSERT INTO volta.apple_tokens (token_hash, expires_at)
-      VALUES (${hash(identityToken)}, now() + make_interval(secs => ${appleTokenMaxAgeSeconds + 2 * appleClockToleranceSeconds}))
+      VALUES (${hash(signed)}, now() + make_interval(secs => ${appleTokenMaxAgeSeconds + 2 * appleClockToleranceSeconds + 60}))
       ON CONFLICT (token_hash) DO NOTHING RETURNING token_hash`;
     return used.length === 1;
   }
@@ -97,12 +102,14 @@ export class Auth {
     const result = await this.sql.begin(async transaction => {
       const tx = transaction as unknown as DB;
       if (!await this.consumeAppleToken(tx, identityToken)) return { error: new ApiError(401, 'invalid_apple_token', 'Apple sign-in could not be verified; try again') };
-      const [owner] = await tx`SELECT subject_hash FROM volta.apple_owners WHERE subject_hash = ${subject}`;
-      if (!owner) {
-        // One open window enrolls one Apple Account; a concurrent second sign-in finds it gone.
+      const enrolled = async () => (await tx`SELECT subject_hash FROM volta.apple_owners WHERE subject_hash = ${subject}`).length === 1;
+      if (!await enrolled()) {
+        // One open window enrolls one Apple Account; a concurrent sign-in finds
+        // it gone. If that was the same account signing in twice, the winner
+        // has committed its enrollment by the time the loser gets here.
         const opened = await tx`DELETE FROM volta.apple_enrollment WHERE expires_at > now() RETURNING id`;
-        if (!opened.length) return { error: new ApiError(403, 'apple_id_not_enrolled', 'This Apple Account is not enrolled on this server. Link it from a paired device, or run `bun run cli apple-enroll` on the server and sign in again within ten minutes.') };
-        await tx`INSERT INTO volta.apple_owners (subject_hash) VALUES (${subject}) ON CONFLICT (subject_hash) DO NOTHING`;
+        if (!opened.length && !await enrolled()) return { error: new ApiError(403, 'apple_id_not_enrolled', 'This Apple Account is not enrolled on this server. Link it from a paired device, or run `bun run cli apple-enroll` on the server and sign in again within ten minutes.') };
+        if (opened.length) await tx`INSERT INTO volta.apple_owners (subject_hash) VALUES (${subject}) ON CONFLICT (subject_hash) DO NOTHING`;
       }
       const token = randomBytes(32).toString('base64url');
       const [device] = await tx`INSERT INTO volta.devices (name, token_hash) VALUES (${deviceName.trim()}, ${hash(token)}) RETURNING *`;
