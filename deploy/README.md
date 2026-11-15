@@ -294,6 +294,24 @@ the phone's pairing screen within ten minutes. Device tokens are stored only as
 hashes in `volta.devices`; the phone stores its raw token in Keychain. Commands
 remain501 `commands_unavailable` in phase1.
 
+## Sign in with Apple
+
+Optional. Reapply `auth-schema.sql` and `auth-grants.sql` as above to create its
+tables, add `APPLE_BUNDLE_ID=<the app's bundle ID>` to the protected env file,
+and restart the API. The API container needs outbound HTTPS to
+`appleid.apple.com`.
+
+A paired phone enrolls its Apple ID from Settings › Account. With no paired
+phone, open a ten-minute enrollment and sign in from the app:
+
+```sh
+fleet exec ubuntu -- 'cd /opt/volta/deploy/ubuntu && sudo docker compose exec -T api bun run cli apple-enroll'
+fleet exec ubuntu -- 'cd /opt/volta/deploy/ubuntu && sudo docker compose exec -T api bun run cli apple-reset'
+```
+
+The enrollment command prints no secret. `apple-reset` forgets every enrolled
+Apple ID; revoke their devices separately.
+
 ## Rollback / stop
 
 Retain the protected env file and `volta` data. Stop only Volta's compose project:

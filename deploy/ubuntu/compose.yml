@@ -12,6 +12,8 @@ services:
       TESLAMATE_DATABASE_URL: ${TESLAMATE_DATABASE_URL:?set read-only database URL}
       AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:?set auth database URL}
       CURRENCY: ${CURRENCY:-USD}
+      # The iOS app's bundle ID. Empty leaves Sign in with Apple off.
+      APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID:-}
       ELEVATION_DEM_DIR: /elevation
     volumes:
       - ${ELEVATION_DEM_PATH:-/opt/volta-elevation}:/elevation:ro

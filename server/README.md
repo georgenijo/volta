@@ -69,6 +69,8 @@ bun run start
 bun run cli pair
 bun run cli devices
 bun run cli revoke 1
+bun run cli apple-enroll
+bun run cli apple-reset
 ```
 
 Pairing prints an 8-character code valid for ten minutes and consumed atomically
@@ -79,6 +81,17 @@ checked on every request. Pairing attempts are globally limited to 30 per ten
 minutes in Postgres, including malformed bodies/names; an operator can wait out
 or clear `volta.rate_limits` if the limit is exhausted. Client IP/identity headers
 are never trusted. The CLI uses only the auth-role URL and never prints tokens.
+
+Sign in with Apple is off unless `APPLE_BUNDLE_ID` names the iOS app. With it
+set, `POST /v1/auth/apple` verifies Apple's identity token against Apple's
+published keys (signature, issuer, audience, at most ten minutes old, accepted
+once) and issues the same device token as pairing. Only an enrolled Apple ID is
+accepted, and Apple's identifier for it is stored only as a SHA-256 hash.
+`apple-enroll` lets the next Apple ID to sign in within ten minutes enroll
+itself; a paired device can also enroll its Apple ID. `apple-reset` forgets
+every enrolled Apple ID; devices they signed in stay connected until revoked.
+Sign-in and link attempts share their own limit of 30 per ten minutes. The API
+needs outbound HTTPS to `appleid.apple.com` to fetch the keys.
 
 ## Schema source and reproducibility
 

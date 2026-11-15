@@ -2,7 +2,7 @@
 
 Base URL: `https://<ubuntu-node>.<tailnet>.ts.net` (via `tailscale serve`).
 JSON, camelCase keys, ISO-8601 UTC timestamps, metric units. Every endpoint
-except `/v1/health` and `/v1/auth/pair` requires `Authorization: Bearer <token>`.
+except `/v1/health`, `POST /v1/auth/pair` and `POST /v1/auth/apple` requires `Authorization: Bearer <token>`.
 Errors: `{ "error": { "code": "not_found", "message": "…" } }` with matching
 HTTP status. `null` means "unknown / not recorded", never zero.
 
@@ -82,10 +82,41 @@ temperature units are inferred and need live confirmation. See
 |---|---|---|---|
 | GET | `/v1/health` | – | `{ ok, version, teslamate: { reachable, lastDataAt } }` |
 | POST | `/v1/auth/pair` | `{ code, deviceName }` | `{ token, device: Device }` |
+| POST | `/v1/auth/apple` | `{ identityToken, deviceName }` | `{ token, device: Device }` |
+| GET | `/v1/auth/apple` | – | `{ available, linked }` |
+| POST | `/v1/auth/apple/link` | `{ identityToken }` | 204 (enrolls that Apple ID) |
 | GET | `/v1/me` | – | `Device` |
 | DELETE | `/v1/me` | – | 204 (revokes this token) |
 
 `Device`: `{ id, name, createdAt, lastSeenAt }`
+
+### Sign in with Apple
+
+`identityToken` is the identity token the app receives from Sign in with Apple.
+The server checks Apple's signature, that the token was issued to the app named
+by `APPLE_BUNDLE_ID`, and that it is at most ten minutes old. Each token is
+accepted once. Sign-in returns the same device token as pairing, so everything
+after sign-in is unchanged.
+
+Volta is single-owner, so only an enrolled Apple ID gets a token. An Apple ID
+is enrolled in one of two ways: a paired device posts its identity token to
+`/v1/auth/apple/link`, or the operator runs `bun run cli apple-enroll`, which
+lets the next Apple ID that signs in within ten minutes enroll itself.
+`GET /v1/auth/apple` reports whether the server accepts Apple sign-in
+(`available`) and whether any Apple ID is enrolled (`linked`).
+
+| Status | Code | Meaning |
+|---|---|---|
+| 400 | `invalid_input` | Missing or malformed `identityToken` or `deviceName` |
+| 400 | `invalid_apple_token` | Link only: the token failed verification or was already used |
+| 401 | `invalid_apple_token` | Sign-in only: the token failed verification or was already used |
+| 403 | `apple_id_not_enrolled` | The Apple ID is not enrolled and no enrollment is open |
+| 429 | `rate_limited` | More than 30 sign-in or link attempts in ten minutes |
+| 501 | `apple_sign_in_unavailable` | `APPLE_BUNDLE_ID` is not set |
+| 503 | `apple_unreachable` | Apple's signing keys could not be fetched |
+
+Link reports a bad token as 400 because a 401 on an authenticated route means
+the device's own token was revoked.
 
 ## Vehicles
 

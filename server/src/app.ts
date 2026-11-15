@@ -21,7 +21,7 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
   });
   app.use('*', bodyLimit({ maxSize: 4096, onError: c => c.json({ error: { code: 'payload_too_large', message: 'Body exceeds 4096 bytes' } }, 413) }));
   app.use('/v1/*', async (c, next) => {
-    if (!((c.req.method === 'GET' && c.req.path === '/v1/health') || (c.req.method === 'POST' && c.req.path === '/v1/auth/pair'))) c.set('device', await auth.authenticate(c.req.header('Authorization')));
+    if (!((c.req.method === 'GET' && c.req.path === '/v1/health') || (c.req.method === 'POST' && (c.req.path === '/v1/auth/pair' || c.req.path === '/v1/auth/apple')))) c.set('device', await auth.authenticate(c.req.header('Authorization')));
     await next();
   });
   app.onError((error, c) => {
@@ -32,14 +32,17 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
   });
   app.notFound(c => c.json({ error: { code: 'not_found', message: 'Resource not found' } }, 404));
   app.get('/v1/health', async c => c.json(await telemetry.health()));
-  app.post('/v1/auth/pair', async c => {
-    let body: unknown;
-    try { body = await c.req.json(); } catch (error) {
+  // Malformed JSON becomes null so each handler reports its own expected shape.
+  const credentials = async (c: { req: { json(): Promise<unknown> } }) => {
+    try { return await c.req.json(); } catch (error) {
       if (error instanceof Error && error.name === 'BodyLimitError') throw error;
-      body = null;
+      return null;
     }
-    return c.json(await auth.pair(body));
-  });
+  };
+  app.post('/v1/auth/pair', async c => c.json(await auth.pair(await credentials(c))));
+  app.post('/v1/auth/apple', async c => c.json(await auth.appleSignIn(await credentials(c))));
+  app.get('/v1/auth/apple', async c => c.json(await auth.appleStatus()));
+  app.post('/v1/auth/apple/link', async c => { await auth.appleLink(await credentials(c)); return c.body(null, 204); });
   app.get('/v1/me', c => c.json(c.get('device')));
   app.delete('/v1/me', async c => { await auth.revoke(c.get('device').id); return c.body(null, 204); });
   app.get('/v1/vehicles', async c => c.json(await telemetry.vehicles()));

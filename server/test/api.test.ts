@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { ServiceLog } from '../src/service';
+import { AppleVerifier } from '../src/apple';
 import { Auth } from '../src/auth';
 import { createApp } from '../src/app';
 import { connect } from '../src/db';
@@ -20,7 +22,7 @@ const json = async (path: string) => { const response = await request(path); con
 const pair = (code: string, name = 'Synthetic phone') => request('/v1/auth/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, deviceName: name }) }, false);
 beforeAll(async () => { await owner`SELECT 1`; });
 beforeEach(async () => {
-  await owner`TRUNCATE public.charges, public.charging_processes, public.positions, public.drives, public.states, public.updates, public.cars, public.car_settings, public.addresses, public.geofences, volta.service_events, volta.service_items, volta.devices, volta.pairing_codes, volta.rate_limits RESTART IDENTITY CASCADE`;
+  await owner`TRUNCATE public.charges, public.charging_processes, public.positions, public.drives, public.states, public.updates, public.cars, public.car_settings, public.addresses, public.geofences, volta.service_events, volta.service_items, volta.devices, volta.pairing_codes, volta.rate_limits, volta.apple_owners, volta.apple_enrollment, volta.apple_tokens RESTART IDENTITY CASCADE`;
   await owner.file(new URL('./fixtures.sql', import.meta.url));
   const response = await pair(await auth.createPairingCode());
   expect(response.status).toBe(200); token = (await response.json() as any).token; logs = [];
@@ -108,6 +110,153 @@ describe('pairing and authorization', () => {
     const devices = await run('devices'); expect(devices.status).toBe(0); expect(JSON.parse(devices.out)).toHaveLength(1);
     const me = await json('/v1/me'); expect((await run('revoke', String(me.id))).status).toBe(0);
     expect((await request('/v1/me')).status).toBe(401); expect((await run('revoke', '999')).status).toBe(1);
+  });
+});
+
+describe('Sign in with Apple', () => {
+  const bundleId = 'com.example.volta';
+  let signer: CryptoKey, stranger: CryptoKey, keys: ReturnType<typeof createLocalJWKSet>;
+  let appleAuth: Auth, appleApp: ReturnType<typeof createApp>;
+  beforeAll(async () => {
+    const pair = await generateKeyPair('RS256'); signer = pair.privateKey;
+    stranger = (await generateKeyPair('RS256')).privateKey;
+    keys = createLocalJWKSet({ keys: [{ ...await exportJWK(pair.publicKey), kid: 'synthetic', alg: 'RS256', use: 'sig' }] });
+    appleAuth = new Auth(authDb, new AppleVerifier(bundleId, keys));
+    appleApp = createApp(appleAuth, telemetry, entry => logs.push(entry));
+  });
+  // Each token is distinct: RS256 signatures are deterministic, so a random claim keeps repeats apart.
+  const identity = (subject = 'synthetic.owner', change: { issuer?: string; audience?: string; issuedAt?: number; key?: CryptoKey; alg?: string } = {}) => {
+    const now = Math.floor(Date.now() / 1000), issuedAt = change.issuedAt ?? now;
+    return new SignJWT({ nonce: randomUUID() }).setProtectedHeader({ alg: change.alg ?? 'RS256', kid: 'synthetic' })
+      .setIssuer(change.issuer ?? 'https://appleid.apple.com').setAudience(change.audience ?? bundleId).setSubject(subject)
+      .setIssuedAt(issuedAt).setExpirationTime(issuedAt + 86400).sign(change.key ?? signer);
+  };
+  const post = (path: string, body: unknown, headers: Record<string, string> = {}, target = appleApp) =>
+    target.request(path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
+  const signIn = async (identityToken: string, deviceName = 'Synthetic Duo') => post('/v1/auth/apple', { identityToken, deviceName });
+  const bearer = () => ({ Authorization: `Bearer ${token}` });
+  const code = async (response: Response) => (await response.json() as any).error.code;
+
+  test('is refused until the server is configured for it', async () => {
+    const response = await post('/v1/auth/apple', { identityToken: await identity(), deviceName: 'Phone' }, {}, app);
+    expect(response.status).toBe(501); expect(await code(response)).toBe('apple_sign_in_unavailable');
+    expect((await post('/v1/auth/apple/link', { identityToken: await identity() }, bearer(), app)).status).toBe(501);
+    expect(await json('/v1/auth/apple')).toEqual({ available: false, linked: false });
+    expect(() => new AppleVerifier('not a bundle id')).toThrow();
+  });
+  test('an Apple ID that is not enrolled gets no token', async () => {
+    const response = await signIn(await identity());
+    expect(response.status).toBe(403); expect(await code(response)).toBe('apple_id_not_enrolled');
+    expect(await owner`SELECT FROM volta.apple_owners`).toHaveLength(0);
+    expect(await auth.devices()).toHaveLength(1);
+  });
+  test('an open enrollment enrolls one Apple ID, which then signs in without it', async () => {
+    await appleAuth.openAppleEnrollment();
+    const first = await signIn(await identity()); expect(first.status).toBe(200);
+    const issued = await first.json() as any; expect(issued.device.name).toBe('Synthetic Duo');
+    expect((await appleApp.request('/v1/me', { headers: { Authorization: `Bearer ${issued.token}` } })).status).toBe(200);
+    const [stored] = await owner`SELECT subject_hash FROM volta.apple_owners`;
+    expect(Buffer.from(stored!.subject_hash).equals(createHash('sha256').update('synthetic.owner').digest())).toBe(true);
+    // The window is spent: another Apple ID is refused, the enrolled one is not.
+    expect((await signIn(await identity('synthetic.stranger'))).status).toBe(403);
+    expect((await signIn(await identity())).status).toBe(200);
+    expect(await owner`SELECT FROM volta.apple_owners`).toHaveLength(1);
+  });
+  test('an enrolled sign-in leaves an open enrollment for the Apple ID it was opened for', async () => {
+    await appleAuth.openAppleEnrollment(); expect((await signIn(await identity())).status).toBe(200);
+    await appleAuth.openAppleEnrollment(); expect((await signIn(await identity())).status).toBe(200);
+    expect((await signIn(await identity('synthetic.second'))).status).toBe(200);
+    expect(await owner`SELECT FROM volta.apple_owners`).toHaveLength(2);
+  });
+  test('an expired enrollment enrolls nobody, and one window admits one of two concurrent Apple IDs', async () => {
+    await appleAuth.openAppleEnrollment(); await owner`UPDATE volta.apple_enrollment SET expires_at = now() - interval '1 second'`;
+    expect((await signIn(await identity())).status).toBe(403);
+    await appleAuth.openAppleEnrollment();
+    const responses = await Promise.all([signIn(await identity('synthetic.a')), signIn(await identity('synthetic.b'))]);
+    expect(responses.map(r => r.status).sort()).toEqual([200, 403]);
+  });
+  test('an identity token is accepted once, even concurrently', async () => {
+    await appleAuth.openAppleEnrollment(); expect((await signIn(await identity())).status).toBe(200);
+    const once = await identity();
+    const responses = await Promise.all([signIn(once), signIn(once)]);
+    expect(responses.map(r => r.status).sort()).toEqual([200, 401]);
+    const replay = await signIn(once); expect(replay.status).toBe(401); expect(await code(replay)).toBe('invalid_apple_token');
+  });
+  test('tokens for another app, issuer, key or algorithm, and stale tokens, are refused', async () => {
+    await appleAuth.openAppleEnrollment();
+    const now = Math.floor(Date.now() / 1000);
+    const forged = [
+      await identity('synthetic.owner', { audience: 'com.example.other' }),
+      await identity('synthetic.owner', { issuer: 'https://appleid.example.com' }),
+      await identity('synthetic.owner', { key: stranger }),
+      await identity('synthetic.owner', { issuedAt: now - 700 }),
+      await identity('synthetic.owner', { issuedAt: now + 120 }),
+      await new SignJWT({}).setProtectedHeader({ alg: 'HS256', kid: 'synthetic' }).setIssuer('https://appleid.apple.com').setAudience(bundleId).setSubject('synthetic.owner').setIssuedAt().setExpirationTime('5m').sign(new TextEncoder().encode('a'.repeat(32))),
+      `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify({ iss: 'https://appleid.apple.com', aud: bundleId, sub: 'synthetic.owner', iat: now, exp: now + 300 })).toString('base64url')}.AA`,
+      await identity(''),
+    ];
+    for (const identityToken of forged) {
+      const response = await signIn(identityToken); expect(response.status).toBe(401); expect(await code(response)).toBe('invalid_apple_token');
+    }
+    // None of them spent the enrollment or created a device.
+    expect(await owner`SELECT FROM volta.apple_enrollment`).toHaveLength(1);
+    expect(await auth.devices()).toHaveLength(1);
+  });
+  test('malformed requests get envelope errors', async () => {
+    for (const body of ['{', '[]', { identityToken: 'not-a-token', deviceName: 'Phone' }, { identityToken: await identity(), deviceName: ' ' }, { identityToken: await identity() }, { deviceName: 'Phone' }]) {
+      const response = await post('/v1/auth/apple', body); expect(response.status).toBe(400); expect(await code(response)).toBe('invalid_input');
+    }
+    expect((await post('/v1/auth/apple', 'a'.repeat(4097))).status).toBe(413);
+  });
+  test('a failure to reach Apple is not reported as a bad token', async () => {
+    const offline = createApp(new Auth(authDb, new AppleVerifier(bundleId, async () => { throw new Error('offline'); })), telemetry, () => {});
+    const response = await post('/v1/auth/apple', { identityToken: await identity(), deviceName: 'Phone' }, {}, offline);
+    expect(response.status).toBe(503); expect(await code(response)).toBe('apple_unreachable');
+  });
+  test('attempts are limited across Auth instances', async () => {
+    for (let n = 0; n < 30; n++) expect((await signIn(await identity())).status).toBe(403);
+    await appleAuth.openAppleEnrollment();
+    const response = await signIn(await identity()); expect(response.status).toBe(429); expect(await code(response)).toBe('rate_limited');
+    await expect(new Auth(authDb, new AppleVerifier(bundleId, keys)).appleSignIn({ identityToken: await identity(), deviceName: 'Phone' })).rejects.toMatchObject({ status: 429 });
+    await owner`UPDATE volta.rate_limits SET window_start = now() - interval '11 minutes'`;
+    expect((await signIn(await identity())).status).toBe(200);
+    // Pairing has its own limit.
+    expect((await owner`SELECT key FROM volta.rate_limits ORDER BY key`).map(r => r.key)).toEqual(['apple', 'pair']);
+  });
+  test('a paired device enrolls its Apple ID, and a bad token does not disconnect it', async () => {
+    expect(await (await appleApp.request('/v1/auth/apple', { headers: bearer() })).json()).toEqual({ available: true, linked: false });
+    expect((await post('/v1/auth/apple/link', { identityToken: await identity() })).status).toBe(401);
+    const bad = await post('/v1/auth/apple/link', { identityToken: await identity('synthetic.owner', { key: stranger }) }, bearer());
+    expect(bad.status).toBe(400); expect(await code(bad)).toBe('invalid_apple_token');
+    expect((await post('/v1/auth/apple/link', {}, bearer())).status).toBe(400);
+    const once = await identity();
+    expect((await post('/v1/auth/apple/link', { identityToken: once }, bearer())).status).toBe(204);
+    const replay = await post('/v1/auth/apple/link', { identityToken: once }, bearer()); expect(replay.status).toBe(400);
+    expect((await post('/v1/auth/apple/link', { identityToken: await identity() }, bearer())).status).toBe(204);
+    expect(await (await appleApp.request('/v1/auth/apple', { headers: bearer() })).json()).toEqual({ available: true, linked: true });
+    expect((await appleApp.request('/v1/me', { headers: bearer() })).status).toBe(200);
+    expect((await signIn(await identity())).status).toBe(200);
+    expect((await signIn(await identity('synthetic.stranger'))).status).toBe(403);
+    expect((await appleApp.request('/v1/auth/apple')).status).toBe(401);
+  });
+  test('logs carry neither the identity token nor the issued device token', async () => {
+    await appleAuth.openAppleEnrollment(); const identityToken = await identity();
+    const issued = (await (await signIn(identityToken)).json() as any).token;
+    const rendered = JSON.stringify(logs); expect(rendered).toContain('/v1/auth/apple');
+    expect(rendered).not.toContain(identityToken); expect(rendered).not.toContain(issued); expect(rendered).not.toContain('synthetic.owner');
+  });
+  test('CLI opens enrollment and forgets enrolled Apple IDs', async () => {
+    const run = async (...args: string[]) => {
+      const child = Bun.spawn([process.execPath, 'src/cli.ts', ...args], { cwd: new URL('..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' });
+      return { status: await child.exited, out: await new Response(child.stdout).text() };
+    };
+    expect((await run('apple-enroll')).status).toBe(0);
+    const issued = await signIn(await identity()); expect(issued.status).toBe(200);
+    const reset = await run('apple-reset'); expect(reset.status).toBe(0); expect(reset.out).toContain('Forgot 1 ');
+    expect((await signIn(await identity())).status).toBe(403);
+    // The device it signed in stays connected until it is revoked.
+    expect((await appleApp.request('/v1/me', { headers: { Authorization: `Bearer ${(await issued.json() as any).token}` } })).status).toBe(200);
+    expect((await run('apple-enroll', 'extra')).status).toBe(1);
   });
 });
 
