@@ -68,7 +68,7 @@ struct AccountSettingsView: View {
     }
 
     private var unpairTitle: String {
-        if model.isLaunchDemo { return "Exit launch demo" }
+        if model.isLaunchDemo { return "Exit demo" }
         return model.isDemoMode ? "Leave demo mode" : "Unpair this iPhone"
     }
     private var dialogTitle: String { model.isDemoMode ? "\(unpairTitle)?" : "Unpair this iPhone?" }
