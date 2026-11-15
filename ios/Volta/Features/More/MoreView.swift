@@ -5,21 +5,28 @@ import SwiftUI
 /// Compact width (an ordinary iPhone, iPhone Duo's outer display): a list that
 /// pushes each page. Regular width (iPhone Duo's inner display): a sidebar of
 /// areas beside the selected page, as Mail shows a list beside a message.
-/// Navigation carries over when the window changes between the two.
+///
+/// Both are one split view, which the system collapses into a single stack in
+/// compact width. Folding and unfolding iPhone Duo therefore keeps the open
+/// pages themselves, with their scroll positions, pushed pages and sheets.
 struct MoreView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.barsOnSide) private var barsOnSide
-    /// Compact: the pushed pages.
-    @State private var path: [MoreRoute] = []
-    /// Regular: the page beside the sidebar, and what it has pushed.
+    /// The open area: pushed over the index in compact width, beside the
+    /// sidebar in regular width.
     @State private var selection: MoreRoute?
+    /// What the open area has pushed.
     @State private var detailPath: [MoreRoute] = []
+    /// Which column a compact window shows: the index or the open area.
+    @State private var compactColumn: NavigationSplitViewColumn = .sidebar
     /// The split view picked `selection` itself, so closing to compact width
     /// returns to the index rather than to a page nobody opened.
     @State private var selectionIsDefault = false
     @State private var vehicleName: String?
+    /// Set while the area's own stack is popping; see `compactColumnBinding`.
+    @State private var pop = PopGuard()
     /// Leading edge of iPhone Duo's fold while the device is partly folded,
     /// so the sidebar can take one side and the page the other.
     @State private var foldX: CGFloat?
@@ -27,11 +34,34 @@ struct MoreView: View {
     private var isSplit: Bool { horizontalSizeClass == .regular }
 
     var body: some View {
-        Group {
-            if isSplit { split } else { stack }
+        NavigationSplitView(preferredCompactColumn: compactColumnBinding) {
+            Group {
+                if isSplit { sidebar } else { index }
+            }
+            .navigationSplitViewColumnWidth(sidebarWidth)
+        } detail: {
+            NavigationStack(path: detailPathBinding) {
+                Group {
+                    if let selection {
+                        // A new selection is a new page with fresh state.
+                        selection.destination.id(selection)
+                    } else {
+                        EmptyState(systemImage: "square.grid.2x2", title: "Choose an area",
+                                   message: "Stats, battery, tires, maintenance and settings open here.")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .voltaScreenBackground()
+                    }
+                }
+                .moreDestinations()
+            }
         }
-        .onAppear { if isSplit { carryNavigation(toSplit: true) } }
-        .onChange(of: isSplit) { _, split in carryNavigation(toSplit: split) }
+        .navigationSplitViewStyle(.balanced)
+        .onGeometryChange(for: CGFloat?.self) { proxy in
+            guard #available(iOS 27.1, *) else { return nil }
+            return proxy.reservedRegions(kind: .division).first(where: \.isActive).map(\.frame.minX)
+        } action: { foldX = $0 }
+        .onAppear { adapt(toSplit: isSplit) }
+        .onChange(of: isSplit) { _, split in adapt(toSplit: split) }
         .task(id: vehicleID) {
             let vehicles = (try? await dataSource.vehicles()) ?? []
             vehicleName = vehicles.first(where: { $0.id == vehicleID })?.name ?? vehicles.first?.name
@@ -77,79 +107,50 @@ struct MoreView: View {
         ]),
     ]
 
-    // MARK: Compact: push navigation
+    // MARK: Compact: the index, which pushes each area
 
-    private var stack: some View {
-        NavigationStack(path: $path) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if barsOnSide { indexTitle.padding(.top, VoltaSpacing.sm) }
-                    ForEach(sections) { section in
-                        VStack(alignment: .leading, spacing: 0) {
-                            ScreenKit.SectionHeader(title: section.title, dot: section.dot, identifier: section.identifier)
-                            ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
-                                NavigationLink(value: item.route) {
-                                    ScreenKit.NavRow(symbol: item.symbol, tint: item.tint, title: item.title,
-                                                     showsDivider: index < section.items.count - 1)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("row.more.\(item.slug)")
+    private var index: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if barsOnSide { indexTitle.padding(.top, VoltaSpacing.sm) }
+                ForEach(sections) { section in
+                    VStack(alignment: .leading, spacing: 0) {
+                        ScreenKit.SectionHeader(title: section.title, dot: section.dot, identifier: section.identifier)
+                        ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
+                            Button { open(item.route) } label: {
+                                ScreenKit.NavRow(symbol: item.symbol, tint: item.tint, title: item.title,
+                                                 showsDivider: index < section.items.count - 1)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("row.more.\(item.slug)")
                         }
                     }
-
-                    VStack(spacing: 0) {
-                        Rectangle().fill(ScreenKit.hairline).frame(height: 1)
-                        NavigationLink(value: MoreRoute.switchVehicle) {
-                            ScreenKit.CapsRow(symbol: "car.2.fill", tint: ScreenKit.mint, title: "Switch Vehicle",
-                                              subtitle: vehicleName ?? "—")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("row.more.switch-vehicle")
-                    }
-                    .padding(.top, 36)
-
-                    footer.padding(.top, 40)
                 }
-                .padding(.top, barsOnSide ? 0 : 8)
-                .padding(.bottom, ScreenKit.bottomBarClearance)
-                .voltaReadableWidth()
+
+                VStack(spacing: 0) {
+                    Rectangle().fill(ScreenKit.hairline).frame(height: 1)
+                    Button { open(.switchVehicle) } label: {
+                        ScreenKit.CapsRow(symbol: "car.2.fill", tint: ScreenKit.mint, title: "Switch Vehicle",
+                                          subtitle: vehicleName ?? "—")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("row.more.switch-vehicle")
+                }
+                .padding(.top, 36)
+
+                footer.padding(.top, 40)
             }
-            .accessibilityIdentifier("scroll.more")
-            .scrollContentBackground(.hidden)
-            .voltaScreenBackground()
-            .modifier(IndexChrome(barsOnSide: barsOnSide) { path.append(.settings) })
-            .moreDestinations()
+            .padding(.top, barsOnSide ? 0 : 8)
+            .padding(.bottom, ScreenKit.bottomBarClearance)
+            .voltaReadableWidth()
         }
+        .accessibilityIdentifier("scroll.more")
+        .scrollContentBackground(.hidden)
+        .voltaScreenBackground()
+        .modifier(IndexChrome(barsOnSide: barsOnSide) { open(.settings) })
     }
 
     // MARK: Regular: sidebar and detail
-
-    private var split: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(sidebarWidth)
-        } detail: {
-            NavigationStack(path: $detailPath) {
-                Group {
-                    if let selection {
-                        selection.destination.id(selection)
-                    } else {
-                        EmptyState(systemImage: "square.grid.2x2", title: "Choose an area",
-                                   message: "Stats, battery, tires, maintenance and settings open here.")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .voltaScreenBackground()
-                    }
-                }
-                .moreDestinations()
-            }
-        }
-        .navigationSplitViewStyle(.balanced)
-        .onGeometryChange(for: CGFloat?.self) { proxy in
-            guard #available(iOS 27.1, *) else { return nil }
-            return proxy.reservedRegions(kind: .division).first(where: \.isActive).map(\.frame.minX)
-        } action: { foldX = $0 }
-    }
 
     /// Partly folded: the sidebar ends at the fold, so the page sits wholly on
     /// the other side. Otherwise a fixed sidebar width.
@@ -161,10 +162,7 @@ struct MoreView: View {
     /// Picking a row starts that page afresh, the way tapping it pushes it on compact.
     private var sidebarSelection: Binding<MoreRoute?> {
         Binding(get: { selection }, set: { route in
-            guard route != selection || !detailPath.isEmpty else { return }
-            selection = route
-            detailPath = []
-            selectionIsDefault = false
+            if let route { open(route) }
         })
     }
 
@@ -204,7 +202,7 @@ struct MoreView: View {
         .scrollContentBackground(.hidden)
         .accessibilityIdentifier("scroll.more")
         .voltaScreenBackground()
-        .modifier(IndexChrome(barsOnSide: barsOnSide) { sidebarSelection.wrappedValue = .settings })
+        .modifier(IndexChrome(barsOnSide: barsOnSide) { open(.settings) })
     }
 
     /// The index title, drawn in the content when the bars are on the side.
@@ -254,29 +252,87 @@ struct MoreView: View {
             .frame(maxWidth: .infinity)
     }
 
-    // MARK: Carrying navigation between widths
+    // MARK: Opening and closing areas
 
-    /// Opening iPhone Duo shows the page that was open on the outer display
-    /// beside the index; closing it shows the page that was selected.
-    private func carryNavigation(toSplit: Bool) {
-        if toSplit {
-            if let first = path.first {
-                selection = first
-                detailPath = Array(path.dropFirst())
+    /// The column a compact window shows, and in regular width the one
+    /// folding will show. Backing out to the index closes the area, so a
+    /// later unfold shows the default area and a later fold the index again.
+    ///
+    /// The system also reports the index when a page pushed inside the area
+    /// pops, though the area stays on screen. The index can only be reached
+    /// from the area's first page, so a report that comes with a pop, or while
+    /// the area has pushed pages, is ignored.
+    private var compactColumnBinding: Binding<NavigationSplitViewColumn> {
+        Binding(get: { compactColumn }, set: { column in
+            // In regular width this records what folding shows; More sets it.
+            guard !isSplit else { return }
+            guard column == .sidebar else {
+                compactColumn = column
+                return
+            }
+            guard !pop.isPopping, detailPath.isEmpty else { return }
+            close()
+        })
+    }
+
+    /// The area's pushed pages, noting pops for `compactColumnBinding`.
+    /// Going deeper into the default area makes it one somebody opened.
+    private var detailPathBinding: Binding<[MoreRoute]> {
+        Binding(get: { detailPath }, set: { newPath in
+            if newPath.count < detailPath.count { pop.began() }
+            detailPath = newPath
+            if !newPath.isEmpty {
                 selectionIsDefault = false
-            } else if selection == nil {
+                compactColumn = .detail
+            }
+        })
+    }
+
+    /// Opens an area afresh, the way tapping a row pushes it on compact.
+    private func open(_ route: MoreRoute) {
+        guard route != selection || !detailPath.isEmpty || compactColumn != .detail else { return }
+        selection = route
+        detailPath = []
+        selectionIsDefault = false
+        compactColumn = .detail
+    }
+
+    /// Back to the index with no area open.
+    private func close() {
+        selection = nil
+        detailPath = []
+        selectionIsDefault = false
+        compactColumn = .sidebar
+    }
+
+    /// Unfolding iPhone Duo shows the open area beside the sidebar, or the
+    /// first area when none is open. Folding it shows the open area again, or
+    /// the index when the split view only picked the default.
+    private func adapt(toSplit split: Bool) {
+        if split {
+            if selection == nil || compactColumn == .sidebar {
                 selection = .stats
+                detailPath = []
                 selectionIsDefault = true
             }
-            path = []
-        } else {
-            if let selection, !(selectionIsDefault && detailPath.isEmpty) {
-                path = [selection] + detailPath
-            } else {
-                path = []
-            }
-            detailPath = []
+            // Folding shows the area unless the split view picked it.
+            compactColumn = selectionIsDefault ? .sidebar : .detail
+        } else if selectionIsDefault && detailPath.isEmpty {
+            close()
+        } else if selection != nil {
+            compactColumn = .detail
         }
+    }
+}
+
+/// Marks the rest of the current update as part of a pop in the area's stack.
+@MainActor
+private final class PopGuard {
+    private(set) var isPopping = false
+
+    func began() {
+        isPopping = true
+        DispatchQueue.main.async { self.isPopping = false }
     }
 }
 
