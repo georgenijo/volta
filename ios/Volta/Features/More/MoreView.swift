@@ -59,8 +59,13 @@ struct MoreView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .onGeometryChange(for: CGFloat?.self) { proxy in
+            // iOS 27.1 SDK only; see `VoltaPanes`.
+            #if compiler(>=6.4.2)
             guard #available(iOS 27.1, *) else { return nil }
             return proxy.reservedRegions(kind: .division).first(where: \.isActive).map(\.frame.minX)
+            #else
+            return nil
+            #endif
         } action: { foldX = $0 }
         .onAppear { adapt(toSplit: isSplit) }
         .onChange(of: isSplit) { _, split in adapt(toSplit: split) }

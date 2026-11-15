@@ -55,14 +55,25 @@ struct VoltaPanes<Primary: View, Secondary: View>: View {
     @ViewBuilder var secondary: Secondary
 
     var body: some View {
+        // `ArrangementView` is in the iOS 27.1 SDK. Xcode 27.2 (Swift 6.4.2)
+        // is known to have it; older toolchains, such as CI's, build the
+        // plain layout only.
+        #if compiler(>=6.4.2)
         if #available(iOS 27.1, *) {
             ArrangementView { primary } secondary: { secondary }
                 .arrangementViewStyle(.split.axes(.horizontal))
         } else {
-            HStack(spacing: 0) {
-                primary.frame(maxWidth: .infinity)
-                secondary.frame(maxWidth: .infinity)
-            }
+            sideBySide
+        }
+        #else
+        sideBySide
+        #endif
+    }
+
+    private var sideBySide: some View {
+        HStack(spacing: 0) {
+            primary.frame(maxWidth: .infinity)
+            secondary.frame(maxWidth: .infinity)
         }
     }
 }

@@ -120,11 +120,16 @@ extension ToolbarContent {
     /// Keeps the most used items out of the overflow menu longest (iOS 27).
     @ToolbarContentBuilder
     func historyPriority(_ high: Bool = true) -> some ToolbarContent {
+        // iOS 27 SDK only; see `VoltaPanes`.
+        #if compiler(>=6.4.2)
         if #available(iOS 27.0, *) {
             visibilityPriority(high ? .high : .low)
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 }
 
