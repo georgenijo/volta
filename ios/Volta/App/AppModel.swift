@@ -18,9 +18,13 @@ final class AppModel {
     private(set) var isConfiguringAppLock = false
     private(set) var isLoadingVehicles = false
     private(set) var isPairing = false
-    /// The server answered that it doesn't offer Sign in with Apple, so the
-    /// sign-in screen asks for a pairing code instead.
-    private(set) var needsPairingCode = false
+    /// Servers that answered they don't offer Sign in with Apple. The sign-in
+    /// screen asks for a pairing code for these addresses only.
+    private var serversWithoutAppleSignIn: Set<String> = []
+    private var alwaysNeedsPairingCode = false
+    /// The last sign-in got no answer from its server, so the sign-in screen
+    /// shows the address for correction.
+    private(set) var serverAddressInDoubt = false
     private(set) var isUnlocking = false
     private(set) var isLocked = false
     var errorMessage: String?
@@ -123,7 +127,7 @@ final class AppModel {
         isLaunchDemo = launchDemo
         #if DEBUG
         // Startup benchmarks pair with a local fixture that has no Apple sign-in.
-        needsPairingCode = launchArguments.contains("-pairing-code")
+        alwaysNeedsPairingCode = launchArguments.contains("-pairing-code")
         #endif
         if launchDemo || settings.demoMode {
             pairingState = .demo; dataSource = MockDataSource(empty: launchDemo ? false : settings.emptyDemo)
@@ -167,6 +171,17 @@ final class AppModel {
         unpair()
         errorMessage = "This device token was revoked or expired. Sign in again to reconnect."
     }
+    /// True when `serverURL` answered that it doesn't offer Sign in with Apple.
+    func needsPairingCode(for serverURL: String) -> Bool {
+        if alwaysNeedsPairingCode { return true }
+        return Self.serverKey(serverURL).map(serversWithoutAppleSignIn.contains) ?? false
+    }
+    /// Host and port, so spellings of one address match.
+    private static func serverKey(_ serverURL: String) -> String? {
+        guard let url = try? APIDataSource.validatedServerURL(serverURL), let host = url.host?.lowercased() else { return nil }
+        return "\(host):\(url.port ?? 443)"
+    }
+    private func resetSignInFallbacks() { serversWithoutAppleSignIn = []; serverAddressInDoubt = false }
     func pair(serverURL: String, code: String, deviceName: String) async {
         await connect(serverURL: serverURL, deviceName: deviceName, withApple: false) { url, name, session in
             let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -210,6 +225,7 @@ final class AppModel {
             }
             settings.serverURL = url.absoluteString
             settings.signedInWithApple = withApple
+            resetSignInFallbacks()
             settings.demoMode = false
             needsCredentialRetry = false; hasLoadedVehicles = false
             settings.selectedVehicleID = nil; settings.selectedVehicleIsExplicit = false
@@ -221,7 +237,12 @@ final class AppModel {
         } catch is CancellationError { }
         catch {
             guard generation == currentGeneration else { return }
-            if error as? VoltaError == .appleSignInUnavailable { needsPairingCode = true }
+            switch error as? VoltaError {
+            case .appleSignInUnavailable:
+                if let key = Self.serverKey(serverURL) { serversWithoutAppleSignIn.insert(key) }
+            case .unreachable: serverAddressInDoubt = true
+            default: break
+            }
             errorMessage = error.localizedDescription
         }
     }
@@ -234,7 +255,7 @@ final class AppModel {
             settings.demoMode = true; settings.selectedVehicleID = nil; settings.selectedVehicleIsExplicit = false
         }
         pairingState = .demo; dataSource = MockDataSource(empty: empty)
-        vehicles = []; errorMessage = nil
+        vehicles = []; errorMessage = nil; resetSignInFallbacks()
         isLocked = settings.appLockEnabled
         updateSurfaces()
     }
@@ -248,7 +269,7 @@ final class AppModel {
         settings.demoMode = false; settings.emptyDemo = false
         settings.selectedVehicleID = nil; settings.selectedVehicleIsExplicit = false
         needsCredentialRetry = false; hasLoadedVehicles = false; authenticateOnActive = false
-        pairingState = .unpaired; vehicles = []; isLocked = false
+        pairingState = .unpaired; vehicles = []; isLocked = false; resetSignInFallbacks()
         dataSource = MockDataSource(empty: true)
         updateSurfaces()  // clears the widget snapshot and ends Live Activities
         do { try tokenStore.delete(); errorMessage = nil; return true }

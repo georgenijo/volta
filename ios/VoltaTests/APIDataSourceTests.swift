@@ -109,7 +109,7 @@ private func bodyData(_ request: URLRequest) throws -> Data {
         let fallback = source { _ in (502, Data("not JSON".utf8)) }
         await expectError(.server(code: "http_502", message: "The server returned HTTP 502.")) { _ = try await fallback.vehicles() }
         let transport = source { _ in throw URLError(.notConnectedToInternet) }
-        do { _ = try await transport.vehicles(); XCTFail() } catch { guard case .transport = error as? VoltaError else { return XCTFail("Expected transport") } }
+        do { _ = try await transport.vehicles(); XCTFail() } catch { guard case .unreachable = error as? VoltaError else { return XCTFail("Expected unreachable") } }
         let malformed = source { _ in (200, Data("{}".utf8)) }
         await expectError(.transport("The server response could not be decoded.")) { _ = try await malformed.vehicles() }
     }

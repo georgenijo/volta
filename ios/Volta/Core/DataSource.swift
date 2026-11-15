@@ -40,6 +40,8 @@ enum VoltaError: LocalizedError, Equatable {
     case notFound
     case server(code: String, message: String)
     case transport(String)
+    /// No answer from the server: wrong address, offline, or off the tailnet.
+    case unreachable(String)
 
     var errorDescription: String? {
         switch self {
@@ -49,6 +51,7 @@ enum VoltaError: LocalizedError, Equatable {
         case .notFound: "Not found."
         case .server(_, let message): message
         case .transport(let message): message
+        case .unreachable(let message): message
         }
     }
 }

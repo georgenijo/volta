@@ -254,7 +254,7 @@ final class TeslaLinkModel {
         case .server(code: "tesla_link_device_mismatch", _)?: return ("That Tesla sign-in was started on another device. Start again on this iPhone.", false)
         case .server(code: "tesla_unavailable", _)?, .server(code: "http_503", _)?: return ("Your server couldn't reach Tesla. Try again in a moment.", true)
         case .unauthorized?: return (VoltaError.unauthorized.errorDescription ?? "This device is no longer paired.", false)
-        case .transport?: return ("Couldn't reach your Volta server. Check your connection and try again.", true)
+        case .transport?, .unreachable?: return ("Couldn't reach your Volta server. Check your connection and try again.", true)
         default: return ("Something went wrong connecting your Tesla account. Try again.", true)
         }
     }

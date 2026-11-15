@@ -103,6 +103,7 @@ struct APIDataSource: VoltaDataSource {
         } catch let error as VoltaError { throw error }
         catch is CancellationError { throw CancellationError() }
         catch let error as URLError where error.code == .cancelled { throw CancellationError() }
+        catch let error as URLError { throw VoltaError.unreachable(error.localizedDescription) }
         catch { throw VoltaError.transport(error.localizedDescription) }
     }
     private func get<T: Decodable>(_ path: String, query: [URLQueryItem] = []) async throws -> T {

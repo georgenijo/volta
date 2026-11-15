@@ -4,21 +4,24 @@ import UIKit
 /// First run: signs this device in to the owner's volta-api server with
 /// Sign in with Apple, and nothing else. The server address comes from the
 /// build or from an earlier sign-in. Other fields appear only when they are
-/// needed: the address when neither source has one, and a pairing code when
-/// the server doesn't offer Sign in with Apple.
+/// needed: the address when neither source has one or the server didn't
+/// answer, and a pairing code when the server doesn't offer Sign in with Apple.
 struct PairingView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var typedServerURL = ""
     @State private var code = ""
     @State private var isWide = false
+    @State private var showsServerField = false
 
     /// The build's address wins over a saved one, so a build can move Volta to a new server.
     private var knownServerURL: String {
         let builtIn = APIDataSource.builtInServerURL()
         return builtIn.isEmpty ? model.settings.serverURL : builtIn
     }
-    private var serverURL: String { knownServerURL.isEmpty ? typedServerURL : knownServerURL }
+    private var asksForServer: Bool { knownServerURL.isEmpty || showsServerField }
+    private var serverURL: String { asksForServer ? typedServerURL : knownServerURL }
+    private var needsPairingCode: Bool { model.needsPairingCode(for: serverURL) }
     private var deviceName: String { UIDevice.current.name }
     private var canSignIn: Bool { !model.isPairing && !serverURL.isEmpty }
     private var canPair: Bool { canSignIn && code.trimmingCharacters(in: .whitespacesAndNewlines).count == 8 }
@@ -50,9 +53,19 @@ struct PairingView: View {
                 }
             }
         }
-        .onGeometryChange(for: Bool.self) { ScreenKit.isWide($0.size) } action: { isWide = $0 }
+        // Measured without the keyboard, so typing never switches layouts.
+        .background {
+            Color.clear.ignoresSafeArea(.keyboard)
+                .onGeometryChange(for: Bool.self) { ScreenKit.isWide($0.size) } action: { isWide = $0 }
+        }
         .voltaScreenBackground()
         .scrollDismissesKeyboard(.interactively)
+        // A server that didn't answer may have moved: show its address to correct.
+        .onChange(of: model.serverAddressInDoubt, initial: true) { _, inDoubt in
+            guard inDoubt, !showsServerField else { return }
+            if typedServerURL.isEmpty { typedServerURL = knownServerURL }
+            showsServerField = true
+        }
     }
 
     private func centered<Content: View>(_ content: Content) -> some View {
@@ -68,13 +81,13 @@ struct PairingView: View {
 
     private var controls: some View {
         VStack(spacing: VoltaSpacing.lg) {
-            if knownServerURL.isEmpty { serverField }
-            if model.needsPairingCode { codeField }
+            if asksForServer { serverField }
+            if needsPairingCode { codeField }
             if let error = model.errorMessage {
                 InlineBanner(systemImage: "exclamationmark.triangle", message: error, tint: .voltaRed)
                     .accessibilityLabel("Sign-in error: \(error)")
             }
-            if model.needsPairingCode {
+            if needsPairingCode {
                 PillButton(model.isPairing ? "Connecting…" : "Connect", size: .wide, style: .accent, isBusy: model.isPairing) {
                     Task { await model.pair(serverURL: serverURL, code: code, deviceName: deviceName) }
                 }
@@ -87,7 +100,7 @@ struct PairingView: View {
                 .overlay {
                     if model.isPairing {
                         RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white)
-                        ProgressView().tint(.black)
+                        ProgressView().tint(.black).accessibilityLabel("Signing in")
                     }
                 }
                 .accessibilityIdentifier("button.signInWithApple")

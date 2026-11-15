@@ -34,13 +34,14 @@ TeslaMate logger ── Tesla API (George's Tesla tokens live only in TeslaMate)
 1. The sign-in screen shows only Sign in with Apple. The app sends Apple's
    identity token to `POST /v1/auth/apple` and stores the returned device
    token in the Keychain. The server address comes from the build
-   (`VOLTA_SERVER_URL`, see `docs/XCODE_CLOUD.md`) or from an earlier sign-in;
-   a build without one asks for it on the same screen.
+   (`VOLTA_SERVER_URL`, see `docs/XCODE_CLOUD.md`) or from an earlier sign-in.
+   The screen asks for it only when neither has one, or when the server
+   doesn't answer so the address can be corrected.
 2. Only an enrolled Apple Account is accepted: a paired device enrolls its
    Apple Account from Settings, or `volta-api apple-enroll` lets the next Apple
    Account to sign in within 10 minutes enroll itself. See `docs/API.md`.
-3. A server without Sign in with Apple answers so, and the screen then asks
-   for a one-time 8-character pairing code from `bun run pair` (or
+3. A server without Sign in with Apple answers so, and the screen then asks,
+   for that address only, for a one-time 8-character pairing code from `bun run pair` (or
    `volta-api pair`), valid for 10 minutes, sent to `POST /v1/auth/pair`.
 4. Every request sends `Authorization: Bearer <token>`. The server stores only
    a SHA-256 hash of each token, in its own `volta` schema. Devices can be
