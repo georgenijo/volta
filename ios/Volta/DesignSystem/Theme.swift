@@ -62,8 +62,9 @@ enum VoltaSpacing {
     static let xxl: CGFloat = 32
     /// Horizontal inset for screen content.
     static let screen: CGFloat = 20
-    /// Bottom inset that keeps scroll content clear of the floating tab bar.
-    static let tabBarClearance: CGFloat = 110
+    /// Breathing room below the last item of a scrolling screen. The system
+    /// tab bar already insets scroll content through the safe area.
+    static let tabBarClearance: CGFloat = 24
 }
 
 enum VoltaRadius {

@@ -1,18 +1,40 @@
 import SwiftUI
 
-/// Root of the signed-in app: a floating Liquid Glass tab bar (Dashboard,
-/// Charging, Drives, Idles) plus a separate circular "…" button for More.
+/// Root of the signed-in app: a system tab view with Dashboard, Charging,
+/// Drives, Idles and More.
 ///
-/// History and More screens own their own `NavigationStack`s and are embedded
-/// bare. Each tab is created the first time it's selected and then kept alive
-/// so its navigation and scroll state survive tab switches.
+/// The system owns the bar. On iPhone Duo it moves the tabs to the side on
+/// the outer display and on the inner display in landscape; everywhere else
+/// it is the floating Liquid Glass bar at the bottom. Screens own their own
+/// `NavigationStack`s, and a tab is built the first time it is selected and
+/// then kept, so its navigation and scroll state survive tab switches.
 struct MainShell: View {
     enum Tab: String, Hashable, CaseIterable {
         case dashboard, charging, drives, idles, more
+
+        var title: String {
+            switch self {
+            case .dashboard: "Dashboard"
+            case .charging: "Charging"
+            case .drives: "Drives"
+            case .idles: "Idles"
+            case .more: "More"
+            }
+        }
+
+        /// The ellipsis is left to the system's toolbar overflow menu.
+        var symbol: String {
+            switch self {
+            case .dashboard: "car.fill"
+            case .charging: "bolt.fill"
+            case .drives: "steeringwheel"
+            case .idles: "parkingsign"
+            case .more: "square.grid.2x2.fill"
+            }
+        }
     }
 
     @State private var selection: Tab = MainShell.initialTab
-    @State private var visited: Set<Tab> = [MainShell.initialTab]
 
     /// Screenshot aid (DEBUG): `-demoTab charging` opens on that tab.
     private static var initialTab: Tab {
@@ -23,31 +45,20 @@ struct MainShell: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
+        TabView(selection: $selection) {
             ForEach(Tab.allCases, id: \.self) { tab in
-                if visited.contains(tab) {
+                SwiftUI.Tab(tab.title, systemImage: tab.symbol, value: tab) {
                     screen(for: tab)
-                        // Kept-alive tabs never disappear; tell them when they're hidden.
+                        // A kept tab does not disappear when another is selected.
                         .environment(\.isActiveTab, selection == tab)
-                        // Hosted UIKit views (scroll views, maps) ignore
-                        // accessibilityHidden and still win accessibility hit
-                        // tests over the visible tab. Park hidden tabs off screen
-                        // (never animated); they stay mounted, so state survives.
-                        .offset(x: selection == tab ? 0 : 10_000)
-                        .animation(nil, value: selection)
-                        .opacity(selection == tab ? 1 : 0)
-                        .allowsHitTesting(selection == tab)
-                        .accessibilityHidden(selection != tab)
+                        // Each tab learns whether the system put the bars on the side.
+                        .readsBarsOnSide()
                 }
+                .accessibilityIdentifier("tab.\(tab.rawValue)")
             }
-            ShellTabBar(selection: $selection)
-                // Animate the selection capsule, without passing the spring to
-                // a newly mounted screen and its loading placeholders.
-                .animation(.snappy(duration: 0.3), value: selection)
         }
-        .background(Color.voltaBackground.ignoresSafeArea())
-        .onChange(of: selection) { _, new in visited.insert(new) }
         .tint(.voltaBlue)
+        .sensoryFeedback(.selection, trigger: selection)
         .preferredColorScheme(.dark)
     }
 
@@ -64,85 +75,10 @@ struct MainShell: View {
 }
 
 extension EnvironmentValues {
-    /// False while this screen's shell tab is hidden. MainShell keeps visited tabs
-    /// mounted (only opacity changes), so `onDisappear` doesn't fire on tab switches;
-    /// screens that must release state when hidden observe this instead.
+    /// False while this screen's shell tab is not the selected one. The tab
+    /// view keeps visited tabs alive, so screens that must release state when
+    /// hidden observe this instead of `onDisappear`.
     @Entry var isActiveTab: Bool = true
-}
-
-/// The floating bar: a glass capsule with four tabs (selected tab sits in a
-/// darker inner capsule, icon in blue) and a detached glass "…" circle.
-struct ShellTabBar: View {
-    @Binding var selection: MainShell.Tab
-    @Namespace private var ns
-
-    private let items: [(MainShell.Tab, String, String)] = [
-        (.dashboard, "car.fill", "Dashboard"),
-        (.charging, "bolt.fill", "Charging"),
-        (.drives, "steeringwheel", "Drives"),
-        (.idles, "parkingsign", "Idles"),
-    ]
-
-    var body: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 12) {
-                HStack(spacing: 0) {
-                    ForEach(items, id: \.0) { tab, symbol, title in
-                        tabButton(tab, symbol: symbol, title: title)
-                    }
-                }
-                .padding(5)
-                .glassEffect(.regular.interactive(), in: .capsule)
-
-                Button {
-                    select(.more)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(selection == .more ? Color.voltaBlue : Color.voltaTextPrimary)
-                        .frame(width: 66, height: 66)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .accessibilityLabel("More")
-                .accessibilityIdentifier("button.more")
-                .accessibilityAddTraits(selection == .more ? .isSelected : [])
-            }
-        }
-        .padding(.horizontal, VoltaSpacing.screen + 2)
-        .padding(.bottom, 2)
-        .sensoryFeedback(.selection, trigger: selection)
-    }
-
-    private func tabButton(_ tab: MainShell.Tab, symbol: String, title: String) -> some View {
-        let selected = selection == tab
-        return Button {
-            select(tab)
-        } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(selected ? Color.voltaBlue : Color.voltaTextPrimary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 56)
-                .background {
-                    if selected {
-                        Capsule()
-                            .fill(Color.black.opacity(0.35))
-                            .matchedGeometryEffect(id: "selected", in: ns)
-                    }
-                }
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityIdentifier("tab.\(tab.rawValue)")
-        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
-    }
-
-    private func select(_ tab: MainShell.Tab) {
-        selection = tab
-    }
 }
 
 #Preview("Shell") {

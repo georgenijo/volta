@@ -19,6 +19,19 @@ struct DashboardView: View {
     @State private var showNotifications = false
     @State private var showLiveCharge = false
     @State private var scrollPosition = ScrollPosition(edge: .top)
+    /// Window is wider than it is tall (iPhone Duo's inner display opened flat).
+    @State private var isLandscape = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.barsOnSide) private var barsOnSide
+
+    /// Regular width and wide: map and battery on one side, cards on the other.
+    private var usesPanes: Bool {
+        guard horizontalSizeClass == .regular, isLandscape else { return false }
+        switch model.phase {
+        case .loading, .loaded: return true
+        case .failed, .noData: return false
+        }
+    }
 
     /// Visible map height below the safe area before content starts.
     private let mapReveal: CGFloat = 300
@@ -26,11 +39,24 @@ struct DashboardView: View {
     private let mapHeight: CGFloat = 520
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.voltaBackground.ignoresSafeArea()
-            mapLayer
-            content
-            header
+        NavigationStack {
+            Group {
+                if usesPanes {
+                    panes
+                } else {
+                    ZStack(alignment: .top) {
+                        Color.voltaBackground.ignoresSafeArea()
+                        mapLayer
+                        content
+                        topScrim
+                        if barsOnSide { wordmark.padding(.top, VoltaSpacing.md) }
+                    }
+                }
+            }
+            .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { isLandscape = $0 }
+            .toolbarTitleDisplayMode(.inline)
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            .toolbar { toolbar }
         }
         .preferredColorScheme(.dark)
         .task(id: vehicleID) {
@@ -113,57 +139,69 @@ struct DashboardView: View {
             .overlay(Color.voltaBackground.opacity(progress * 0.6))
             .offset(y: -max(scrollOffset, 0) * 0.45 + max(-scrollOffset, 0) * 0.5)
             .scaleEffect(1 + max(-scrollOffset, 0) / 900, anchor: .top)
-            .ignoresSafeArea(edges: .top)
+            // Full width: on iPhone Duo the backdrop continues under the side bar.
+            .ignoresSafeArea(edges: [.top, .horizontal])
             .allowsHitTesting(false)
             .redacted(reason: model.status == nil ? .placeholder : [])
     }
 
-    // MARK: Header
+    // MARK: Toolbar
 
-    private var header: some View {
-        let fade = min(max((scrollOffset - mapReveal * 0.6) / 80, 0), 1)
-        return ZStack {
-            Image("Wordmark")
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(height: 20)
-                .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
-                .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
-                .accessibilityLabel("Volta")
-                .accessibilityAddTraits(.isHeader)
-            HStack {
-                GlassCircleButton(systemImage: "car.fill", size: 52,
-                                  accessibilityLabel: selectVehicle == nil ? "Vehicle" : "Vehicle and switch vehicles") {
-                    showVehicle = true
-                }
-                .accessibilityIdentifier("button.vehicle")
-                Spacer()
-                GlassCircleButton(systemImage: "bell.fill", size: 52, badge: false,
-                                  accessibilityLabel: "Notifications") {
-                    showNotifications = true
-                }
-                .popover(isPresented: $showNotifications) {
-                    Text("No notifications")
-                        .font(.subheadline)
-                        .foregroundStyle(Color.voltaTextSecondary)
-                        .padding()
-                        .presentationCompactAdaptation(.popover)
-                }
+    /// System toolbar items, so iPhone Duo can move them to the side bar with
+    /// the tabs. Each has a title and a symbol for the overflow menu.
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        // A title keeps a horizontal bar alive, so with side bars the wordmark
+        // is drawn over the map instead.
+        if !barsOnSide {
+            ToolbarItem(placement: .principal) { wordmark }
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Button { showVehicle = true } label: {
+                Label(selectVehicle == nil ? "Vehicle" : "Vehicle and switch vehicles", systemImage: "car.fill")
+            }
+            .tint(Color.voltaTextPrimary)
+            .accessibilityIdentifier("button.vehicle")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showNotifications = true } label: {
+                Label("Notifications", systemImage: "bell.fill")
+            }
+            .tint(Color.voltaTextPrimary)
+            .popover(isPresented: $showNotifications) {
+                Text("No notifications")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.voltaTextSecondary)
+                    .padding()
+                    .presentationCompactAdaptation(.popover)
             }
         }
-        .padding(.horizontal, VoltaSpacing.screen - 4)
-        .padding(.bottom, VoltaSpacing.md)
-        .background(alignment: .top) {
-            LinearGradient(stops: [.init(color: .voltaBackground, location: 0),
-                                   .init(color: .voltaBackground.opacity(0.95), location: 0.6),
-                                   .init(color: .clear, location: 1)],
-                           startPoint: .top, endPoint: .bottom)
-                .frame(height: 190)
-                .ignoresSafeArea(edges: .top)
-                .opacity(fade)
-                .allowsHitTesting(false)
-        }
+    }
+
+    private var wordmark: some View {
+        Image("Wordmark")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(height: 20)
+            .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
+            .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
+            .accessibilityLabel("Volta")
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Darkens the top once the map has scrolled away, so the bar buttons and
+    /// status bar stay legible over the cards.
+    private var topScrim: some View {
+        let fade = min(max((scrollOffset - mapReveal * 0.6) / 80, 0), 1)
+        return LinearGradient(stops: [.init(color: .voltaBackground, location: 0),
+                                      .init(color: .voltaBackground.opacity(0.95), location: 0.6),
+                                      .init(color: .clear, location: 1)],
+                              startPoint: .top, endPoint: .bottom)
+            .frame(height: 130)
+            .ignoresSafeArea(edges: [.top, .horizontal])
+            .opacity(fade)
+            .allowsHitTesting(false)
     }
 
     // MARK: Content
@@ -194,44 +232,13 @@ struct DashboardView: View {
                     .accessibilityAddTraits(.isButton)
                     .accessibilityIdentifier("button.liveCharge.map")
                 VStack(alignment: .leading, spacing: 0) {
-                    if let error = model.refreshError {
-                        InlineBanner(systemImage: "wifi.exclamationmark",
-                                     message: "Couldn't refresh. Showing data from \(lastUpdatedText(status)). \(error)",
-                                     tint: .voltaAmber) { model.refreshError = nil }
-                            .padding(.bottom, VoltaSpacing.lg)
-                    }
-                    if let partial = model.partialFailureMessage, model.refreshError == nil {
-                        InlineBanner(systemImage: "exclamationmark.triangle",
-                                     message: "\(partial) Pull to refresh to try again.",
-                                     tint: .voltaAmber)
-                            .padding(.bottom, VoltaSpacing.lg)
-                    }
-                    identityRow(status)
-                    if let freshness = status.telemetryFreshness {
-                        Text(freshness.label)
-                            .font(.caption).foregroundStyle(Color.voltaTextSecondary)
-                            .padding(.top, VoltaSpacing.sm)
-                    }
-                    batteryBlock(status)
-                        .padding(.top, VoltaSpacing.xl)
+                    banners(status)
+                    hero(status)
                     HairlineDivider().padding(.top, VoltaSpacing.xl)
-                    QuickControlsRow(status: status) { showControls = true }
-                    HairlineDivider()
-                    metricGrid(status)
-                        .padding(.top, VoltaSpacing.xl)
-                    ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
-                                  loading: model.loadingSections.contains(.timeline))
-                        .padding(.top, VoltaSpacing.xxl + 4)
-                    HairlineDivider().padding(.top, VoltaSpacing.xl)
-                    // Re-render when today's reporting day ends so its totals drop.
-                    TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
-                        ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
-                                               failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
-                                               loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
-                    }
-                    .padding(.top, VoltaSpacing.xl)
+                    details(status)
                 }
                 .padding(.horizontal, VoltaSpacing.screen)
+                .voltaReadableWidth(720)
                 .redacted(reason: isPlaceholder ? .placeholder : [])
                 .disabled(isPlaceholder)
             }
@@ -246,6 +253,107 @@ struct DashboardView: View {
             scrollOffset = new
         }
         .refreshable { await load() }
+    }
+
+    /// Regular-width, wide window: the map with the battery over it is one
+    /// pane and the scrolling cards are the other. Same content and controls
+    /// as the single column, so nothing is lost or added between displays.
+    private var panes: some View {
+        let status = model.status ?? .skeleton
+        let isPlaceholder = model.status == nil
+        return VoltaPanes {
+            ZStack(alignment: .bottom) {
+                DashboardMap(location: status.location,
+                             sentry: status.sentryMode ?? false,
+                             state: model.status?.state,
+                             charging: status.isCharging,
+                             chargerPowerKw: status.chargerPowerKw)
+                    .overlay(alignment: .bottom) {
+                        LinearGradient(colors: [.clear, .voltaBackground.opacity(0.85), .voltaBackground],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: 300)
+                    }
+                    .ignoresSafeArea()
+                    .contentShape(.rect)
+                    .onTapGesture { if status.isCharging { showLiveCharge = true } }
+                    .accessibilityAddTraits(status.isCharging ? .isButton : [])
+                    .accessibilityIdentifier("button.liveCharge.map")
+                    .redacted(reason: isPlaceholder ? .placeholder : [])
+                VStack(alignment: .leading, spacing: 0) {
+                    hero(status)
+                }
+                .padding(.horizontal, VoltaSpacing.screen)
+                .padding(.bottom, VoltaSpacing.xl)
+                .redacted(reason: isPlaceholder ? .placeholder : [])
+            }
+            .overlay(alignment: .top) { wordmark.padding(.top, VoltaSpacing.md) }
+        } secondary: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    banners(status)
+                    details(status)
+                }
+                .padding(.horizontal, VoltaSpacing.screen)
+                .padding(.top, VoltaSpacing.sm)
+                .padding(.bottom, VoltaSpacing.tabBarClearance)
+                .redacted(reason: isPlaceholder ? .placeholder : [])
+                .disabled(isPlaceholder)
+            }
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier("scroll.dashboard")
+            .refreshable { await load() }
+            .background(Color.voltaBackground.ignoresSafeArea())
+        }
+        .background(Color.voltaBackground.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private func banners(_ status: VehicleStatus) -> some View {
+        if let error = model.refreshError {
+            InlineBanner(systemImage: "wifi.exclamationmark",
+                         message: "Couldn't refresh. Showing data from \(lastUpdatedText(status)). \(error)",
+                         tint: .voltaAmber) { model.refreshError = nil }
+                .padding(.bottom, VoltaSpacing.lg)
+        }
+        if let partial = model.partialFailureMessage, model.refreshError == nil {
+            InlineBanner(systemImage: "exclamationmark.triangle",
+                         message: "\(partial) Pull to refresh to try again.",
+                         tint: .voltaAmber)
+                .padding(.bottom, VoltaSpacing.lg)
+        }
+    }
+
+    /// Who the car is and how much charge it has.
+    @ViewBuilder
+    private func hero(_ status: VehicleStatus) -> some View {
+        identityRow(status)
+        if let freshness = status.telemetryFreshness {
+            Text(freshness.label)
+                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
+                .padding(.top, VoltaSpacing.sm)
+        }
+        batteryBlock(status)
+            .padding(.top, VoltaSpacing.xl)
+    }
+
+    /// Quick controls, metric cards, the activity strip and the summary.
+    @ViewBuilder
+    private func details(_ status: VehicleStatus) -> some View {
+        QuickControlsRow(status: status) { showControls = true }
+        HairlineDivider()
+        metricGrid(status)
+            .padding(.top, VoltaSpacing.xl)
+        ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
+                      loading: model.loadingSections.contains(.timeline))
+            .padding(.top, VoltaSpacing.xxl + 4)
+        HairlineDivider().padding(.top, VoltaSpacing.xl)
+        // Re-render when today's reporting day ends so its totals drop.
+        TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
+            ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
+                                   failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
+                                   loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
+        }
+        .padding(.top, VoltaSpacing.xl)
     }
 
     private func failure(_ message: String) -> some View {
