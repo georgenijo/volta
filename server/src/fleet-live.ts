@@ -23,9 +23,9 @@ export type LiveDrive = { gear: LiveReading<LiveGear>|null; speedKph: LiveReadin
  * power reading is current only for `stillnessMs` after it was observed.
  * A connected stream in gear quiet for longer proves only that the car has
  * moved less than the report distance since (see `quietSpeedBelowKph`).
- * The window follows the installed profile as observed: five times the
- * shortest gap between the car's latest fixes, within 10 to 60 s; without
- * two recent fixes the cadence is unknown and nothing is inferred. */
+ * The window follows the installed profile: five times its interval
+ * (`installedFixIntervalS`), within 10 to 60 s; while that is unknown,
+ * nothing is inferred. */
 export const stillnessMs = (fixIntervalS: number | null) => fixIntervalS == null || !Number.isFinite(fixIntervalS) || fixIntervalS <= 0
   ? null : Math.min(60_000, Math.max(10_000, fixIntervalS * 5_000));
 /** Location's MinimumDelta over IntervalSeconds, the same in both profiles
@@ -36,6 +36,21 @@ export const reportDistancePerIntervalM = 1.5;
  * (quiet − one interval) it moved less than that distance. */
 export const quietSpeedBelowKph = (fixIntervalS: number, quietMs: number) =>
   reportDistancePerIntervalM * fixIntervalS / Math.max(fixIntervalS, quietMs / 1000 - fixIntervalS) * 3.6;
+/** Location's IntervalSeconds in the installed profiles (normal, economy;
+ * checked against fleetconfig.go by the tests). */
+export const profileFixIntervalsS = [2, 10] as const;
+/** At this speed a car passes the report distance well within one interval
+ * in both profiles (5.6 m per 2 s against 3 m; 55 m per 10 s against 15 m),
+ * so consecutive fixes this fast are one interval apart. Slower fixes are
+ * not: a car creeping in a queue reports once per 3 m, which can be 30 s
+ * apart on a 2 s profile. */
+export const cadenceSpeedKph = 20;
+/** The installed interval from the shortest gap between fast consecutive
+ * fixes: the longest configured interval that gap allows (reports never come
+ * faster than the interval; 0.5 s for timestamp jitter). Without such a gap
+ * the cadence is unknown, and nothing is inferred from silence. */
+export const installedFixIntervalS = (movingGapS: number | null): number | null => movingGapS == null || !Number.isFinite(movingGapS) || movingGapS <= 0
+  ? null : profileFixIntervalsS.filter(i => i <= movingGapS + 0.5).at(-1) ?? profileFixIntervalsS[0];
 /** Current window for a reading while the cadence is unknown. */
 export const defaultCurrentMs = 10_000;
 /** A TeslaMate position from the open drive is current this long. */
@@ -61,10 +76,13 @@ export class FleetLive {
             AND x.source_ts<=CASE WHEN s.end_reason='open' THEN now() ELSE LEAST(s.end_ts,now()) END AND x.dc_power_kw>0)) FROM volta_telemetry.sessions s
         WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge,
       (SELECT sign FROM volta_telemetry.power_calibration WHERE vehicle_id=b.vehicle_id) AS power_sign,
-      -- The report cadence the installed profile gives: the shortest gap between the newest fixes.
-      (SELECT extract(epoch FROM min(gap)) FROM (SELECT source_ts - lag(source_ts) OVER (ORDER BY source_ts) AS gap
-        FROM (SELECT source_ts FROM volta_telemetry.payload_points p WHERE p.vehicle_id=b.vehicle_id AND p.latitude IS NOT NULL
-          AND p.source_ts > now() - interval '15 minutes' AND p.source_ts <= now() ORDER BY source_ts DESC LIMIT 8) f) g) AS fix_interval_s
+      -- The shortest gap between consecutive recent fixes that were both
+      -- moving fast enough to report every interval (see installedFixIntervalS).
+      (SELECT extract(epoch FROM min(gap)) FROM (SELECT source_ts - lag(source_ts) OVER (ORDER BY source_ts) AS gap,
+          speed_kph AS speed, lag(speed_kph) OVER (ORDER BY source_ts) AS prior
+        FROM (SELECT source_ts,speed_kph FROM volta_telemetry.payload_points p WHERE p.vehicle_id=b.vehicle_id AND p.latitude IS NOT NULL
+          AND p.source_ts > now() - interval '15 minutes' AND p.source_ts <= now() ORDER BY source_ts DESC LIMIT 30) f) g
+        WHERE gap > interval '0' AND speed >= ${cadenceSpeedKph} AND prior >= ${cadenceSpeedKph}) AS moving_fix_gap_s
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(row.vin, 'utf8').digest('hex');
@@ -73,7 +91,7 @@ export class FleetLive {
       lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true,
         observed: row.last_charge.observed === true, dc: row.last_charge.dc === true } : null,
       powerSign: (row.power_sign ?? null) as string | null,
-      fixIntervalS: row.fix_interval_s == null ? null : Number(row.fix_interval_s) };
+      fixIntervalS: installedFixIntervalS(row.moving_fix_gap_s == null ? null : Number(row.moving_fix_gap_s)) };
   }
 }
 

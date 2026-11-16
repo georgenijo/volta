@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { liveValues, quietSpeedBelowKph, reportDistancePerIntervalM, reportTransitMs, stillnessMs } from '../src/fleet-live';
+import { installedFixIntervalS, liveValues, profileFixIntervalsS, quietSpeedBelowKph, reportDistancePerIntervalM, reportTransitMs, stillnessMs } from '../src/fleet-live';
 const now = new Date('2026-01-02T12:00:00Z'), old = '2026-01-01T00:00:00Z';
 const sample = (field:string, value:any, unit='', invalid=false) => ({field,source_ts:old,source_unit:unit,invalid,quality:invalid?'invalid':'ok',...value});
 const health = {receiver_generation:'fixture',receiver_started_at:old,receiver_seen_at:now,updated_at:now,caught_up_at:now,lag_records:0};
@@ -221,4 +221,12 @@ test('both streaming profiles report Location every interval only after the same
   const locations = [...go.matchAll(/Name: "Location", FieldConfig: FieldConfig\{IntervalSeconds: (\d+), MinimumDelta: f\(([\d.]+)\)/g)];
   expect(locations.length).toBe(2);
   for (const [, interval, delta] of locations) expect(Number(delta) / Number(interval)).toBe(reportDistancePerIntervalM);
+  expect(locations.map(l => Number(l[1])).sort((a, b) => a - b)).toEqual([...profileFixIntervalsS]);
+});
+test('the cadence is a configured interval, never a long observed gap',()=>{
+  expect(installedFixIntervalS(2.0)).toBe(2); expect(installedFixIntervalS(1.8)).toBe(2);
+  expect(installedFixIntervalS(4)).toBe(2); expect(installedFixIntervalS(9.7)).toBe(10); expect(installedFixIntervalS(10.1)).toBe(10);
+  // A 30 s gap between fast fixes still allows at most the economy interval, so the window stays 50 s, not 60.
+  expect(installedFixIntervalS(30)).toBe(10); expect(stillnessMs(installedFixIntervalS(30))).toBe(50_000);
+  expect(installedFixIntervalS(null)).toBeNull(); expect(installedFixIntervalS(0)).toBeNull();
 });

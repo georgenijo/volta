@@ -241,8 +241,11 @@ stream is connected. Speed and power come from the stream or from the open
 TeslaMate drive's newest position (`source`). The stream sends them with
 `Location`, only after the car has moved (normal profile: at most every 2 s,
 after 3 m; economy profile: every 10 s, after 15 m). On a connected stream
-they are current for five times the shortest gap between the car's newest
-fixes, within 10 to 60 s (10 s while that cadence is unknown); a TeslaMate
+they are current for five times the installed profile's interval, within 10
+to 60 s (10 s while it is unknown). The interval is the configured one (2 or
+10 s) that the shortest gap between consecutive recent fixes at 20 km/h or
+more allows; slower fixes can be far apart on either profile, so without a
+fast pair the interval is unknown; a TeslaMate
 position is current for 30 s, and only when it is newer than the stream's
 last position report. Per value a current reading beats a stale one, then
 the newer one wins. `powerKw` is battery power: positive

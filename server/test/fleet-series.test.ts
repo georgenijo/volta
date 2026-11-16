@@ -533,7 +533,8 @@ test('live drive: the stream leads while current, the open TeslaMate drive fills
   await put('VehicleSpeed',{num:40,unit:'mph'},recent);await put('Location',{lat:37.44,lon:-122.14,unit:'deg'},recent);
   await put('PackVoltage',{num:400,unit:'V'},recent);await put('PackCurrent',{num:105,unit:'A'},recent);
   // Fixes 2 s apart: the normal profile's cadence, so stillness is judged after 10 s.
-  for (const i of [0,1,2]) await datum('Location',null,new Date(+recent-i*2000),'fix-'+i,1,{latitude:37.44,longitude:-122.14});
+  for (const i of [0,1,2]) { const t=new Date(+recent-i*2000);
+    await datum('Location',null,t,'fix-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',40,t,'fix-'+i); }
   await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at) VALUES(1,'fixture','CONNECTED',${old},${old})`;
   await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
     VALUES(1,'fixture',${old},${now},${old},${now},0,${now})`;
@@ -570,12 +571,28 @@ test('live drive: the stream leads while current, the open TeslaMate drive fills
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${quiet},received_at=${quiet} WHERE field<>'Gear'`;
   // Fixes only every 10 s (the economy profile): a minute's silence is a quiet span, 30 s is not.
   await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'fix-%'`;
-  for (const i of [0,1,2]) await datum('Location',null,new Date(+quiet-i*10_000),'fix-'+i,1,{latitude:37.44,longitude:-122.14});
+  for (const i of [0,1,2]) { const t=new Date(+quiet-i*10_000);
+    await datum('Location',null,t,'fix-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',40,t,'fix-'+i); }
   expect(Date.parse((await get('/v1/vehicles/1/status')).liveDrive.quiet.since)).toBe(+quiet);
   const half=new Date(+now-30_000);
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${half},received_at=${half} WHERE field<>'Gear'`;
   status=await get('/v1/vehicles/1/status');
   expect(status.liveDrive.quiet).toBeNull();expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:true});
+  // Creeping in a queue on the 2 s profile: one fix per 3 m, 30 s apart and
+  // never fast. Those gaps are not the cadence: it is unknown, so 15 s after
+  // the last report its speed is not current and no quiet span is inferred.
+  await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'fix-%'`;
+  const creep=new Date(+now-15_000);
+  for (const i of [0,1,2,3,4,5,6,7]) { const t=new Date(+creep-i*30_000);
+    await datum('Location',null,t,'fix-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',5,t,'fix-'+i); }
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${creep},received_at=${creep} WHERE field<>'Gear'`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});expect(status.liveDrive.quiet).toBeNull();
+  // An earlier fast stretch, fixes 2 s apart, shows the 2 s profile: now 15 s of silence is quiet.
+  for (const i of [0,1]) { const t=new Date(+now-600_000+i*2000);
+    await datum('Location',null,t,'fix-fast-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',40,t,'fix-fast-'+i); }
+  status=await get('/v1/vehicles/1/status');
+  expect(Date.parse(status.liveDrive.quiet.since)).toBe(+creep);expect(status.liveDrive.speedKph.current).toBe(false);
   // Parked: gear P, no stillness, the drive's readings stay stale.
   await owner`UPDATE volta_telemetry.latest_samples SET value_text='ShiftStateP',source_ts=${recent} WHERE field='Gear'`;
   status=await get('/v1/vehicles/1/status');
