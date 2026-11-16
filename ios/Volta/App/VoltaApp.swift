@@ -2,8 +2,14 @@ import SwiftUI
 
 @main
 struct VoltaApp: App {
-    @State private var model = AppModel()
-    init() { ExportFiles.removeAll() } // Sweep exports left by a previous run.
+    // Shared with App Intents, so Siri, Shortcuts and controls use the same
+    // pairing and command coordinator as the screens.
+    @State private var model = AppModel.shared
+    init() {
+        ExportFiles.removeAll() // Sweep exports left by a previous run.
+        // Control Center and Lock Screen controls send commands through the app.
+        VoltaIntentHost.performer = VehicleIntentService.shared
+    }
     var body: some Scene {
         WindowGroup {
             VoltaRootView()
