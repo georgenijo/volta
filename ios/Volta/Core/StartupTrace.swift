@@ -33,7 +33,8 @@ enum StartupTrace {
         case shell
         /// `AppModel` has a vehicle list from the server.
         case vehicles
-        /// A frame with the last saved status was committed.
+        /// A frame with the last saved status was committed. Not logged when
+        /// fresh status replaced it before any frame showed it.
         case cachedStatus
         /// A frame with status fetched in this process was committed.
         case status
@@ -64,6 +65,12 @@ enum StartupTrace {
         if milestone == .appModel { log(milestone) } else { NextRefresh.shared.add(milestone) }
     }
 
+    /// Drops `milestone` if it is still waiting for a display refresh: a
+    /// saved status replaced before any frame showed it was never visible.
+    @MainActor static func supersede(_ milestone: Milestone) {
+        NextRefresh.shared.drop(milestone)
+    }
+
     @MainActor fileprivate static func log(_ milestone: Milestone) {
         let elapsed = processStart.map { Int((Date.now.timeIntervalSince($0) * 1_000).rounded()) } ?? -1
         signposter.emitEvent("milestone", "\(milestone.rawValue, privacy: .public)")
@@ -85,6 +92,10 @@ private final class NextRefresh: NSObject {
         let link = CADisplayLink(target: self, selector: #selector(refresh))
         link.add(to: .main, forMode: .common)
         self.link = link
+    }
+
+    func drop(_ milestone: StartupTrace.Milestone) {
+        waiting.removeAll { $0 == milestone }
     }
 
     @objc private func refresh() {

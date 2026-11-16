@@ -24,13 +24,16 @@ out rather than saved again under the new date. On the next launch `AppModel`
 reads the file before the first frame, so the tab shell and the saved dashboard
 appear in that frame.
 
-- The status is labelled "Saved data from … · car last seen …" until fresh
-  status replaces it. A failed refresh keeps it with the usual "Couldn't
-  refresh" banner. When fresh status arrives, saved history is hidden until
-  this load replaces it, so its sections show loading or failed states rather
-  than unlabelled old data.
+- The caption reads "Saved 2 hr. ago · car last seen …", with a small
+  refreshing indicator, until fresh status replaces it. A failed refresh keeps
+  it with the usual "Couldn't refresh" banner, and becoming active retries
+  once that attempt is over 10 s old. Each history section keeps its saved
+  data, marked "Saved 2 hr. ago", until this load replaces it; one whose load
+  fails stays marked. History, saving and widget publication never wait for
+  the vehicle list.
 - No command is based on saved status: while `ControlsModel` holds it, no
-  control is enabled and `send` refuses. Saved status also keeps no location
+  control is enabled, `send` refuses, and Controls says "Showing saved data ·
+  controls unlock after a refresh". Saved status also keeps no location
   time, so HomeLink never offers itself. Colours stay as they are; the
   caption and a small refreshing indicator carry the provenance. The live
   charging sheet says "SAVED DATA", and names a failed refresh.
@@ -159,8 +162,9 @@ launch and the medians. It also reports each milestone relative to `appModel`:
 the time before it is mostly the simulator's dyld and Swift conformance setup,
 which swings with host load. Every milestone after `appModel` is logged at the
 first display refresh after it was reached, when the frame showing it has been
-committed: `cachedStatus` is saved data on screen, `status` fresh status on
-screen, and `sections` every history section on screen. Each readiness launch
+committed: `cachedStatus` is saved data on screen (not logged when fresh
+status replaced it before any frame), `status` fresh status on screen, and
+`sections` every history section on screen. Each readiness launch
 stays open four seconds so history milestones are recorded.
 
 The live API speaks HTTP/2, where parallel requests share one connection.

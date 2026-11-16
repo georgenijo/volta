@@ -220,8 +220,13 @@ struct ControlsView: View {
     // MARK: Banners
 
     @ViewBuilder private var banners: some View {
-        if dataSource.simulatesVehicleCommands || !(coordinator.capability(dataSource: dataSource, vehicleID: vehicleID)?.available ?? false) || controlNotice != nil {
+        if dataSource.simulatesVehicleCommands || !(coordinator.capability(dataSource: dataSource, vehicleID: vehicleID)?.available ?? false) || controlNotice != nil || model.showsSavedStatus {
             VStack(alignment: .leading, spacing: VoltaSpacing.md) {
+                if model.showsSavedStatus {
+                    InlineBanner(systemImage: "clock.arrow.circlepath",
+                                 message: "Showing saved data · controls unlock after a refresh", tint: .voltaBlue)
+                        .accessibilityIdentifier("controls.savedNotice")
+                }
                 readiness
                 if let controlNotice {
                     InlineBanner(systemImage: "location.slash", message: controlNotice, tint: .voltaAmber)

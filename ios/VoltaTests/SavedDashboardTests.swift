@@ -266,29 +266,35 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         await task.value
     }
 
-    func testFreshStatusHidesSavedHistoryUntilThisLoadReplacesIt() async {
+    func testSavedHistoryStaysMarkedUntilThisLoadReplacesIt() async {
         let source = StubSource(), gate = SectionGate(), store = MemorySavedDashboards(), model = DashboardModel()
         store.acceptedBackend = "backend-a"
         source.timelineHandler = { await gate.wait(); throw VoltaError.unreachable("offline") }
-        source.summaryHandler = { _ in await gate.wait(); throw VoltaError.unreachable("offline") }
+        source.summaryHandler = { range in
+            if range == .sevenDays { return makeSummary(range, km: 77) }
+            await gate.wait(); throw VoltaError.unreachable("offline")
+        }
         let task = Task {
             await model.load(dataSource: source, vehicleID: 1,
                              initialVehicles: DashboardStart(saved: saved(), store: store, backend: "backend-a"))
         }
-        await waitUntil { model.status?.batteryLevel == 72 }
+        await waitUntil { model.summaries[.sevenDays]?.distanceKm == 77 }
         XCTAssertFalse(model.showsSavedStatus)
-        XCTAssertTrue(model.timeline.isEmpty, "saved history is not shown beside fresh status")
-        XCTAssertTrue(model.summaries.isEmpty)
-        XCTAssertEqual(model.loadingSections.count, 4, "those sections show as loading")
+        XCTAssertEqual(model.timeline.count, 1, "saved history stays on screen")
+        XCTAssertNotNil(model.savedSectionNote(.timeline), "and is marked as saved")
+        XCTAssertEqual(model.summaries[.thirtyDays]?.distanceKm, 300)
+        XCTAssertEqual(model.savedSectionNote(.summary(.thirtyDays))?.hasPrefix("Saved "), true)
+        XCTAssertNil(model.savedSectionNote(.summary(.sevenDays)), "a section this load replaced is not")
 
         await gate.open()
         await task.value
-        XCTAssertEqual(model.failedSections.count, 4, "and then as failed, not as saved data")
-        XCTAssertTrue(model.timeline.isEmpty)
+        XCTAssertEqual(model.failedSections, [.timeline, .summary(.today), .summary(.thirtyDays)])
+        XCTAssertEqual(model.timeline.count, 1, "a failed section keeps its saved data")
+        XCTAssertNotNil(model.savedSectionNote(.timeline), "still marked as saved")
         let written = store.dashboard
         XCTAssertEqual(written?.status.batteryLevel, 72)
         XCTAssertEqual(written?.timeline, [], "failed sections are never saved under the new date")
-        XCTAssertEqual(written?.summaries, [])
+        XCTAssertEqual(written?.summaries.map(\.range), [.sevenDays])
 
         // The next launch shows what that load really fetched, and nothing older.
         let next = DashboardModel(), nextGate = SectionGate()
@@ -300,9 +306,54 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         await waitUntil { next.status != nil }
         XCTAssertTrue(next.showsSavedStatus)
         XCTAssertTrue(next.timeline.isEmpty)
-        XCTAssertTrue(next.summaries.isEmpty)
+        XCTAssertEqual(next.summaries.keys.sorted { $0.rawValue < $1.rawValue }, [.sevenDays])
         await nextGate.open()
         await relaunch.value
+    }
+
+    func testHistoryAndSavingDoNotWaitForTheVehicleList() async {
+        let source = StubSource(), gate = SectionGate(), store = MemorySavedDashboards(), model = DashboardModel()
+        store.acceptedBackend = "backend-a"
+        source.timelineHandler = { [segment] }
+        source.vehiclesHandler = { await gate.wait(); return [Vehicle(id: 1, name: "Fresh name")] }
+        let task = Task {
+            await model.load(dataSource: source, vehicleID: 1,
+                             initialVehicles: DashboardStart(saved: saved(), store: store, backend: "backend-a"))
+        }
+        await waitUntil { model.loadingSections.isEmpty && store.dashboard != nil }
+        XCTAssertEqual(model.timeline.count, 1)
+        XCTAssertEqual(model.summaries.count, 3)
+        XCTAssertTrue(model.savedSections.isEmpty)
+        XCTAssertEqual(model.vehicle?.name, "Saved", "the list is still pending")
+        XCTAssertEqual(store.dashboard?.summaries.count, 3, "saved without waiting for the list")
+
+        await gate.open()
+        await task.value
+        XCTAssertEqual(model.vehicle?.name, "Fresh name")
+        XCTAssertEqual(store.dashboard?.vehicles.map(\.name), ["Fresh name"], "saved again with the list")
+    }
+
+    func testAFailedLaunchFromSavedDataRetriesOnForeground() async {
+        let source = StubSource(), model = DashboardModel()
+        source.statusHandler = { throw VoltaError.unreachable("offline") }
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: saved()))
+        XCTAssertTrue(model.showsSavedStatus)
+        XCTAssertNotNil(model.refreshError)
+        XCTAssertFalse(model.foregroundRefreshDue(), "not straight after the failure")
+        XCTAssertTrue(model.foregroundRefreshDue(now: .now.addingTimeInterval(DashboardModel.failedRetryInterval + 1)))
+
+        // Connectivity is back; the app becomes active and reloads.
+        let gate = SectionGate()
+        source.statusHandler = { await gate.wait(); return makeStatus(battery: 88) }
+        let reload = Task { await model.load(dataSource: source, vehicleID: 1) }
+        await waitUntil { model.isLoading }
+        XCTAssertFalse(model.foregroundRefreshDue(now: .now.addingTimeInterval(3600)), "never while a load runs")
+        await gate.open()
+        await reload.value
+        XCTAssertFalse(model.showsSavedStatus)
+        XCTAssertEqual(model.status?.batteryLevel, 88)
+        XCTAssertNil(model.refreshError)
+        XCTAssertFalse(model.foregroundRefreshDue(now: .now.addingTimeInterval(20)), "fresh data waits 30 s")
     }
 
     func testOnlySectionsLoadedFreshAreSaved() async {

@@ -645,14 +645,16 @@ struct DashboardView: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: 0) {
             ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
-                          loading: model.loadingSections.contains(.timeline))
+                          loading: model.loadingSections.contains(.timeline),
+                          savedNote: model.savedSectionNote(.timeline))
                 .padding(.top, VoltaSpacing.sm)
             HairlineDivider().padding(.top, VoltaSpacing.lg)
             // Re-render when today's reporting day ends so its totals drop.
             TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
                 ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
                                        failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
-                                       loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
+                                       loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }),
+                                       savedNotes: SummaryRange.allCases.reduce(into: [:]) { $0[$1] = model.savedSectionNote(.summary($1)) })
             }
             .padding(.top, VoltaSpacing.md)
         }
@@ -991,6 +993,8 @@ struct ActivitySummarySection: View {
     /// Ranges whose latest load failed (stale data, if any, is still shown).
     var failedRanges: Set<SummaryRange> = []
     var loadingRanges: Set<SummaryRange> = []
+    /// "Saved 2 hr. ago" for ranges still showing saved data.
+    var savedNotes: [SummaryRange: String] = [:]
     @Environment(\.units) private var units
     @State private var range: SummaryRange = .today
 
@@ -1032,7 +1036,9 @@ struct ActivitySummarySection: View {
                 HStack { stats(summary) }
                 VStack(spacing: VoltaSpacing.lg) { stats(summary) }
             }
-            if summary == nil, loadingRanges.contains(range) {
+            if summary != nil, let note = savedNotes[range] {
+                SavedSectionNote(text: note)
+            } else if summary == nil, loadingRanges.contains(range) {
                 ProgressView("Loading \(range.voltaLabel) activity…")
                     .font(.footnote)
                     .tint(Color.voltaTextSecondary)

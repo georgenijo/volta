@@ -11,6 +11,8 @@ struct ActivityStrip: View {
     /// rather than an empty (idle) strip.
     var failed = false
     var loading = false
+    /// "Saved 2 hr. ago" while these segments are from the saved dashboard.
+    var savedNote: String? = nil
 
     private var unavailable: Bool { failed && segments.isEmpty }
 
@@ -27,6 +29,7 @@ struct ActivityStrip: View {
         VStack(alignment: .leading, spacing: VoltaSpacing.md) {
             HStack {
                 Text("Last \(hours)h").voltaLabelStyle()
+                if let savedNote { SavedSectionNote(text: savedNote) }
                 Spacer()
                 HStack(spacing: VoltaSpacing.md) {
                     legend("Drives", .voltaRed)
@@ -148,4 +151,17 @@ struct ActivityStrip: View {
     .padding(VoltaSpacing.screen)
     .voltaScreenBackground()
     .preferredColorScheme(.dark)
+}
+
+/// Marks one dashboard section as showing saved data, not data from now.
+struct SavedSectionNote: View {
+    var text: String
+    var body: some View {
+        Label(text, systemImage: "clock.arrow.circlepath")
+            .font(.caption2)
+            .foregroundStyle(Color.voltaTextSecondary)
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+            .accessibilityIdentifier("dashboard.savedSection")
+    }
 }

@@ -201,7 +201,7 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
             await gate.wait()
             return [Vehicle(id: 1, name: "Late")]
         }
-        source.summaryHandler = { makeSummary($0, km: 99) }
+        source.summaryHandler = { await gate.wait(); return makeSummary($0, km: 99) }
         let task = Task { await model.load(dataSource: source, vehicleID: 1) }
         await waitUntil { model.status?.batteryLevel == 55 }
 

@@ -51,9 +51,17 @@ final class DashboardModel {
     /// Pending history must not look like a successfully loaded empty section.
     private(set) var loadingSections: Set<Section> = []
 
+    /// Sections still showing what the saved dashboard had, because this
+    /// process has not loaded them yet (or their load failed). Each is marked
+    /// as saved on screen; see `savedSectionNote`.
+    private(set) var savedSections: Set<Section> = []
+    /// When the shown saved data was saved.
+    private(set) var savedAt: Date?
+
     private enum SectionResponse: Sendable {
         case timeline(Result<[TimelineSegment], any Error>)
         case summary(SummaryRange, Result<ActivitySummary, any Error>)
+        case vehicles(Result<[Vehicle], any Error>)
     }
 
     private var generation = 0
@@ -64,13 +72,29 @@ final class DashboardModel {
     private var savedBackend: String?
     /// The shown status came from the saved dashboard, not this process.
     private(set) var showsSavedStatus = false
+    /// A load is running (status, history or the vehicle list).
+    private(set) var isLoading = false
+    /// When the latest load that got no fresh status finished.
+    private var failedAttemptAt: Date?
+    /// How soon becoming active may retry a load that got no fresh status.
+    static let failedRetryInterval: TimeInterval = 10
 
-    /// Whether returning to the foreground should reload: fresh data is over
-    /// 30 s old and no load is still filling the screen. Saved data alone
-    /// never counts, so a launch with saved data sends one set of requests.
+    /// Whether returning to the foreground should reload: no load is running,
+    /// and fresh data is over 30 s old, or the latest load got no fresh
+    /// status over 10 s ago (an offline launch showing saved data recovers).
+    /// Saved data alone never counts, so a launch with saved data sends one
+    /// set of requests.
     func foregroundRefreshDue(now: Date = .now) -> Bool {
-        guard loadingSections.isEmpty, let lastLoadedAt else { return false }
+        guard !isLoading, loadingSections.isEmpty else { return false }
+        if let failedAttemptAt, now.timeIntervalSince(failedAttemptAt) > Self.failedRetryInterval { return true }
+        guard let lastLoadedAt else { return false }
         return now.timeIntervalSince(lastLoadedAt) > 30
+    }
+
+    /// "Saved 2 hr. ago" for a section in `savedSections`, else nil.
+    func savedSectionNote(_ section: Section, now: Date = .now) -> String? {
+        guard savedSections.contains(section), let savedAt else { return nil }
+        return "Saved \(VoltaFormat.relativeDate(min(savedAt, now), now: now))"
     }
 
     /// Short message for the partial-failure banner, if any section failed.
@@ -123,7 +147,8 @@ final class DashboardModel {
         if isNewModel, let saved = start?.saved, saved.vehicleID == vehicleID { show(saved) }
         if status == nil { phase = .loading }
         loadingSections = [.timeline, .summary(.today), .summary(.sevenDays), .summary(.thirtyDays)]
-        defer { if token == generation { loadingSections = [] } }
+        isLoading = true
+        defer { if token == generation { loadingSections = []; isLoading = false } }
 
         // Accept the app's startup list only for a genuinely new model and
         // only when it contains the selected vehicle; an invalid seed falls
@@ -140,8 +165,9 @@ final class DashboardModel {
         let todayRequestedZone = prefetch?.requestedZone ?? TimeZone.current.identifier
 
         await withTaskGroup(of: SectionResponse.self) { group in
-            async let vehiclesReq = Self.vehicleResult(dataSource: dataSource, vehicleID: vehicleID,
-                                                       seededVehicles: seededVehicles)
+            // The vehicle list only names cars; nothing else waits for it.
+            group.addTask { .vehicles(await Self.vehicleResult(dataSource: dataSource, vehicleID: vehicleID,
+                                                               seededVehicles: seededVehicles)) }
             // Taken before /status (here or by the prefetch): orders widget publishes.
             let issued = prefetch.map { $0.issued } ?? surfaces?.nextStatusToken()
             let statusTask = prefetch?.status, timelineTask = prefetch?.timeline
@@ -162,9 +188,12 @@ final class DashboardModel {
             guard token == generation, !Task.isCancelled,
                   !Self.isCancellation(statusResult.map { _ in }) else { group.cancelAll(); return }
             guard case .success(let newStatus) = statusResult else {
-                let vehiclesResult = await vehiclesReq
-                guard token == generation, !Task.isCancelled,
-                      !Self.isCancellation(vehiclesResult.map { _ in }) else { group.cancelAll(); return }
+                var vehiclesResult: Result<[Vehicle], any Error>?
+                for await response in group { if case .vehicles(let result) = response { vehiclesResult = result; break } }
+                group.cancelAll()
+                guard token == generation, !Task.isCancelled else { return }
+                failedAttemptAt = .now
+                guard let vehiclesResult, !Self.isCancellation(vehiclesResult.map { _ in }) else { return }
                 apply(vehiclesResult, selectedVehicleID: vehicleID)
                 if case .failure(let error) = statusResult {
                     let message = Self.message(for: error)
@@ -179,30 +208,24 @@ final class DashboardModel {
             // Battery, range, controls and the map do not depend on history.
             // Publish these as soon as status arrives. In particular, a normal
             // vehicle-list refresh must not hold fresh status off screen.
+            // Saved history stays, each section marked as saved
+            // (`savedSections`), until this load replaces it.
             withAnimation(.smooth) {
-                // History shown from the saved dashboard has no label of its
-                // own once fresh status replaces the saved one: hide it until
-                // this load replaces it, so pending and failed sections show.
-                if showsSavedStatus {
-                    timeline = []; summaries = [:]; todayDay = nil; todayRequest = nil
-                }
                 status = newStatus
                 showsSavedStatus = false
                 refreshError = nil
                 lastLoadedAt = .now
+                failedAttemptAt = nil
                 phase = .loaded
             }
             let statusLoadedAt = lastLoadedAt ?? .now
+            StartupTrace.supersede(.cachedStatus)
             StartupTrace.mark(.status)
 
-            let vehiclesResult = await vehiclesReq
-            guard token == generation, !Task.isCancelled else { group.cancelAll(); return }
-            // A request-level cancellation is only a list failure. Fresh status
-            // is already visible, so continue consuming independent history.
-            apply(vehiclesResult, selectedVehicleID: vehicleID)
-
             // Fill history sections in completion order so one slow summary
-            // cannot hold up the others.
+            // cannot hold up the others; the vehicle list arrives whenever.
+            var pendingHistory = 1 + SummaryRange.allCases.count
+            var saved = false
             var freshTimeline: [TimelineSegment]?
             var freshToday: TodaySummary?
             /// Sections loaded by this load; only these are saved.
@@ -210,7 +233,29 @@ final class DashboardModel {
             var cancelledSection = false
             for await response in group {
                 guard token == generation, !Task.isCancelled else { group.cancelAll(); return }
+                if case .vehicles(let result) = response {
+                    // A request-level cancellation is only a list failure.
+                    apply(result, selectedVehicleID: vehicleID)
+                    // Saved before the list arrived: save it with the list.
+                    if saved, case .success = result {
+                        save(status: newStatus, vehicleID: vehicleID, at: statusLoadedAt, timeline: freshTimeline,
+                             summaries: freshSummaries, todayRequestedAt: todayRequestedAt, todayRequestedZone: todayRequestedZone)
+                    }
+                    continue
+                }
+                pendingHistory -= 1
+                defer {
+                    if pendingHistory == 0 {
+                        // Every section is in: save and publish without waiting for the list.
+                        saved = true
+                        finishHistory(status: newStatus, vehicleID: vehicleID, at: statusLoadedAt, issued: issued,
+                                      cancelled: cancelledSection, surfaces: surfaces, dataSource: dataSource,
+                                      timeline: freshTimeline, today: freshToday, summaries: freshSummaries,
+                                      todayRequestedAt: todayRequestedAt, todayRequestedZone: todayRequestedZone)
+                    }
+                }
                 switch response {
+                case .vehicles: break
                 case .timeline(let result):
                     loadingSections.remove(.timeline)
                     if Self.isCancellation(result.map { _ in }) {
@@ -222,6 +267,7 @@ final class DashboardModel {
                     case .success(let segments):
                         timeline = segments
                         freshTimeline = segments
+                        savedSections.remove(.timeline)
                         failedSections.remove(.timeline)
                     case .failure: failedSections.insert(.timeline)
                     }
@@ -245,23 +291,29 @@ final class DashboardModel {
                             freshToday = today
                             if current { freshSummaries[.today] = summary }
                         } else { summaries[range] = summary; freshSummaries[range] = summary }
+                        savedSections.remove(.summary(range))
                         failedSections.remove(.summary(range))
                     case .failure: failedSections.insert(.summary(range))
                     }
                 }
             }
-            guard token == generation, !Task.isCancelled else { return }
-            if failedSections.isEmpty { StartupTrace.mark(.sections) }
-            save(status: newStatus, vehicleID: vehicleID, at: statusLoadedAt, timeline: freshTimeline,
-                 summaries: freshSummaries, todayRequestedAt: todayRequestedAt, todayRequestedZone: todayRequestedZone)
-            // One ordered publication per status request, preserving the
-            // existing widget / Live Activity ordering and reporting-day rules.
-            guard token == generation, !Task.isCancelled, !cancelledSection else { return }
-            if let surfaces, let issued {
-                surfaces.publish(VehicleRefresh(status: newStatus, issued: issued,
-                    vehicleName: vehicle?.name, today: freshToday, timeline: freshTimeline), dataSource: dataSource)
-            }
         }
+    }
+
+    /// After every history section of a load with fresh status is in: save
+    /// it, and publish one ordered refresh per status request, preserving the
+    /// existing widget / Live Activity ordering and reporting-day rules.
+    private func finishHistory(status: VehicleStatus, vehicleID: Int, at statusLoadedAt: Date,
+                               issued: StatusRequestToken?, cancelled: Bool, surfaces: (any VehicleSurfaces)?,
+                               dataSource: any VoltaDataSource, timeline: [TimelineSegment]?, today: TodaySummary?,
+                               summaries: [SummaryRange: ActivitySummary], todayRequestedAt: Date, todayRequestedZone: String) {
+        loadingSections = []
+        if failedSections.isEmpty { StartupTrace.mark(.sections) }
+        save(status: status, vehicleID: vehicleID, at: statusLoadedAt, timeline: timeline, summaries: summaries,
+             todayRequestedAt: todayRequestedAt, todayRequestedZone: todayRequestedZone)
+        guard !cancelled, let surfaces, let issued else { return }
+        surfaces.publish(VehicleRefresh(status: status, issued: issued, vehicleName: vehicle?.name,
+                                        today: today, timeline: timeline), dataSource: dataSource)
     }
 
     /// Shows the previous launch's dashboard until fresh data replaces it.
@@ -270,12 +322,16 @@ final class DashboardModel {
         vehicle = saved.vehicles.first { $0.id == saved.vehicleID }
         status = saved.labelledStatus
         showsSavedStatus = true
+        savedAt = saved.savedAt
         timeline = saved.timeline
+        if !saved.timeline.isEmpty { savedSections.insert(.timeline) }
+        for summary in saved.summaries where summary.range != .today { savedSections.insert(.summary(summary.range)) }
         for summary in saved.summaries where summary.range != .today { summaries[summary.range] = summary }
         if let today = saved.today {
             deviceZone = TimeZone.current.identifier
             if today.day.isCurrent(at: .now, deviceZone: deviceZone) {
                 summaries[.today] = today.summary
+                savedSections.insert(.summary(.today))
                 todayDay = today.day
                 todayRequest = (today.requestedAt, today.requestedZone)
             }
