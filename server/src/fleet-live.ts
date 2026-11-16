@@ -20,7 +20,7 @@ export type LiveDrive = { gear: LiveReading<LiveGear>|null; speedKph: LiveReadin
  * after 3 m; economy: every 10 s after 15 m, ingestion/fleetconfig), with
  * VehicleSpeed, PackVoltage and PackCurrent riding on it. The receiver holds
  * the last speed a stopping car reported (often 1 to 5 mph). So a speed or
- * power reading is current only for `stillnessMs` after it was observed.
+ * power reading is current only briefly after it was observed (`currentMs`).
  * A connected stream in gear quiet for longer proves only that the car has
  * moved less than the report distance since (see `quietSpeedBelowKph`).
  * The window follows the installed profile: five times its interval
@@ -53,6 +53,15 @@ export const installedFixIntervalS = (movingGapS: number | null): number | null 
   ? null : profileFixIntervalsS.filter(i => i <= movingGapS + 0.5).at(-1) ?? profileFixIntervalsS[0];
 /** Current window for a reading while the cadence is unknown. */
 export const defaultCurrentMs = 10_000;
+/** How long a stream speed or power reading holds now. A moving car reports
+ * at least once per interval, so one interval plus transit, but never under
+ * the unknown-cadence window: 10 s on the 2 s profile, 12 s on economy.
+ * Unlike the stillness window this never grows with the cadence, because an
+ * inferred cadence can be too long (a normal-profile car whose only fast
+ * pair spans a lost report looks like economy); then a stopped car's held
+ * speed stays current for at most 12 s, and quiet is only inferred later. */
+export const currentMs = (fixIntervalS: number | null) => fixIntervalS == null || !Number.isFinite(fixIntervalS) || fixIntervalS <= 0
+  ? defaultCurrentMs : Math.max(defaultCurrentMs, Math.min(stillnessMs(fixIntervalS)!, fixIntervalS * 1000 + reportTransitMs));
 /** A TeslaMate position from the open drive is current this long. */
 export const teslamateCurrentMs = 30_000;
 
@@ -192,7 +201,7 @@ function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, 
   const reading = <T>(value: T | null, s: Row | null, current: boolean): LiveReading<T> | null =>
     value == null || !s ? null : { value, observedAt: at(s), current, source: 'fleet_telemetry' };
   const still = stillnessMs(live.fixIntervalS);
-  const recent = (s: Row | null) => connected && s != null && +now - +at(s) <= (still ?? defaultCurrentMs);
+  const recent = (s: Row | null) => connected && s != null && +now - +at(s) <= currentMs(live.fixIntervalS);
   const g = valid('Gear'), gear = g ? gears[g.value_text] ?? null : null;
   const s = valid('VehicleSpeed'), mph = s?.source_unit === 'mph' ? 1.609344 : s?.source_unit === 'km/h' ? 1 : null;
   const speed = s && mph != null && Number.isFinite(s.value_num) ? s.value_num * mph : null;

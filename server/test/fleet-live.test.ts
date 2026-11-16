@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { installedFixIntervalS, liveValues, profileFixIntervalsS, quietSpeedBelowKph, reportDistancePerIntervalM, reportTransitMs, stillnessMs } from '../src/fleet-live';
+import { currentMs, installedFixIntervalS, liveValues, profileFixIntervalsS, quietSpeedBelowKph, reportDistancePerIntervalM, reportTransitMs, stillnessMs } from '../src/fleet-live';
 const now = new Date('2026-01-02T12:00:00Z'), old = '2026-01-01T00:00:00Z';
 const sample = (field:string, value:any, unit='', invalid=false) => ({field,source_ts:old,source_unit:unit,invalid,quality:invalid?'invalid':'ok',...value});
 const health = {receiver_generation:'fixture',receiver_started_at:old,receiver_seen_at:now,updated_at:now,caught_up_at:now,lag_records:0};
@@ -222,6 +222,25 @@ test('both streaming profiles report Location every interval only after the same
   expect(locations.length).toBe(2);
   for (const [, interval, delta] of locations) expect(Number(delta) / Number(interval)).toBe(reportDistancePerIntervalM);
   expect(locations.map(l => Number(l[1])).sort((a, b) => a - b)).toEqual([...profileFixIntervalsS]);
+});
+test('a held speed is current for at most 12 s, even when the cadence is misread as economy',()=>{
+  expect(currentMs(2)).toBe(10_000); expect(currentMs(10)).toBe(12_000); expect(currentMs(null)).toBe(10_000);
+  // A normal-profile car whose only fast pair spans a lost report reads as economy.
+  const f = driving(); f.fixIntervalS = installedFixIntervalS(10);
+  const stopped = new Date(+now - 30_000).toISOString();
+  for (const s of f.samples) s.source_ts = s.field === 'Gear' ? old : stopped;
+  let d = liveValues(f, now)!.drive;
+  expect(d.speedKph!.current).toBe(false); expect(d.powerKw!.current).toBe(false); expect(d.quiet).toBeNull();
+  // 13 s: still not current; 11 s, a moving economy car's report: current.
+  for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = new Date(+now - 13_000).toISOString();
+  expect(liveValues(f, now)!.drive.speedKph!.current).toBe(false);
+  for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = new Date(+now - 11_000).toISOString();
+  expect(liveValues(f, now)!.drive.speedKph!.current).toBe(true);
+  // Quiet still waits out the economy window (conservative): 30 s of silence is not quiet, 55 s is.
+  for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = stopped;
+  expect(liveValues(f, now)!.drive.quiet).toBeNull();
+  for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = new Date(+now - 55_000).toISOString();
+  d = liveValues(f, now)!.drive; expect(d.quiet).not.toBeNull(); expect(d.speedKph!.current).toBe(false);
 });
 test('the cadence is a configured interval, never a long observed gap',()=>{
   expect(installedFixIntervalS(2.0)).toBe(2); expect(installedFixIntervalS(1.8)).toBe(2);

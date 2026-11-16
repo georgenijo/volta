@@ -241,18 +241,20 @@ stream is connected. Speed and power come from the stream or from the open
 TeslaMate drive's newest position (`source`). The stream sends them with
 `Location`, only after the car has moved (normal profile: at most every 2 s,
 after 3 m; economy profile: every 10 s, after 15 m). On a connected stream
-they are current for five times the installed profile's interval, within 10
-to 60 s (10 s while it is unknown). The interval is the configured one (2 or
-10 s) that the shortest gap between consecutive recent fixes at 20 km/h or
-more allows; slower fixes can be far apart on either profile, so without a
-fast pair the interval is unknown; a TeslaMate
+they are current for one installed interval plus 2 s of transit, but at least
+10 s (so 10 s on the 2 s profile and 12 s on economy). The interval is the
+configured one (2 or 10 s) that the shortest gap between consecutive recent
+fixes at 20 km/h or more allows. Slower fixes can be far apart on either
+profile, so without a fast pair the interval is unknown and the window is
+10 s. The stillness window below is five times the interval, within 10 to
+60 s; a TeslaMate
 position is current for 30 s, and only when it is newer than the stream's
 last position report. Per value a current reading beats a stale one, then
 the newer one wins. `powerKw` is battery power: positive
 drives, negative is regen. Stream power uses `PackVoltage` and `PackCurrent`
 from the same payload with the operator's recorded `PackCurrent` sign, and is
 null without that calibration. `quiet` is set when a connected stream in R,
-N or D with a valid GPS fix has sent no position for longer than that window,
+N or D with a valid GPS fix has sent no position for longer than the stillness window,
 counted only up to the time the pipeline is proven to have stored everything
 the car sent: the receiver seen alive and the consumer caught up (stream
 health, written every 15 s), less 2 s for transit, and only while that proof

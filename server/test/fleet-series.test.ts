@@ -577,7 +577,8 @@ test('live drive: the stream leads while current, the open TeslaMate drive fills
   const half=new Date(+now-30_000);
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${half},received_at=${half} WHERE field<>'Gear'`;
   status=await get('/v1/vehicles/1/status');
-  expect(status.liveDrive.quiet).toBeNull();expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:true});
+  // Not quiet yet, and a 30 s old reading does not hold now on any profile.
+  expect(status.liveDrive.quiet).toBeNull();expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});
   // Creeping in a queue on the 2 s profile: one fix per 3 m, 30 s apart and
   // never fast. Those gaps are not the cadence: it is unknown, so 15 s after
   // the last report its speed is not current and no quiet span is inferred.
