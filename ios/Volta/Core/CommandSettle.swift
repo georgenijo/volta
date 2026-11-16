@@ -4,10 +4,10 @@ import Foundation
 /// usually still shows the old state: the car reports the change over Fleet
 /// Telemetry a moment later (well under a second when it streams, up to its
 /// 15-second reporting interval at worst). So the status is read again after
-/// these pauses until it shows what was asked for: about 1, 3, 6, 12 and 20
+/// these pauses until it shows what was asked for: about 0.5, 2, 5, 11 and 19
 /// seconds after the first read.
 enum CommandSettle {
-    static let pauses: [Duration] = [.seconds(1), .seconds(2), .seconds(3), .seconds(6), .seconds(8)]
+    static let pauses: [Duration] = [.milliseconds(500), .milliseconds(1500), .seconds(3), .seconds(6), .seconds(8)]
 }
 
 extension VehicleCommand {
@@ -30,9 +30,25 @@ extension VehicleCommand {
         case .setTemperatures(let driver, _):
             guard let observed = status.driverTempSettingC else { return false }
             return abs(observed - driver) < 0.25
-        case .openChargePort, .closeChargePort, .actuateTrunk, .windowControl, .honk, .flash,
-             .triggerHomeLink, .wakeUp, .seatHeater, .steeringWheelHeat, .defrost:
+        case .openChargePort: return status.chargePortDoorOpen == true
+        case .closeChargePort: return status.chargePortDoorOpen == false
+        // Defrost runs the climate; turning it off leaves the climate as it was.
+        case .defrost(true): return status.climateOn == true
+        case .defrost(false), .actuateTrunk, .windowControl, .honk, .flash,
+             .triggerHomeLink, .wakeUp, .seatHeater, .steeringWheelHeat:
             return nil
+        }
+    }
+
+    /// The status shows this command's result, so it is worth reading again.
+    var hasObservableState: Bool {
+        switch self {
+        case .lock, .unlock, .climateOn, .climateOff, .sentryOn, .sentryOff, .chargeStart, .chargeStop,
+             .setChargeLimit, .setTemperatures, .openChargePort, .closeChargePort, .defrost(true):
+            true
+        case .defrost(false), .actuateTrunk, .windowControl, .honk, .flash, .triggerHomeLink, .wakeUp,
+             .seatHeater, .steeringWheelHeat:
+            false
         }
     }
 }

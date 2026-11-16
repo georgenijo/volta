@@ -362,8 +362,14 @@ final class VehicleIntentService: VehicleIntentPerforming {
             }
             if case .succeeded(simulated: false) = outcome {
                 await self.publishObservedStatus(model: model, target: target, command: command) {
-                    // Another command for this car (from Controls, say) speaks for it now.
-                    coordinator.activity(dataSource: target.dataSource, vehicleID: target.vehicleID)?.id == requestID
+                    // Pairing, the connection or the selected car changed: this
+                    // source's reads no longer describe what the app shows.
+                    guard CommandContext(model) == context else { return false }
+                    // Another command for this car (from Controls, say) speaks for it
+                    // now. A dismissed result leaves no activity; that isn't one.
+                    guard let latest = coordinator.activity(dataSource: target.dataSource,
+                                                            vehicleID: target.vehicleID) else { return true }
+                    return latest.id == requestID
                 }
             }
             // Controls show the requested state while the action runs; reload so
@@ -436,17 +442,21 @@ final class VehicleIntentService: VehicleIntentPerforming {
     /// the intent answered, so a slow or failing status read never delays it.
     /// The car reports the change a moment after accepting it, so the status
     /// is read again (`CommandSettle`) until it shows `command`, while
-    /// `isLatest` says no other command has run for the car since.
+    /// `isLatest` says the connection is the same and no other command has
+    /// run for the car since. A command the status can't show is read once.
     private func publishObservedStatus(model: AppModel, target: IntentCommandTarget, command: VehicleCommand,
                                        isLatest: @MainActor () -> Bool) async {
         if !model.hasLoadedVehicles { await model.loadVehicles() }
-        for pause in [Duration.zero] + settlePauses {
+        let pauses = command.hasObservableState ? settlePauses : []
+        for pause in [Duration.zero] + pauses {
             if pause > .zero {
                 do { try await Task.sleep(for: pause) } catch { return }
             }
             guard isLatest(), let surfaces = model.refreshSurfaces else { return }
             let issued = surfaces.nextStatusToken()
             guard let status = try? await target.dataSource.status(vehicleID: target.vehicleID) else { continue }
+            // Checked again: the connection may have changed during the read.
+            guard isLatest() else { return }
             surfaces.publish(VehicleRefresh(status: status, issued: issued), dataSource: target.dataSource)
             if command.isReflected(in: status) != false { return }
         }

@@ -37,6 +37,8 @@ final class ControlsModel {
     @ObservationIgnored var settlePauses: [Duration] = CommandSettle.pauses
     /// The re-reads after the last accepted command, while they run.
     @ObservationIgnored private(set) var settleTask: Task<Void, Never>?
+    /// Which re-reads own `settleTask`; bumped whenever they are replaced.
+    @ObservationIgnored private var settleGeneration = 0
 
     @ObservationIgnored private var refreshGeneration = 0
     @ObservationIgnored private var chargeLimitTask: Task<Void, Never>?
@@ -110,19 +112,25 @@ final class ControlsModel {
         // Only a send the coordinator will actually start is logged.
         // Saved values never reach the coordinator.
         guard !showsSavedStatus else { return false }
-        // A new send replaces any earlier command's re-reads.
-        settleTask?.cancel()
-        settleTask = nil
-        let entry = coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
-            ? log.begin(command, label: label, key: key) : nil
+        let starts = coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
+        let entry = starts ? log.begin(command, label: label, key: key) : nil
+        // A send that actually starts replaces any earlier command's re-reads;
+        // one the coordinator refuses leaves them running.
+        if starts { replaceSettle(nil) }
+        let generation = settleGeneration
         let outcome = await coordinator.perform(command, label: label, dataSource: dataSource, vehicleID: vehicleID)
         if let entry { log.finish(entry, with: outcome) }
         switch outcome {
         case .succeeded(let simulated):
             if simulated { simulate?() }
             else {
+                let activity = coordinator.activity(dataSource: dataSource, vehicleID: vehicleID)?.id
                 await refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
-                settle(command, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
+                // A newer send started while this one read its status: it owns the re-reads.
+                if generation == settleGeneration {
+                    settle(command, activity: activity, coordinator: coordinator, dataSource: dataSource,
+                           vehicleID: vehicleID, surfaces: surfaces)
+                }
             }
             return true
         case .failed, .unknown:
@@ -130,23 +138,44 @@ final class ControlsModel {
         }
     }
 
+    /// Cancels the running re-reads and installs `task` (or none) in their place.
+    private func replaceSettle(_ task: Task<Void, Never>?) {
+        settleTask?.cancel()
+        settleGeneration += 1
+        settleTask = task
+    }
+
     /// Reads the status again, in the background, until it shows what
     /// `command` asked for (see `CommandSettle`). Stops at the first status
-    /// that shows it, when another command is sent, or after the last pause.
-    private func settle(_ command: VehicleCommand, dataSource: any VoltaDataSource, vehicleID: Int,
-                        surfaces: (any VehicleSurfaces)?) {
+    /// that shows it, when another command is sent (here, or anywhere else
+    /// for this car: the coordinator's activity changes), or after the last pause.
+    private func settle(_ command: VehicleCommand, activity: UUID?, coordinator: VehicleCommandCoordinator,
+                        dataSource: any VoltaDataSource, vehicleID: Int, surfaces: (any VehicleSurfaces)?) {
         guard let status, command.isReflected(in: status) == false else { return }
         let pauses = settlePauses
+        replaceSettle(nil)
+        let generation = settleGeneration
         settleTask = Task { [weak self] in
             for pause in pauses {
                 do { try await Task.sleep(for: pause) } catch { return }
-                guard let self, !Task.isCancelled else { return }
+                guard let self, self.ownsSettle(generation, activity: activity, coordinator: coordinator,
+                                                dataSource: dataSource, vehicleID: vehicleID) else { return }
                 await self.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
-                guard !Task.isCancelled else { return }
+                guard self.settleGeneration == generation, !Task.isCancelled else { return }
                 if let status = self.status, command.isReflected(in: status) != false { break }
             }
-            if let self, !Task.isCancelled { self.settleTask = nil }
+            if let self, self.settleGeneration == generation { self.settleTask = nil }
         }
+    }
+
+    /// These re-reads are still the latest: no newer send replaced them, and
+    /// no other command (an intent, another screen) has run for the car since.
+    private func ownsSettle(_ generation: Int, activity: UUID?, coordinator: VehicleCommandCoordinator,
+                            dataSource: any VoltaDataSource, vehicleID: Int) -> Bool {
+        guard settleGeneration == generation, !Task.isCancelled else { return false }
+        // A dismissed result leaves no activity; that is not another command.
+        guard let current = coordinator.activity(dataSource: dataSource, vehicleID: vehicleID)?.id else { return true }
+        return activity == nil || current == activity
     }
 
     /// Sends `command` with its standard label and, in demo mode, its simulated effect.

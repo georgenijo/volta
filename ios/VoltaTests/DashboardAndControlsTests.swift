@@ -779,6 +779,45 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertNil(model.settleTask)
     }
 
+    func testARefusedSendLeavesEarlierRereadsRunning() async {
+        let source = StubSource(), coordinator = coordinator()
+        // Flash isn't offered, so the coordinator refuses it before sending.
+        source.capability = VehicleCommandCapabilities(available: true, reason: nil,
+                                                       commands: Array(VehicleCommand.supportedNames.filter { $0 != "flash" }))
+        source.statusHandler = { makeStatus(climateOn: false) }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(climateOn: false))
+        model.settlePauses = [.seconds(30)]
+        await model.setClimate(true, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        let first = try! XCTUnwrap(model.settleTask)
+        let sent = await model.send(.flash, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertFalse(sent)
+        XCTAssertFalse(first.isCancelled, "nothing new went out, so the climate re-reads continue")
+        XCTAssertEqual(model.settleTask, first)
+        model.settleTask?.cancel()
+    }
+
+    func testAnOlderSendsLateReadDoesNotReplaceNewerRereads() async {
+        let source = StubSource(), coordinator = coordinator(), reads = Counter(), gate = SectionGate()
+        // The first read (climate on's) is held until the lock has started its re-reads.
+        source.statusHandler = {
+            if await reads.next() == 1 { await gate.wait() }
+            return makeStatus(locked: true, climateOn: false)
+        }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(locked: true, climateOn: false))
+        model.settlePauses = [.seconds(30)]
+        let climate = Task { await model.setClimate(true, coordinator: coordinator, dataSource: source, vehicleID: 1) }
+        while await reads.value < 1 { try? await Task.sleep(for: .milliseconds(2)) }
+        await model.setLocked(false, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        let lockRereads = try! XCTUnwrap(model.settleTask)
+        await gate.open()
+        _ = await climate.value
+        XCTAssertEqual(model.settleTask, lockRereads, "the newer command keeps its re-reads")
+        XCTAssertFalse(lockRereads.isCancelled)
+        model.settleTask?.cancel()
+    }
+
     func testCommandReflectionCoversObservableState() {
         var status = makeStatus(locked: true, climateOn: nil, chargeLimit: 80, chargingState: .stopped)
         status.driverTempSettingC = 21
@@ -789,6 +828,12 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(VehicleCommand.setChargeLimit(percent: 90).isReflected(in: status), false)
         XCTAssertEqual(VehicleCommand.setTemperatures(driverTempC: 21, passengerTempC: 21).isReflected(in: status), true)
         XCTAssertNil(VehicleCommand.honk.isReflected(in: status))
+        XCTAssertEqual(VehicleCommand.openChargePort.isReflected(in: status), false, "unknown door")
+        XCTAssertEqual(VehicleCommand.defrost(on: true).isReflected(in: status), false)
+        XCTAssertNil(VehicleCommand.defrost(on: false).isReflected(in: status))
+        for command in [VehicleCommand.lock, .honk, .openChargePort, .defrost(on: true), .defrost(on: false), .flash] {
+            XCTAssertEqual(command.hasObservableState, command.isReflected(in: status) != nil, "\(command)")
+        }
     }
 
     func testUnknownPersistsAcrossFileBackedRestartAndReplaysSameKey() async throws {

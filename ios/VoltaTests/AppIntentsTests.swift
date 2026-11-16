@@ -462,6 +462,12 @@ private final class SlowReplies: Sendable {
 
 private func accepted(_ name: String) -> Data { Data(#"{"ok":true,"command":"\#(name)","requestId":"request_1"}"#.utf8) }
 
+private final class ReadCount: Sendable {
+    private let count = Mutex(0)
+    func next() -> Int { count.withLock { $0 += 1; return $0 } }
+    var value: Int { count.withLock { $0 } }
+}
+
 private final class RequestLog: Sendable {
     private let entries = Mutex<[String]>([])
     func add(_ request: URLRequest) { entries.withLock { $0.append("\(request.httpMethod ?? "GET") \(request.url?.path ?? "")") } }
@@ -1108,6 +1114,65 @@ private final class RequestLog: Sendable {
         await service.finishBackgroundWork()
         XCTAssertEqual(reads.withLock { $0 }, 3, "re-reads stop at the first status that shows the car locked")
         XCTAssertEqual(surfaces.published.map(\.status.locked), [false, false, true])
+    }
+
+    /// A model whose status reads are counted and shaped by `status`; lock
+    /// and flash are accepted.
+    private func rereadModel(surfaces: IntentSurfaces, reads: ReadCount,
+                             status: @escaping @Sendable (Int) throws -> (Int, Data)) throws -> AppModel {
+        try pairedModel(surfaces: surfaces) { request in
+            switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
+            case ("GET", "/v1/vehicles/42/commands"):
+                return (200, Data(#"{"available":true,"reason":null,"commands":["lock","unlock","climate_on","flash"]}"#.utf8))
+            case ("GET", "/v1/vehicles"):
+                return (200, try JSONSerialization.data(withJSONObject: [["id": 42, "name": "Friday"]]))
+            case ("POST", "/v1/vehicles/42/commands/lock"): return (200, accepted("lock"))
+            case ("POST", "/v1/vehicles/42/commands/flash"): return (200, accepted("flash"))
+            case ("GET", "/v1/vehicles/42/status"):
+                return try status(reads.next())
+            default: return (404, Data())
+            }
+        }
+    }
+
+    nonisolated private static func lockedStatus(_ locked: Bool, read: Int) throws -> (Int, Data) {
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let status = VehicleStatus(
+            vehicleId: 42, state: .online, updatedAt: now.addingTimeInterval(Double(read)), batteryLevel: 72,
+            usableBatteryLevel: nil, ratedRangeKm: nil, estRangeKm: 328, chargeLimit: 80,
+            chargingState: .disconnected, chargerPowerKw: nil, minutesToFull: nil, insideTempC: nil,
+            outsideTempC: nil, climateOn: false, driverTempSettingC: nil, locked: locked, sentryMode: false,
+            odometerKm: nil, location: nil, locationUpdatedAt: nil, firmware: nil)
+        return (200, try encoder.encode(status))
+    }
+
+    /// Unpairing (or pairing another server) stops the re-reads: the old
+    /// source's status must not reach the new connection's widgets.
+    func testRereadsStopWhenTheConnectionChanges() async throws {
+        let surfaces = IntentSurfaces(), reads = ReadCount()
+        let model = try rereadModel(surfaces: surfaces, reads: reads) { try Self.lockedStatus(false, read: $0) }
+        let service = intentService(model: { model }, settlePauses: Array(repeating: .milliseconds(150), count: 4))
+        _ = try await service.perform(.lock)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while surfaces.published.isEmpty, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(surfaces.published.count, 1)
+        _ = model.unpair()
+        await service.finishBackgroundWork()
+        XCTAssertEqual(reads.value, 1, "no read from the replaced source")
+        XCTAssertEqual(surfaces.published.count, 1)
+    }
+
+    /// A command the status can't show is read once, even when that read fails.
+    func testACommandWithNothingToShowIsReadOnce() async throws {
+        let surfaces = IntentSurfaces(), reads = ReadCount()
+        let model = try rereadModel(surfaces: surfaces, reads: reads) { _ in
+            (503, Data(#"{"error":{"code":"teslamate_unavailable","message":"down"}}"#.utf8))
+        }
+        let service = intentService(model: { model }, settlePauses: Array(repeating: .milliseconds(5), count: 5))
+        _ = try await service.perform(.flashLights)
+        await service.finishBackgroundWork()
+        XCTAssertEqual(reads.value, 1)
+        XCTAssertTrue(surfaces.published.isEmpty)
     }
 
     func testPairedCommandIsRefusedWhenTeslaIsNotLinkedAndNothingIsSent() async throws {
