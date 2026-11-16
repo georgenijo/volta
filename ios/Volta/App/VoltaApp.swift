@@ -118,10 +118,7 @@ private struct VoltaRootView: View {
         } message: {
             Text("Volta forgets this device's token. You'll need a new pairing code from your server to connect again.")
         }
-        .onAppear {
-            // Runs after the transaction that first displays the root view commits.
-            DispatchQueue.main.async { StartupTrace.mark(.firstFrame) }
-        }
+        .onAppear { StartupTrace.markFirstFrameAtNextRefresh() }
         .task(id: model.pairingState) {
             if model.needsCredentialRetry { model.restorePairing() }
             if model.isLocked { await model.unlock() }

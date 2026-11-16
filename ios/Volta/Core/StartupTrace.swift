@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 import os
 
 /// Startup milestones, each logged once per process with the milliseconds
@@ -10,7 +11,8 @@ enum StartupTrace {
     enum Milestone: String, Sendable {
         /// `AppModel` began initializing.
         case appModel
-        /// The first frame of the root view was committed.
+        /// The first display refresh after the root view appeared: its first
+        /// frame has been committed and the main thread is free again.
         case firstFrame
         /// The signed-in tab shell appeared.
         case shell
@@ -37,11 +39,36 @@ enum StartupTrace {
     }()
     @MainActor private static var reached: Set<Milestone> = []
 
+    /// Marks `.firstFrame` at the next display refresh. Call when the root view appears.
+    @MainActor static func markFirstFrameAtNextRefresh() {
+        FirstRefresh.shared.start()
+    }
+
     /// Logs `milestone` the first time this process reaches it.
     @MainActor static func mark(_ milestone: Milestone) {
         guard reached.insert(milestone).inserted else { return }
         let elapsed = processStart.map { Int((Date.now.timeIntervalSince($0) * 1_000).rounded()) } ?? -1
         signposter.emitEvent("milestone", "\(milestone.rawValue, privacy: .public)")
         logger.notice("startup milestone=\(milestone.rawValue, privacy: .public) ms=\(elapsed, privacy: .public)")
+    }
+}
+
+/// A one-shot display link: its first callback runs only after the frame
+/// built in the current main-thread pass has been committed.
+@MainActor
+private final class FirstRefresh: NSObject {
+    static let shared = FirstRefresh()
+    private var link: CADisplayLink?
+
+    func start() {
+        guard link == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(refresh))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    @objc private func refresh() {
+        link?.invalidate()
+        StartupTrace.mark(.firstFrame)
     }
 }

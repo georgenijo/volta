@@ -74,7 +74,15 @@ def main() -> int:
     summary = {key: describe([row[key] for row in measured if key in row]) for key in header[1:]}
     for key, value in summary.items():
         print(f"  {key}: {value}")
-    (out / "summary.json").write_text(json.dumps({"rows": rows, "summary": summary}, indent=2))
+    # Pre-main time is mostly the simulator's dyld and swings with host load;
+    # time since AppModel started isolates the app's own launch path.
+    print("median (range) since appModel, trials 1+, ms")
+    relative = {}
+    for key in MILESTONES[1:]:
+        values = [row[key] - row["appModel"] for row in measured if key in row and "appModel" in row]
+        relative[key] = describe(values)
+        print(f"  {key}: {relative[key]}")
+    (out / "summary.json").write_text(json.dumps({"rows": rows, "summary": summary, "sinceAppModel": relative}, indent=2))
     return 0
 
 
