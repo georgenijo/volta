@@ -51,6 +51,8 @@ struct SavedDashboard: Codable, Equatable, Sendable {
     var labelledStatus: VehicleStatus {
         var status = status
         status.locationUpdatedAt = nil
+        // A drive seen by an earlier launch is over or unknown now.
+        status.liveDrive = nil
         var freshness = status.telemetryFreshness ?? TelemetryFreshness(connected: false, lastSeenAt: nil, recordedAt: [:])
         freshness.savedAt = savedAt
         status.telemetryFreshness = freshness

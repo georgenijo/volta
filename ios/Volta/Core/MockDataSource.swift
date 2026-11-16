@@ -53,6 +53,8 @@ struct MockDataSource: VoltaDataSource {
             status.chargeStartedAt = now.addingTimeInterval(-Self.liveChargeMinutes * 60)
             status.activeChargeId = Self.liveChargeID
         }
+        // `-demoDriving <scenario>`: on the road, read at the current time.
+        MockDriving.current?.apply(to: &status, now: .now)
         return status
     }
     private func parkedStatus(vehicleID: Int) throws -> VehicleStatus {

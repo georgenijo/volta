@@ -65,6 +65,13 @@ final class DashboardModel {
     }
 
     private var generation = 0
+    /// Changes when a load starts; see `showLive`.
+    var loadGeneration: Int { generation }
+    /// The newest load's `/status` has not answered yet.
+    private(set) var statusPending = false
+    /// When a load last published to widgets and Live Activities; the live
+    /// driving refresh counts its 30 s from the newest publication.
+    private(set) var surfacesPublishedAt: Date?
     /// When and in which zone the shown today total was requested.
     private var todayRequest: (at: Date, zone: String)?
     /// Where loads are saved for the next launch; from the first load's start.
@@ -149,7 +156,8 @@ final class DashboardModel {
         if status == nil { phase = .loading }
         loadingSections = [.timeline, .summary(.today), .summary(.sevenDays), .summary(.thirtyDays)]
         isLoading = true
-        defer { if token == generation { loadingSections = []; isLoading = false } }
+        statusPending = true
+        defer { if token == generation { loadingSections = []; isLoading = false; statusPending = false } }
 
         // Accept the app's startup list only for a genuinely new model and
         // only when it contains the selected vehicle; an invalid seed falls
@@ -186,6 +194,7 @@ final class DashboardModel {
             }
 
             let statusResult = await statusReq
+            if token == generation { statusPending = false }
             guard token == generation, !Task.isCancelled,
                   !Self.isCancellation(statusResult.map { _ in }) else { group.cancelAll(); return }
             guard case .success(let newStatus) = statusResult else {
@@ -313,8 +322,29 @@ final class DashboardModel {
         save(status: status, vehicleID: vehicleID, at: statusLoadedAt, timeline: timeline, summaries: summaries,
              todayRequestedAt: todayRequestedAt, todayRequestedZone: todayRequestedZone)
         guard !cancelled, let surfaces, let issued else { return }
-        surfaces.publish(VehicleRefresh(status: status, issued: issued, vehicleName: vehicle?.name,
-                                        today: today, timeline: timeline), dataSource: dataSource)
+        // Only a publication surfaces took counts: an older token's is rejected.
+        if surfaces.publishAccepted(VehicleRefresh(status: status, issued: issued, vehicleName: vehicle?.name,
+                                                   today: today, timeline: timeline), dataSource: dataSource) {
+            surfacesPublishedAt = .now
+        }
+    }
+
+    /// A status from the live driving refresh (`LiveDrivingRefresher`): shown
+    /// at once; history and the saved dashboard are left to loads. Refused
+    /// while a load's own `/status` is pending, or when a load started after
+    /// this request was sent, so an older answer never replaces a newer one.
+    /// Slow history does not hold it back.
+    @discardableResult
+    func showLive(_ newStatus: VehicleStatus, vehicleID: Int, startedGeneration: Int) -> Bool {
+        guard !statusPending, generation == startedGeneration, newStatus.vehicleId == vehicleID,
+              status?.vehicleId == vehicleID else { return false }
+        status = newStatus
+        showsSavedStatus = false
+        refreshError = nil
+        lastLoadedAt = .now
+        failedAttemptAt = nil
+        phase = .loaded
+        return true
     }
 
     /// Shows the previous launch's dashboard until fresh data replaces it.

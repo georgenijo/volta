@@ -698,7 +698,11 @@ enum LiveActivityPlanner {
     enum DrivingObservation: Hashable { case driving, ended, unknown }
 
     static func drivingObservation(_ status: VehicleStatus) -> DrivingObservation {
-        switch status.state {
+        // A live gear leads TeslaMate, as on the Dashboard (`LiveDriveDisplay.isDriving`).
+        if status.telemetryFreshness?.savedAt == nil, let gear = status.liveDrive?.gear, gear.current {
+            return gear.value == .p ? .ended : .driving
+        }
+        return switch status.state {
         case .driving: .driving
         // Offline can be a tunnel or a dead zone mid-drive; let the activity go stale instead.
         case .offline: .unknown

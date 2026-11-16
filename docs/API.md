@@ -224,9 +224,51 @@ VehicleStatus  { vehicleId, state: online|asleep|offline|driving|charging|updati
                  chargePortLatch, tpms: { fl, fr, rl, rr }, telemetryFreshness,
                  chargeEnergyAddedKwh, chargerVoltage, chargerCurrentA, fastCharger,
                  chargeCableType, chargeStartedAt, chargeStartObserved, activeChargeId,
-                 chargeReadyAt }
+                 chargeReadyAt, liveDrive?: LiveDrive }
 TireReading    { pressureBar: number|null, updatedAt: timestamp|null }
+LiveDrive      { gear: LiveReading<P|R|N|D>|null, speedKph: LiveReading<number>|null,
+                 powerKw: LiveReading<number>|null, quiet: LiveQuiet|null }
+LiveReading    { value, observedAt, current: boolean, source: fleet_telemetry|teslamate }
+LiveQuiet      { since, speedBelowKph }
 ```
+
+`liveDrive` is what the car is doing on the road; it is omitted when nothing is
+known (a parked car without telemetry). Each reading carries when it was
+observed and whether it holds now (`current`); a reading that is not current
+is the last one seen, not a live value. Gear comes from Fleet Telemetry's
+change-only `Gear` (Invalid, SNA and Unknown are null) and is current while the
+stream is connected. Speed and power come from the stream or from the open
+TeslaMate drive's newest position (`source`). The stream sends them with
+`Location`, only after the car has moved (normal profile: at most every 2 s,
+after 3 m; economy profile: every 10 s, after 15 m). On a connected stream
+they are current for one installed interval plus 2 s of transit, but at least
+10 s (so 10 s on the 2 s profile and 12 s on economy). The interval is the
+configured one (2 or 10 s) that the shortest gap between consecutive recent
+fixes at 20 km/h or more allows. Slower fixes can be far apart on either
+profile, so without a fast pair the interval is unknown and the window is
+10 s. The stillness window below is five times the interval, within 10 to
+60 s; a TeslaMate
+position is current for 30 s, and only when it is newer than the stream's
+last position report. Per value a current reading beats a stale one, then
+the newer one wins. `powerKw` is battery power: positive
+drives, negative is regen. Stream power uses `PackVoltage` and `PackCurrent`
+from the same payload with the operator's recorded `PackCurrent` sign, and is
+null without that calibration. `quiet` is set when a connected stream in R,
+N or D with a valid GPS fix has sent no position for longer than the stillness window,
+counted only up to the time the pipeline is proven to have stored everything
+the car sent: the receiver seen alive and the consumer caught up (stream
+health, written every 15 s), less 2 s for transit, and only while that proof
+is under 45 s old. Silence after a receiver or consumer failure proves
+nothing, so its readings just go stale. It is not a claim that the car stopped: a car moving slower than the report
+distance per interval (1.5 m/s in both profiles) can stay silent. It says
+the car has reported no movement since `since`, and its average speed since
+then is below `speedBelowKph` (that distance over the proven quiet time less
+one interval). The app shows the bound ("Under 2 mph"), and "Stopped" once
+the bound is under 0.5 km/h, where any allowed speed reads 0. The receiver holds the last speed a stopping car reported, usually
+1 to 5 mph, so that reading is never current here. `quiet` is null when a
+current speed observed after the stream's last report exists, and never inferred without a fix or a known
+cadence. Gear and readings
+outlast the drive: clients decide what to show from gear and `state`.
 
 Live charging comes from Fleet Telemetry's `DetailedChargeState` while the
 stream is connected, or when that state is newer than every TeslaMate

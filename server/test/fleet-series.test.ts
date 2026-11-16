@@ -513,3 +513,89 @@ test('live charging leads TeslaMate while connected; a disconnected stale state 
   await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'live-%'`;
   await owner`TRUNCATE volta_telemetry.sessions`;
 });
+
+test('live drive: the stream leads while current, the open TeslaMate drive fills in, a parked car has no drive',async()=>{
+  const now=new Date(),old=new Date('2000-01-01T00:00:00Z'),recent=new Date(+now-2000),quiet=new Date(+now-60_000);
+  // Parked, nothing streamed: no liveDrive at all.
+  expect((await get('/v1/vehicles/1/status')).liveDrive).toBeUndefined();
+  // An open TeslaMate drive whose newest position is 5 s old.
+  await owner`INSERT INTO drives(id,car_id,start_date) VALUES (90,1,(now() AT TIME ZONE 'UTC') - interval '10 minutes')`;
+  await owner`INSERT INTO positions(id,car_id,drive_id,date,latitude,longitude,battery_level,usable_battery_level,speed,power)
+    VALUES (90,1,90,(now() AT TIME ZONE 'UTC') - interval '5 seconds',37.44,-122.14,64,64,52,-12)`;
+  let status=await get('/v1/vehicles/1/status');
+  expect(status.state).toBe('driving');
+  expect(status.liveDrive).toMatchObject({gear:null,speedKph:{value:52,current:true,source:'teslamate'},powerKw:{value:-12,current:true,source:'teslamate'},quiet:null});
+  // A connected stream in Drive with calibrated pack power leads.
+  await owner`INSERT INTO volta_telemetry.power_calibration(vehicle_id,sign,source,evidence_note) VALUES (1,'discharge_positive','operator_live_gate','synthetic')`;
+  const put=async(field:string,v:{num?:number,text?:string,unit?:string,lat?:number,lon?:number},t:Date,payload='drive-1')=>owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_num,value_text,latitude,longitude,source_unit,invalid,quality,payload_id)
+    VALUES(1,${field},${t},${t},${v.num??null},${v.text??null},${v.lat??null},${v.lon??null},${v.unit??''},false,'ok',${payload})`;
+  await put('Gear',{text:'ShiftStateD'},new Date(+now-600_000));
+  await put('VehicleSpeed',{num:40,unit:'mph'},recent);await put('Location',{lat:37.44,lon:-122.14,unit:'deg'},recent);
+  await put('PackVoltage',{num:400,unit:'V'},recent);await put('PackCurrent',{num:105,unit:'A'},recent);
+  // Fixes 2 s apart: the normal profile's cadence, so stillness is judged after 10 s.
+  for (const i of [0,1,2]) { const t=new Date(+recent-i*2000);
+    await datum('Location',null,t,'fix-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',40,t,'fix-'+i); }
+  await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at) VALUES(1,'fixture','CONNECTED',${old},${old})`;
+  await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
+    VALUES(1,'fixture',${old},${now},${old},${now},0,${now})`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.gear).toMatchObject({value:'D',current:true,source:'fleet_telemetry'});
+  expect(status.liveDrive.speedKph).toMatchObject({current:true,source:'fleet_telemetry'});expect(status.liveDrive.speedKph.value).toBeCloseTo(64.37,2);
+  expect(status.liveDrive.powerKw).toMatchObject({value:42,current:true,source:'fleet_telemetry'});
+  expect(Date.parse(status.liveDrive.speedKph.observedAt)).toBe(+recent);
+  // The stream goes quiet for a minute in Drive. TeslaMate's position
+  // is now 5 s old and current, so its speed and power show instead of the held ones.
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${quiet},received_at=${quiet} WHERE field<>'Gear'`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.speedKph).toMatchObject({value:52,source:'teslamate',current:true});expect(status.liveDrive.quiet).toBeNull();
+  // Without a current TeslaMate position the stream's quiet span stands and the held speed is stale.
+  await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '2 minutes' WHERE id=90`;
+  status=await get('/v1/vehicles/1/status');
+  expect(Date.parse(status.liveDrive.quiet.since)).toBe(+quiet);
+  expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});
+  expect(status.liveDrive.powerKw).toMatchObject({source:'fleet_telemetry',current:false});
+  // TeslaMate's 100 km/h from 25 s ago is older than the stream's last report
+  // 15 s ago: it is within TeslaMate's window but never holds over the
+  // newer silence, so the car is quiet and no speed is current.
+  const lastReport=new Date(+now-15_000);
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${lastReport},received_at=${lastReport} WHERE field<>'Gear'`;
+  await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '25 seconds',speed=100 WHERE id=90`;
+  status=await get('/v1/vehicles/1/status');
+  expect(Date.parse(status.liveDrive.quiet.since)).toBe(+lastReport);
+  expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});
+  // A TeslaMate speed newer than that report does end the quiet span.
+  await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '5 seconds' WHERE id=90`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.speedKph).toMatchObject({value:100,source:'teslamate',current:true});expect(status.liveDrive.quiet).toBeNull();
+  await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '2 minutes' WHERE id=90`;
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${quiet},received_at=${quiet} WHERE field<>'Gear'`;
+  // Fixes only every 10 s (the economy profile): a minute's silence is a quiet span, 30 s is not.
+  await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'fix-%'`;
+  for (const i of [0,1,2]) { const t=new Date(+quiet-i*10_000);
+    await datum('Location',null,t,'fix-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',40,t,'fix-'+i); }
+  expect(Date.parse((await get('/v1/vehicles/1/status')).liveDrive.quiet.since)).toBe(+quiet);
+  const half=new Date(+now-30_000);
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${half},received_at=${half} WHERE field<>'Gear'`;
+  status=await get('/v1/vehicles/1/status');
+  // Not quiet yet, and a 30 s old reading does not hold now on any profile.
+  expect(status.liveDrive.quiet).toBeNull();expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});
+  // Creeping in a queue on the 2 s profile: one fix per 3 m, 30 s apart and
+  // never fast. Those gaps are not the cadence: it is unknown, so 15 s after
+  // the last report its speed is not current and no quiet span is inferred.
+  await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'fix-%'`;
+  const creep=new Date(+now-15_000);
+  for (const i of [0,1,2,3,4,5,6,7]) { const t=new Date(+creep-i*30_000);
+    await datum('Location',null,t,'fix-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',5,t,'fix-'+i); }
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${creep},received_at=${creep} WHERE field<>'Gear'`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});expect(status.liveDrive.quiet).toBeNull();
+  // An earlier fast stretch, fixes 2 s apart, shows the 2 s profile: now 15 s of silence is quiet.
+  for (const i of [0,1]) { const t=new Date(+now-600_000+i*2000);
+    await datum('Location',null,t,'fix-fast-'+i,1,{latitude:37.44,longitude:-122.14}); await datum('VehicleSpeed',40,t,'fix-fast-'+i); }
+  status=await get('/v1/vehicles/1/status');
+  expect(Date.parse(status.liveDrive.quiet.since)).toBe(+creep);expect(status.liveDrive.speedKph.current).toBe(false);
+  // Parked: gear P, no stillness, the drive's readings stay stale.
+  await owner`UPDATE volta_telemetry.latest_samples SET value_text='ShiftStateP',source_ts=${recent} WHERE field='Gear'`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.gear).toMatchObject({value:'P',current:true});expect(status.liveDrive.quiet).toBeNull();
+});
