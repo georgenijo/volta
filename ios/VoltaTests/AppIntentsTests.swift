@@ -420,24 +420,27 @@ private final class RequestLog: Sendable {
     }
 
     /// A paired model whose server answers through `handler`.
+    ///
+    /// The app's own launch requests (#42's `/vehicles`, and a saved
+    /// dashboard's prefetch: read-only, and not made by the intents path) are
+    /// off unless `appLaunchRequests`, as in a prewarm. So a request log
+    /// records what the intent itself sends, not everything the app sends.
     private func pairedModel(surfaces: IntentSurfaces = IntentSurfaces(),
                              willStartCommand: (@Sendable () -> Void)? = nil,
                              appLock: (any AppAuthenticating)? = nil,
                              savedDashboards: (any SavedDashboardStoring)? = nil,
-                             launchRequests: Bool = false,
+                             selectedVehicleID: Int? = 42,
+                             appLaunchRequests: Bool = false,
                              handler: @escaping @Sendable (URLRequest) throws -> (Int, Data)) throws -> AppModel {
         StubProtocol.handler.withLock { $0 = handler }
         addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
-        let settings = settings(); settings.serverURL = "https://volta.example"; settings.selectedVehicleID = 42
+        let settings = settings(); settings.serverURL = "https://volta.example"; settings.selectedVehicleID = selectedVehicleID
         if appLock != nil { settings.appLockEnabled = true }
         let store = IntentTokenStore(); try store.save("synthetic-token")
-        // The launch's own requests (`/vehicles`, and a saved dashboard's
-        // prefetch) are off unless asked for, as in a prewarm: these tests
-        // count the intent's requests.
         return AppModel(settings: settings, tokenStore: store, session: URLSession(configuration: config),
                         appLock: appLock ?? AppLock(),
-                        launchArguments: ["Volta"], launchEnvironment: launchRequests ? [:] : ["ActivePrewarm": "1"],
+                        launchArguments: ["Volta"], launchEnvironment: appLaunchRequests ? [:] : ["ActivePrewarm": "1"],
                         surfaces: surfaces,
                         commandIntentStore: VehicleCommandIntentStore(inMemory: []),
                         savedDashboards: savedDashboards, willStartCommand: willStartCommand)
@@ -528,10 +531,81 @@ private final class RequestLog: Sendable {
         XCTAssertEqual(reading.snapshot, cached)
 
         // Saved as already locked: the request still goes out, after a fresh capability check.
+        // The car is the selected one; the restored list neither chose nor confirmed it.
         _ = try await service.perform(.lock)
-        let sent = log.all.filter { $0.contains("/commands") }
-        XCTAssertEqual(sent, ["GET /v1/vehicles/42/commands", "POST /v1/vehicles/42/commands/lock"])
+        XCTAssertEqual(log.all, [
+            "GET /v1/vehicles",                  // the intent's own check of the car (offline: the selection stands)
+            "GET /v1/vehicles/42/commands",      // fresh capabilities
+            "POST /v1/vehicles/42/commands/lock",
+            "GET /v1/vehicles",                  // after the command: the app's vehicle load (offline)
+            "GET /v1/vehicles/42/status",        // the observed status for widgets (offline)
+        ])
         XCTAssertTrue(surfaces.published.isEmpty, "the saved status is never published to widgets or controls")
+    }
+
+    private func savedDashboard(for vehicle: Vehicle) -> SavedDashboard {
+        let status = VehicleStatus(
+            vehicleId: vehicle.id, state: .online, updatedAt: now, batteryLevel: 50, usableBatteryLevel: nil,
+            ratedRangeKm: nil, estRangeKm: 200, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil,
+            minutesToFull: nil, insideTempC: nil, outsideTempC: nil, climateOn: false, driverTempSettingC: nil,
+            locked: false, sentryMode: false, odometerKm: nil, location: nil, locationUpdatedAt: nil, firmware: nil)
+        return SavedDashboard(backend: "saved-backend", vehicleID: vehicle.id, savedAt: now, vehicles: [vehicle],
+                              status: status, timeline: [], summaries: [], todayRequestedAt: nil, todayRequestedZone: nil)
+    }
+
+    /// No selection (a later `/vehicles` returned no cars and cleared it), a
+    /// saved dashboard still on disk, and `/vehicles` failing: the restored
+    /// list never supplies the car, so the intent fails and nothing is sent.
+    func testARestoredVehicleListNeverChoosesTheCarWhenTheVehicleRequestFails() async throws {
+        let log = RequestLog()
+        let model = try pairedModel(savedDashboards: SavedFile(savedDashboard(for: Vehicle(id: 7, name: "Saved"))),
+                                    selectedVehicleID: nil) { request in
+            log.add(request)
+            switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
+            case ("GET", "/v1/vehicles/7/commands"):
+                return (200, Data(#"{"available":true,"reason":null,"commands":["lock","unlock"]}"#.utf8))
+            case ("POST", "/v1/vehicles/7/commands/lock"):
+                return (200, Data(#"{"ok":true,"command":"lock","requestId":"request_1"}"#.utf8))
+            default:
+                throw URLError(.cannotConnectToHost)
+            }
+        }
+        // The app's own vehicle load fails: "loaded", yet the list is still the saved one.
+        await model.loadVehicles()
+        XCTAssertTrue(model.hasLoadedVehicles)
+        XCTAssertEqual(model.vehicles.map(\.id), [7], "the restored list stays after a failed load")
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do { _ = try await service.perform(.lock); XCTFail("expected the vehicle request's error") }
+        catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .serverUnreachable) }
+        XCTAssertEqual(log.all, ["GET /v1/vehicles", "GET /v1/vehicles"],
+                       "the app's load, then the intent's own check; no capability check and no command for the saved car")
+    }
+
+    /// No selection, a saved dashboard for one car, and `/vehicles` now
+    /// returning another: the command goes to the fetched car.
+    func testARestoredVehicleListNeverChoosesTheCarOverAFetchedOne() async throws {
+        let log = RequestLog()
+        let model = try pairedModel(savedDashboards: SavedFile(savedDashboard(for: Vehicle(id: 7, name: "Saved"))),
+                                    selectedVehicleID: nil) { request in
+            log.add(request)
+            switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
+            case ("GET", "/v1/vehicles"):
+                return (200, try JSONSerialization.data(withJSONObject: [["id": 42, "name": "Friday"]]))
+            case ("GET", let path) where path.hasSuffix("/commands"):
+                return (200, Data(#"{"available":true,"reason":null,"commands":["lock","unlock"]}"#.utf8))
+            case ("POST", let path) where path.hasSuffix("/commands/lock"):
+                return (200, Data(#"{"ok":true,"command":"lock","requestId":"request_1"}"#.utf8))
+            default:
+                return (404, Data())
+            }
+        }
+        XCTAssertEqual(model.vehicles.map(\.id), [7], "the saved dashboard was restored")
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let text = try await service.perform(.lock)
+        XCTAssertEqual(text, "Locking Friday.")
+        XCTAssertEqual(log.all.filter { $0.contains("/commands") },
+                       ["GET /v1/vehicles/42/commands", "POST /v1/vehicles/42/commands/lock"])
+        XCTAssertFalse(log.all.contains { $0.contains("/vehicles/7/") }, "nothing about the saved car")
     }
 
     func testPairedCommandIsRefusedWhenTeslaIsNotLinkedAndNothingIsSent() async throws {
@@ -714,7 +788,7 @@ private final class RequestLog: Sendable {
             do { _ = try await service.perform(action, confirm: nil); XCTFail("\(action) needs confirmation") }
             catch { XCTAssertEqual(error as? VoltaIntentError, .confirmationRequired) }
         }
-        XCTAssertTrue(log.all.isEmpty, "refused before any request")
+        XCTAssertTrue(log.all.isEmpty, "the intent itself refused before sending any request")
     }
 
     func testSwitchingToDemoDuringConfirmationSendsNothing() async throws {
@@ -867,7 +941,7 @@ private final class RequestLog: Sendable {
         XCTAssertEqual(model.controlsRequest, ControlsRequest(generation: model.connectionGeneration),
                        "the Controls screen is requested for this connection")
         XCTAssertTrue(recorder.actions.isEmpty, "the unlock never reached the command path")
-        XCTAssertTrue(log.all.isEmpty, "zero requests")
+        XCTAssertTrue(log.all.isEmpty, "the intent itself sends no request")
     }
 
     /// If the system can't bring Volta forward, the tap fails and still sends nothing.
@@ -880,7 +954,7 @@ private final class RequestLog: Sendable {
         }
         do { _ = try await SetVehicleLockIntent(value: false).perform(); XCTFail("expected the error") }
         catch { XCTAssertTrue(error is Unavailable) }
-        XCTAssertTrue(log.all.isEmpty, "zero requests")
+        XCTAssertTrue(log.all.isEmpty, "the intent itself sends no request")
     }
 
     func testLockControlStillLocksImmediately() async throws {
@@ -983,7 +1057,7 @@ private final class RequestLog: Sendable {
                                    status: status, timeline: [], summaries: [],
                                    todayRequestedAt: nil, todayRequestedZone: nil)
         let auth = StubAuthentication()
-        let model = try pairedModel(appLock: auth, savedDashboards: SavedFile(saved), launchRequests: true) { _ in
+        let model = try pairedModel(appLock: auth, savedDashboards: SavedFile(saved), appLaunchRequests: true) { _ in
             throw URLError(.cannotConnectToHost)
         }
         XCTAssertTrue(model.isLocked)

@@ -146,7 +146,9 @@ final class VehicleIntentService: VehicleIntentPerforming {
         if model.needsCredentialRetry { throw VoltaIntentError.deviceLocked }
         guard model.isPaired else { throw VoltaIntentError.notSignedIn }
         let source = model.dataSource
-        var vehicles = model.vehicles
+        // Only a list fetched from the server may choose or confirm the car;
+        // one restored from the saved dashboard may only name it (below).
+        var vehicles = model.hasFetchedVehicles ? model.vehicles : []
         var vehicleID = model.settings.selectedVehicleID ?? Vehicle.automaticChoice(in: vehicles)?.id
         if vehicleID == nil || !vehicles.contains(where: { $0.id == vehicleID }) {
             do { vehicles = try await source.vehicles() }
@@ -158,6 +160,7 @@ final class VehicleIntentService: VehicleIntentPerforming {
         }
         let snapshot = readSnapshot()
         let name = vehicles.first { $0.id == vehicleID }?.name
+            ?? model.vehicles.first { $0.id == vehicleID }?.name
             ?? (snapshot?.vehicleId == vehicleID ? snapshot?.vehicleName : nil)
             ?? "your car"
         return IntentCommandTarget(dataSource: source, vehicleID: vehicleID, vehicleName: name)

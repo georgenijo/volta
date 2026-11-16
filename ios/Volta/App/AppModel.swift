@@ -42,6 +42,10 @@ final class AppModel {
     /// follows every change (the saved list restored at launch or unlock too).
     private(set) var vehicles: [Vehicle] = [] { didSet { followSelectionInSavedDashboards() } }
     private(set) var hasLoadedVehicles = false
+    /// `vehicles` is a list this process fetched from the server, not the
+    /// saved dashboard's (`hasLoadedVehicles` is also set after a failed load).
+    /// Only such a list may choose or confirm a command's car.
+    @ObservationIgnored private(set) var hasFetchedVehicles = false
     private(set) var needsCredentialRetry = false
     private(set) var isConfiguringAppLock = false
     private(set) var isLoadingVehicles = false
@@ -156,7 +160,7 @@ final class AppModel {
         guard pairingState == .paired, !isLocked, !hasLoadedVehicles, vehicles.isEmpty,
               let backend = savedDashboardBackend, let saved = savedDashboards.read(backend: backend),
               saved.vehicles.contains(where: { $0.id == saved.vehicleID }) else { return }
-        vehicles = saved.vehicles
+        vehicles = saved.vehicles; hasFetchedVehicles = false
         launchDashboard = saved
         // The shell mounts in the first frame; its dashboard's status need
         // not wait for that frame to be built.
@@ -397,7 +401,7 @@ final class AppModel {
             forgetSavedDashboard()
         }
         pairingState = .demo; dataSource = MockDataSource(empty: empty)
-        vehicles = []; errorMessage = nil; resetSignInFallbacks()
+        vehicles = []; hasFetchedVehicles = false; errorMessage = nil; resetSignInFallbacks()
         isLocked = settings.appLockEnabled
         updateSurfaces()
     }
@@ -411,7 +415,7 @@ final class AppModel {
         settings.demoMode = false; settings.emptyDemo = false
         settings.selectedVehicleID = nil; settings.selectedVehicleIsExplicit = false
         needsCredentialRetry = false; hasLoadedVehicles = false; authenticateOnActive = false
-        pairingState = .unpaired; vehicles = []; isLocked = false; resetSignInFallbacks()
+        pairingState = .unpaired; vehicles = []; hasFetchedVehicles = false; isLocked = false; resetSignInFallbacks()
         dataSource = MockDataSource(empty: true)
         forgetSavedDashboard()
         updateSurfaces()  // clears the widget snapshot and ends Live Activities
@@ -460,7 +464,7 @@ final class AppModel {
             else { vehicles = try await source.vehicles() }
             guard generation == currentGeneration else { return }
             dashboardCanUseInitialVehicles = !hasLoadedVehicles
-            self.vehicles = vehicles
+            self.vehicles = vehicles; hasFetchedVehicles = true
             if let startupLoad, vehiclesLoad == startupLoad { startupLoadUnclaimed = true }
             StartupTrace.mark(.vehicles)
             if !isLaunchDemo { resolveSelection() }
@@ -504,7 +508,7 @@ final class AppModel {
         generation = UUID(); lockGeneration = UUID(); appLock.cancel()
         authenticateOnActive = false
         isPairing = false; isUnlocking = false; isLoadingVehicles = false; isConfiguringAppLock = false
-        vehicles = []; hasLoadedVehicles = false; needsCredentialRetry = false; errorMessage = nil
+        vehicles = []; hasFetchedVehicles = false; hasLoadedVehicles = false; needsCredentialRetry = false; errorMessage = nil
         pairingState = .unpaired; dataSource = MockDataSource(empty: true); isLocked = false
         updateSurfaces()
         // This process stays isolated even after exiting the synthetic preview.
