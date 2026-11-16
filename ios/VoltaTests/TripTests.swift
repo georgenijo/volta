@@ -635,7 +635,7 @@ final class TripTests: XCTestCase {
         let nanRoute = TripRoute(nan, mode: .elevation)
         assertRouteGeometry(nanRoute, nan, .elevation)
         XCTAssertEqual(nanRoute.coloredSeconds(nan), 594, accuracy: 1e-9)
-        // Efficiency needs speed and power at both ends and a moving car.
+        // Efficiency needs speed and power at both ends, and distance to divide by.
         let parked = TripTimeline(path: stride(from: 0.0, through: 600, by: 3).map { point($0, speed: 0, power: 1, lat: 37 + $0 / 100_000) })
         XCTAssertTrue(TripRoute(parked, mode: .efficiency).pieces.allSatisfy { $0.value == nil })
         let noPower = TripTimeline(path: stride(from: 0.0, through: 600, by: 3).enumerated().map { n, t in

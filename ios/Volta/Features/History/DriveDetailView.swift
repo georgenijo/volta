@@ -280,7 +280,11 @@ struct DriveDetailView: View {
                         let style = TripRouteStyle(mode: mode, valueRange: route.valueRange,
                                                    reference: EfficiencyReference(ratedWhPerKm: summary.ratedWhPerKm))
                         TripMapView(timeline: snapshot.timeline, route: route, style: style, highlight: highlight,
-                                    bottomInset: Self.mapFade, legend: style.legend(units: units),
+                                    bottomInset: Self.mapFade,
+                                    // iPhone Duo keeps its bar in the side strip: nothing to clear at the top.
+                                    frameInsets: EdgeInsets(top: sideBars.barEdges.isEmpty ? 140 : 32, leading: 48, bottom: 96, trailing: 48),
+                                    legend: style.legend(units: units),
+                                    reservedLegend: TripRouteStyle(mode: .efficiency, reference: style.reference).legend(units: units),
                                     legendLeading: Self.margin - 12 + sideBars.leading,
                                     underEdges: sideBars.barEdges.union(.vertical))
                     } else {

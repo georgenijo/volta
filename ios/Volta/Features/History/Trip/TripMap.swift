@@ -40,7 +40,7 @@ struct TripRouteStyle: Equatable {
     func legend(units: UnitPreferences) -> RouteLegendModel? {
         switch mode {
         case .speed: return .speed(units: units)
-        case .efficiency: return .efficiency(reference: reference, units: units)
+        case .efficiency: return .efficiency(reference: reference, units: units, averagedOverKm: EfficiencyWindow.windowKm)
         case .elevation: return valueRange.map { .elevation(minM: $0.lowerBound, maxM: $0.upperBound, units: units) }
         }
     }
@@ -85,22 +85,18 @@ struct TripRoute: Equatable {
     /// Lowest to highest piece value; the elevation ramp spans it.
     var valueRange: ClosedRange<Double>?
 
-    /// Mean speed (km/h) an efficiency interval needs: below it Wh/km divides by ~0.
-    static let minEfficiencySpeedKph = 3.0
-
     /// Whether the mode's metric is supported on the interval from timeline
     /// sample `i` to `i + 1` (same position segment): the metric is recorded
-    /// and finite at both ends. Efficiency needs speed and power at both ends
-    /// and a mean speed above `minEfficiencySpeedKph`.
+    /// and finite at both ends. Efficiency needs speed and power at both ends.
+    /// A stop is recorded data (speed 0, idle power): it stays inside its
+    /// efficiency run, so the rolling window counts its energy and carries on
+    /// through it instead of restarting at every traffic light.
     static func supports(_ mode: TripMapMode, _ a: DrivePoint, _ b: DrivePoint) -> Bool {
-        func finite(_ v: Double?) -> Double? { v.flatMap { $0.isFinite ? $0 : nil } }
+        func finite(_ v: Double?) -> Bool { v.map(\.isFinite) ?? false }
         switch mode {
-        case .speed: return finite(a.speedKph) != nil && finite(b.speedKph) != nil
-        case .elevation: return finite(a.elevationM) != nil && finite(b.elevationM) != nil
-        case .efficiency:
-            guard let s0 = finite(a.speedKph), let s1 = finite(b.speedKph),
-                  finite(a.powerKw) != nil, finite(b.powerKw) != nil else { return false }
-            return (s0 + s1) / 2 > minEfficiencySpeedKph
+        case .speed: return finite(a.speedKph) && finite(b.speedKph)
+        case .elevation: return finite(a.elevationM) && finite(b.elevationM)
+        case .efficiency: return finite(a.speedKph) && finite(b.speedKph) && finite(a.powerKw) && finite(b.powerKw)
         }
     }
 
@@ -142,10 +138,24 @@ struct TripRoute: Equatable {
                 let supported = Self.supports(mode, points[runStart], points[runStart + 1])
                 var runEnd = runStart + 1
                 while runEnd < seg.upperBound - 1, Self.supports(mode, points[runEnd], points[runEnd + 1]) == supported { runEnd += 1 }
+                // Efficiency colours by consumption over a rolling distance
+                // window inside this run, never per sample.
+                let intervals: [EfficiencyWindow.Interval]? = supported && mode == .efficiency
+                    ? (runStart..<runEnd).map { EfficiencyWindow.interval(points[$0], points[$0 + 1]) ?? .init(distanceKm: 0, energyKwh: 0) }
+                    : nil
+                let windowed: [Double?]? = intervals.map { EfficiencyWindow.smoothed($0) }
                 var i = runStart
                 while i < runEnd {
                     let end = min(i + stride, runEnd)
-                    raw.append((i...end, supported ? value(points[i...end]) : nil))
+                    let pieceValue: Double?
+                    if !supported {
+                        pieceValue = nil
+                    } else if let windowed, let intervals {
+                        pieceValue = Self.distanceWeighted(windowed, intervals, range: (i - runStart)..<(end - runStart))
+                    } else {
+                        pieceValue = value(points[i...end])
+                    }
+                    raw.append((i...end, pieceValue))
                     i = end
                 }
                 runStart = runEnd
@@ -160,6 +170,19 @@ struct TripRoute: Equatable {
         }
         self.gaps = gaps
         self.isolated = isolated
+    }
+
+    /// Distance-weighted mean of a run's windowed values over `range` (a
+    /// piece covers several intervals when the route is long).
+    private static func distanceWeighted(_ windowed: [Double?], _ intervals: [EfficiencyWindow.Interval], range: Range<Int>) -> Double? {
+        var sum = 0.0, weight = 0.0, plain = 0.0, n = 0.0
+        for k in range where k < windowed.count {
+            guard let v = windowed[k] else { continue }
+            let d: Double = intervals[k].distanceKm
+            sum += v * d; weight += d; plain += v; n += 1
+        }
+        if weight > 0 { return sum / weight }
+        return n > 0 ? plain / n : nil
     }
 
     /// Seconds of the trip drawn in color (pieces with a value).
@@ -215,29 +238,32 @@ struct TripRoute: Equatable {
     /// each edge of a view of `size`), when MapKit fits the rect to the area
     /// left by the map's own safe-area padding `safe`. The rect has that
     /// area's aspect ratio, so MapKit shows it exactly. On a short map the
-    /// route keeps at least 40% of the height: the top inset gives way first
-    /// (to no less than 60% of itself), so the route stays clear of the fade
-    /// and MapKit's logo; only then does the bottom shrink.
+    /// route gets `minContentHeight` (default a fifth of the map, at least
+    /// 48 pt) by giving up top inset, down to 24 pt; the bottom gives way only
+    /// below 32 pt of route.
     static func fitted(_ content: MKMapRect, size: CGSize, safe: EdgeInsets, insets: EdgeInsets,
-                       insetBudget: CGFloat = 0.6) -> MKMapRect {
+                       minContentHeight: CGFloat? = nil) -> MKMapRect {
         guard size.width > 0, size.height > 0, content.width > 0, content.height > 0 else { return content }
         var insets = insets
-        let vertical = insets.top + insets.bottom, horizontal = insets.leading + insets.trailing
-        let budget = size.height * insetBudget
-        if vertical > budget {
-            // A short map gives up its top margin first (down to 24 pt), then
-            // its bottom margin, but never the clearance that keeps the route
-            // off the Apple Maps logo just above the fade.
-            insets.top = max(min(insets.top, 24), budget - insets.bottom)
-            if insets.top + insets.bottom > budget {
-                insets.bottom = max(min(insets.bottom, safe.bottom + 32), budget - insets.top)
-            }
+        // A short map keeps its bottom margin (it clears the legend, logo and
+        // Legal link) and gives up its top margin first, down to 24 pt, to give
+        // the route `preferred` height. The bottom margin gives way only when
+        // the route would otherwise get under 32 pt, and never past the fade.
+        let preferred: CGFloat = minContentHeight ?? max(48, size.height * 0.2)
+        let least: CGFloat = 32
+        if size.height - insets.top - insets.bottom < preferred {
+            insets.top = max(min(insets.top, 24), size.height - insets.bottom - preferred)
         }
-        if horizontal > size.width * insetBudget {
-            let k = size.width * insetBudget / horizontal
+        if size.height - insets.top - insets.bottom < least {
+            insets.bottom = max(min(insets.bottom, safe.bottom), size.height - insets.top - least)
+        }
+        let horizontal: CGFloat = insets.leading + insets.trailing
+        if horizontal > size.width * 0.6 {
+            let k: CGFloat = size.width * 0.6 / horizontal
             insets.leading *= k; insets.trailing *= k
         }
-        let wantW = size.width - insets.leading - insets.trailing, wantH = size.height - insets.top - insets.bottom
+        let wantW: CGFloat = max(1, size.width - insets.leading - insets.trailing)
+        let wantH: CGFloat = max(1, size.height - insets.top - insets.bottom)
         let scale = min(wantW / content.width, wantH / content.height)   // points per map point
         let areaW = max(1, size.width - safe.leading - safe.trailing), areaH = max(1, size.height - safe.top - safe.bottom)
         // Map point that must sit at the safe area's top-left corner so the
@@ -285,6 +311,9 @@ struct TripMapView: View {
     /// controls, the fade and the legend.
     var frameInsets = EdgeInsets(top: 140, leading: 48, bottom: 96, trailing: 48)
     var legend: RouteLegendModel?
+    /// The tallest legend any mode shows. Its measured height sets the
+    /// bottom fit margin, so switching modes never re-zooms the map.
+    var reservedLegend: RouteLegendModel?
     /// Leading room for the legend chip (side bars on iPhone Duo).
     var legendLeading: CGFloat = 16
     /// Safe-area edges the map runs under. In a split view's detail column,
@@ -295,7 +324,33 @@ struct TripMapView: View {
     @State private var position: MapCameraPosition = .automatic
     /// The map's visible rect, from the latest camera change; nil until MapKit reports one.
     @State private var visible: MKMapRect?
-    @State private var framedSize: CGSize?
+    @State private var framed: FrameKey?
+    @State private var mapSize: CGSize?
+    /// Measured height of the tallest legend chip at the current text size.
+    @State private var legendHeight: CGFloat = 0
+
+    private struct FrameKey: Equatable { var size: CGSize; var bottom: CGFloat }
+
+    /// MapKit's logo and Legal link, with the margin MapKit keeps around them.
+    static let logoRow: CGFloat = 30
+    /// Clear space between the chip row and the nearest route marker or line.
+    static let chipClearance: CGFloat = 12
+    /// Endpoint markers reach this far past the route's own extent.
+    static let markerReach: CGFloat = 8
+
+    /// The bottom row over the fade: the legend chip (4 pt above the fade)
+    /// beside the logo and Legal link, whichever is taller.
+    private var chipRow: CGFloat { max(legendHeight > 0 ? legendHeight + 4 : 0, Self.logoRow) }
+
+    /// Where the route is fitted: the bottom margin clears the whole chip row
+    /// plus `chipClearance`, so no marker or line lands under or against the
+    /// chip, the logo or the Legal link.
+    private var fitInsets: EdgeInsets {
+        var insets = frameInsets
+        insets.top += Self.markerReach
+        insets.bottom = max(insets.bottom, bottomInset + chipRow + Self.chipClearance + Self.markerReach)
+        return insets
+    }
 
     /// MapKit's own padding: the logo and Legal link sit above the fade and
     /// beside the legend chip, never under either.
@@ -325,7 +380,7 @@ struct TripMapView: View {
                             TripRouteCanvas(projection: projection(visible: visible, size: geo.size), style: style)
                         }
                     }
-                    .onChange(of: geo.size, initial: true) { _, size in frame(size) }
+                    .onChange(of: geo.size, initial: true) { _, size in mapSize = size; frame(size) }
                 }
                 .ignoresSafeArea(edges: underEdges)
                 .allowsHitTesting(false)
@@ -333,20 +388,32 @@ struct TripMapView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Trip route map")
             .overlay(alignment: .bottomLeading) {
-                if let legend {
-                    RouteLegendChip(model: legend)
-                        .padding(.leading, legendLeading)
-                        .padding(.bottom, bottomInset + 4)
+                ZStack(alignment: .bottomLeading) {
+                    if let reserve = reservedLegend ?? legend {
+                        // Never shown: measures the tallest chip for the fit.
+                        RouteLegendChip(model: reserve)
+                            .hidden()
+                            .accessibilityHidden(true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { legendHeight = $0 }
+                    }
+                    if let legend {
+                        RouteLegendChip(model: legend)
+                    }
                 }
+                .padding(.leading, legendLeading)
+                .padding(.bottom, bottomInset + 4)
             }
+            .onChange(of: legendHeight) { if let mapSize { frame(mapSize) } }
     }
 
     /// Frames the whole trip once the map's size is known (again if it changes).
     private func frame(_ size: CGSize) {
-        guard size.width > 0, size.height > 0, framedSize != size,
+        let insets = fitInsets
+        let key = FrameKey(size: size, bottom: insets.bottom)
+        guard size.width > 0, size.height > 0, framed != key,
               let content = TripRoute.contentRect(timeline.points) else { return }
-        framedSize = size
-        position = .rect(TripRoute.fitted(content, size: size, safe: mapSafe, insets: frameInsets))
+        framed = key
+        position = .rect(TripRoute.fitted(content, size: size, safe: mapSafe, insets: insets))
     }
 
     private func projection(visible: MKMapRect, size: CGSize) -> TripRouteProjection {
@@ -388,11 +455,7 @@ private struct TripRouteCanvas: View {
     var projection: TripRouteProjection
     var style: TripRouteStyle
 
-    /// Quantised colour key, so a route split into thousands of pieces is a
-    /// handful of strokes.
-    private static func key(_ c: RoutePalette.RGB) -> Int {
-        (Int((c.r * 63).rounded()) << 12) | (Int((c.g * 63).rounded()) << 6) | Int((c.b * 63).rounded())
-    }
+    private static func key(_ c: RoutePalette.RGB) -> Int { c.bucketKey }
 
     var body: some View {
         Canvas { ctx, _ in
@@ -407,25 +470,42 @@ private struct TripRouteCanvas: View {
             // metric wasn't recorded (thin grey); then colour by value.
             var casing = Path(), missing = Path()
             var buckets: [Int: (color: RoutePalette.RGB, path: Path)] = [:]
-            var order: [Int] = []
+            // Consecutive pieces of one colour join into a single run, so the
+            // run bends with round joins and a short change of colour shows at
+            // its true length; runs end square (the casing rounds the ends).
+            var run: (key: Int, color: RoutePalette.RGB, end: CGPoint, path: Path)?
+            func flush() {
+                guard let r = run else { return }
+                if buckets[r.key] == nil { buckets[r.key] = (r.color, Path()) }
+                buckets[r.key]!.path.addPath(r.path)
+                run = nil
+            }
             for piece in p.pieces {
-                guard let first = piece.points.first, piece.points.count > 1 else { continue }
+                guard let first = piece.points.first, let last = piece.points.last, piece.points.count > 1 else { flush(); continue }
                 var path = Path()
                 path.move(to: first)
                 for q in piece.points.dropFirst() { path.addLine(to: q) }
                 casing.addPath(path)
-                guard let value = piece.value else { missing.addPath(path); continue }
-                let color = style.rgb(value)
-                let key = Self.key(color)
-                if buckets[key] == nil { buckets[key] = (color, Path()); order.append(key) }
-                buckets[key]!.path.addPath(path)
+                guard let value = piece.value else { flush(); missing.addPath(path); continue }
+                let color: RoutePalette.RGB = style.rgb(value)
+                let key: Int = Self.key(color)
+                if var r = run, r.key == key, r.end == first {
+                    for q in piece.points.dropFirst() { r.path.addLine(to: q) }
+                    r.end = last
+                    run = r
+                } else {
+                    flush()
+                    run = (key, color, last, path)
+                }
             }
+            flush()
             let round = { (w: CGFloat) in StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round) }
             ctx.stroke(casing, with: .color(RoutePalette.casing.color), style: round(RoutePalette.casingWidth))
             ctx.stroke(missing, with: .color(RoutePalette.missing.color), style: round(RoutePalette.missingWidth))
-            for key in order {
+            let square = StrokeStyle(lineWidth: RoutePalette.lineWidth, lineCap: .butt, lineJoin: .round)
+            for key in buckets.keys.sorted() {
                 let bucket = buckets[key]!
-                ctx.stroke(bucket.path, with: .color(bucket.color.color), style: round(RoutePalette.lineWidth))
+                ctx.stroke(bucket.path, with: .color(bucket.color.color), style: square)
             }
             for q in p.isolated {
                 RouteEndpointMarker.draw(.end, in: &ctx, at: q, size: 8)

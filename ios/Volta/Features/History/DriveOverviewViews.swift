@@ -195,9 +195,7 @@ struct DrivesRouteMap: View {
     private func frame(_ size: CGSize, runs: [[CLLocationCoordinate2D]]) {
         guard size.width > 0, size.height > 0, framedSize != size, !runs.isEmpty else { return }
         framedSize = size
-        // The full-bleed hero is short and its top inset is the bars: keep it.
-        position = .rect(TripRoute.fitted(Self.content(runs), size: size, safe: mapSafe, insets: frameInsets,
-                                          insetBudget: fullBleed ? 0.75 : 0.6))
+        position = .rect(TripRoute.fitted(Self.content(runs), size: size, safe: mapSafe, insets: frameInsets))
     }
 
     /// Counts off the main thread; plain maps need no layer.
@@ -237,7 +235,7 @@ struct DrivesRouteMap: View {
                     case .efficiency: color = stroke.ratio.map { RoutePalette.efficiency.rgb($0) }
                     default: color = RoutePalette.density(count: stroke.count)
                     }
-                    let key = color.map { (Int(($0.r * 63).rounded()) << 12) | (Int(($0.g * 63).rounded()) << 6) | Int(($0.b * 63).rounded()) } ?? -1
+                    let key: Int = color?.bucketKey ?? -1
                     if groups[key] == nil { groups[key] = (color, Path()); order.append(key) }
                     groups[key]!.path.addLines(stroke.points.map(transform))
                 }
@@ -735,12 +733,15 @@ struct DrivesHeatmapView: View {
 
     /// Driven days fill green in proportion to distance.
     private func cell(number: Int, ratio: Double?) -> some View {
-        Text("\(number)")
-            .font(.system(size: 13, weight: ratio == nil ? .medium : .semibold)).monospacedDigit()
-            .foregroundStyle(ratio == nil ? HistoryTheme.tertiary : .white)
+        let weight: Font.Weight = ratio == nil ? .medium : .semibold
+        let text: Color = ratio == nil ? HistoryTheme.tertiary : .white
+        let fill: Color
+        if let ratio { fill = HistoryTheme.green.opacity(0.15 + 0.6 * ratio) } else { fill = Color.white.opacity(0.03) }
+        return Text("\(number)")
+            .font(.system(size: 13, weight: weight)).monospacedDigit()
+            .foregroundStyle(text)
             .frame(maxWidth: .infinity).frame(height: 38)
-            .background(ratio.map { HistoryTheme.green.opacity(0.15 + 0.6 * $0) } ?? Color.white.opacity(0.03),
-                        in: .rect(cornerRadius: 10, style: .continuous))
+            .background(fill, in: .rect(cornerRadius: 10, style: .continuous))
             .contentShape(Rectangle())
     }
 }

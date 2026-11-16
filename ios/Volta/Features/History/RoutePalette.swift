@@ -21,6 +21,18 @@ enum RoutePalette {
 
         /// OKLab lightness, 0...1.
         var lightness: Double { OKLab(self).l }
+
+        /// Quantised to 6 bits per channel, so a route split into thousands of
+        /// pieces draws as a handful of strokes.
+        var bucketKey: Int {
+            let red: Int = Self.level(r), green: Int = Self.level(g), blue: Int = Self.level(b)
+            return (red << 12) | (green << 6) | blue
+        }
+
+        private static func level(_ channel: Double) -> Int {
+            let scaled: Double = (channel * 63).rounded()
+            return Int(scaled)
+        }
     }
 
     /// A ramp: colours pinned at increasing positions along a domain. Values
@@ -190,10 +202,23 @@ struct RouteLegendModel: Equatable {
     var extra: (label: String, color: Color)?
     /// Read by VoiceOver as one sentence.
     var sentence: String
+    /// A small line under the labels, e.g. how the colour is averaged.
+    var note: String? = nil
 
     static func == (a: RouteLegendModel, b: RouteLegendModel) -> Bool {
         a.low == b.low && a.mid == b.mid && a.high == b.high && a.tick == b.tick && a.sentence == b.sentence
-            && a.extra?.label == b.extra?.label
+            && a.extra?.label == b.extra?.label && a.note == b.note
+    }
+
+    /// "0.25 mi" or "400 m".
+    static func windowText(_ km: Double, units: UnitPreferences) -> (short: String, long: String) {
+        if units.distance == .miles {
+            let miles: Double = km / 1.609344
+            let text = VoltaFormat.number(miles, digits: 2)
+            return ("\(text) mi", "\(text) miles")
+        }
+        let metres = VoltaFormat.number(km * 1000, digits: 0)
+        return ("\(metres) m", "\(metres) metres")
     }
 
     static func speed(units: UnitPreferences) -> RouteLegendModel {
@@ -207,18 +232,24 @@ struct RouteLegendModel: Equatable {
                                 sentence: "Route colour shows speed, from 0 to \(VoltaFormat.number(top, digits: 0)) \(unit) and above.")
     }
 
-    static func efficiency(reference: EfficiencyReference, units: UnitPreferences, showsRegen: Bool = true) -> RouteLegendModel {
+    /// `averagedOverKm`: the colour is a rolling average over this much
+    /// driving (a single drive), so the legend says so.
+    static func efficiency(reference: EfficiencyReference, units: UnitPreferences, showsRegen: Bool = true,
+                           averagedOverKm: Double? = nil) -> RouteLegendModel {
         let ramp = RoutePalette.efficiency
         let span = ramp.domain.upperBound - ramp.domain.lowerBound
         let ref = VoltaFormat.number(units.efficiencyValue(whPerKm: reference.whPerKm), digits: 0)
         let label = reference.isRated ? ref : "~\(ref)"
+        let window = averagedOverKm.map { windowText($0, units: units) }
         let what = reference.isRated ? "the car's rated \(ref) \(units.efficiencyUnit)"
             : "an estimated reference of \(ref) \(units.efficiencyUnit)"
         return RouteLegendModel(stops: ramp.gradientStops(), low: "Efficient", mid: label, high: "Thirsty",
                                 tick: (1 - ramp.domain.lowerBound) / span,
                                 extra: showsRegen ? ("Regen", RoutePalette.regen.color) : nil,
                                 sentence: "Route colour shows efficiency against \(what): green is more efficient, orange is thirstier"
-                                    + (showsRegen ? ", violet is regenerating." : "."))
+                                    + (showsRegen ? ", violet is regenerating." : ".")
+                                    + (window.map { " Colour is averaged over \($0.long) of driving, not a reading at each point." } ?? ""),
+                                note: window.map { "Averaged over \($0.short)" })
     }
 
     static func elevation(minM: Double, maxM: Double, units: UnitPreferences) -> RouteLegendModel {
@@ -276,6 +307,9 @@ struct RouteLegendChip: View {
                 Text(model.high)
             }
             .frame(width: width)
+            if let note = model.note {
+                Text(note).foregroundStyle(.white.opacity(0.6)).scaledFont(11, weight: .medium)
+            }
         }
         .scaledFont(11, weight: .semibold)
         .monospacedDigit()

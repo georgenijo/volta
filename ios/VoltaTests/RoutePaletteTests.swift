@@ -129,21 +129,61 @@ final class RoutePaletteTests: XCTestCase {
     func testFittedRectPutsTheRouteInsideTheInsets() {
         let content = MKMapRect(x: 43_112_000, y: 104_057_000, width: 79_000, height: 56_000)
         let safe = EdgeInsets(top: 0, leading: 254, bottom: 64, trailing: 0)
-        let insets = EdgeInsets(top: 140, leading: 48, bottom: 96, trailing: 48)
-        for size in [CGSize(width: 375, height: 600), CGSize(width: 402, height: 900), CGSize(width: 375, height: 354),
-                     CGSize(width: 466, height: 265)] {
+        // Bottom: fade 64 + chip row 82 + clearance 12 + marker reach 8.
+        // Top: the iPhone toolbar (140) or the Duo's clear top edge (32), plus marker reach.
+        let phone = EdgeInsets(top: 148, leading: 48, bottom: 166, trailing: 48)
+        let duo = EdgeInsets(top: 40, leading: 48, bottom: 166, trailing: 48)
+        // iPhone tall and 13 mini trip maps; the Duo's usual and shortest (200 pt + its top inset).
+        let cases: [(CGSize, EdgeInsets)] = [(CGSize(width: 402, height: 900), phone), (CGSize(width: 375, height: 600), phone),
+                                             (CGSize(width: 375, height: 341), phone),
+                                             (CGSize(width: 466, height: 265), duo), (CGSize(width: 466, height: 224), duo)]
+        for (size, insets) in cases {
             let rect = TripRoute.fitted(content, size: size, safe: safe, insets: insets)
             let a = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: rect, size: size, safe: safe))
             let b = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: rect, size: size, safe: safe))
             XCTAssertGreaterThanOrEqual(a.x, 48 - 0.01, "\(size)")
             XCTAssertLessThanOrEqual(b.x, size.width - 48 + 0.01, "\(size)")
-            XCTAssertGreaterThanOrEqual(b.y - a.y, 0)
-            // The bottom inset holds even on a short map; the top gives way first.
-            XCTAssertLessThanOrEqual(b.y, size.height - 96 + 0.01, "\(size)")
+            XCTAssertGreaterThan(b.y - a.y, 0)
+            // The bottom margin (the chip row) holds on every supported height.
+            XCTAssertLessThanOrEqual(b.y, size.height - 166 + 0.01, "\(size)")
             XCTAssertGreaterThanOrEqual(a.y, 24 - 0.01, "\(size)")
-            // Fills the wanted area in at least one direction.
-            XCTAssertTrue(abs(a.x - 48) < 0.5 || abs(b.y - (size.height - 96)) < 0.5 || abs(a.y - 140) < 0.5, "\(size)")
         }
+        // 13 mini: the top gives way only as far as the toolbar (about 86 pt) plus marker reach.
+        let mini = CGSize(width: 375, height: 341)
+        let miniRect = TripRoute.fitted(content, size: mini, safe: safe, insets: phone)
+        let miniTop = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: miniRect, size: mini, safe: safe))
+        XCTAssertGreaterThanOrEqual(miniTop.y, 86 + 8 + 4)
+        // Tall map: the full top margin is kept.
+        let tall = CGSize(width: 402, height: 900)
+        let rect = TripRoute.fitted(content, size: tall, safe: safe, insets: phone)
+        let top = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: rect, size: tall, safe: safe))
+        XCTAssertGreaterThanOrEqual(top.y, 148 - 0.01)
+        // Shorter than any supported map: the top is already at its 24 pt floor
+        // before the bottom gives way, and then never past the fade.
+        let tiny = CGSize(width: 375, height: 200)
+        let squeezed = TripRoute.fitted(content, size: tiny, safe: safe, insets: phone)
+        let s0 = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: squeezed, size: tiny, safe: safe))
+        let s1 = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: squeezed, size: tiny, safe: safe))
+        XCTAssertGreaterThanOrEqual(s0.y, 24 - 0.01)
+        XCTAssertLessThan(s0.y, 24 + 0.01 + (s1.y - s0.y), "top at its floor")
+        XCTAssertLessThanOrEqual(s1.y, tiny.height - 64 + 0.01)
+    }
+
+    func testBucketKeyQuantisesChannels() {
+        let a = RoutePalette.RGB(r: 1, g: 0.5, b: 0)
+        XCTAssertEqual(a.bucketKey, (63 << 12) | (32 << 6) | 0)
+        XCTAssertEqual(RoutePalette.RGB(r: 0.999, g: 0.501, b: 0.001).bucketKey, a.bucketKey)
+    }
+
+    func testEfficiencyLegendSaysTheColourIsAveraged() {
+        let miles = UnitPreferences(distance: .miles)
+        let legend = RouteLegendModel.efficiency(reference: EfficiencyReference(ratedWhPerKm: 160), units: miles,
+                                                 averagedOverKm: EfficiencyWindow.windowKm)
+        XCTAssertEqual(legend.note, "Averaged over 0.25 mi")
+        XCTAssertTrue(legend.sentence.contains("averaged over 0.25 miles"), legend.sentence)
+        XCTAssertNil(RouteLegendModel.efficiency(reference: EfficiencyReference(ratedWhPerKm: 160), units: miles).note)
+        let style = TripRouteStyle(mode: .efficiency, reference: EfficiencyReference(ratedWhPerKm: 160))
+        XCTAssertEqual(style.legend(units: miles)?.note, "Averaged over 0.25 mi")
     }
 
     // MARK: Score
@@ -233,5 +273,121 @@ final class RouteDensityTests: XCTestCase {
         XCTAssertLessThanOrEqual(thinned[0].count, RouteDensity.maxPointsPerDrive)
         XCTAssertEqual(thinned[0].first?.latitude, long[0].first?.latitude)
         XCTAssertEqual(thinned[0].last?.longitude, long[0].last?.longitude)
+    }
+}
+
+final class EfficiencyWindowTests: XCTestCase {
+    private typealias Interval = EfficiencyWindow.Interval
+    private let reference = EfficiencyReference(ratedWhPerKm: 160)
+
+    /// `count` intervals of `metres` each at `whPerKm`.
+    private func steady(_ count: Int, metres: Double = 14, whPerKm: Double = 160) -> [Interval] {
+        Array(repeating: Interval(distanceKm: metres / 1000, energyKwh: metres / 1000 * whPerKm / 1000), count: count)
+    }
+
+    private func colour(_ whPerKm: Double?) -> Int {
+        RoutePalette.efficiency(whPerKm: whPerKm!, reference: reference).bucketKey
+    }
+
+    func testConstantConsumptionIsOneColour() {
+        let values = EfficiencyWindow.smoothed(steady(200))
+        XCTAssertEqual(values.count, 200)
+        for v in values { XCTAssertEqual(v!, 160, accuracy: 1e-6) }
+        XCTAssertEqual(Set(values.map(colour)).count, 1)
+    }
+
+    func testOneSpikeInASteadyStretchDoesNotFlipTheColour() {
+        // One sample at 40 kW among 8 kW samples, 1 s apart at 50 km/h: the two
+        // intervals touching it read 480 Wh/km on their own (thirsty orange).
+        var run = steady(200)
+        let spike = Interval(distanceKm: 50.0 / 3600, energyKwh: 24.0 / 3600)
+        run[100] = spike; run[101] = spike
+        XCTAssertGreaterThan(spike.energyKwh / spike.distanceKm * 1000 / 160, 1.375, "raw interval is thirsty")
+        let values = EfficiencyWindow.smoothed(run)
+        let steadyColour = colour(160)
+        for i in 60...140 {
+            let ratio = values[i]! / 160
+            XCTAssertLessThan(ratio, 1.2, "index \(i)")
+            // Still on the neutral side of the ramp, nowhere near orange.
+            XCTAssertLessThan(abs(ratio - 1), 0.2)
+        }
+        XCTAssertEqual(colour(values[20]), steadyColour)
+        XCTAssertEqual(colour(values[180]), steadyColour)
+    }
+
+    func testRegenIsDecidedOnTheWindowedValue() {
+        var run = steady(100, whPerKm: -60)
+        run[50] = Interval(distanceKm: 0.014, energyKwh: 0.014 * 0.4)   // one thirsty interval
+        let values = EfficiencyWindow.smoothed(run)
+        XCTAssertGreaterThan(run[50].energyKwh, 0)
+        for i in 30...70 { XCTAssertLessThan(values[i]!, 0, "index \(i)") }
+        XCTAssertEqual(RoutePalette.efficiency(whPerKm: values[50]!, reference: reference), RoutePalette.regen)
+    }
+
+    func testRunShorterThanTheWindowUsesTheWholeRun() {
+        let run = [Interval(distanceKm: 0.05, energyKwh: 0.005), Interval(distanceKm: 0.05, energyKwh: 0.02),
+                   Interval(distanceKm: 0.1, energyKwh: 0.015)]
+        let values = EfficiencyWindow.smoothed(run)
+        for v in values { XCTAssertEqual(v!, 0.04 * 1000 / 0.2, accuracy: 1e-9) }
+    }
+
+    func testWindowShrinksSymmetricallyAtTheEnds() {
+        // 1 km: 500 m at 100 Wh/km then 500 m at 300 Wh/km, 10 m intervals.
+        let run = steady(50, metres: 10, whPerKm: 100) + steady(50, metres: 10, whPerKm: 300)
+        let values = EfficiencyWindow.smoothed(run)
+        XCTAssertEqual(values[0]!, 100, accuracy: 1e-6, "first interval's window is itself")
+        XCTAssertEqual(values[99]!, 300, accuracy: 1e-6)
+        let blended: Double = (205.0 * 100 + 195.0 * 300) / 400
+        XCTAssertEqual(values[49]!, blended, accuracy: 1e-6, "full 400 m window")
+        XCTAssertEqual(values.count, 100)
+        XCTAssertTrue(EfficiencyWindow.smoothed([]).isEmpty)
+        XCTAssertEqual(EfficiencyWindow.smoothed([Interval(distanceKm: 0, energyKwh: 0)]), [nil])
+    }
+
+    @MainActor
+    func testAGapOrUnrecordedStretchSplitsWindows() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        func point(_ s: Double, power: Double?, lat: Double) -> DrivePoint {
+            DrivePoint(t: t0.addingTimeInterval(s), latitude: lat, longitude: -122.1, speedKph: 50,
+                       powerKw: power, elevationM: 30, batteryLevel: 60)
+        }
+        // 8 kW (160 Wh/km), a position gap, then 20 kW (400 Wh/km).
+        let first = stride(from: 0.0, through: 120, by: 2).map { point($0, power: 8, lat: 37.40 + $0 / 100_000) }
+        let second = stride(from: 400.0, through: 520, by: 2).map { point($0, power: 20, lat: 37.41 + $0 / 100_000) }
+        let gapped = TripRoute(TripTimeline(path: first + second), mode: .efficiency)
+        XCTAssertEqual(gapped.gaps.count, 1)
+        for piece in gapped.pieces {
+            let v = try! XCTUnwrap(piece.value)
+            XCTAssertEqual(v, piece.coordinates[0].latitude < 37.41 ? 160 : 400, accuracy: 1e-6, "no blending across the gap")
+        }
+        // 8 kW, a minute with no power recorded, then 20 kW, all one position segment.
+        let rows = stride(from: 0.0, through: 360, by: 2).map { t -> DrivePoint in
+            point(t, power: t < 120 ? 8 : (t <= 180 ? nil : 20), lat: 37.40 + t / 100_000)
+        }
+        // A stop is recorded data: braking regen, idle and pull-away stay
+        // inside one window run instead of restarting it at the light.
+        let stopRows = stride(from: 0.0, through: 360, by: 2).map { t -> DrivePoint in
+            let stopped = t >= 170 && t <= 190
+            let braking = t >= 160 && t < 170, launching = t > 190 && t <= 200
+            let power: Double = stopped ? 1 : (braking ? -15 : (launching ? 25 : 8))
+            return DrivePoint(t: t0.addingTimeInterval(t), latitude: 37.40 + t / 100_000, longitude: -122.1,
+                              speedKph: stopped ? 0 : 50, powerKw: power, elevationM: 30, batteryLevel: 60)
+        }
+        let stop = TripRoute(TripTimeline(path: stopRows), mode: .efficiency)
+        XCTAssertTrue(stop.pieces.allSatisfy { $0.value != nil }, "the stop doesn't break the run")
+        for piece in stop.pieces {
+            let v = try! XCTUnwrap(piece.value)
+            XCTAssertGreaterThan(v, 0, "braking regen is averaged in, not shown on its own")
+            // On its own the pull-away reads 500 Wh/km (3.1x the reference).
+            XCTAssertLessThan(v / 160, 2.0, "the pull-away is averaged in")
+        }
+
+        let unrecorded = TripRoute(TripTimeline(path: rows), mode: .efficiency)
+        XCTAssertTrue(unrecorded.gaps.isEmpty)
+        XCTAssertTrue(unrecorded.pieces.contains { $0.value == nil }, "the unrecorded stretch is drawn as not recorded")
+        for piece in unrecorded.pieces {
+            guard let v = piece.value else { continue }
+            XCTAssertEqual(v, piece.indices.upperBound <= 60 ? 160 : 400, accuracy: 1e-6, "no blending across it")
+        }
     }
 }
