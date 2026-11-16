@@ -43,6 +43,8 @@ final class VehicleIntentService: VehicleIntentPerforming {
     private let reloadControls: @MainActor () -> Void
     private let answerWithin: Duration
     private let holdBackgroundTime: @MainActor (String) -> @MainActor () -> Void
+    /// Pauses between status re-reads after an accepted command (`CommandSettle`).
+    private let settlePauses: [Duration]
     /// Commands (and replays) intents started that may still be running,
     /// by backend and vehicle. They outlive the intent that started them.
     private var sends: [String: IntentCommandSend] = [:]
@@ -75,8 +77,10 @@ final class VehicleIntentService: VehicleIntentPerforming {
          readSnapshot: @escaping @MainActor () -> WidgetSnapshot? = { WidgetSnapshotStore.read() },
          reloadControls: @escaping @MainActor () -> Void = { ControlCenter.shared.reloadAllControls() },
          answerWithin: Duration = VehicleIntentService.answerWithin,
-         holdBackgroundTime: @escaping @MainActor (String) -> @MainActor () -> Void = BackgroundTime.hold) {
+         holdBackgroundTime: @escaping @MainActor (String) -> @MainActor () -> Void = BackgroundTime.hold,
+         settlePauses: [Duration] = CommandSettle.pauses) {
         self.model = model
+        self.settlePauses = settlePauses
         self.readSnapshot = readSnapshot
         self.reloadControls = reloadControls
         self.answerWithin = answerWithin
@@ -356,7 +360,12 @@ final class VehicleIntentService: VehicleIntentPerforming {
                 self.lateReports[key] = LateReport(command: command, accepted: accepted, text: report, at: .now,
                                                    activity: own)
             }
-            if case .succeeded(simulated: false) = outcome { await self.publishObservedStatus(model: model, target: target) }
+            if case .succeeded(simulated: false) = outcome {
+                await self.publishObservedStatus(model: model, target: target, command: command) {
+                    // Another command for this car (from Controls, say) speaks for it now.
+                    coordinator.activity(dataSource: target.dataSource, vehicleID: target.vehicleID)?.id == requestID
+                }
+            }
             // Controls show the requested state while the action runs; reload so
             // they settle on what the snapshot observes, whatever the outcome.
             self.reloadControls()
@@ -425,13 +434,21 @@ final class VehicleIntentService: VehicleIntentPerforming {
     /// After an accepted command, refresh the observed status so widgets and
     /// controls show what the car reports (not what was requested). Runs after
     /// the intent answered, so a slow or failing status read never delays it.
-    private func publishObservedStatus(model: AppModel, target: IntentCommandTarget) async {
+    /// The car reports the change a moment after accepting it, so the status
+    /// is read again (`CommandSettle`) until it shows `command`, while
+    /// `isLatest` says no other command has run for the car since.
+    private func publishObservedStatus(model: AppModel, target: IntentCommandTarget, command: VehicleCommand,
+                                       isLatest: @MainActor () -> Bool) async {
         if !model.hasLoadedVehicles { await model.loadVehicles() }
-        if let surfaces = model.refreshSurfaces {
-            let issued = surfaces.nextStatusToken()
-            if let status = try? await target.dataSource.status(vehicleID: target.vehicleID) {
-                surfaces.publish(VehicleRefresh(status: status, issued: issued), dataSource: target.dataSource)
+        for pause in [Duration.zero] + settlePauses {
+            if pause > .zero {
+                do { try await Task.sleep(for: pause) } catch { return }
             }
+            guard isLatest(), let surfaces = model.refreshSurfaces else { return }
+            let issued = surfaces.nextStatusToken()
+            guard let status = try? await target.dataSource.status(vehicleID: target.vehicleID) else { continue }
+            surfaces.publish(VehicleRefresh(status: status, issued: issued), dataSource: target.dataSource)
+            if command.isReflected(in: status) != false { return }
         }
     }
 

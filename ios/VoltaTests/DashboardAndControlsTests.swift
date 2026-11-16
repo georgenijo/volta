@@ -725,6 +725,72 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(coordinator.activity(dataSource: source, vehicleID: 1)?.phase, .success)
     }
 
+    func testAcceptedCommandRereadsStatusUntilTheCarReportsIt() async {
+        let source = StubSource(), coordinator = coordinator(), reads = Counter()
+        // The read right after acceptance and the first re-read still show it off.
+        source.statusHandler = { makeStatus(climateOn: await reads.next() >= 3) }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(climateOn: false))
+        model.settlePauses = Array(repeating: .milliseconds(10), count: 5)
+        await model.setClimate(true, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(model.climateOn, false, "the car hasn't reported it yet")
+        await model.settleTask?.value
+        let count = await reads.value
+        XCTAssertEqual(model.climateOn, true)
+        XCTAssertEqual(count, 3, "re-reads stop at the first status that shows the change")
+    }
+
+    func testRereadsStopAfterTheLastPause() async {
+        let source = StubSource(), coordinator = coordinator(), reads = Counter()
+        source.statusHandler = { _ = await reads.next(); return makeStatus(locked: true) }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(locked: true))
+        model.settlePauses = Array(repeating: .milliseconds(5), count: 3)
+        await model.setLocked(false, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        await model.settleTask?.value
+        let count = await reads.value
+        XCTAssertEqual(count, 4, "one read after acceptance, then one after each pause")
+        XCTAssertEqual(model.locked, true)
+        XCTAssertNil(model.settleTask)
+    }
+
+    func testNoRereadsForACommandTheStatusCannotShow() async {
+        let source = StubSource(), coordinator = coordinator(), reads = Counter()
+        source.statusHandler = { _ = await reads.next(); return makeStatus() }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus())
+        model.settlePauses = [.milliseconds(5)]
+        await model.send(.honk, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertNil(model.settleTask)
+        let count = await reads.value
+        XCTAssertEqual(count, 1)
+    }
+
+    func testANewSendReplacesEarlierRereads() async {
+        let source = StubSource(), coordinator = coordinator()
+        source.statusHandler = { makeStatus(climateOn: false) }
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(climateOn: false))
+        model.settlePauses = [.seconds(30)]
+        await model.setClimate(true, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        let first = try! XCTUnwrap(model.settleTask)
+        await model.send(.honk, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertTrue(first.isCancelled)
+        XCTAssertNil(model.settleTask)
+    }
+
+    func testCommandReflectionCoversObservableState() {
+        var status = makeStatus(locked: true, climateOn: nil, chargeLimit: 80, chargingState: .stopped)
+        status.driverTempSettingC = 21
+        XCTAssertEqual(VehicleCommand.lock.isReflected(in: status), true)
+        XCTAssertEqual(VehicleCommand.unlock.isReflected(in: status), false)
+        XCTAssertEqual(VehicleCommand.climateOff.isReflected(in: status), false, "unknown is not yet shown")
+        XCTAssertEqual(VehicleCommand.chargeStop.isReflected(in: status), true)
+        XCTAssertEqual(VehicleCommand.setChargeLimit(percent: 90).isReflected(in: status), false)
+        XCTAssertEqual(VehicleCommand.setTemperatures(driverTempC: 21, passengerTempC: 21).isReflected(in: status), true)
+        XCTAssertNil(VehicleCommand.honk.isReflected(in: status))
+    }
+
     func testUnknownPersistsAcrossFileBackedRestartAndReplaysSameKey() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let file = directory.appendingPathComponent("pending.json")

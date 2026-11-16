@@ -475,10 +475,12 @@ private final class RequestLog: Sendable {
                                readSnapshot: @escaping @MainActor () -> WidgetSnapshot? = { nil },
                                reloadControls: @escaping @MainActor () -> Void = {},
                                answerWithin: Duration = VehicleIntentService.answerWithin,
-                               holdBackgroundTime: @escaping @MainActor (String) -> @MainActor () -> Void = { _ in {} })
+                               holdBackgroundTime: @escaping @MainActor (String) -> @MainActor () -> Void = { _ in {} },
+                               settlePauses: [Duration] = [])
         -> VehicleIntentService {
         let service = VehicleIntentService(model: model, readSnapshot: readSnapshot, reloadControls: reloadControls,
-                                           answerWithin: answerWithin, holdBackgroundTime: holdBackgroundTime)
+                                           answerWithin: answerWithin, holdBackgroundTime: holdBackgroundTime,
+                                           settlePauses: settlePauses)
         addTeardownBlock { @MainActor in await service.finishBackgroundWork() }
         return service
     }
@@ -1072,6 +1074,40 @@ private final class RequestLog: Sendable {
         replies.gate("status")?.release(503, Data(#"{"error":{"code":"teslamate_unavailable","message":"down"}}"#.utf8))
         await service.finishBackgroundWork()
         XCTAssertTrue(surfaces.published.isEmpty, "a failed read publishes nothing")
+    }
+
+    /// The car reports a change a moment after accepting it, so the status is
+    /// read again until it shows the command, and each read is published.
+    func testAnAcceptedCommandRereadsStatusUntilTheCarReportsIt() async throws {
+        let log = RequestLog(), surfaces = IntentSurfaces(), reads = Mutex(0)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let model = try pairedModel(surfaces: surfaces) { request in
+            log.add(request)
+            switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
+            case ("GET", "/v1/vehicles/42/commands"):
+                return (200, Data(#"{"available":true,"reason":null,"commands":["lock","unlock","climate_on","flash"]}"#.utf8))
+            case ("GET", "/v1/vehicles"):
+                return (200, try JSONSerialization.data(withJSONObject: [["id": 42, "name": "Friday"]]))
+            case ("POST", "/v1/vehicles/42/commands/lock"):
+                return (200, accepted("lock"))
+            case ("GET", "/v1/vehicles/42/status"):
+                let read = reads.withLock { $0 += 1; return $0 }
+                let status = VehicleStatus(
+                    vehicleId: 42, state: .online, updatedAt: now.addingTimeInterval(Double(read)), batteryLevel: 72,
+                    usableBatteryLevel: nil, ratedRangeKm: nil, estRangeKm: 328, chargeLimit: 80,
+                    chargingState: .disconnected, chargerPowerKw: nil, minutesToFull: nil, insideTempC: nil,
+                    outsideTempC: nil, climateOn: false, driverTempSettingC: nil, locked: read >= 3, sentryMode: false,
+                    odometerKm: nil, location: nil, locationUpdatedAt: nil, firmware: nil)
+                return (200, try encoder.encode(status))
+            default:
+                return (404, Data())
+            }
+        }
+        let service = intentService(model: { model }, settlePauses: Array(repeating: .milliseconds(10), count: 5))
+        _ = try await service.perform(.lock)
+        await service.finishBackgroundWork()
+        XCTAssertEqual(reads.withLock { $0 }, 3, "re-reads stop at the first status that shows the car locked")
+        XCTAssertEqual(surfaces.published.map(\.status.locked), [false, false, true])
     }
 
     func testPairedCommandIsRefusedWhenTeslaIsNotLinkedAndNothingIsSent() async throws {

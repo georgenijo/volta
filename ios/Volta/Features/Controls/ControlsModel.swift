@@ -33,6 +33,11 @@ final class ControlsModel {
     /// Where sends are recorded; the app-wide log unless a test replaces it.
     @ObservationIgnored var log: VehicleCommandLog = .shared
 
+    /// Pauses between status re-reads after an accepted command; tests shorten them.
+    @ObservationIgnored var settlePauses: [Duration] = CommandSettle.pauses
+    /// The re-reads after the last accepted command, while they run.
+    @ObservationIgnored private(set) var settleTask: Task<Void, Never>?
+
     @ObservationIgnored private var refreshGeneration = 0
     @ObservationIgnored private var chargeLimitTask: Task<Void, Never>?
     @ObservationIgnored private var cabinTask: Task<Void, Never>?
@@ -105,6 +110,9 @@ final class ControlsModel {
         // Only a send the coordinator will actually start is logged.
         // Saved values never reach the coordinator.
         guard !showsSavedStatus else { return false }
+        // A new send replaces any earlier command's re-reads.
+        settleTask?.cancel()
+        settleTask = nil
         let entry = coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
             ? log.begin(command, label: label, key: key) : nil
         let outcome = await coordinator.perform(command, label: label, dataSource: dataSource, vehicleID: vehicleID)
@@ -112,10 +120,32 @@ final class ControlsModel {
         switch outcome {
         case .succeeded(let simulated):
             if simulated { simulate?() }
-            else { await refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
+            else {
+                await refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
+                settle(command, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
+            }
             return true
         case .failed, .unknown:
             return false
+        }
+    }
+
+    /// Reads the status again, in the background, until it shows what
+    /// `command` asked for (see `CommandSettle`). Stops at the first status
+    /// that shows it, when another command is sent, or after the last pause.
+    private func settle(_ command: VehicleCommand, dataSource: any VoltaDataSource, vehicleID: Int,
+                        surfaces: (any VehicleSurfaces)?) {
+        guard let status, command.isReflected(in: status) == false else { return }
+        let pauses = settlePauses
+        settleTask = Task { [weak self] in
+            for pause in pauses {
+                do { try await Task.sleep(for: pause) } catch { return }
+                guard let self, !Task.isCancelled else { return }
+                await self.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
+                guard !Task.isCancelled else { return }
+                if let status = self.status, command.isReflected(in: status) != false { break }
+            }
+            if let self, !Task.isCancelled { self.settleTask = nil }
         }
     }
 
