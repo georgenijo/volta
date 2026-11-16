@@ -161,6 +161,10 @@ export class Telemetry {
         if (sample && (!result.updatedAt || +new Date(sample.source_ts) > +result.updatedAt)) result.updatedAt = new Date(sample.source_ts);
       }
     }
+    // During cabin overheat protection the user's climate state is unknown; a
+    // TeslaMate reading from before it must not report climate on.
+    const hvac = live.by.get('HvacPower');
+    if (live.overheatProtect && hvac && (live.freshness.connected || !row.polled_at || +new Date(hvac.source_ts) >= +new Date(row.polled_at))) result.climateOn = null;
     // Fleet Telemetry knows the charge state minutes before TeslaMate opens a
     // process. A connected stream's change-only state is current; a disconnected
     // one wins only when newer than everything TeslaMate recorded since.

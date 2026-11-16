@@ -100,5 +100,8 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     insideTempC:num('InsideTemp',{C:1}),outsideTempC:num('OutsideTemp',{C:1}),climateOn,driverTempSettingC:num('HvacLeftTemperatureRequest',{C:1}),firmware:text('Version'),
     odometerKm:num('Odometer',{mi:1.609344,km:1}),energyRemainingKwh:num('EnergyRemaining',{kWh:1}),
   }, tpms:{fl:tire('Fl'),fr:tire('Fr'),rl:tire('Rl'),rr:tire('Rr')},
+  // A recognized overheat-protection reading is current evidence, not a gap:
+  // status uses it to clear an older recorded climate state.
+  overheatProtect: hvac === 'HvacPowerStateOverheatProtect',
   freshness:{connected,lastSeenAt,recordedAt:times}, charge, by };
 }

@@ -348,9 +348,19 @@ test('live overlapping metrics prefer connected change-only data, otherwise comp
   expect(status.climateOn).toBe(false);expect(status.driverTempSettingC).toBe(20.5);
   await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateOn' WHERE field='HvacPower'`;
   expect((await get('/v1/vehicles/1/status')).climateOn).toBe(true);
-  await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateOverheatProtect' WHERE field='HvacPower'`;
+  await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateUnknown' WHERE field='HvacPower'`;
   status=await get('/v1/vehicles/1/status');
   expect(status.climateOn).toBe(fallback.climateOn);
+  // Current overheat protection clears a recorded climate-on from before it;
+  // a missing or invalid reading still falls back to the recorded value.
+  const before=await owner`SELECT id,is_climate_on FROM positions WHERE car_id=1 AND is_climate_on IS NOT NULL`;
+  await owner`UPDATE positions SET is_climate_on=true WHERE car_id=1 AND is_climate_on IS NOT NULL`;
+  expect((await get('/v1/vehicles/1/status')).climateOn).toBe(true);
+  await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateOverheatProtect' WHERE field='HvacPower'`;
+  expect((await get('/v1/vehicles/1/status')).climateOn).toBeNull();
+  await owner`UPDATE volta_telemetry.latest_samples SET invalid=true,quality='invalid',value_text=NULL WHERE field='HvacPower'`;
+  expect((await get('/v1/vehicles/1/status')).climateOn).toBe(true);
+  for (const r of before) await owner`UPDATE positions SET is_climate_on=${r.is_climate_on} WHERE id=${r.id}`;
 });
 
 
