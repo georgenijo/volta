@@ -53,7 +53,7 @@ struct ChargingDetailView: View {
     }
 
     /// The bottom of the map that fades into the page; MapKit's attribution sits above it.
-    private static let mapFade: CGFloat = 56
+    private static let mapFade: CGFloat = VoltaMapChrome.fade
     static let margin: CGFloat = 28
 
     @State private var page = HistoryWindow()

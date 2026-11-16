@@ -392,48 +392,46 @@ struct SessionsMapHero: View {
     /// Nil draws plain dots in `pin`.
     var kinds: [ChargerKind]? = nil
     var height: CGFloat
-    var fade: CGFloat = 64
+    var fade: CGFloat = VoltaMapChrome.fade
     /// Space at the top the camera keeps clear: the status bar and system bar.
     var topInset: CGFloat = 110
     var pin: Color = HistoryTheme.pin
     var expand: () -> Void
 
+    private struct Spot: Identifiable {
+        var id: Int
+        var coordinate: CLLocationCoordinate2D
+        var kind: ChargerKind?
+    }
+
     /// One pin per spot, to roughly 100 m; the first session's kind marks it.
-    private var spotKinds: [(coordinate: CLLocationCoordinate2D, kind: ChargerKind?)] {
+    private var spots: [Spot] {
         var seen = Set<String>()
         return coordinates.enumerated().compactMap { index, c in
             guard seen.insert(String(format: "%.3f,%.3f", c.latitude, c.longitude)).inserted else { return nil }
-            return (c, kinds.flatMap { index < $0.count ? $0[index] : nil })
+            return Spot(id: index, coordinate: c, kind: kinds.flatMap { index < $0.count ? $0[index] : nil })
         }
-    }
-
-    private var spots: [CLLocationCoordinate2D] { spotKinds.map(\.coordinate) }
-
-    private var region: MKCoordinateRegion? {
-        let spots = spots
-        guard let minLat = spots.map(\.latitude).min(), let maxLat = spots.map(\.latitude).max(),
-              let minLon = spots.map(\.longitude).min(), let maxLon = spots.map(\.longitude).max() else { return nil }
-        return MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2),
-            span: MKCoordinateSpan(latitudeDelta: max(0.04, (maxLat - minLat) * 1.8), longitudeDelta: max(0.04, (maxLon - minLon) * 1.8)))
     }
 
     var body: some View {
         ZStack {
             HistoryTheme.background
-            if let region {
-                let spotKinds = spotKinds, spots = spots
-                // Framed below the bar; the Maps logo and Legal link stay above the fade.
-                GreyTileMap(framing: .region(region, pins: spots),
-                            insets: EdgeInsets(top: topInset, leading: 0, bottom: fade, trailing: 0), dim: 0.65) { index in
-                    if let kind = spotKinds[index].kind {
+            let spots = spots
+            if !spots.isEmpty {
+                // Whole badges at least 24 pt below the bar (the page's safe
+                // area already ends a little under it) and 24 pt above the
+                // fade; the logo and Legal link sit just above the fade.
+                PinnedMap(items: spots, coordinate: \.coordinate,
+                          safe: EdgeInsets(top: 0, leading: 0, bottom: fade, trailing: 0),
+                          clearance: EdgeInsets(top: topInset + 12, leading: 24, bottom: fade + 24, trailing: 24),
+                          dim: 0.65, interactive: false, pinAnchor: .center) { spot in
+                    if let kind = spot.kind {
                         ChargerBadge(kind: kind)
                     } else {
                         Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
                     }
                 }
                 .allowsHitTesting(false)
-                .id(spots.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ";"))
                 .overlay {
                     Color.clear.contentShape(.rect).onTapGesture(perform: expand)
                         .accessibilityHidden(true)
@@ -461,33 +459,33 @@ struct SessionsMapHero: View {
     }
 }
 
-/// Fixed private MapKit tiles drained to grey, with pins drawn over the map
-/// so they keep their color. Nothing is geocoded or searched.
+/// Fixed private MapKit tiles drained to grey, centred on one coordinate,
+/// with its pin drawn over the map so it keeps its colour. Nothing is
+/// geocoded or searched.
 struct GreyTileMap<Pin: View>: View {
     enum Framing {
         /// One pin at the camera's centre.
         case camera(CLLocationCoordinate2D, distance: Double)
-        /// The region fitted into the map, a pin per coordinate.
-        case region(MKCoordinateRegion, pins: [CLLocationCoordinate2D])
     }
 
     var framing: Framing
     /// Area the camera frames; the Maps logo and Legal link sit above the bottom inset.
     var insets: EdgeInsets
+    /// Darkens the tiles, never the attribution.
     var dim: Double = 0
-    /// The pin for the pin at an index (`.camera` has one, index 0).
+    /// The pin (index 0).
     @ViewBuilder var pin: (Int) -> Pin
 
     var body: some View {
         map
             .voltaBasemap()
             .safeAreaPadding(insets)
-            .overlay { Color.black.opacity(dim).allowsHitTesting(false) }
+            .voltaMapDim(dim, bottom: insets.bottom)
             .overlay {
                 GeometryReader { geo in
-                    ForEach(Array(points(in: geo.size).enumerated()), id: \.offset) { index, point in
-                        pin(index).position(point)
-                    }
+                    let w = geo.size.width - insets.leading - insets.trailing
+                    let h = geo.size.height - insets.top - insets.bottom
+                    pin(0).position(x: insets.leading + w / 2, y: insets.top + h / 2)
                 }
                 .allowsHitTesting(false)
             }
@@ -497,33 +495,7 @@ struct GreyTileMap<Pin: View>: View {
         switch framing {
         case .camera(let center, let distance):
             Map(initialPosition: .camera(MapCamera(centerCoordinate: center, distance: distance, heading: 0, pitch: 0)), interactionModes: [])
-        case .region(let region, _):
-            Map(initialPosition: .region(region), interactionModes: [])
         }
-    }
-
-    /// Flat camera: the centre of the framed area, or a Web Mercator projection
-    /// of each pin into the region MapKit fits to that area.
-    private func points(in size: CGSize) -> [CGPoint] {
-        let w = size.width - insets.leading - insets.trailing, h = size.height - insets.top - insets.bottom
-        let mid = CGPoint(x: insets.leading + w / 2, y: insets.top + h / 2)
-        switch framing {
-        case .camera:
-            return [mid]
-        case .region(let region, let pins):
-            let c = region.center
-            let dy = Self.mercatorY(c.latitude + region.span.latitudeDelta / 2) - Self.mercatorY(c.latitude - region.span.latitudeDelta / 2)
-            guard region.span.longitudeDelta > 0, dy > 0, w > 0, h > 0 else { return [] }
-            let scale = min(w / region.span.longitudeDelta, h / dy)
-            return pins.map {
-                CGPoint(x: mid.x + ($0.longitude - c.longitude) * scale,
-                        y: mid.y - (Self.mercatorY($0.latitude) - Self.mercatorY(c.latitude)) * scale)
-            }
-        }
-    }
-
-    private static func mercatorY(_ latitude: Double) -> Double {
-        log(tan(.pi / 4 + latitude * .pi / 360)) * 180 / .pi
     }
 }
 

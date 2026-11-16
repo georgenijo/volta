@@ -36,7 +36,7 @@ struct DriveDetailView: View {
     /// Wattly's text margin on a 402 pt wide phone.
     static let margin: CGFloat = 28
     /// The map's fade into the page; MapKit's logo and Legal link sit just above it.
-    static let mapFade: CGFloat = 64
+    static let mapFade: CGFloat = VoltaMapChrome.fade
 
     @State private var page = HistoryWindow()
 
@@ -213,11 +213,12 @@ struct DriveDetailView: View {
 
     // MARK: Toolbar
 
-    /// System toolbar items, so iPhone Duo can move them to the side strip.
-    /// Route color modes are one group, replay and share another.
+    /// iPhone: one capsule of five 44 pt slots laid out here, so the system
+    /// never folds replay and share into an overflow menu. iPhone Duo: system
+    /// items it can move to the side strip, the modes folded into one menu.
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            if barsOnSide {
+        if barsOnSide {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 // The strip shares its height with the tabs: one menu keeps
                 // replay and share out of the overflow menu.
                 Menu {
@@ -231,44 +232,68 @@ struct DriveDetailView: View {
                 }
                 .tint(Color.voltaTextPrimary)
                 .accessibilityIdentifier("trip.mode")
-            } else {
-                // The selected mode is a neutral circle: green is not a selection colour.
-                ForEach(TripMapMode.allCases) { m in modeButton(m) }
             }
-        }
-        .historyPriority()
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            Button(action: toggleReplay) {
-                Label(isPlaying ? "Pause replay" : "Replay trip", systemImage: isPlaying ? "pause.fill" : "play.fill")
-                    .contentTransition(.symbolEffect(.replace))
+            .historyPriority()
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                replayButton
+                shareButton
             }
-            .tint(Color.voltaTextPrimary)
-            .disabled((snapshot?.timeline.points.count ?? 0) < 2)
-            .accessibilityIdentifier("trip.play")
-            if let shareImage {
-                ShareLink(item: shareImage, preview: SharePreview("Trip summary", image: shareImage)) {
-                    Label("Share trip summary", systemImage: "square.and.arrow.up")
+            .historyPriority()
+        } else {
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 0) {
+                    // The selected mode is a neutral circle: green is not a selection colour.
+                    ForEach(TripMapMode.allCases) { m in modeButton(m) }
+                    replayButton.labelStyle(.iconOnly).frame(width: Self.slot, height: Self.slot).contentShape(.rect)
+                    shareButton.labelStyle(.iconOnly).frame(width: Self.slot, height: Self.slot).contentShape(.rect)
                 }
-                .tint(Color.voltaTextPrimary)
-                .accessibilityIdentifier("trip.share")
-            } else {
-                Button {} label: { Label("Share trip summary", systemImage: "square.and.arrow.up") }
-                    .disabled(true)
+                // Fixed glyphs: five slots must fit a 375 pt phone at every text size.
+                .font(.system(size: 17, weight: .medium))
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.voltaTextPrimary)
             }
+            .historyPriority()
         }
-        .historyPriority()
     }
 
-    /// A mode inside the one toolbar capsule; the selected one sits on a
-    /// 34 pt circle of white at 16%, so the capsule never splits.
+    /// A toolbar slot: the 44 pt hit region every control keeps.
+    static let slot: CGFloat = 44
+
+    private var replayButton: some View {
+        Button(action: toggleReplay) {
+            Label(isPlaying ? "Pause replay" : "Replay trip", systemImage: isPlaying ? "pause.fill" : "play.fill")
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .tint(Color.voltaTextPrimary)
+        .disabled((snapshot?.timeline.points.count ?? 0) < 2)
+        .accessibilityIdentifier("trip.play")
+    }
+
+    @ViewBuilder private var shareButton: some View {
+        if let shareImage {
+            ShareLink(item: shareImage, preview: SharePreview("Trip summary", image: shareImage)) {
+                Label("Share trip summary", systemImage: "square.and.arrow.up")
+            }
+            .tint(Color.voltaTextPrimary)
+            .accessibilityIdentifier("trip.share")
+        } else {
+            Button {} label: { Label("Share trip summary", systemImage: "square.and.arrow.up") }
+                .disabled(true)
+                .accessibilityIdentifier("trip.share")
+        }
+    }
+
+    /// A mode in the capsule: a 44 pt slot; the selected one sits on a 34 pt
+    /// circle of white at 16%, so the capsule never splits.
     private func modeButton(_ m: TripMapMode) -> some View {
         let selected = mode == m
         return Button { mode = m } label: {
             Image(systemName: m.systemImage)
                 .frame(width: 34, height: 34)
                 .background { if selected { Circle().fill(Color.white.opacity(0.16)) } }
+                .frame(width: Self.slot, height: Self.slot)
+                .contentShape(.rect)
         }
-        .tint(Color.voltaTextPrimary)
         .accessibilityLabel("Color route by \(m.title.lowercased())")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("trip.mode.\(m.rawValue)")
@@ -292,7 +317,7 @@ struct DriveDetailView: View {
     }
 
     /// MapKit's logo and Legal link above the fade.
-    static let attribution: CGFloat = 24
+    static let attribution: CGFloat = VoltaMapChrome.attribution
 
     /// The legend for the current mode, under the map.
     @ViewBuilder private var legendStrip: some View {

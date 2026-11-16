@@ -168,7 +168,12 @@ struct TripRoute: Equatable {
                 let windowed: [Double?]? = intervals.map { EfficiencyWindow.smoothed($0, windowKm: window) }
                 var i = runStart
                 while i < runEnd {
-                    let end = min(i + stride, runEnd)
+                    var end = min(i + stride, runEnd)
+                    if let windowed {
+                        // A piece never mixes regen with consumption: averaging a
+                        // short descent into a long piece would hide it.
+                        end = Self.signBreak(windowed, from: i - runStart, to: end - runStart) + runStart
+                    }
                     let pieceValue: Double?
                     if !supported {
                         pieceValue = nil
@@ -200,6 +205,23 @@ struct TripRoute: Equatable {
         }
         self.gaps = gaps
         self.isolated = isolated
+    }
+
+    /// The end of a piece starting at interval `from`: `to`, or earlier, at
+    /// the first interval whose windowed value is on the other side of zero
+    /// (regen versus consumption). Always at least one interval.
+    static func signBreak(_ windowed: [Double?], from: Int, to: Int) -> Int {
+        func regen(_ k: Int) -> Bool? { windowed[k].map { $0 < 0 } }
+        var side = regen(from)
+        var k = from + 1
+        while k < to {
+            if let r = regen(k) {
+                if let s = side, r != s { return k }
+                side = r
+            }
+            k += 1
+        }
+        return to
     }
 
     /// Distance-weighted mean of a run's windowed values over `range` (a
@@ -271,26 +293,30 @@ struct TripRoute: Equatable {
     /// route gets `minContentHeight` (default a fifth of the map, at least
     /// 48 pt) by giving up top inset, down to 24 pt; the bottom gives way only
     /// below 32 pt of route.
+    /// `strict` keeps every margin as given (pins and the Drives hero): no
+    /// margin gives way for size, only the tiny-frame guards below apply.
     static func fitted(_ content: MKMapRect, size: CGSize, safe: EdgeInsets, insets: EdgeInsets,
-                       minContentHeight: CGFloat? = nil) -> MKMapRect {
+                       minContentHeight: CGFloat? = nil, strict: Bool = false) -> MKMapRect {
         guard size.width > 0, size.height > 0, content.width > 0, content.height > 0 else { return content }
         var insets = insets
-        // A short map keeps its bottom margin (it clears the attribution, logo and
-        // Legal link) and gives up its top margin first, down to 24 pt, to give
-        // the route `preferred` height. The bottom margin gives way only when
-        // the route would otherwise get under 32 pt, and never past the fade.
-        let preferred: CGFloat = minContentHeight ?? max(48, size.height * 0.2)
-        let least: CGFloat = 32
-        if size.height - insets.top - insets.bottom < preferred {
-            insets.top = max(min(insets.top, 24), size.height - insets.bottom - preferred)
-        }
-        if size.height - insets.top - insets.bottom < least {
-            insets.bottom = max(min(insets.bottom, safe.bottom), size.height - insets.top - least)
-        }
-        let horizontal: CGFloat = insets.leading + insets.trailing
-        if horizontal > size.width * 0.6 {
-            let k: CGFloat = size.width * 0.6 / horizontal
-            insets.leading *= k; insets.trailing *= k
+        if !strict {
+            // A short map keeps its bottom margin (it clears the attribution, logo and
+            // Legal link) and gives up its top margin first, down to 24 pt, to give
+            // the route `preferred` height. The bottom margin gives way only when
+            // the route would otherwise get under 32 pt, and never past the fade.
+            let preferred: CGFloat = minContentHeight ?? max(48, size.height * 0.2)
+            let least: CGFloat = 32
+            if size.height - insets.top - insets.bottom < preferred {
+                insets.top = max(min(insets.top, 24), size.height - insets.bottom - preferred)
+            }
+            if size.height - insets.top - insets.bottom < least {
+                insets.bottom = max(min(insets.bottom, safe.bottom), size.height - insets.top - least)
+            }
+            let horizontal: CGFloat = insets.leading + insets.trailing
+            if horizontal > size.width * 0.6 {
+                let k: CGFloat = size.width * 0.6 / horizontal
+                insets.leading *= k; insets.trailing *= k
+            }
         }
         // Too small a frame for the margins: frame the route in MapKit's own
         // area instead, and when even that is empty, hand MapKit the bare
@@ -381,14 +407,13 @@ struct TripMapView: View {
         Map(position: $position, interactionModes: [.pan, .zoom])
             .mapControls { }
             .voltaBasemap()
-            .brightness(-0.06)
             .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
             .safeAreaPadding(mapSafe)
             .ignoresSafeArea(edges: underEdges)
             // MapKit draws into any safe area it touches; keep it to the edges asked for.
             .clipped()
-            // Darker than MapKit's dark style so labels recede behind the route.
-            .overlay { Color.black.opacity(0.36).ignoresSafeArea(edges: underEdges).allowsHitTesting(false) }
+            // Darker than MapKit's dark style so labels recede behind the route; the attribution stays clear.
+            .voltaMapDim(0.4, bottom: bottomInset, ignoring: underEdges)
             .overlay {
                 GeometryReader { geo in
                     ZStack {
@@ -410,7 +435,7 @@ struct TripMapView: View {
         guard size.width > 0, size.height > 0, framedSize != size,
               let content = TripRoute.contentRect(timeline.points) else { return }
         framedSize = size
-        position = .rect(TripRoute.fitted(content, size: size, safe: mapSafe, insets: fitInsets))
+        position = .fitting(TripRoute.fitted(content, size: size, safe: mapSafe, insets: fitInsets), replacing: position)
     }
 
     private func projection(visible: MKMapRect, size: CGSize) -> TripRouteProjection {

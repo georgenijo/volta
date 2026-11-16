@@ -97,6 +97,9 @@ struct RouteSketch: View {
     /// On cards narrower than 390 pt, so the place names keep their room.
     static let compact = CGSize(width: 56, height: 40)
 
+    /// The last step when names don't fit on one line beside `compact`.
+    static let small = CGSize(width: 44, height: 32)
+
     static func size(forCardWidth width: CGFloat) -> CGSize { width > 0 && width < 390 ? compact : size }
 
     var body: some View {
@@ -271,11 +274,63 @@ struct DriveDayHeader: View {
 
 // MARK: - Card
 
+/// A drive or roadtrip card's top row: place names, route sketch, and the
+/// trailing distance column, fitted in order: names on one line each beside
+/// the card's sketch (56 × 40 under 390 pt, else 72 × 48); names on one line
+/// each beside a 44 × 32 sketch with 8 pt gaps; names on up to two lines
+/// beside that small sketch. Names stay 17 pt semibold in every step and
+/// are never truncated. Accessibility sizes drop the sketch.
+struct CardHeaderRow<Names: View, Trailing: View>: View {
+    var points: [DriveRoutePoint]
+    var cardWidth: CGFloat
+    /// Space above the sketch, to line it up with the names.
+    var sketchTop: CGFloat = 0
+    /// The names, on one line each (`oneLine`) or wrapping to two.
+    @ViewBuilder var names: (_ oneLine: Bool) -> Names
+    @ViewBuilder var trailing: () -> Trailing
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if typeSize.isAccessibilitySize || points.count < 2 {
+            row(oneLine: false, sketch: nil, gap: 12)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                row(oneLine: true, sketch: RouteSketch.size(forCardWidth: cardWidth), gap: 12)
+                row(oneLine: true, sketch: RouteSketch.small, gap: 8)
+                row(oneLine: false, sketch: RouteSketch.small, gap: 8)
+            }
+        }
+    }
+
+    private func row(oneLine: Bool, sketch: CGSize?, gap: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: gap) {
+            names(oneLine).frame(maxWidth: .infinity, alignment: .leading)
+            if let sketch { RouteSketch(points: points, size: sketch).padding(.top, sketchTop) }
+            trailing().fixedSize()
+        }
+    }
+}
+
+/// A place name on a card: 17 pt semibold, on one line (sized to fit, so
+/// `ViewThatFits` sees its full width) or wrapping to two.
+struct CardPlaceName: View {
+    var name: String
+    var oneLine: Bool
+
+    var body: some View {
+        if oneLine {
+            Text(name).scaledFont(17, weight: .semibold, relativeTo: .body).lineLimit(1).fixedSize()
+        } else {
+            Text(name).scaledFont(17, weight: .semibold, relativeTo: .body)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct DriveCard: View {
     var drive: DriveSummary
     var showsDate = false
     @Environment(\.units) private var units
-    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(AppModel.self) private var model: AppModel?
     @State private var width: CGFloat = 0
 
@@ -286,13 +341,9 @@ struct DriveCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                // Names take what's left and wrap to a second line rather
-                // than shrink or truncate; the sketch keeps its box.
-                itinerary.frame(maxWidth: .infinity, alignment: .leading)
-                if !typeSize.isAccessibilitySize, drive.drawableRoute.count > 1 {
-                    RouteSketch(points: drive.drawableRoute, size: RouteSketch.size(forCardWidth: width))
-                }
+            CardHeaderRow(points: drive.drawableRoute, cardWidth: width) { oneLine in
+                itinerary(oneLine: oneLine)
+            } trailing: {
                 VStack(alignment: .trailing, spacing: 9) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: drive.distanceKm)))
@@ -310,7 +361,6 @@ struct DriveCard: View {
                         Text(drive.start.formatted(.dateTime.month(.abbreviated).day().year())).scaledFont(11).foregroundStyle(HistoryTheme.tertiary)
                     }
                 }
-                .fixedSize()
                 .padding(.top, 1)
             }
             .padding(.leading, 18).padding(.trailing, 16)
@@ -333,24 +383,22 @@ struct DriveCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var itinerary: some View {
+    private func itinerary(oneLine: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            place(drive.startPlace, marker: .start)
+            place(drive.startPlace, marker: .start, oneLine: oneLine)
             Rectangle().fill(HistoryTheme.tertiary.opacity(0.7)).frame(width: 1, height: 5)
                 .padding(.leading, 4.5).padding(.vertical, 0.5)
-            place(drive.endPlace, marker: .end)
+            place(drive.endPlace, marker: .end, oneLine: oneLine)
         }
     }
 
     /// Both names at one size (17 pt semibold, scaling with Dynamic Type);
     /// a long name wraps to a second line, never shrinks or truncates.
-    private func place(_ name: String, marker: RouteEndpoint) -> some View {
+    private func place(_ name: String, marker: RouteEndpoint, oneLine: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             RouteEndpointMarker(kind: marker, size: 9)
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 5 }
-            Text(name).scaledFont(17, weight: .semibold, relativeTo: .body).foregroundStyle(.white)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+            CardPlaceName(name: name, oneLine: oneLine).foregroundStyle(.white)
         }
         .frame(minHeight: 22)
     }

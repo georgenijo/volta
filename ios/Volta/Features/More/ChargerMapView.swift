@@ -15,6 +15,8 @@ struct ChargerMapView: View {
         ScreenKit.Page(splits: !(state.value ?? []).isEmpty) {
             LoadableContent(state: state, retry: load) { locations in
                 Text("Your recorded charging places · TeslaMate history").font(.caption).foregroundStyle(ScreenKit.secondary)
+                    // Kinds for every place: its pin and its card.
+                    .task(id: locations.map(\.id)) { await loadKinds(locations) }
                 if locations.isEmpty {
                     EmptyState(systemImage: "mappin.and.ellipse", title: "No charging places yet", message: "Locations appear after TeslaMate records a charging session. This map shows your own history.")
                 } else {
@@ -22,7 +24,9 @@ struct ChargerMapView: View {
                     if !mapped.isEmpty {
                         // The shared grey basemap; badges drawn over it in colour.
                         PinnedMap(items: mapped, coordinate: { CLLocationCoordinate2D(latitude: $0.latitude!, longitude: $0.longitude!) },
-                                  safe: .init(top: 40, leading: 32, bottom: 16, trailing: 32)) { location in
+                                  // Whole badges at least 40 pt from every edge of the card.
+                                  clearance: .init(top: 40, leading: 40, bottom: 40, trailing: 40),
+                                  pinAnchor: .center) { location in
                             Button { push?(.chargerPlace(location)) } label: {
                                 ChargerBadge(kind: kinds[location.id] ?? .unknown)
                             }
@@ -31,7 +35,6 @@ struct ChargerMapView: View {
                         }
                         .modifier(ScreenKit.MapHeight())
                         .clipShape(.rect(cornerRadius: 22))
-                        .task(id: mapped.map(\.id)) { await loadKinds(mapped) }
                     } else {
                         Text("TeslaMate has not recorded coordinates for these places. Their sessions are available below.").foregroundStyle(ScreenKit.secondary)
                     }
@@ -43,9 +46,23 @@ struct ChargerMapView: View {
                     Button { push?(.chargerPlace(location)) } label: {
                         Card {
                             VStack(alignment: .leading, spacing: 12) {
-                                HStack { Text(location.name).font(.headline); Spacer(); Image(systemName: "chevron.right") }
+                                // The same badge, and kind, as the place's pin.
+                                HStack(spacing: 10) {
+                                    ChargerBadge(kind: kinds[location.id] ?? .unknown)
+                                    Text(location.name).font(.headline)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                }
                                 Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                Text(location.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Total energy unknown — some sessions lack readings")
+                                if let energy = location.energyAddedKwh {
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Text(VoltaFormat.number(energy)).font(.system(size: 22, weight: .semibold, design: .rounded)).monospacedDigit()
+                                        Text("kWh added").foregroundStyle(ScreenKit.secondary)
+                                    }
+                                    .accessibilityElement(children: .combine)
+                                } else {
+                                    Text("Total energy unknown — some sessions lack readings")
+                                }
                                 Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.caption).foregroundStyle(ScreenKit.secondary)
                                 Text(ChargerPresentation.cost(location.cost, currency: location.currency)).font(.caption)
                                 if !location.hasCoordinate { Text("Coordinates not recorded").font(.caption).foregroundStyle(ScreenKit.secondary) }

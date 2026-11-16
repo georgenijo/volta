@@ -113,8 +113,10 @@ struct HistorySessionsMap: View {
     var onSelect: (String) -> Void = { _ in }
 
     var body: some View {
-        // Room for the callouts drawn above each pin when framing.
-        PinnedMap(items: pins, coordinate: \.coordinate, safe: .init(top: 64, leading: 56, bottom: 24, trailing: 56)) { pin in
+        // Every pin whole, callout included, 24 pt from the edges and 24 pt
+        // above the attribution.
+        PinnedMap(items: pins, coordinate: \.coordinate, safe: .init(top: 0, leading: 0, bottom: 24, trailing: 0),
+                  clearance: .init(top: 24, leading: 24, bottom: 24 + VoltaMapChrome.attribution + 24, trailing: 24)) { pin in
             Button { onSelect(pin.id) } label: {
                 VStack(spacing: 4) {
                     VStack(spacing: 1) {
@@ -420,25 +422,33 @@ struct HistoryLocationCard: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// The shared basemap, its pin drawn over it so it keeps its tint (the
+    /// camera centres the coordinate in the padded area), and a fade over
+    /// only the last 40 pt, below MapKit's logo and Legal link.
     private func map(_ coordinate: CLLocationCoordinate2D) -> some View {
-        ZStack {
+        let fade = VoltaMapChrome.fade
+        return ZStack(alignment: .bottom) {
             Map(initialPosition: .camera(MapCamera(centerCoordinate: coordinate, distance: 1600, heading: 0, pitch: 45)),
-                interactionModes: []) {
-                Annotation("", coordinate: coordinate) {
-                    ZStack {
-                        Circle().fill(tint.opacity(0.22)).frame(width: 46, height: 46)
-                        Circle().fill(tint).frame(width: 24, height: 24)
-                            .shadow(color: tint.opacity(0.6), radius: 8)
-                        Image(systemName: systemImage)
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.black.opacity(0.75))
+                interactionModes: [])
+                .voltaBasemap()
+                .safeAreaPadding(.bottom, fade)
+                .allowsHitTesting(false)
+                .overlay {
+                    GeometryReader { geo in
+                        ZStack {
+                            Circle().fill(tint.opacity(0.22)).frame(width: 46, height: 46)
+                            Circle().fill(tint).frame(width: 24, height: 24)
+                                .shadow(color: tint.opacity(0.6), radius: 8)
+                            Image(systemName: systemImage)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.black.opacity(0.75))
+                        }
+                        .position(x: geo.size.width / 2, y: (geo.size.height - fade) / 2)
                     }
+                    .allowsHitTesting(false)
                 }
-            }
-            .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
-            .environment(\.colorScheme, .dark)
-            .allowsHitTesting(false)
-            LinearGradient(colors: [.clear, HistoryTheme.card.opacity(0.85)], startPoint: .center, endPoint: .bottom)
+            LinearGradient(colors: [.clear, HistoryTheme.card.opacity(0.85)], startPoint: .top, endPoint: .bottom)
+                .frame(height: fade)
                 .allowsHitTesting(false)
         }
         .frame(height: height)

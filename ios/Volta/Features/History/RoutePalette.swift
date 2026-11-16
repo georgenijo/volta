@@ -315,67 +315,11 @@ private struct LegendMarks: View {
     }
 }
 
-/// A compact glass chip: a thin gradient capsule with low, reference and
-/// high labels. Placed at a map's bottom leading corner, above the fade.
-struct RouteLegendChip: View {
-    var model: RouteLegendModel
-    var width: CGFloat = 140
-    /// Room kept beside the chip so MapKit's logo never moves when the
-    /// legend changes (the widest chip, with its regen swatch, plus a gap).
-    static let reservedWidth: CGFloat = 238
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let mid = model.mid {
-                // The reference sits over its tick, kept inside the bar.
-                LegendMarks(marks: [.init(label: mid, position: model.tick ?? 0.5)], width: width)
-            }
-            HStack(spacing: 10) {
-                Capsule()
-                    .fill(LinearGradient(stops: model.stops, startPoint: .leading, endPoint: .trailing))
-                    .frame(width: width, height: 4)
-                    .overlay(alignment: .leading) {
-                        if let tick = model.tick {
-                            Capsule().fill(.white).frame(width: 2, height: 10).offset(x: width * tick - 1)
-                        }
-                    }
-                if let extra = model.extra {
-                    HStack(spacing: 5) {
-                        Capsule().fill(extra.color).frame(width: 12, height: 4)
-                        Text(extra.label)
-                    }
-                }
-            }
-            if let marks = model.marks {
-                LegendMarks(marks: marks, width: width)
-            } else {
-                HStack(spacing: 0) {
-                    Text(model.low)
-                    Spacer(minLength: 6)
-                    Text(model.high)
-                }
-                .frame(width: width)
-            }
-            if let note = model.note {
-                Text(note).foregroundStyle(.white.opacity(0.6)).scaledFont(11, weight: .medium)
-            }
-        }
-        .scaledFont(11, weight: .semibold)
-        .monospacedDigit()
-        .foregroundStyle(.white.opacity(0.85))
-        .lineLimit(1)
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .glassEffect(.regular, in: .rect(cornerRadius: 14))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.sentence)
-        .accessibilityIdentifier("route.legend")
-    }
-}
-
-/// The trip legend as a footer strip under the map, on the page background:
-/// one row (end labels around the bar and its tick; the regen swatch at the
-/// trailing end), and a caption line under it only when there is a tick
-/// label or a note.
+/// The one route legend, a strip on the page background: under the trip map,
+/// and between the heatmap's switch and its map. One row (end labels around
+/// the bar and its tick; the regen swatch at the trailing end), and a caption
+/// line under it only when there is a tick label, a note or fixed marks
+/// (density's 1 · 3 · 10 · 30+, placed under the bar instead of end labels).
 struct RouteLegendStrip: View {
     var model: RouteLegendModel
     @State private var bar: CGRect = .zero
@@ -384,7 +328,7 @@ struct RouteLegendStrip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 8) {
-                Text(model.low)
+                if model.marks == nil { Text(model.low) }
                 Capsule()
                     .fill(LinearGradient(stops: model.stops, startPoint: .leading, endPoint: .trailing))
                     .frame(height: 4)
@@ -398,7 +342,7 @@ struct RouteLegendStrip: View {
                         }
                     }
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("legend.strip")) } action: { bar = $0 }
-                Text(model.high)
+                if model.marks == nil { Text(model.high) }
                 if let extra = model.extra {
                     HStack(spacing: 5) {
                         Capsule().fill(extra.color).frame(width: 12, height: 4)
@@ -408,7 +352,11 @@ struct RouteLegendStrip: View {
                 }
             }
             .foregroundStyle(.white.opacity(0.85))
-            if model.mid != nil || model.note != nil {
+            if let marks = model.marks {
+                LegendMarks(marks: marks, width: bar.width)
+                    .padding(.leading, bar.minX)
+                    .foregroundStyle(HistoryTheme.secondary)
+            } else if model.mid != nil || model.note != nil {
                 ZStack(alignment: .leading) {
                     Color.clear.frame(maxWidth: .infinity).frame(height: 1)
                     if let note = model.note {

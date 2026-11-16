@@ -166,6 +166,51 @@ final class RoutePaletteTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(miniTop.y, phone.top - 0.01)
     }
 
+    @MainActor
+    func testTheAllDrivesMapIsFramedToItsRoutes() {
+        // The demo drives' routes, as the Drives hero and heatmap load them.
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let runs = DemoRoutes.all.indices.map { id in
+            DemoRoutes.points(for: id, start: start, durationMin: 30).map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        }
+        let content = try! XCTUnwrap(voltaBounds(runs.joined().map(MKMapPoint.init)))
+        let safe = DrivesRouteMap.mapSafe()
+        // 13 mini hero (first layout without its top inset, then the real
+        // one), iPhone Duo hero, heatmap.
+        let cases: [(CGSize, CGFloat, Bool)] = [(CGSize(width: 375, height: 150), 0, true), (CGSize(width: 375, height: 254), 104, true),
+                                                (CGSize(width: 419, height: 232), 122, true), (CGSize(width: 375, height: 320), 0, false)]
+        for (size, top, hero) in cases {
+            let rect = try! XCTUnwrap(DrivesRouteMap.camera(runs, size: size, topInset: top, fullBleed: hero))
+            let a = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: rect, size: size, safe: safe))
+            let b = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: rect, size: size, safe: safe))
+            let clear = DrivesRouteMap.clearance(topInset: top, fullBleed: hero)
+            let insetTop = clear.top, insetBottom = clear.bottom
+            XCTAssertEqual(insetTop, top + (hero ? 12 : 24))
+            XCTAssertGreaterThanOrEqual(insetBottom, DrivesRouteMap.fade + 24)
+            // Inside the clearances: under the bars, above the attribution.
+            XCTAssertGreaterThanOrEqual(a.y, insetTop - 0.01, "\(size)")
+            XCTAssertLessThanOrEqual(b.y, size.height - insetBottom + 0.01, "\(size)")
+            XCTAssertGreaterThanOrEqual(a.x, 32 - 0.01, "\(size)")
+            XCTAssertLessThanOrEqual(b.x, size.width - 32 + 0.01, "\(size)")
+            // And filling them one way: the camera never shows a region wider
+            // than the routes plus those margins (no fallback to the Bay Area).
+            let fillsHeight = abs((b.y - a.y) - (size.height - insetTop - insetBottom)) < 0.5
+            let fillsWidth = abs((b.x - a.x) - (size.width - 64)) < 0.5
+            XCTAssertTrue(fillsHeight || fillsWidth, "\(size)")
+        }
+    }
+
+    func testAnEqualFitIsStillReapplied() {
+        let rect = MKMapRect(x: 43_000_000, y: 104_000_000, width: 400_000, height: 100_000)
+        let again = MapCameraPosition.fitting(rect, replacing: .rect(rect))
+        let moved = try! XCTUnwrap(again.rect)
+        XCTAssertFalse(MKMapRectEqualToRect(moved, rect), "a new value, so SwiftUI hands it to MapKit")
+        XCTAssertEqual(moved.origin.x, rect.origin.x, accuracy: 0.01)
+        XCTAssertEqual(moved.size.width, rect.size.width)
+        let other = MKMapRect(x: 1, y: 2, width: 3, height: 4)
+        XCTAssertTrue(MKMapRectEqualToRect(MapCameraPosition.fitting(other, replacing: .rect(rect)).rect!, other))
+    }
+
     func testTinyFramesFallBackInsteadOfANegativeRect() {
         let content = MKMapRect(x: 43_112_000, y: 104_057_000, width: 79_000, height: 56_000)
         let insets = EdgeInsets(top: 126, leading: 32, bottom: 120, trailing: 32)
@@ -297,14 +342,49 @@ final class RouteDensityTests: XCTestCase {
         let result = RouteDensity.build(many) { checks += 1; return checks > 2 }
         XCTAssertNil(result)
         XCTAssertEqual(checks, 3, "stops at the first check after cancelling, not after every drive")
+        XCTAssertLessThan(checks, many.count, "returned before visiting every drive")
     }
 
+    @MainActor
     func testNetRegenerationIsRegenOnTheHeatmap() {
         let layer = layerOf([drive(1, from: west, to: east, ratio: -0.3)])
-        let ratio = try! XCTUnwrap(layer.strokes.first?.ratio)
-        XCTAssertLessThan(ratio, 0)
-        XCTAssertEqual(RoutePalette.efficiency(ratio: ratio), RoutePalette.regen)
-        XCTAssertEqual(RoutePalette.efficiency(ratio: 1), RoutePalette.RGB(hex: 0xA8B0BB))
+        let stroke = try! XCTUnwrap(layer.strokes.first)
+        XCTAssertLessThan(stroke.ratio!, 0)
+        // Through the function the heatmap's renderer colours each stroke with.
+        let reference = EfficiencyReference(ratedWhPerKm: 160)
+        XCTAssertEqual(DrivesRouteMap.strokeColor(stroke, coloring: .efficiency(reference)), RoutePalette.regen)
+        var neutral = stroke; neutral.ratio = 1
+        XCTAssertEqual(DrivesRouteMap.strokeColor(neutral, coloring: .efficiency(reference)), RoutePalette.RGB(hex: 0xA8B0BB))
+        XCTAssertEqual(DrivesRouteMap.strokeColor(stroke, coloring: .density), RoutePalette.density(count: stroke.count))
+    }
+
+    private func summary(_ id: Int, route: [DriveRoutePoint]) -> DriveSummary {
+        var d = DriveSummary(id: id, start: Date(timeIntervalSince1970: 0), end: Date(timeIntervalSince1970: 600), startAddress: nil,
+                             endAddress: nil, distanceKm: 5, durationMin: 10, startBatteryLevel: nil, endBatteryLevel: nil,
+                             energyUsedKwh: 1, efficiencyWhPerKm: 160, maxSpeedKph: nil, avgSpeedKph: nil, outsideTempAvgC: nil)
+        d.route = route
+        return d
+    }
+
+    @MainActor
+    func testTheHeatmapLayerKeyCoversRouteContents() {
+        let route = (0..<20).map { i in
+            DriveRoutePoint(t: Date(timeIntervalSince1970: Double(i) * 30), latitude: 37.40 + Double(i) * 0.001, longitude: -122.1)
+        }
+        var moved = route; moved[10].latitude += 0.0005          // one interior coordinate corrected
+        var broken = route; broken[10].routeBreakBefore = true   // one break flag
+        let reference = EfficiencyReference(ratedWhPerKm: 160)
+        func key(_ r: [DriveRoutePoint]) -> DrivesRouteMap.LayerKey {
+            DrivesRouteMap.LayerKey.make([summary(1, route: r)], coloring: .density, reference: reference, digests: RouteDigests())
+        }
+        XCTAssertEqual(key(route), key(route))
+        XCTAssertNotEqual(key(route), key(moved))
+        XCTAssertNotEqual(key(route), key(broken))
+        // A cached digest is replaced when the drive's route changes.
+        let digests = RouteDigests()
+        let first = digests.digest(summary(1, route: route))
+        XCTAssertNotEqual(digests.digest(summary(1, route: moved)), first)
+        XCTAssertEqual(digests.digest(summary(1, route: route)), first)
     }
 
     func testTwoDrivesOverOneRoadCountTwo() {
@@ -381,7 +461,12 @@ final class EfficiencyWindowTests: XCTestCase {
         let route = TripRoute(TripTimeline(path: rows), mode: .efficiency)
         let km = TripRoute.recordedKm(TripTimeline(path: rows))
         XCTAssertEqual(km, 12, accuracy: 0.3)
-        XCTAssertEqual(route.windowKm, km / 12, accuracy: 1e-9)
+        XCTAssertEqual(route.windowKm, km / 12, accuracy: 1e-9, "no drive distance: the positions' length")
+        // The drive's own distance (18 km, not the 12 km of positions) sets it.
+        let supplied = TripRoute(TripTimeline(path: rows), mode: .efficiency, tripKm: 18)
+        XCTAssertEqual(supplied.windowKm, 1.5, accuracy: 1e-9)
+        XCTAssertEqual(TripRouteStyle(mode: .efficiency, reference: reference, windowKm: supplied.windowKm)
+            .legend(units: UnitPreferences(distance: .kilometers))?.note, "Averaged over 1.5 km")
     }
 
     @MainActor
@@ -418,6 +503,25 @@ final class EfficiencyWindowTests: XCTestCase {
         XCTAssertEqual(Set(values.map(colour)).count, 1)
     }
 
+    func testNoiseAroundAConstantMeanIsOneColour() {
+        // Samples alternate 100 and 220 Wh/km around a 160 mean: unsmoothed,
+        // the line would flicker between green and orange.
+        let run = (0..<200).map { i in
+            Interval(distanceKm: 0.014, energyKwh: 0.014 * (i.isMultiple(of: 2) ? 100 : 220) / 1000)
+        }
+        let raw = run.map { $0.energyKwh / $0.distanceKm * 1000 }
+        XCTAssertGreaterThan(Set(raw.map(colour)).count, 1, "the raw samples are confetti")
+        let values = EfficiencyWindow.smoothed(run)
+        // Past the ends, where the window has shrunk to a few samples, every
+        // value sits within 3 % of the mean (raw: ±37 %), one colour to the eye.
+        for v in values[20..<180] { XCTAssertEqual(v! / 160, 1, accuracy: 0.03) }
+        let steady = RoutePalette.OKLab(RoutePalette.efficiency(whPerKm: 160, reference: reference))
+        for v in values[20..<180] {
+            let c = RoutePalette.OKLab(RoutePalette.efficiency(whPerKm: v!, reference: reference))
+            XCTAssertLessThan(hypot(hypot(c.l - steady.l, c.a - steady.a), c.b - steady.b), 0.02)
+        }
+    }
+
     func testOneSpikeInASteadyStretchDoesNotFlipTheColour() {
         // One sample at 40 kW among 8 kW samples, 1 s apart at 50 km/h: the two
         // intervals touching it read 480 Wh/km on their own (thirsty orange).
@@ -444,6 +548,33 @@ final class EfficiencyWindowTests: XCTestCase {
         XCTAssertGreaterThan(run[50].energyKwh, 0)
         for i in 30...70 { XCTAssertLessThan(values[i]!, 0, "index \(i)") }
         XCTAssertEqual(RoutePalette.efficiency(whPerKm: values[50]!, reference: reference), RoutePalette.regen)
+    }
+
+    @MainActor
+    func testARegenStretchShorterThanADrawingPieceKeepsItsColour() {
+        // 60 km at 72 km/h, a sample every 10 s (200 m), 300 Wh/km, with a
+        // 3 km descent at -60 Wh/km. Eight drawing pieces of 7.5 km each:
+        // the descent is shorter than its piece, which averaged as a whole
+        // would read about +160 Wh/km and show no regen.
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let rows = (0...300).map { n -> DrivePoint in
+            let regen = (150...165).contains(n)
+            return DrivePoint(t: t0.addingTimeInterval(Double(n) * 10), latitude: 37.0 + Double(n) * 0.0018, longitude: -122.1,
+                              speedKph: 72, powerKw: regen ? -4.32 : 21.6, elevationM: nil, batteryLevel: 60)
+        }
+        let route = TripRoute(TripTimeline(path: rows), mode: .efficiency, tripKm: 60, maxPieces: 8)
+        XCTAssertEqual(route.windowKm, 2, accuracy: 1e-9)
+        let regen = route.pieces.filter { ($0.value ?? 0) < 0 }
+        XCTAssertFalse(regen.isEmpty, "the descent is drawn in regen")
+        XCTAssertTrue(regen.allSatisfy { $0.indices.count >= 2 }, "each regen piece is at least one drawable segment")
+        let style = TripRouteStyle(mode: .efficiency, valueRange: route.valueRange, reference: reference, windowKm: route.windowKm)
+        XCTAssertEqual(style.rgb(regen[0].value!), RoutePalette.regen)
+        // Pieces still cover the run without a gap.
+        for (a, b) in zip(route.pieces, route.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
+        // The split rule on its own: a piece ends where the windowed sign flips.
+        XCTAssertEqual(TripRoute.signBreak([5, 4, -1, -2, 3], from: 0, to: 5), 2)
+        XCTAssertEqual(TripRoute.signBreak([nil, -1, -2, 3], from: 0, to: 4), 3)
+        XCTAssertEqual(TripRoute.signBreak([5, 4, 3], from: 0, to: 3), 3)
     }
 
     func testRunShorterThanTheWindowUsesTheWholeRun() {

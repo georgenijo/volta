@@ -100,19 +100,29 @@ struct DrivesRouteMap: View {
     /// keeps routes clear of the status bar) and fades out only at the bottom.
     var fullBleed = false
     var topInset: CGFloat = 0
-    /// Shown as a glass chip at the bottom leading corner, above the fade.
-    var legend: RouteLegendModel? = nil
     /// Route width; maps of many drives at region scale draw thinner than a trip.
     var lineWidth: CGFloat = 3
     /// The dark casing under the routes.
     var casingWidth: CGFloat = 5
 
-    static let fade: CGFloat = 64
+    static let fade: CGFloat = VoltaMapChrome.fade
 
+    @Environment(\.units) private var units
     @State private var visible: MKMapRect?
     @State private var layer: RouteDensity.Layer?
     @State private var position: MapCameraPosition = .automatic
-    @State private var framedSize: CGSize?
+    @State private var mapSize: CGSize = .zero
+    private static let space = "drives.route.map"
+    /// The area MapKit fits the camera into, as insets from the map's edges:
+    /// our padding plus whatever safe area it inherits (iPhone Duo's side
+    /// strip, the status bar). Measured from MapKit itself; nil until then.
+    @State private var mapInsets: EdgeInsets?
+    @State private var digests = RouteDigests()
+
+    private struct FrameKey: Equatable { var size: CGSize; var insets: EdgeInsets? }
+
+    /// The map's real safe area, once measured.
+    private var safe: EdgeInsets { mapInsets ?? Self.mapSafe() }
 
     private var runs: [[CLLocationCoordinate2D]] {
         drives.flatMap { drive in
@@ -122,24 +132,32 @@ struct DrivesRouteMap: View {
         }
     }
 
-    /// Bounding rect of every recorded point, at least ~2 km across.
-    private static func content(_ runs: [[CLLocationCoordinate2D]]) -> MKMapRect {
-        let points = runs.joined().map(MKMapPoint.init)
-        let minX = points.map(\.x).min()!, maxX = points.map(\.x).max()!
-        let minY = points.map(\.y).min()!, maxY = points.map(\.y).max()!
-        let minSide = 2_000 * MKMapPointsPerMeterAtLatitude(runs[0][0].latitude)
-        let w = max(maxX - minX, minSide), h = max(maxY - minY, minSide)
-        return MKMapRect(x: (minX + maxX - w) / 2, y: (minY + maxY - h) / 2, width: w, height: h)
+    /// MapKit's padding: only the fade, so the logo and Legal link sit just
+    /// above it in the bottom leading corner. No top padding: MapKit hides its
+    /// logo on a short padded area, and the routes' clearance below the bars
+    /// is kept by `camera` instead.
+    static func mapSafe() -> EdgeInsets { EdgeInsets(top: 0, leading: 0, bottom: fade, trailing: 0) }
+
+    /// Where routes are kept in a map: at least 24 pt below the bars
+    /// (`topInset` is the page's safe area, which already ends a little under
+    /// the floating toolbar, so the hero adds 12), 32 pt from the sides, and
+    /// 24 pt above the fade. The short hero's routes are centred, clear of the
+    /// logo in the leading corner; a taller map also keeps 24 pt above the
+    /// attribution itself.
+    static func clearance(topInset: CGFloat, fullBleed: Bool) -> EdgeInsets {
+        EdgeInsets(top: topInset + (fullBleed ? 12 : 24), leading: 32,
+                   bottom: fade + (fullBleed ? 0 : VoltaMapChrome.attribution) + 24, trailing: 32)
     }
 
-    /// MapKit's padding: logo and Legal above the fade, beside the legend.
-    private var mapSafe: EdgeInsets {
-        EdgeInsets(top: topInset, leading: legend == nil ? 0 : 16 + RouteLegendChip.reservedWidth, bottom: Self.fade, trailing: 0)
-    }
-
-    /// Where routes are framed: below the bars, above the fade, off the edges.
-    private var frameInsets: EdgeInsets {
-        EdgeInsets(top: topInset + (fullBleed ? 12 : 24), leading: 32, bottom: Self.fade + (legend == nil ? 8 : 40), trailing: 32)
+    /// The camera rect framing `runs` in a map of `size`. The margins never
+    /// give way, so however the map is laid out the camera never shows more
+    /// than the routes plus those margins.
+    /// `safe` is the safe area MapKit fits into (measured; by default only
+    /// our padding).
+    static func camera(_ runs: [[CLLocationCoordinate2D]], size: CGSize, topInset: CGFloat, fullBleed: Bool,
+                       safe: EdgeInsets = mapSafe()) -> MKMapRect? {
+        guard let content = voltaBounds(runs.joined().map(MKMapPoint.init)) else { return nil }
+        return TripRoute.fitted(content, size: size, safe: safe, insets: clearance(topInset: topInset, fullBleed: fullBleed), strict: true)
     }
 
     private var fadeMask: some View {
@@ -152,14 +170,20 @@ struct DrivesRouteMap: View {
         }
     }
 
-    /// What the layer depends on: each drive's route length, last sample and
-    /// consumption, and the reference. A drive in progress gaining points, a
-    /// corrected consumption or a new reference all rebuild it.
-    private struct LayerKey: Hashable {
-        struct Revision: Hashable { var id: Int; var points: Int; var last: Date?; var whPerKm: Double? }
+    /// What the layer depends on: every drive's route contents (a digest of
+    /// each point's time, coordinate and break flag), its consumption, and the
+    /// reference. Correcting one interior coordinate or a break flag rebuilds it.
+    struct LayerKey: Hashable {
+        struct Revision: Hashable { var id: Int; var route: UInt64; var whPerKm: Double? }
         var coloring: Coloring
         var reference: EfficiencyReference
         var drives: [Revision]
+
+        static func make(_ drives: [DriveSummary], coloring: Coloring, reference: EfficiencyReference, digests: RouteDigests) -> LayerKey {
+            LayerKey(coloring: coloring, reference: reference, drives: drives.map {
+                Revision(id: $0.id, route: digests.digest($0), whPerKm: $0.displayEfficiencyWhPerKm)
+            })
+        }
     }
 
     private var reference: EfficiencyReference {
@@ -169,10 +193,7 @@ struct DrivesRouteMap: View {
 
     private var layerKey: LayerKey? {
         guard coloring != .plain else { return nil }
-        return LayerKey(coloring: coloring, reference: reference, drives: drives.map {
-            LayerKey.Revision(id: $0.id, points: $0.drawableRoute.count, last: $0.drawableRoute.last?.t,
-                              whPerKm: $0.displayEfficiencyWhPerKm)
-        })
+        return LayerKey.make(drives, coloring: coloring, reference: reference, digests: digests)
     }
 
     var body: some View {
@@ -182,25 +203,34 @@ struct DrivesRouteMap: View {
                 Text("Routes not recorded for these drives").scaledFont(13, weight: .medium).foregroundStyle(HistoryTheme.secondary)
                     .padding(.top, topInset)
             } else {
-                Map(position: $position, interactionModes: [])
+                MapReader { proxy in
+                    Map(position: $position, interactionModes: [])
                         .voltaBasemap()
-                        .safeAreaPadding(mapSafe)
-                        .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
-                        // Dark: roads read as texture, labels stay dim.
-                        .opacity(fullBleed ? 0.45 : 0.55)
+                        .safeAreaPadding(Self.mapSafe())
+                        .onMapCameraChange(frequency: .continuous) { context in
+                            visible = context.rect
+                            measureArea(proxy, visible: context.rect)
+                        }
+                        // Dark: roads read as texture, labels stay dim; the attribution stays clear.
+                        .voltaMapDim(fullBleed ? 0.55 : 0.45, bottom: Self.fade)
                         .overlay { routes(runs).allowsHitTesting(false) }
-                        .onGeometryChange(for: CGSize.self) { $0.size } action: { frame($0, runs: runs) }
+                        .onGeometryChange(for: CGSize.self) { $0.size } action: { mapSize = $0 }
+                        .onChange(of: FrameKey(size: mapSize, insets: mapInsets), initial: true) { frame(runs: runs) }
+                        // Once the map has settled, measure again: the first
+                        // camera reports can come before MapKit has placed it.
+                        .task(id: mapSize) {
+                            try? await Task.sleep(for: .milliseconds(350))
+                            if let visible { measureArea(proxy, visible: visible) }
+                        }
+                }
+                // Measured in the map's own space, which moves with it (a push
+                // transition doesn't skew the measurement).
+                .coordinateSpace(.named(Self.space))
                         .mask { fadeMask }
             }
         }
         .frame(maxWidth: .infinity)
         .frame(height: height)
-        .overlay(alignment: .bottomLeading) {
-            if let legend, !runs.isEmpty {
-                RouteLegendChip(model: legend)
-                    .padding(.leading, 16).padding(.bottom, Self.fade + 4)
-            }
-        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
         .task(id: layerKey) { await buildLayer() }
@@ -211,19 +241,40 @@ struct DrivesRouteMap: View {
     /// whether it is estimated).
     private var accessibilityText: String {
         let base = "Recorded routes for loaded drives."
-        if let legend { return base + " " + legend.sentence }
         switch coloring {
         case .plain: return base
         case .density: return base + " " + RouteLegendModel.density.sentence
         case .efficiency(let reference):
-            return base + " " + RouteLegendModel.efficiency(reference: reference, units: .default).sentence
+            return base + " " + RouteLegendModel.efficiency(reference: reference, units: units).sentence
         }
     }
 
-    private func frame(_ size: CGSize, runs: [[CLLocationCoordinate2D]]) {
-        guard size.width > 0, size.height > 0, framedSize != size, !runs.isEmpty else { return }
-        framedSize = size
-        position = .rect(TripRoute.fitted(Self.content(runs), size: size, safe: mapSafe, insets: frameInsets))
+    private func frame(runs: [[CLLocationCoordinate2D]]) {
+        let size = mapSize
+        guard size.width > 0, size.height > 0,
+              let rect = Self.camera(runs, size: size, topInset: topInset, fullBleed: fullBleed, safe: safe) else { return }
+        // Re-applied even when equal to the last fit: MapKit refits on resize.
+        position = .fitting(rect, replacing: position)
+    }
+
+    /// Where the camera's visible rect lands on screen is the area MapKit
+    /// fits into. Framing and drawing use it, so both agree with the tiles
+    /// whatever safe area the map inherits.
+    private func measureArea(_ proxy: MapProxy, visible: MKMapRect) {
+        guard mapSize.width > 0, mapSize.height > 0,
+              let a = proxy.convert(MKMapPoint(x: visible.minX, y: visible.minY).coordinate, to: .named(Self.space)),
+              let b = proxy.convert(MKMapPoint(x: visible.maxX, y: visible.maxY).coordinate, to: .named(Self.space)) else { return }
+        func r(_ v: CGFloat) -> CGFloat { (v * 2).rounded() / 2 }
+        let measured = EdgeInsets(top: r(a.y), leading: r(a.x), bottom: r(mapSize.height - b.y), trailing: r(mapSize.width - b.x))
+        // Before MapKit has placed the map the conversion can be far off
+        // (hundreds of points outside the map): only an area inside the map counts.
+        let edges = [measured.top, measured.leading, measured.bottom, measured.trailing]
+        guard edges.allSatisfy({ $0.isFinite && $0 >= -0.5 }),
+              measured.top + measured.bottom < mapSize.height - 1,
+              measured.leading + measured.trailing < mapSize.width - 1 else { return }
+        if let old = mapInsets, abs(old.top - measured.top) < 1, abs(old.leading - measured.leading) < 1,
+           abs(old.bottom - measured.bottom) < 1, abs(old.trailing - measured.trailing) < 1 { return }
+        mapInsets = measured
     }
 
     /// Counts off the main thread; plain maps need no layer. Leaving the
@@ -237,11 +288,20 @@ struct DrivesRouteMap: View {
         if !Task.isCancelled, let built { layer = built }
     }
 
+    /// A stroke's colour: density by count, or efficiency by ratio, where a
+    /// negative ratio (net regeneration) takes the shared regen colour.
+    static func strokeColor(_ stroke: RouteDensity.Stroke, coloring: Coloring) -> RoutePalette.RGB? {
+        switch coloring {
+        case .efficiency: return stroke.ratio.map { RoutePalette.efficiency(ratio: $0) }
+        default: return RoutePalette.density(count: stroke.count)
+        }
+    }
+
     private func routes(_ runs: [[CLLocationCoordinate2D]]) -> some View {
         Canvas { context, size in
             // `visible` changes with the camera and redraws the routes.
             guard let visible else { return }
-            let safe = mapSafe
+            let safe = self.safe
             let transform = { (m: MKMapPoint) in TripRoute.project(m, visible: visible, size: size, safe: safe) ?? .zero }
             let casing = StrokeStyle(lineWidth: casingWidth, lineCap: .round, lineJoin: .round)
             let line = StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
@@ -260,12 +320,7 @@ struct DrivesRouteMap: View {
                 var order: [Int] = []
                 var groups: [Int: (color: RoutePalette.RGB?, path: Path)] = [:]
                 for stroke in layer.strokes {
-                    let color: RoutePalette.RGB?
-                    switch coloring {
-                    // Net regeneration takes the shared regen colour, as on a trip map.
-                    case .efficiency: color = stroke.ratio.map { RoutePalette.efficiency(ratio: $0) }
-                    default: color = RoutePalette.density(count: stroke.count)
-                    }
+                    let color: RoutePalette.RGB? = Self.strokeColor(stroke, coloring: coloring)
                     let key: Int = color?.bucketKey ?? -1
                     if groups[key] == nil { groups[key] = (color, Path()); order.append(key) }
                     groups[key]!.path.addLines(stroke.points.map(transform))
@@ -281,6 +336,40 @@ struct DrivesRouteMap: View {
                 }
             }
         }
+    }
+}
+
+/// Each drive's route digest, kept with the route it was taken from. A hit
+/// costs one array comparison, which Swift answers at once when the route
+/// is the same storage; a corrected route compares unequal and is digested
+/// again. A class, so filling it from a view body changes no state.
+final class RouteDigests {
+    private var cache: [Int: (route: [DriveRoutePoint], digest: UInt64)] = [:]
+
+    func digest(_ drive: DriveSummary) -> UInt64 {
+        let route = drive.route ?? []
+        if let hit = cache[drive.id], hit.route == route { return hit.digest }
+        let digest = Self.digest(route)
+        cache[drive.id] = (route, digest)
+        return digest
+    }
+
+    /// FNV-1a over every point's time, coordinate and break flag: stable
+    /// across launches, and any one changed value changes it.
+    static func digest(_ route: [DriveRoutePoint]) -> UInt64 {
+        var h: UInt64 = 0xcbf29ce484222325
+        func mix(_ v: UInt64) {
+            var v = v
+            for _ in 0..<8 { h ^= v & 0xff; h = h &* 0x100000001b3; v >>= 8 }
+        }
+        mix(UInt64(route.count))
+        for p in route {
+            mix(p.t.timeIntervalSince1970.bitPattern)
+            mix(p.latitude.bitPattern)
+            mix(p.longitude.bitPattern)
+            mix(p.routeBreakBefore.map { $0 ? 2 : 1 } ?? 0)
+        }
+        return h
     }
 }
 
@@ -368,6 +457,8 @@ struct RoadtripsView: View {
                             .buttonStyle(VoltaPressStyle())
                     }
                 }
+                // Cards sit 16 pt from the screen edge, as on Drives; text keeps the page margin.
+                .padding(.horizontal, DrivesLayout.cardInset - VoltaSpacing.screen)
             }
         }
     }
@@ -395,18 +486,17 @@ struct RoadtripsView: View {
 private struct RoadtripCard: View {
     var trip: Roadtrip
     @Environment(\.units) private var units
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var width: CGFloat = 0
 
+    /// Laid out like a Drives card: the same header row and sketch steps
+    /// (`CardHeaderRow`), the same inner padding for the trailing column and
+    /// footer, and the same footer metrics.
     var body: some View {
         let first = trip.drives[0], last = trip.drives[trip.drives.count - 1]
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                itinerary(from: first.startPlace, to: last.endPlace)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !typeSize.isAccessibilitySize {
-                    RouteSketch(points: trip.routePoints, size: RouteSketch.size(forCardWidth: width)).padding(.top, 6)
-                }
+            CardHeaderRow(points: trip.routePoints, cardWidth: width) { oneLine in
+                itinerary(from: first.startPlace, to: last.endPlace, oneLine: oneLine)
+            } trailing: {
                 VStack(alignment: .trailing, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: trip.distanceKm), digits: 0))
@@ -415,14 +505,14 @@ private struct RoadtripCard: View {
                     }
                     .foregroundStyle(.white)
                     Text(first.start.formatted(.dateTime.month(.abbreviated).day().year()))
-                        .font(.system(size: 15)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                        .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                     Text(first.start.historyTime)
                         .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
                 }
-                .fixedSize()
             }
-            .padding(.bottom, 18)
-            Rectangle().fill(HistoryTheme.hairline).frame(height: 1)
+            .padding(.leading, 18).padding(.trailing, 16)
+            .padding(.bottom, 16)
+            Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.horizontal, 13)
             HStack(spacing: 8) {
                 metric("clock", VoltaFormat.duration(trip.durationMin))
                 dot
@@ -431,30 +521,30 @@ private struct RoadtripCard: View {
                 metric("leaf.fill", trip.efficiencyWhPerKm.map { units.formatEfficiency($0) } ?? "—")
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 12)
+            .padding(.leading, 18).padding(.trailing, 16)
+            .padding(.top, 14)
         }
-        .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 6)
-        .driveSurface()
+        .padding(.top, 14).padding(.bottom, 13)
+        .driveSurface(radius: 18)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .combine)
     }
 
-    private func itinerary(from start: String, to end: String) -> some View {
-        HStack(alignment: .top, spacing: 16) {
+    private func itinerary(from start: String, to end: String, oneLine: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
             VStack(spacing: 0) {
-                RouteEndpointMarker(kind: .start, size: 9).padding(.top, 8)
+                RouteEndpointMarker(kind: .start, size: 9).padding(.top, 7)
                 Rectangle().fill(HistoryTheme.tertiary.opacity(0.6))
                     .frame(width: 1).frame(maxHeight: .infinity).padding(.vertical, 6)
-                RouteEndpointMarker(kind: .end, size: 9).padding(.bottom, 8)
+                RouteEndpointMarker(kind: .end, size: 9).padding(.bottom, 7)
             }
             // Both names at one size; a long name wraps, never shrinks or truncates.
             VStack(alignment: .leading, spacing: 6) {
-                Text(start).scaledFont(17, weight: .semibold, relativeTo: .body)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                CardPlaceName(name: start, oneLine: oneLine)
                 Text(trip.stops == 0 ? "NONSTOP" : trip.stops == 1 ? "1 STOP" : "\(trip.stops) STOPS")
                     .scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.tertiary)
-                Text(end).scaledFont(17, weight: .semibold, relativeTo: .body)
-                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .fixedSize()
+                CardPlaceName(name: end, oneLine: oneLine)
             }
             .foregroundStyle(.white)
         }
@@ -465,8 +555,8 @@ private struct RoadtripCard: View {
 
     private func metric(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 13, weight: .medium))
-            Text(text).font(.system(size: 16)).monospacedDigit()
+            Image(systemName: icon).font(.system(size: 11, weight: .medium))
+            Text(text).font(.system(size: 13)).monospacedDigit()
         }
         .foregroundStyle(HistoryTheme.secondary)
         .lineLimit(1).fixedSize()
@@ -691,12 +781,15 @@ struct DrivesHeatmapView: View {
                 .padding(.top, 18)
                 .accessibilityIdentifier("heatmap.mode")
                 let reference = EfficiencyReference(drives: drives)
+                // The same legend strip as the trip map, on the page, between
+                // the switch and the map; its labels line up with the switch.
+                RouteLegendStrip(model: mode == .density ? .density : .efficiency(reference: reference, units: units))
+                    .padding(.horizontal, -16)
+                    .padding(.top, 6)
                 DrivesRouteMap(drives: drives, height: wide ? 380 : 320,
                                coloring: mode == .density ? .density : .efficiency(reference),
-                               legend: mode == .density ? .density : .efficiency(reference: reference, units: units),
                                lineWidth: 4, casingWidth: 7)
                     .overviewBleed()
-                    .padding(.top, 4)
             }
             OverviewSectionHeader(title: "Calendar", trailing: "Distance per day")
                 .padding(.top, 30)

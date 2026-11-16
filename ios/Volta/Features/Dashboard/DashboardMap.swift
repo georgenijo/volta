@@ -119,8 +119,12 @@ struct CarMarker: View {
 
 /// Charging pin: a green disc with a dark ring and bolt, and one ring
 /// expanding from it every 2.4 s while charging (static under Reduce Motion).
+/// The ring only runs while it can be seen: the scene is active and the
+/// marker is on screen.
 struct ChargingMarker: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var onScreen = false
     private static let green = Color(hex: 0x5ECB93)
 
     var body: some View {
@@ -128,7 +132,7 @@ struct ChargingMarker: View {
             // One ring expanding from the disc while power flows (this marker
             // is shown only then); none of it under Reduce Motion.
             if !reduceMotion {
-                TimelineView(.animation) { context in
+                TimelineView(.animation(minimumInterval: nil, paused: scenePhase != .active || !onScreen)) { context in
                     let phase: Double = (context.date.timeIntervalSinceReferenceDate / 2.4).truncatingRemainder(dividingBy: 1)
                     let side: CGFloat = 30 * (1 + 0.9 * phase)
                     Circle()
@@ -147,6 +151,10 @@ struct ChargingMarker: View {
                 .foregroundStyle(Color(hex: 0x06140D))
         }
         .frame(width: 92, height: 92)
+        .onAppear { onScreen = true }
+        .onDisappear { onScreen = false }
+        // Inside a scroll view: scrolled out of sight counts as off screen.
+        .onScrollVisibilityChange(threshold: 0.01) { onScreen = $0 }
     }
 }
 
