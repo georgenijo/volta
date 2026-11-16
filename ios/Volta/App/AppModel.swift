@@ -231,11 +231,12 @@ final class AppModel {
             pairingState = .paired; dataSource = makeAPI(url: url, token: token)
             needsCredentialRetry = false; errorMessage = nil
             isLocked = settings.appLockEnabled
+            // Status first: a saved list already stands in for the vehicles.
+            restoreSavedDashboard()
             if !isLocked {
                 // Detached: a main-actor task would not start until the first frame is built.
                 launchVehicles = Task.detached(priority: .userInitiated) { [dataSource] in try await dataSource.vehicles() }
             }
-            restoreSavedDashboard()
         } catch let error as KeychainTokenStore.StoreError where error.status == -25308 {
             needsCredentialRetry = true
             errorMessage = "Unlock your iPhone, then retry access to the stored device token."
