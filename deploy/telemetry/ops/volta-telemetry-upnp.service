@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Discovery and four SOAP calls each time out in 5 s; never let a hung router stall the timer.
+# Each network step times out in 5 s; cap the whole run so a slow router cannot stall
+# the timer. Hitting the cap ends as Result=timeout, which ops/check.sh reports.
 TimeoutStartSec=60
 DynamicUser=yes
 # systemd reads this root-only file before dropping privileges.

@@ -241,10 +241,11 @@ fleet exec --timeout 30 ubuntu -- 'sudo curl --fail --silent --config /etc/volta
 fleet exec --timeout 60 ubuntu -- 'sudo docker compose --env-file /opt/volta-telemetry/telemetry.env -f /opt/volta/deploy/telemetry/compose.yaml stop receiver consumer redpanda; sudo systemctl disable --now volta-telemetry-cert.timer'
 ```
 
-Stop the forward keeper first, or it re-adds the forward within five minutes:
+Stop and remove the forward keeper first, or it re-adds the forward within five
+minutes (removing the units also keeps `ops/check.sh` from reporting it):
 
 ```sh
-fleet exec --timeout 30 ubuntu -- 'sudo systemctl disable --now volta-telemetry-upnp.timer volta-telemetry-upnp.service'
+fleet exec --timeout 30 ubuntu -- 'sudo systemctl disable --now volta-telemetry-upnp.timer volta-telemetry-upnp.service && sudo rm -f /etc/systemd/system/volta-telemetry-upnp.service /etc/systemd/system/volta-telemetry-upnp.timer && sudo systemctl daemon-reload'
 ```
 
 Then remove the router port-forward and DNS record. A node still carrying the

@@ -145,6 +145,12 @@ class PortKeeperTest(unittest.TestCase):
                 keeper.keep(self.service(), BIND)
         self.assertEqual(self.adds(), [])
 
+    def test_accepts_every_upnp_spelling_of_enabled(self):
+        for enabled in ("1", "true", "Yes"):
+            self.state["mappings"][("443", "TCP")] = {"client": BIND, "port": "8448", "enabled": enabled, "lease": "0"}
+            self.assertEqual(keeper.keep(self.service(), BIND), 0)
+        self.assertEqual(self.adds(), [])
+
     def test_enables_a_disabled_mapping(self):
         self.state["mappings"][("443", "TCP")] = {"client": BIND, "port": "8448", "enabled": "0", "lease": "0"}
         self.assertEqual(keeper.keep(self.service(), BIND), 0)

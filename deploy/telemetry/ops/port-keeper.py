@@ -18,6 +18,7 @@ Settings come from the environment (the telemetry env file in production):
 Exit status: 0 mapping in place, 1 conflict, router refusal or no router, 2 setup.
 Uses only the standard library.
 """
+import http.client
 import ipaddress
 import os
 import re
@@ -92,7 +93,7 @@ def discover(bind, ssdp=("239.255.255.250", 1900)):
             if location:
                 url = location.group(1).decode("ascii", "replace")
                 parts = urllib.parse.urlsplit(url)
-                # A device may only point at itself, so no LAN host can steer the keeper elsewhere.
+                # A device may only describe itself, so no third party can redirect discovery.
                 if parts.scheme == "http" and parts.hostname == sender and url not in found:
                     found.append(url)
     return found
@@ -175,7 +176,7 @@ def keep(service, bind):
             return 1
         lease = found.get("NewLeaseDuration", "0")
         lease = int(lease) if lease.isdigit() else 0
-        if found.get("NewEnabled", "1") == "1" and (lease == 0 or lease > RENEW_BELOW):
+        if found.get("NewEnabled", "1").lower() in ("1", "true", "yes") and (lease == 0 or lease > RENEW_BELOW):
             log(f"ok: TCP {PUBLIC_PORT} -> receiver port {RECEIVER_PORT}" + (f" ({lease}s left)" if lease else ""))
             return 0
         # Same host and port: re-adding updates this mapping in place (enable or renew).
@@ -212,7 +213,7 @@ def main(env=os.environ):
                 return keep(service, bind)
         except Refused as error:
             log(f"{error} at one responder; trying the next")
-        except (OSError, ValueError, ElementTree.ParseError) as error:
+        except (OSError, ValueError, ElementTree.ParseError, http.client.HTTPException) as error:
             log(f"skipping a responder: {type(error).__name__}")
     log("no responder offered a usable WAN connection service")
     return 1
