@@ -82,7 +82,8 @@ enum DriveRouteSegments {
 /// ramps (every all-drives map). No glow.
 /// Single positions (sparse polling) are not drawn: a lone dot reads as a
 /// place, not a route. The bottom edge fades into the page over at most 64 pt,
-/// and MapKit's logo and Legal link sit just above that fade.
+/// and MapKit's logo and Legal link sit just above that fade, except on a
+/// backdrop (`attribution: false`, the Drives hero).
 struct DrivesRouteMap: View {
     enum Coloring: Hashable {
         /// One plain colour.
@@ -100,6 +101,10 @@ struct DrivesRouteMap: View {
     /// keeps routes clear of the status bar) and fades out only at the bottom.
     var fullBleed = false
     var topInset: CGFloat = 0
+    /// False for a backdrop (the Drives hero): MapKit's logo and Legal link
+    /// stay at the map's real bottom edge, under the fade and the page, as
+    /// they always have there, and the dim is even. Framing is the same.
+    var attribution = true
     /// Route width; maps of many drives at region scale draw thinner than a trip.
     var lineWidth: CGFloat = 3
     /// The dark casing under the routes.
@@ -124,7 +129,7 @@ struct DrivesRouteMap: View {
     private struct FrameKey: Equatable { var size: CGSize; var insets: EdgeInsets?; var bars: EdgeInsets }
 
     /// The map's real safe area, once measured.
-    private var safe: EdgeInsets { mapInsets ?? Self.mapSafe() }
+    private var safe: EdgeInsets { mapInsets ?? Self.mapSafe(attribution: attribution) }
 
     private var runs: [[CLLocationCoordinate2D]] {
         drives.flatMap { drive in
@@ -137,8 +142,11 @@ struct DrivesRouteMap: View {
     /// MapKit's padding: only the fade, so the logo and Legal link sit just
     /// above it in the bottom leading corner. No top padding: MapKit hides its
     /// logo on a short padded area, and the routes' clearance below the bars
-    /// is kept by `camera` instead.
-    static func mapSafe() -> EdgeInsets { EdgeInsets(top: 0, leading: 0, bottom: fade, trailing: 0) }
+    /// is kept by `camera` instead. Without `attribution`, no padding: the
+    /// logo and link stay at the bottom edge, under the fade.
+    static func mapSafe(attribution: Bool = true) -> EdgeInsets {
+        EdgeInsets(top: 0, leading: 0, bottom: attribution ? fade : 0, trailing: 0)
+    }
 
     /// Where routes are kept in a map: at least 24 pt below the bars
     /// (`topInset` is the page's safe area, which ends about 9 pt under the
@@ -213,13 +221,13 @@ struct DrivesRouteMap: View {
                 MapReader { proxy in
                     Map(position: $position, interactionModes: [])
                         .voltaBasemap()
-                        .safeAreaPadding(Self.mapSafe())
+                        .safeAreaPadding(Self.mapSafe(attribution: attribution))
                         .onMapCameraChange(frequency: .continuous) { context in
                             visible = context.rect
                             measureArea(proxy, visible: context.rect)
                         }
                         // Dark: roads read as texture, labels stay dim; the attribution stays clear.
-                        .voltaMapDim(fullBleed ? 0.55 : 0.45, bottom: Self.fade)
+                        .voltaMapDim(fullBleed ? 0.55 : 0.45, bottom: Self.fade, attribution: attribution)
                         .overlay { routes(runs).allowsHitTesting(false) }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { mapSize = $0 }
                         .onChange(of: FrameKey(size: mapSize, insets: mapInsets, bars: sideBars), initial: true) { frame(runs: runs) }

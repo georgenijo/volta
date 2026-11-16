@@ -317,6 +317,13 @@ struct DriveDetailView: View {
         return EdgeInsets(top: top, leading: 24, bottom: Self.mapFade + Self.attribution + 24, trailing: 24).clearing(bars: sideBars)
     }
 
+    /// The part of `routeClearance` that clears what covers the map (the
+    /// floating toolbar, or the side bars): it holds on a small map.
+    private var routeObstructions: EdgeInsets {
+        EdgeInsets(top: sideBars.barEdges.isEmpty ? page.safeArea.top + 24 : 0, leading: 0, bottom: 0, trailing: 0)
+            .clearing(bars: sideBars)
+    }
+
     /// MapKit's logo and Legal link above the fade.
     static let attribution: CGFloat = VoltaMapChrome.attribution
 
@@ -339,7 +346,7 @@ struct DriveDetailView: View {
                 case .route, .single:
                     if let snapshot, let route = snapshot.routes[mode] {
                         TripMapView(timeline: snapshot.timeline, route: route, style: routeStyle(route), highlight: highlight,
-                                    bottomInset: Self.mapFade, frameInsets: routeClearance,
+                                    bottomInset: Self.mapFade, frameInsets: routeClearance, hardInsets: routeObstructions,
                                     underEdges: sideBars.barEdges.union(.vertical))
                     } else {
                         mapPlaceholder(nil)

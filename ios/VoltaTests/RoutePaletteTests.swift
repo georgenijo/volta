@@ -238,6 +238,33 @@ final class RoutePaletteTests: XCTestCase {
         XCTAssertEqual(EdgeInsets(top: 0, leading: 24, bottom: 0, trailing: 24).clearing(bars: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8)).trailing, 40)
     }
 
+    func testAnObstructionMarginNeverGivesWay() {
+        // Sol's case: a 320 pt map, a 160 pt strip over its trailing edge. The
+        // trailing inset asked for is the strip plus 32 pt plus the markers'
+        // 8 pt reach; the side margins together pass 60% of the width, and
+        // only their decorative part may shrink.
+        let content = MKMapRect(x: 1_000_000, y: 1_000_000, width: 40_000, height: 30_000)
+        let size = CGSize(width: 320, height: 300)
+        let safe = EdgeInsets(top: 0, leading: 0, bottom: 40, trailing: 0)
+        let insets = EdgeInsets(top: 32, leading: 32, bottom: 100, trailing: 200)
+        let hard = EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 200)
+        func right(_ rect: MKMapRect) -> CGFloat {
+            TripRoute.project(MKMapPoint(x: content.maxX, y: content.midY), visible: rect, size: size, safe: safe)!.x
+        }
+        let loose = TripRoute.fitted(content, size: size, safe: safe, insets: insets)
+        XCTAssertGreaterThan(right(loose), 320 - 200 + 1, "without hard minima the clearance shrinks")
+        let held = TripRoute.fitted(content, size: size, safe: safe, insets: insets, hard: hard)
+        XCTAssertLessThanOrEqual(right(held), 320 - 200 + 0.01, "the stroke keeps its clearance from the strip")
+        let left = TripRoute.project(MKMapPoint(x: content.minX, y: content.midY), visible: held, size: size, safe: safe)!.x
+        XCTAssertGreaterThanOrEqual(left, -0.01)
+        // Side margins that leave no width fall back, as for a tiny frame, to
+        // MapKit's own area across.
+        let none = TripRoute.fitted(content, size: size, safe: safe, insets: insets,
+                                    hard: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 330))
+        let plain = TripRoute.fitted(content, size: size, safe: safe, insets: EdgeInsets(top: 32, leading: 0, bottom: 100, trailing: 0))
+        XCTAssertTrue(MKMapRectEqualToRect(none, plain))
+    }
+
     func testAPinMapRefitsWhenAPlaceMovesUnderTheSameID() {
         // A search swaps one AC place for another; both are pin 0.
         let size = CGSize(width: 375, height: 280), reach = EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14)
@@ -663,20 +690,64 @@ final class EfficiencyWindowTests: XCTestCase {
         // Pieces still cover the run without a gap.
         for (a, b) in zip(route.pieces, route.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
         XCTAssertLessThanOrEqual(route.pieces.count, 8)
-        // The split rule on its own: a side changes only where the other side
-        // reaches the dead band and lasts half a window.
-        func sides(_ w: [Double?], band: Double = 8, minRunKm: Double = 1) -> [String] {
-            TripRoute.sides(w, distances: Array(repeating: 0.2, count: w.count), band: band, minRunKm: minRunKm)
+        // The split rule on its own, 200 m intervals and a 0.8 km window: a
+        // sign counts once it holds for 0.4 km where the window is whole
+        // (every interval but the first two and last two).
+        func sides(_ w: [Double?]) -> [String] {
+            TripRoute.sides(w, distances: Array(repeating: 0.2, count: w.count), windowKm: 0.8)
                 .map { "\($0.range.lowerBound)..<\($0.range.upperBound) \($0.regen ? "regen" : "use")" }
         }
-        XCTAssertEqual(sides([50, 40, -1, -2, 30]), ["0..<5 use"], "a small dip below zero is noise")
-        XCTAssertEqual(sides([50, 40, -20, -20, -20, -20, -20, 30]), ["0..<2 use", "2..<8 regen"],
-                       "a consumption tail shorter than half a window stays in the descent")
-        XCTAssertEqual(sides([50, 40, -20, -20, -20, -20, -20, 30, 30, 30, 30, 30]), ["0..<2 use", "2..<7 regen", "7..<12 use"])
-        XCTAssertEqual(sides([50, -5, -5, -5, -5, -5, -5, -20]), ["0..<8 use"], "regen inside the dead band doesn't hold")
-        XCTAssertEqual(sides([50, -20, -20, -20, 30]), ["0..<5 use"], "regen shorter than half a window is absorbed")
-        XCTAssertEqual(sides([nil, -20, -20, -20, -20, -20]), ["0..<6 regen"], "unknown values join their stretch")
-        XCTAssertEqual(TripRoute.deadBand(referenceWhPerKm: 160), 8, accuracy: 1e-9)
+        XCTAssertEqual(sides([50, 50, 50, 50, -90, 50, 50, 50, 50, 50]), ["0..<10 use"],
+                       "a flip that doesn't persist never splits, however large")
+        XCTAssertEqual(sides([50, 50, 50, 50, -3, -3, -3, -3, 50, 50, 50, 50]), ["0..<4 use", "4..<8 regen", "8..<12 use"],
+                       "small but lasting regen changes the side")
+        XCTAssertEqual(sides([50, 50, 50, -3, -3, -3, -3, 50, 50, 50]), ["0..<10 regen"],
+                       "a sign lasts only where its window is whole: the ends' 0.2 km don't")
+        XCTAssertEqual(sides([-90, -90, 50, 50, 50, 50, 50, 50, 50, 50]), ["0..<10 use"],
+                       "the shrunken window at a run's end decides nothing")
+        XCTAssertEqual(sides([50, 50, 50, 50, -20, 50, -20, -20, -20, -20, -20, -20]), ["0..<6 use", "6..<12 regen"],
+                       "a flip inside a stretch joins its neighbours")
+        XCTAssertEqual(sides([nil, nil, -20, -20, -20, -20, -20, -20, -20, -20]), ["0..<10 regen"], "unknown values join their stretch")
+        // No sign lasts: the run's net mean decides, consumption at zero.
+        XCTAssertEqual(sides([-20, -20, 30, -20, -20]), ["0..<5 regen"])
+        XCTAssertEqual(sides([-5, -5, 30, -5, -5]), ["0..<5 use"])
+        XCTAssertEqual(sides([-1, -1, -1, -1, -1]), ["0..<5 regen"], "however small")
+        XCTAssertEqual(sides([1, -1, 1, -1]), ["0..<4 use"])
+    }
+
+    @MainActor
+    func testAPieceIsColouredByItsOwnMean() {
+        // Sol's cases: 301 samples 10 s apart at 72 km/h (200 m intervals), 60 km.
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        func route(_ power: (Int) -> Double) -> TripRoute {
+            let rows = (0...300).map { n in
+                DrivePoint(t: t0.addingTimeInterval(Double(n) * 10), latitude: 37.0 + Double(n) * 0.0018, longitude: -122.1,
+                           speedKph: 72, powerKw: power(n), elevationM: nil, batteryLevel: 60)
+            }
+            return TripRoute(TripTimeline(path: rows), mode: .efficiency, tripKm: 60)
+        }
+        // One -10 kW sample at the start, then a steady +0.36 kW (5 Wh/km):
+        // the start's shrunken window reads regen, but no regen lasts.
+        let start = route { $0 == 0 ? -10 : 0.36 }
+        XCTAssertFalse(start.pieces.isEmpty)
+        XCTAssertTrue(start.pieces.allSatisfy { ($0.value ?? -1) >= 0 }, "no regen piece")
+        let style = TripRouteStyle(mode: .efficiency, valueRange: start.valueRange, reference: reference, windowKm: start.windowKm)
+        XCTAssertFalse(start.pieces.contains { style.rgb($0.value!) == RoutePalette.regen }, "the route is in the ramp colour")
+
+        // 10 km at 21.6 kW, then 50 km of -0.36 kW (-5 Wh/km, a gentle descent):
+        // a long, small, real net regen is drawn as regen, not clamped to zero.
+        let descent = route { $0 < 50 ? 21.6 : -0.36 }
+        let regen = descent.pieces.filter { ($0.value ?? 0) < 0 }
+        XCTAssertFalse(regen.isEmpty, "a regen piece")
+        for piece in descent.pieces {
+            if piece.indices.lowerBound >= 60 { XCTAssertLessThan(piece.value!, 0, "the negative stretch is regen") }
+            if piece.indices.upperBound <= 45 { XCTAssertGreaterThan(piece.value!, 0) }
+        }
+        XCTAssertEqual(regen.last?.indices.upperBound, 300, "regen runs to the end")
+        XCTAssertLessThanOrEqual(regen.first!.indices.lowerBound, 60)
+        let descentStyle = TripRouteStyle(mode: .efficiency, valueRange: descent.valueRange, reference: reference, windowKm: descent.windowKm)
+        XCTAssertEqual(descentStyle.rgb(regen[0].value!), RoutePalette.regen)
+        XCTAssertLessThanOrEqual(descent.pieces.count, 160)
     }
 
     @MainActor

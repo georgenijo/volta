@@ -133,15 +133,12 @@ struct TripRoute: Equatable {
     /// never merge (colour covers exactly the recorded time), so a route
     /// fragmented past the budget draws one piece per run.
     /// `tripKm` is the drive's own distance; without one the window uses the
-    /// recorded positions' length. `referenceWhPerKm` (the car's rating, or the
-    /// fallback) sets the efficiency dead band.
+    /// recorded positions' length.
     init(_ timeline: TripTimeline, mode: TripMapMode, tripKm: Double? = nil,
-         referenceWhPerKm: Double = RoutePalette.fallbackReferenceWhPerKm,
          maxPieces: Int = 160, maxCoordinatesPerPiece: Int = 16) {
         let points = timeline.points
         let km: Double = tripKm.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? Self.recordedKm(timeline)
         let window: Double = EfficiencyWindow.windowKm(forTripKm: km)
-        let band = Self.deadBand(referenceWhPerKm: referenceWhPerKm)
 
         func value(_ chunk: ArraySlice<DrivePoint>) -> Double? {
             switch mode {
@@ -182,9 +179,9 @@ struct TripRoute: Equatable {
                         windowedAt[runStart + k] = v
                         distanceAt[runStart + k] = intervals[k].distanceKm
                     }
-                    // A piece never mixes regen with consumption: averaging a
-                    // descent into a long piece would hide it.
-                    for side in Self.sides(windowed, distances: intervals.map(\.distanceKm), band: band, minRunKm: window / 2) {
+                    // A piece never spans a lasting change between regen and
+                    // consumption: averaging a descent into a long piece would hide it.
+                    for side in Self.sides(windowed, distances: intervals.map(\.distanceKm), windowKm: window) {
                         units.append(Unit(segment: n, intervals: (runStart + side.range.lowerBound)..<(runStart + side.range.upperBound),
                                           supported: true, regen: side.regen))
                     }
@@ -199,21 +196,18 @@ struct TripRoute: Equatable {
         var raw: [(indices: ClosedRange<Int>, value: Double?)] = []
         for (unit, count) in zip(units, Self.pieceCounts(units.map(\.intervals.count), budget: maxPieces)) {
             let length = Int((Double(unit.intervals.count) / Double(count)).rounded(.up))
+            if let regen = unit.regen {
+                // Each piece's colour is its own true mean, never forced: the
+                // stretch only decides where pieces end (see `agreeingPieces`).
+                for r in Self.agreeingPieces(unit.intervals, regen: regen, length: length, windowed: windowedAt, distances: distanceAt) {
+                    raw.append((r.lowerBound...r.upperBound, Self.net(Self.distanceWeighted(windowedAt, distanceAt, range: r))))
+                }
+                continue
+            }
             var i = unit.intervals.lowerBound
             while i < unit.intervals.upperBound {
                 let end = min(i + length, unit.intervals.upperBound)
-                let pieceValue: Double?
-                if !unit.supported {
-                    pieceValue = nil
-                } else if mode == .efficiency {
-                    // Inside the dead band a value keeps its stretch's side.
-                    pieceValue = Self.distanceWeighted(windowedAt, distanceAt, range: i..<end).map { v in
-                        unit.regen == true ? (v < 0 ? v : -Double.leastNormalMagnitude) : max(v, 0)
-                    }
-                } else {
-                    pieceValue = value(points[i...end])
-                }
-                raw.append((i...end, pieceValue))
+                raw.append((i...end, unit.supported ? value(points[i...end]) : nil))
                 i = end
             }
         }
@@ -248,44 +242,105 @@ struct TripRoute: Equatable {
         var regen: Bool?
     }
 
-    /// Windowed consumption this close to zero is noise, not a change between
-    /// regen and consumption: 5% of the reference (about 8 Wh/km at 160).
-    static func deadBand(referenceWhPerKm: Double) -> Double {
-        0.05 * (referenceWhPerKm.isFinite && referenceWhPerKm > 0 ? referenceWhPerKm : RoutePalette.fallbackReferenceWhPerKm)
-    }
+    /// Means this close to zero (Wh/km) are rounding, not regen: a run that
+    /// nets exactly zero sums to a few 1e-14 either side.
+    static let rounding: Double = 1e-9
 
-    /// A run's regen and consumption stretches. The windowed value changes
-    /// side only where, on the other side of zero, it stays beyond `band` for
-    /// at least `minRunKm`; anything smaller or shorter (noise around zero, a
-    /// run's shrinking end window) keeps the side of the stretch it is in. The
-    /// run starts on the side of its first value beyond the band. Unknown
-    /// values continue the stretch they are in. The ranges cover the run in order.
-    static func sides(_ windowed: [Double?], distances: [Double], band: Double, minRunKm: Double) -> [(range: Range<Int>, regen: Bool)] {
-        guard !windowed.isEmpty else { return [] }
-        // Maximal stretches of one strict sign; `held` is the distance spent
-        // beyond the band.
-        var stretches: [(start: Int, regen: Bool, peak: Double, held: Double)] = []
-        for (k, v) in windowed.enumerated() {
-            let d = k < distances.count ? distances[k] : 0
-            let regen = v.map { $0 < 0 } ?? stretches.last?.regen ?? false
-            let beyond = abs(v ?? 0) >= band
+    /// A mean with rounding taken off: zero within `rounding`, else itself.
+    static func net(_ v: Double?) -> Double? { v.map { abs($0) < rounding ? 0 : $0 } }
+
+    /// A run's lasting regen and consumption stretches. A sign belongs to a
+    /// stretch only when it persists for half the window (by distance); a flip
+    /// that doesn't persist never splits, whatever its size, and is absorbed
+    /// into its neighbours, shortest first. Persistence counts only intervals
+    /// whose window is whole: near a run's ends the window shrinks, so one
+    /// sample there can swing the windowed value without being evidence of
+    /// anything. When no sign persists, the run is one stretch on the side of
+    /// its net mean (consumption at zero). Unknown values
+    /// continue the stretch they are in. The ranges cover the run in order.
+    static func sides(_ windowed: [Double?], distances: [Double], windowKm: Double) -> [(range: Range<Int>, regen: Bool)] {
+        let n = windowed.count
+        guard n > 0 else { return [] }
+        let half = windowKm / 2
+        func d(_ k: Int) -> Double { k < distances.count ? distances[k] : 0 }
+        let length = (0..<n).reduce(0.0) { $0 + d($1) }
+        var stretches: [(start: Int, regen: Bool, held: Double)] = []
+        var travelled = 0.0
+        for k in 0..<n {
+            let centre = travelled + d(k) / 2
+            travelled += d(k)
+            let whole = centre >= half - 1e-9 && length - centre >= half - 1e-9
+            let regen = windowed[k].map { $0 < 0 } ?? stretches.last?.regen ?? false
             if let last = stretches.last, last.regen == regen {
-                stretches[stretches.count - 1].peak = max(last.peak, abs(v ?? 0))
-                if beyond { stretches[stretches.count - 1].held += d }
+                if whole { stretches[stretches.count - 1].held += d(k) }
             } else {
-                stretches.append((k, regen, abs(v ?? 0), beyond ? d : 0))
+                stretches.append((k, regen, whole ? d(k) : 0))
             }
         }
-        var side = stretches.first { $0.peak >= band }?.regen ?? false
-        var result: [(range: Range<Int>, regen: Bool)] = []
-        var start = 0
-        for s in stretches where s.regen != side && s.peak >= band && s.held >= minRunKm {
-            if s.start > start { result.append((start..<s.start, side)) }
-            start = s.start
-            side = s.regen
+        // Absorb flips that don't persist, shortest first; a stretch between
+        // two others joins them into one.
+        while stretches.count > 1 {
+            var shortest: Int?
+            for (i, s) in stretches.enumerated() where s.held < half - 1e-9 {
+                if let j = shortest, stretches[j].held <= s.held { continue }
+                shortest = i
+            }
+            guard let i = shortest else { break }
+            if i == 0 {
+                stretches[1].start = stretches[0].start
+                stretches.remove(at: 0)
+            } else if i == stretches.count - 1 {
+                stretches.remove(at: i)
+            } else {
+                stretches[i - 1].held += stretches[i + 1].held
+                stretches.removeSubrange(i...(i + 1))
+            }
         }
-        result.append((start..<windowed.count, side))
-        return result
+        if stretches.count == 1, stretches[0].held < half - 1e-9 {
+            stretches[0].regen = (net(distanceWeighted(windowed, (0..<n).map(d), range: 0..<n)) ?? 0) < 0
+        }
+        return stretches.enumerated().map { i, s in
+            (s.start..<(i + 1 < stretches.count ? stretches[i + 1].start : n), s.regen)
+        }
+    }
+
+    /// Cuts a stretch into pieces of at least `length` intervals, each
+    /// extended until its own distance-weighted mean is on the stretch's side
+    /// (negative for regen, otherwise not negative); a last piece that never
+    /// gets there joins the one before it. The pieces' values are their true
+    /// means: a flip that didn't persist widens a piece instead of being
+    /// clamped, so a positive mean is never drawn as regen and a lasting
+    /// negative one always is.
+    static func agreeingPieces(_ range: Range<Int>, regen: Bool, length: Int, windowed: [Double?], distances: [Double]) -> [Range<Int>] {
+        func agrees(_ r: Range<Int>) -> Bool {
+            guard let v = net(distanceWeighted(windowed, distances, range: r)) else { return true }
+            return regen ? v < 0 : v >= 0
+        }
+        var pieces: [Range<Int>] = []
+        var start = range.lowerBound
+        while start < range.upperBound {
+            var sum = 0.0, weight = 0.0, plain = 0.0, count = 0.0
+            func meanAgrees() -> Bool {
+                let v: Double? = net(weight > 0 ? sum / weight : count > 0 ? plain / count : nil)
+                guard let v else { return true }
+                return regen ? v < 0 : v >= 0
+            }
+            var end = start
+            while end < range.upperBound, end - start < max(1, length) || !meanAgrees() {
+                if end < windowed.count, let v = windowed[end] {
+                    let dist = end < distances.count ? distances[end] : 0
+                    sum += v * dist; weight += dist; plain += v; count += 1
+                }
+                end += 1
+            }
+            pieces.append(start..<end)
+            start = end
+        }
+        while pieces.count > 1, let last = pieces.last, !agrees(last) {
+            pieces.removeLast()
+            pieces[pieces.count - 1] = pieces[pieces.count - 1].lowerBound..<last.upperBound
+        }
+        return pieces
     }
 
     /// Merges units until there are at most `limit`. Only a run's regen and
@@ -397,10 +452,15 @@ struct TripRoute: Equatable {
     /// below 32 pt of route.
     /// `strict` keeps every margin as given (pins and the Drives hero): no
     /// margin gives way for size, only the tiny-frame guards below apply.
+    /// `hard` is the part of each margin that clears something covering the
+    /// map (the toolbar, iPhone Duo's tab strip): it never gives way; only
+    /// the decorative rest does. When the hard margins alone leave no area,
+    /// the tiny-frame guards apply.
     static func fitted(_ content: MKMapRect, size: CGSize, safe: EdgeInsets, insets: EdgeInsets,
-                       minContentHeight: CGFloat? = nil, strict: Bool = false) -> MKMapRect {
+                       hard: EdgeInsets = EdgeInsets(), minContentHeight: CGFloat? = nil, strict: Bool = false) -> MKMapRect {
         guard size.width > 0, size.height > 0, content.width > 0, content.height > 0 else { return content }
-        var insets = insets
+        var insets = EdgeInsets(top: max(insets.top, hard.top), leading: max(insets.leading, hard.leading),
+                                bottom: max(insets.bottom, hard.bottom), trailing: max(insets.trailing, hard.trailing))
         if !strict {
             // A short map keeps its bottom margin (it clears the attribution, logo and
             // Legal link) and gives up its top margin first, down to 24 pt, to give
@@ -409,15 +469,18 @@ struct TripRoute: Equatable {
             let preferred: CGFloat = minContentHeight ?? max(48, size.height * 0.2)
             let least: CGFloat = 32
             if size.height - insets.top - insets.bottom < preferred {
-                insets.top = max(min(insets.top, 24), size.height - insets.bottom - preferred)
+                insets.top = max(hard.top, min(insets.top, 24), size.height - insets.bottom - preferred)
             }
             if size.height - insets.top - insets.bottom < least {
-                insets.bottom = max(min(insets.bottom, safe.bottom), size.height - insets.top - least)
+                insets.bottom = max(hard.bottom, min(insets.bottom, safe.bottom), size.height - insets.top - least)
             }
-            let horizontal: CGFloat = insets.leading + insets.trailing
-            if horizontal > size.width * 0.6 {
-                let k: CGFloat = size.width * 0.6 / horizontal
-                insets.leading *= k; insets.trailing *= k
+            // Side margins over 60% of the width shrink, decorative part only.
+            if insets.leading + insets.trailing > size.width * 0.6 {
+                let loose: CGFloat = insets.leading - hard.leading + insets.trailing - hard.trailing
+                let room: CGFloat = max(0, size.width * 0.6 - hard.leading - hard.trailing)
+                let k: CGFloat = loose > 0 ? min(1, room / loose) : 1
+                insets.leading = hard.leading + (insets.leading - hard.leading) * k
+                insets.trailing = hard.trailing + (insets.trailing - hard.trailing) * k
             }
         }
         // Too small a frame for the margins: frame the route in MapKit's own
@@ -476,6 +539,9 @@ struct TripMapView: View {
     /// Where the route is framed, in points from each edge: clear of the top
     /// controls, the attribution and the fade (marker reach is added here).
     var frameInsets = EdgeInsets(top: 140, leading: 48, bottom: 96, trailing: 48)
+    /// The part of `frameInsets` that clears something covering the map
+    /// (toolbar, side strip): it never gives way on a small map.
+    var hardInsets = EdgeInsets()
     /// Safe-area edges the map runs under. In a split view's detail column,
     /// leave out the edge under the list column, or the camera frames the
     /// route partly behind it.
@@ -488,6 +554,13 @@ struct TripMapView: View {
 
     /// Endpoint markers reach this far past the route's own extent.
     static let markerReach: CGFloat = 8
+
+    /// `hardInsets` plus the markers' reach on each side that has one.
+    private var fitHard: EdgeInsets {
+        func reach(_ v: CGFloat) -> CGFloat { v > 0 ? v + Self.markerReach : 0 }
+        return EdgeInsets(top: reach(hardInsets.top), leading: reach(hardInsets.leading),
+                          bottom: reach(hardInsets.bottom), trailing: reach(hardInsets.trailing))
+    }
 
     /// Where the route's extent is fitted: the caller's clearances plus the
     /// markers' reach, so no ring or dot touches the controls or the attribution.
@@ -537,7 +610,7 @@ struct TripMapView: View {
         guard size.width > 0, size.height > 0, framedSize != size,
               let content = TripRoute.contentRect(timeline.points) else { return }
         framedSize = size
-        position = .fitting(TripRoute.fitted(content, size: size, safe: mapSafe, insets: fitInsets), replacing: position)
+        position = .fitting(TripRoute.fitted(content, size: size, safe: mapSafe, insets: fitInsets, hard: fitHard), replacing: position)
     }
 
     private func projection(visible: MKMapRect, size: CGSize) -> TripRouteProjection {

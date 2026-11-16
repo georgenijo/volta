@@ -48,9 +48,8 @@ struct TripSnapshot {
         telemetryTruncated = detail.telemetry?.truncated == true
         let timeline = TripTimeline(path: usesFleetTelemetry ? telemetryPath : detail.path, start: s.start, end: end)
         self.timeline = timeline
-        let reference = EfficiencyReference(ratedWhPerKm: s.ratedWhPerKm).whPerKm
         routes = Dictionary(uniqueKeysWithValues: TripMapMode.allCases.map {
-            ($0, TripRoute(timeline, mode: $0, tripKm: s.distanceKm, referenceWhPerKm: reference))
+            ($0, TripRoute(timeline, mode: $0, tripKm: s.distanceKm))
         })
         let feet = units.distance == .miles
         let telemetryBatteryTimeline = Self.metricTimeline(detail.telemetry, field: "BatteryLevel", start: s.start, end: end,

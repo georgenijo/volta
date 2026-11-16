@@ -50,17 +50,23 @@ extension View {
     /// link: the dim eases off to nothing across the 32 pt above the
     /// attribution row, which (with the fade below it) stays at full strength.
     /// `bottom` is the map's bottom padding (where the attribution sits).
-    func voltaMapDim(_ opacity: Double, bottom: CGFloat, ignoring edges: Edge.Set = []) -> some View {
+    /// Without `attribution` (a backdrop, whose logo and link stay at the
+    /// bottom edge under the fade, as they always have) the dim is even.
+    func voltaMapDim(_ opacity: Double, bottom: CGFloat, ignoring edges: Edge.Set = [], attribution: Bool = true) -> some View {
         overlay {
             GeometryReader { geo in
                 let h = max(geo.size.height, 1)
                 let clear = max(0, min(1, (h - bottom - VoltaMapChrome.attribution) / h))
                 let full = max(0, clear - 32 / h)
-                LinearGradient(stops: [.init(color: .black.opacity(opacity), location: 0),
-                                       .init(color: .black.opacity(opacity), location: full),
-                                       .init(color: .black.opacity(0), location: clear),
-                                       .init(color: .black.opacity(0), location: 1)],
-                               startPoint: .top, endPoint: .bottom)
+                if attribution {
+                    LinearGradient(stops: [.init(color: .black.opacity(opacity), location: 0),
+                                           .init(color: .black.opacity(opacity), location: full),
+                                           .init(color: .black.opacity(0), location: clear),
+                                           .init(color: .black.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                } else {
+                    Color.black.opacity(opacity)
+                }
             }
             .ignoresSafeArea(edges: edges)
             .allowsHitTesting(false)
@@ -147,6 +153,9 @@ struct PinnedMap<Item: Identifiable, Pin: View, Callout: View>: View {
     var clearance = EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24)
     /// Darkens the tiles under the pins (not the attribution).
     var dim: Double = 0.2
+    /// False for a backdrop: no padding, so MapKit's logo and Legal link
+    /// stay at the bottom edge, and an even dim (see `backdrop()`).
+    var attribution = true
     var interactive = true
     /// Which point of the pin sits on the coordinate.
     var pinAnchor: UnitPoint = .bottom
@@ -197,7 +206,7 @@ struct PinnedMap<Item: Identifiable, Pin: View, Callout: View>: View {
                     camera = context.rect
                     measure(proxy)
                 }
-                .voltaMapDim(dim, bottom: safe.bottom)
+                .voltaMapDim(dim, bottom: safe.bottom, attribution: attribution)
                 .overlay {
                     // MapKit's own projection, in global space, so the pins sit
                     // on their coordinates whatever safe areas the map and this
@@ -277,6 +286,15 @@ struct PinnedMap<Item: Identifiable, Pin: View, Callout: View>: View {
 }
 
 extension PinnedMap {
+    /// A backdrop under page content: MapKit's logo and Legal link stay at
+    /// the map's bottom edge, under the fade, as on the heroes they always
+    /// have; the dim is even. Pass no `safe` padding. Framing is unchanged.
+    func backdrop() -> Self {
+        var map = self
+        map.attribution = false
+        return map
+    }
+
     /// Pins with callouts (see `CalloutLayout`). The pin should carry the
     /// callout's text in its accessibility label: a callout can be hidden.
     init(items: [Item], coordinate: @escaping (Item) -> CLLocationCoordinate2D, safe: EdgeInsets = EdgeInsets(),

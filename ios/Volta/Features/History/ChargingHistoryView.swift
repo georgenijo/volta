@@ -427,10 +427,10 @@ struct SessionsMapHero: View {
             let spots = spots
             if !spots.isEmpty {
                 // Whole badges at least 24 pt below the bar (the page's safe
-                // area ends about 9 pt under it) and 24 pt above the
-                // fade; the logo and Legal link sit just above the fade.
-                PinnedMap(items: spots, coordinate: \.coordinate,
-                          safe: EdgeInsets(top: 0, leading: 0, bottom: fade, trailing: 0),
+                // area ends about 9 pt under it) and 24 pt above the fade.
+                // A backdrop: no padding, so the logo and Legal link stay at
+                // the map's bottom edge, under the fade and the page.
+                PinnedMap(items: spots, coordinate: \.coordinate, safe: EdgeInsets(),
                           clearance: EdgeInsets(top: topInset + 16, leading: 24, bottom: fade + 24, trailing: 24).clearing(bars: sideBars),
                           dim: 0.65, interactive: false, pinAnchor: .center) { spot in
                     if let kind = spot.kind {
@@ -439,6 +439,7 @@ struct SessionsMapHero: View {
                         Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
                     }
                 }
+                .backdrop()
                 .allowsHitTesting(false)
                 .overlay {
                     Color.clear.contentShape(.rect).onTapGesture(perform: expand)

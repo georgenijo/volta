@@ -264,7 +264,7 @@ struct DrivesHistoryView: View {
                     let reveal = page.reveal(0.23, 150...180) + title
                     // Coloured by road density, like the heatmap, so both all-drives maps agree.
                     DrivesRouteMap(drives: visible, height: reveal + topInset, coloring: .density, fullBleed: true,
-                                   topInset: topInset + title)
+                                   topInset: topInset + title, attribution: false)
                         .padding(.top, -topInset)
                         .allowsHitTesting(false)
                         .overlay(alignment: .topLeading) { inlineTitle.historySides(sideBars) }
