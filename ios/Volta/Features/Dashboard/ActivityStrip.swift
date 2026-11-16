@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// "LAST 48H" strip: hourly ticks with drives (red), charging (green) and
-/// online/idle (blue) segments, plus a -48H … NOW axis.
+/// "LAST 48H" strip: hourly ticks with drives (white), charging (green) and
+/// online/idle (neutral grey) segments, plus a -48H … NOW axis. Each mark
+/// has at least 3:1 contrast with the empty cells.
 struct ActivityStrip: View {
     var segments: [TimelineSegment]
     var hours: Int = 48
@@ -15,9 +16,9 @@ struct ActivityStrip: View {
 
     static func color(for kind: TimelineKind) -> Color? {
         switch kind {
-        case .drive: .voltaRed
+        case .drive: .voltaTextPrimary
         case .charge: .voltaGreen
-        case .idle: .voltaBlue
+        case .idle: .voltaTextTertiary
         case .asleep, .offline: nil
         }
     }
@@ -28,9 +29,9 @@ struct ActivityStrip: View {
                 Text("Last \(hours)h").voltaLabelStyle()
                 Spacer()
                 HStack(spacing: VoltaSpacing.md) {
-                    legend("Drives", .voltaRed)
+                    legend("Drives", .voltaTextPrimary)
                     legend("Charging", .voltaGreen)
-                    legend("Online", .voltaBlue)
+                    legend("Online", .voltaTextTertiary)
                 }
             }
             strip
@@ -93,7 +94,7 @@ struct ActivityStrip: View {
                     let x0 = CGFloat(s.timeIntervalSince(start) / total) * size.width
                     let x1 = CGFloat(e.timeIntervalSince(start) / total) * size.width
                     let r = CGRect(x: x0, y: 0, width: max(x1 - x0, cell), height: size.height)
-                    layer.fill(Path(r), with: .color(color.opacity(segment.kind == .idle ? 0.7 : 0.9)))
+                    layer.fill(Path(r), with: .color(color))
                 }
             }
         }
@@ -110,6 +111,9 @@ struct ActivityStrip: View {
             }
         }
         .frame(height: 16)
+        // Tick labels sit at fixed fractions of the strip; past this size
+        // they collide. The strip's accessibility label carries the content.
+        .dynamicTypeSize(...DynamicTypeSize.large)
     }
 
     private func axisLabel(_ text: String) -> some View {

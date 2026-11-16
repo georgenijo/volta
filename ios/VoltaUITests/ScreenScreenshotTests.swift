@@ -151,23 +151,46 @@ final class ScreenScreenshotTests: XCTestCase {
     func testControls() throws {
         defer { app.terminate() }
         try launchDemo()
-        try tap("button.controls")
+        // `button.controls` is the dock's Controls tile.
+        try openControls()
         try waitForScreen("controls")
+        XCTAssertTrue(element("row.doors").waitForExistence(timeout: 5), "Doors states the lock and offers its action")
         capture("controls-top")
         try scroll("controls", screenshot: "controls-bottom")
+        XCTAssertTrue(element("list.commandLog").exists, "Sent this session closes the Controls list")
+    }
+
+    /// The Dashboard's dock and Now card send through the same path as Controls.
+    func testDashboardDockAndNowCard() throws {
+        defer { app.terminate() }
+        continueAfterFailure = false
+        app.launchArguments = ["-demo-mode", "YES", "-demoCharging", "YES", "-VoltaDisableMotion"]
+        app.launch()
+        try waitForScreen("dashboard")
+        XCTAssertTrue(element("card.now").waitForExistence(timeout: 10))
+        XCTAssertTrue(element("stepper.chargeLimit").exists, "Charging shows one charge limit stepper")
+        XCTAssertTrue(element("button.liveCharge").exists)
+        // One column on an ordinary iPhone: the dock sits under the Now card.
+        let lights = element("dock.lights")
+        for _ in 0..<5 where !(lights.exists && lights.isHittable) { element("scroll.dashboard").swipeUp() }
+        try tap("dock.lights")
+        XCTAssertTrue(element("banner.commandActivity").waitForExistence(timeout: 5))
+        capture("dashboard-dock-sent")
     }
 
     func testClimateControlsFitAndSend() throws {
         defer { app.terminate() }
         try launchDemo()
-        try tap("button.controls")
+        try openControls()
         try waitForScreen("controls")
-        let climate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Climate controls")).firstMatch
+        let climate = element("button.climate")
         for _ in 0..<5 where !climate.isHittable { element("scroll.controls").swipeUp() }
         XCTAssertTrue(climate.isHittable)
         climate.tap()
         try waitForScreen("climate")
-        for control in [app.buttons["Back"], app.buttons["Increase driver target"],
+        // Side bars (iPhone Duo) label the system back button "BackButton".
+        let back = app.buttons["Back"].exists ? app.buttons["Back"] : app.buttons["BackButton"]
+        for control in [back, app.buttons["Increase driver target"],
                         app.buttons["Increase passenger target"], element("button.seat.0.0"),
                         element("button.seat.0.3")] {
             XCTAssertTrue(control.isHittable, "Every climate action must fit on screen")
@@ -189,9 +212,9 @@ final class ScreenScreenshotTests: XCTestCase {
         app.launchArguments = ["-demo-mode", "YES", "-demo-command-outcome-unknown", "-VoltaDisableMotion"]
         app.launch()
         try waitForScreen("dashboard")
-        try tap("button.controls")
+        try openControls()
         try waitForScreen("controls")
-        let openFrunk = app.buttons["Open"].firstMatch
+        let openFrunk = app.buttons["Open frunk"].firstMatch
         XCTAssertTrue(openFrunk.waitForExistence(timeout: 10))
         openFrunk.tap()
         let original = app.alerts["Open the frunk?"]
@@ -368,6 +391,14 @@ final class ScreenScreenshotTests: XCTestCase {
             XCTFail("Missing screen.\(name). Check demo launch handling and the identifier contract in VoltaUITests/README.md.")
             throw NavigationFailure.missing("screen.\(name)")
         }
+    }
+
+    /// Taps the dock's Controls tile, scrolling the Dashboard to it first: on
+    /// short windows the dock sits under the Now card.
+    private func openControls() throws {
+        let tile = element("button.controls")
+        for _ in 0..<5 where !(tile.exists && tile.isHittable) { element("scroll.dashboard").swipeUp() }
+        try tap("button.controls")
     }
 
     private func tap(_ identifier: String) throws {

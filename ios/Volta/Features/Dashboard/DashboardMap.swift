@@ -41,6 +41,9 @@ struct DashboardMap: View {
                     }
                     AddressPill(location: location, sentry: sentry, state: state,
                                 charging: charging, chargerPowerKw: chargerPowerKw)
+                        // A map label: the map's own accessibility label reads the
+                        // place at any size, so the pill keeps clear of the wordmark.
+                        .dynamicTypeSize(...DynamicTypeSize.xLarge)
                         .alignmentGuide(VerticalAlignment.center) { d in d[.bottom] + 16 }
                 }
             }
@@ -145,10 +148,11 @@ struct ChargingMarker: View {
     }
 }
 
-/// "Street / ● SENTRY · TOWN" pill with a hairline stem; while charging,
-/// "● CHARGING · 7.7 kW  LIVE ›".
+/// "Home / PALO ALTO" pill with a hairline stem: where the car is, nothing
+/// else. The Dashboard's Now card carries what the car is doing.
 struct AddressPill: View {
     var location: Location
+    // Kept for the map's call; the pill no longer shows state.
     var sentry: Bool
     var state: VehicleState?
     var charging: Bool = false
@@ -159,28 +163,11 @@ struct AddressPill: View {
         return location.address?.split(separator: ",").first.map { String($0).trimmed } ?? "Unknown location"
     }
 
-    private var locality: String? {
+    /// The town: the address's first part under a place name, else its second.
+    static func locality(for location: Location) -> String? {
         let parts = location.address?.split(separator: ",").map { String($0).trimmed } ?? []
         if location.placeName != nil { return parts.first }
         return parts.dropFirst().first
-    }
-
-    private var statusText: String {
-        if charging {
-            return chargerPowerKw.map { "Charging · \(VoltaFormat.number($0, digits: $0 >= 20 ? 0 : 1)) kW" } ?? "Charging"
-        }
-        if sentry { return "Sentry" }
-        switch state {
-        case .driving: return "Driving"
-        case .charging: return "Charging"
-        case .asleep: return "Asleep"
-        case .offline: return "Offline"
-        default: return "Parked"
-        }
-    }
-
-    private var statusColor: Color {
-        charging ? .voltaGreen : sentry ? .voltaRed : (state?.color ?? .voltaTextSecondary)
     }
 
     var body: some View {
@@ -190,28 +177,14 @@ struct AddressPill: View {
                     .font(.system(.headline, weight: .semibold))
                     .foregroundStyle(Color.voltaTextPrimary)
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    StatusDot(color: statusColor, size: 6)
-                    Text(statusText)
-                        .foregroundStyle(statusColor)
-                    if charging {
-                        HStack(spacing: 2) {
-                            Text("Live")
-                            Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
-                        }
-                        .foregroundStyle(Color.voltaGreen)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Color.voltaGreen.opacity(0.16), in: .capsule)
-                        .padding(.leading, 4)
-                    } else if let locality {
-                        Text("·").foregroundStyle(Color.voltaTextTertiary)
-                        Text(locality).foregroundStyle(Color.voltaTextSecondary)
-                    }
+                if let locality = Self.locality(for: location) {
+                    Text(locality)
+                        .font(.system(.caption, weight: .semibold))
+                        .tracking(2)
+                        .textCase(.uppercase)
+                        .foregroundStyle(Color.voltaTextSecondary)
+                        .lineLimit(1)
                 }
-                .font(.system(.caption2, weight: .semibold))
-                .tracking(1.6)
-                .textCase(.uppercase)
-                .lineLimit(1)
             }
             .padding(.horizontal, VoltaSpacing.lg + 2)
             .padding(.vertical, VoltaSpacing.md)

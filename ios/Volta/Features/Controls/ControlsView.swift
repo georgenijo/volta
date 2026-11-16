@@ -1,190 +1,236 @@
 import SwiftUI
 
-@MainActor @Observable
-final class ControlsModel {
-    var status: VehicleStatus?
-    var locked: Bool?
-    var chargingState: ChargingState?
-    var chargeLimit: Int?
-    var climateOn: Bool?
-    var sentry: Bool?
-    private var refreshGeneration = 0
-
-    init(status: VehicleStatus?) { apply(status) }
-
-    func apply(_ status: VehicleStatus?) {
-        self.status = status
-        guard let status else { return }
-        locked = status.locked
-        chargingState = status.chargingState
-        chargeLimit = status.chargeLimit
-        climateOn = status.climateOn
-        sentry = status.sentryMode
-    }
-
-    func refresh(dataSource: any VoltaDataSource, vehicleID: Int,
-                 surfaces: (any VehicleSurfaces)? = nil) async {
-        refreshGeneration += 1
-        let token = refreshGeneration
-        let issued = surfaces?.nextStatusToken()
-        guard let fresh = try? await dataSource.status(vehicleID: vehicleID),
-              token == refreshGeneration, !Task.isCancelled else { return }
-        apply(fresh)
-        if let surfaces, let issued {
-            surfaces.publish(VehicleRefresh(status: fresh, issued: issued), dataSource: dataSource)
-        }
-    }
-
-    @discardableResult
-    func send(_ command: VehicleCommand, label: String, coordinator: VehicleCommandCoordinator,
-              dataSource: any VoltaDataSource, vehicleID: Int,
-              surfaces: (any VehicleSurfaces)? = nil, simulate: (() -> Void)? = nil) async -> Bool {
-        refreshGeneration += 1
-        let outcome = await coordinator.perform(command, label: label, dataSource: dataSource, vehicleID: vehicleID)
-        switch outcome {
-        case .succeeded(let simulated):
-            if simulated { simulate?() }
-            else { await refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
-            return true
-        case .failed, .unknown:
-            return false
-        }
-    }
-
-    func setLocked(_ value: Bool, coordinator: VehicleCommandCoordinator, dataSource: any VoltaDataSource,
-                   vehicleID: Int, surfaces: (any VehicleSurfaces)? = nil) async {
-        await send(value ? .lock : .unlock, label: value ? "Lock" : "Unlock", coordinator: coordinator,
-                   dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) { self.locked = value }
-    }
-
-    func setCharging(_ value: Bool, coordinator: VehicleCommandCoordinator, dataSource: any VoltaDataSource,
-                     vehicleID: Int, surfaces: (any VehicleSurfaces)? = nil) async {
-        await send(value ? .chargeStart : .chargeStop, label: value ? "Start charging" : "Stop charging",
-                   coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) {
-            self.chargingState = value ? .charging : .stopped
-        }
-    }
-
-    func setClimate(_ value: Bool, coordinator: VehicleCommandCoordinator, dataSource: any VoltaDataSource,
-                    vehicleID: Int, surfaces: (any VehicleSurfaces)? = nil) async {
-        await send(value ? .climateOn : .climateOff, label: value ? "Start climate" : "Stop climate",
-                   coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) { self.climateOn = value }
-    }
-
-    func setSentry(_ value: Bool, coordinator: VehicleCommandCoordinator, dataSource: any VoltaDataSource,
-                   vehicleID: Int, surfaces: (any VehicleSurfaces)? = nil) async {
-        await send(value ? .sentryOn : .sentryOff, label: value ? "Arm Sentry" : "Disarm Sentry",
-                   coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) { self.sentry = value }
-    }
-
-    func adjustChargeLimit(by delta: Int, coordinator: VehicleCommandCoordinator,
-                           dataSource: any VoltaDataSource, vehicleID: Int,
-                           surfaces: (any VehicleSurfaces)? = nil) async {
-        guard let old = chargeLimit else { return }
-        let value = min(100, max(50, old + delta))
-        guard value != old else { return }
-        await send(.setChargeLimit(percent: value), label: "Set charge limit to \(value)%",
-                   coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) { self.chargeLimit = value }
-    }
-}
-
+/// Vehicle controls. A sheet in a compact window (one column); a pushed
+/// two-pane screen in a regular-width window wider than tall, with Back and
+/// Refresh in the system bars. The model normally comes from the Dashboard,
+/// so switching between the two forms (folding or unfolding iPhone Duo)
+/// keeps its state.
 struct ControlsView: View {
+    enum Presentation { case sheet, pushed }
+    /// What the pushed screen's second pane shows.
+    enum SecondPane: Hashable { case main, climate }
+
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.dismiss) private var dismiss
     @Environment(\.vehicleSurfaces) private var surfaces
     @Environment(\.vehicleCommandCoordinator) private var sharedCoordinator
+    @Environment(\.units) private var units
     @Environment(AppModel.self) private var app: AppModel?
 
     let vehicleName: String?
+    let presentation: Presentation
+    let secondPane: SecondPane
     @State private var model: ControlsModel
     @State private var localCoordinator = VehicleCommandCoordinator()
     @State private var confirmation: CommandConfirmation?
     @State private var controlNotice: String?
-    private let iconInset: CGFloat = 52
+    @State private var showClimate = false
 
+    /// A sheet with its own model (the live charging sheet's "Manage charging").
     init(initialStatus: VehicleStatus?, vehicleName: String?) {
         self.vehicleName = vehicleName
+        presentation = .sheet
+        secondPane = .main
         _model = State(initialValue: ControlsModel(status: initialStatus))
     }
 
+    /// Controls for a model the caller owns.
+    init(model: ControlsModel, vehicleName: String?, presentation: Presentation, secondPane: SecondPane = .main) {
+        self.vehicleName = vehicleName
+        self.presentation = presentation
+        self.secondPane = secondPane
+        _model = State(initialValue: model)
+    }
+
     private var coordinator: VehicleCommandCoordinator { sharedCoordinator ?? localCoordinator }
+    private var context: VehicleCommandContext {
+        VehicleCommandContext(model: model, coordinator: coordinator, dataSource: dataSource,
+                              vehicleID: vehicleID, surfaces: surfaces)
+    }
 
     var body: some View {
+        Group {
+            switch presentation {
+            case .sheet: sheet
+            case .pushed: pushed
+            }
+        }
+        .preferredColorScheme(.dark)
+        .task(id: vehicleID) { if secondPane == .main { await load() } }
+        .alert(item: $confirmation) { item in
+            Alert(title: Text(item.title), message: Text(item.message),
+                  primaryButton: .cancel(), secondaryButton: .destructive(Text(item.button)) { run(item.command) })
+        }
+    }
+
+    private func load() async {
+        await coordinator.refreshCapabilities(dataSource: dataSource, vehicleID: vehicleID)
+        await context.refresh()
+    }
+
+    // MARK: Forms
+
+    private var sheet: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    identity
-                    readiness.padding(.top, VoltaSpacing.lg)
-                    if let controlNotice {
-                        InlineBanner(systemImage: "location.slash", message: controlNotice, tint: .voltaAmber)
-                            .padding(.top, VoltaSpacing.md)
-                    }
-                    access.padding(.top, VoltaSpacing.xxl)
-                    chargingSection.padding(.top, VoltaSpacing.xxl)
-                    comfort.padding(.top, VoltaSpacing.xxl)
-                    security.padding(.top, VoltaSpacing.xxl)
-                    locate.padding(.top, VoltaSpacing.xxl)
+                VStack(alignment: .leading, spacing: VoltaSpacing.xl) {
+                    statusLine
+                    banners
+                    access
+                    charging
+                    comfort
+                    security
+                    CommandLogList(log: model.log, key: context.logKey)
                 }
-                .padding(.horizontal, VoltaSpacing.screen + 4)
-                .padding(.bottom, 80)
+                .padding(.horizontal, VoltaSpacing.screen)
+                .padding(.top, VoltaSpacing.sm)
+                .padding(.bottom, 96)
+                .voltaReadableWidth()
             }
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("scroll.controls")
             .overlay(alignment: .bottom) { activityBanner }
             .background(Color.voltaBackground.ignoresSafeArea())
             .toolbarTitleDisplayMode(.inline)
-            .toolbar { toolbar }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: { Label("Close", systemImage: "xmark") }
+                        .tint(Color.voltaTextPrimary)
+                }
+                ToolbarItem(placement: .principal) {
+                    Text("CONTROLS").font(.system(.headline, weight: .semibold)).tracking(3)
+                        .foregroundStyle(Color.voltaTextPrimary).accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("screen.controls")
+                }
+                refreshItem
+            }
             .refreshable { await load() }
         }
         .presentationDragIndicator(.visible)
         .presentationBackground(Color.voltaBackground)
         .presentationCornerRadius(34)
-        .preferredColorScheme(.dark)
-        .task(id: vehicleID) { await load() }
-        .alert(item: $confirmation) { item in
-            Alert(title: Text(item.title), message: Text(item.message),
-                  primaryButton: .cancel(), secondaryButton: .destructive(Text(item.button)) { run(item.command, label: item.label) })
+    }
+
+    /// Pushed: Access, Charging and the session log on one side of the fold;
+    /// banners, Comfort and Security on the other. "Seats, wheel & defrost"
+    /// pushes the same screen with the climate details in the second pane.
+    private var pushed: some View {
+        VoltaPanes {
+            ScrollView {
+                VStack(alignment: .leading, spacing: VoltaSpacing.xl) {
+                    VStack(alignment: .leading, spacing: VoltaSpacing.xs) {
+                        Text("Controls")
+                            .font(.system(.largeTitle, weight: .bold))
+                            .foregroundStyle(Color.voltaTextPrimary)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier(secondPane == .main ? "screen.controls" : "")
+                        statusLine
+                    }
+                    access
+                    charging
+                    CommandLogList(log: model.log, key: context.logKey)
+                }
+                .padding(.horizontal, VoltaSpacing.screen)
+                .padding(.top, VoltaSpacing.sm)
+                .padding(.bottom, VoltaSpacing.xxl)
+            }
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier(secondPane == .main ? "scroll.controls" : "")
+            .refreshable { await load() }
+        } secondary: {
+            Group {
+                switch secondPane {
+                case .main:
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: VoltaSpacing.xl) {
+                            banners
+                            comfort
+                            security
+                        }
+                        .padding(.horizontal, VoltaSpacing.screen)
+                        .padding(.top, VoltaSpacing.sm)
+                        .padding(.bottom, 96)
+                    }
+                    .scrollIndicators(.hidden)
+                    .refreshable { await load() }
+                case .climate:
+                    ClimateControlsView(model: model, embedded: true)
+                }
+            }
+            .overlay(alignment: .bottom) { activityBanner }
+        }
+        .background(Color.voltaBackground.ignoresSafeArea())
+        .toolbarTitleDisplayMode(.inline)
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        .toolbar { refreshItem }
+        .navigationDestination(isPresented: $showClimate) {
+            ControlsView(model: model, vehicleName: vehicleName, presentation: .pushed, secondPane: .climate)
         }
     }
 
-    private func load() async {
-        await coordinator.refreshCapabilities(dataSource: dataSource, vehicleID: vehicleID)
-        await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
-    }
-
-    /// System toolbar: Close first, then the title and Refresh, so iPhone Duo
-    /// can place them with its other side controls.
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .cancellationAction) {
-            Button { dismiss() } label: { Label("Close", systemImage: "xmark") }
-                .tint(Color.voltaTextPrimary)
-        }
-        ToolbarItem(placement: .principal) {
-            Text("CONTROLS").font(.system(.headline, weight: .semibold)).tracking(3)
-                .foregroundStyle(Color.voltaTextPrimary).accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("screen.controls")
-        }
+    private var refreshItem: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Button { Task { await load() } } label: { Label("Refresh controls", systemImage: "arrow.clockwise") }
                 .tint(Color.voltaTextPrimary)
         }
     }
 
-    private var identity: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let freshness = model.status?.telemetryFreshness {
-                Text(freshness.label).font(.caption).foregroundStyle(Color.voltaTextSecondary)
-            }
-            Text(vehicleName ?? "Vehicle").font(.system(.title, weight: .semibold)).foregroundStyle(Color.voltaTextPrimary)
-            if let state = model.status?.state {
-                HStack(spacing: 8) {
-                    StatusDot(color: state.color, size: 6)
-                    Text(state.displayName).font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
+    // MARK: Header
+
+    /// "FRIDAY · 72% · Charging · updated just now"
+    private var statusLine: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { timeline in
+            let detail = Self.statusDetail(model.status, now: timeline.date)
+            // One line, or the name above the detail when they don't fit.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    statusName
+                    if let detail { statusDetailText("· \(detail)") }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    statusName
+                    if let detail { statusDetailText(detail) }
                 }
             }
-        }.padding(.top, VoltaSpacing.lg)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var statusName: some View {
+        Text(vehicleName ?? "Vehicle")
+            .font(.system(.subheadline, weight: .semibold))
+            .tracking(2)
+            .textCase(.uppercase)
+            .foregroundStyle(Color.voltaTextPrimary)
+    }
+
+    private func statusDetailText(_ text: String) -> some View {
+        Text(text)
+            .font(.subheadline)
+            .foregroundStyle(Color.voltaTextSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    static func statusDetail(_ status: VehicleStatus?, now: Date = .now) -> String? {
+        guard let status else { return nil }
+        let state = status.isCharging ? "Charging" : status.state.displayName
+        let age = now.timeIntervalSince(status.updatedAt)
+        let updated = age < 60 ? "updated just now" : "updated \(VoltaFormat.relativeDate(status.updatedAt, now: now))"
+        return "\(status.batteryLevel)% · \(state) · \(updated)"
+    }
+
+    // MARK: Banners
+
+    @ViewBuilder private var banners: some View {
+        if dataSource.simulatesVehicleCommands || !(coordinator.capability(dataSource: dataSource, vehicleID: vehicleID)?.available ?? false) || controlNotice != nil {
+            VStack(alignment: .leading, spacing: VoltaSpacing.md) {
+                readiness
+                if let controlNotice {
+                    InlineBanner(systemImage: "location.slash", message: controlNotice, tint: .voltaAmber)
+                }
+            }
+        }
     }
 
     @ViewBuilder private var readiness: some View {
@@ -192,8 +238,8 @@ struct ControlsView: View {
             InlineBanner(systemImage: "theatermasks", message: "Demo mode: controls are simulated on this device. No vehicle is contacted.", tint: .voltaBlue)
         } else if let capability = coordinator.capability(dataSource: dataSource, vehicleID: vehicleID), !capability.available {
             VStack(alignment: .leading, spacing: VoltaSpacing.md) {
-                InlineBanner(systemImage: readinessSymbol(capability.reason), message: readinessMessage(capability.reason), tint: .voltaAmber)
-                if needsTeslaConsent(capability.reason) {
+                InlineBanner(systemImage: Self.readinessSymbol(capability.reason), message: Self.readinessMessage(capability.reason), tint: .voltaAmber)
+                if Self.needsTeslaConsent(capability.reason) {
                     PillButton("Enable vehicle controls", systemImage: "key.horizontal", style: .accent) {
                         Task { await app?.tesla.refresh(); app?.tesla.enableVehicleControls() }
                     }
@@ -209,35 +255,60 @@ struct ControlsView: View {
         }
     }
 
+    // MARK: Access
+
     private var access: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionLabel("Access", rule: true) { EmptyView() }.padding(.bottom, VoltaSpacing.sm)
-            stateControl(StateDisplay.doors(model.locked), title: "Doors", subtitle: "Observed lock state",
-                         value: model.locked, on: .lock, off: .unlock, onLabel: "Lock", offLabel: "Unlock") { value in
-                confirm(value ? .lock : .unlock, label: value ? "Lock" : "Unlock",
-                        title: value ? "Lock the vehicle?" : "Unlock the vehicle?",
-                        message: value ? "This will remotely lock all doors." : "This will remotely unlock all doors. Make sure the vehicle is secure.")
+        ControlGroup(title: "Access") {
+            doorsRow
+            TwoUpRow {
+                HalfControl(systemImage: "car.side.front.open", title: "Frunk", button: "Open",
+                            accessibilityLabel: "Open frunk") { request(.actuateTrunk(whichTrunk: .front)) }
+                    .disabled(!canSend(.actuateTrunk(whichTrunk: .front)))
+            } trailing: {
+                HalfControl(systemImage: "car.side.rear.open", title: "Trunk", button: "Open",
+                            accessibilityLabel: "Open trunk") { request(.actuateTrunk(whichTrunk: .rear)) }
+                    .disabled(!canSend(.actuateTrunk(whichTrunk: .rear)))
             }
-            HairlineDivider(leadingInset: iconInset)
-            actionRow(icon: "car.side.front.open", title: "Frunk", subtitle: "Front trunk", button: "Open", command: .actuateTrunk(whichTrunk: .front)) {
-                confirm(.actuateTrunk(whichTrunk: .front), label: "Open frunk", title: "Open the frunk?", message: "The frunk can only be closed by hand. Make sure nothing is above it.")
+            ControlRow(systemImage: "window.vertical.open", title: "Windows", subtitle: "Position not recorded") {
+                button("Vent", .windowControl(command: .vent), accessibility: "Vent windows")
+                button("Close", .windowControl(command: .close), accessibility: "Close windows")
             }
-            HairlineDivider(leadingInset: iconInset)
-            actionRow(icon: "car.side.rear.open", title: "Trunk", subtitle: "Rear trunk", button: "Open", command: .actuateTrunk(whichTrunk: .rear)) {
-                confirm(.actuateTrunk(whichTrunk: .rear), label: "Open trunk", title: "Actuate the trunk?", message: "This sends Tesla's remote trunk actuation command. Check clearance first.")
+            ControlRow(systemImage: "powerplug", title: "Charge port", subtitle: chargePortStatus) {
+                ForEach(Self.chargePortCommands(doorOpen: model.status?.chargePortDoorOpen), id: \.self) { command in
+                    button(command == .openChargePort ? "Open" : "Close", command,
+                           accessibility: command == .openChargePort ? "Open charge port" : "Close charge port")
+                }
             }
-            HairlineDivider(leadingInset: iconInset)
-            pairRow(icon: "powerplug", title: "Charge port", subtitle: chargePortStatus,
-                    left: ("Open", .openChargePort, { confirm(.openChargePort, label: "Open charge port", title: "Open the charge port?", message: "This remotely opens the vehicle's charge port door.") }),
-                    right: ("Close", .closeChargePort, { confirm(.closeChargePort, label: "Close charge port", title: "Close the charge port?", message: "Make sure no charging connector is inserted.") }))
-            HairlineDivider()
-            pairRow(icon: "window.vertical.open", title: "Windows", subtitle: "Observed position unavailable",
-                    left: ("Vent", .windowControl(command: .vent), { confirm(.windowControl(command: .vent), label: "Vent windows", title: "Vent the windows?", message: "This slightly opens the windows and may expose the cabin to weather.") }),
-                    right: ("Close", .windowControl(command: .close), { confirm(.windowControl(command: .close), label: "Close windows", title: "Close the windows?", message: "Make sure hands and objects are clear of every window.") }))
-            HairlineDivider()
-            actionRow(icon: "power", title: "Wake vehicle", subtitle: "Request the vehicle to wake", button: "Wake", command: .wakeUp) {
-                run(.wakeUp, label: "Wake request")
+        }
+    }
+
+    /// States the lock, then offers the one action that changes it (both when
+    /// unknown). Both keep their confirmation.
+    private var doorsRow: some View {
+        let display = StateDisplay.doors(model.locked)
+        return ControlRow(systemImage: display.symbol,
+                          iconColor: model.locked == false ? .voltaAmber : .voltaTextPrimary.opacity(0.85),
+                          title: "Doors", subtitle: display.text,
+                          subtitleColor: model.locked == false ? .voltaAmber : .voltaTextSecondary) {
+            switch model.locked {
+            case true?: button("Unlock", .unlock, accessibility: "Doors locked. Unlock")
+            case false?: button("Lock", .lock, accessibility: "Doors unlocked. Lock")
+            case nil:
+                button("Unlock", .unlock, accessibility: "Lock state unknown. Unlock")
+                button("Lock", .lock, accessibility: "Lock state unknown. Lock")
             }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("row.doors")
+    }
+
+    /// The port actions that apply: Open when the door is closed, Close when
+    /// it is open, both when its state was not recorded.
+    static func chargePortCommands(doorOpen: Bool?) -> [VehicleCommand] {
+        switch doorOpen {
+        case true?: [.closeChargePort]
+        case false?: [.openChargePort]
+        case nil: [.openChargePort, .closeChargePort]
         }
     }
 
@@ -252,73 +323,141 @@ struct ControlsView: View {
         return latch.map { "\(door) · \($0)" } ?? door
     }
 
-    private var chargingSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionLabel("Charging", rule: true) { EmptyView() }.padding(.bottom, VoltaSpacing.sm)
-            stateControl(StateDisplay.charging(model.chargingState), title: "Charging", subtitle: "Observed charging state",
-                         value: model.chargingState.map { $0 == .charging }, on: .chargeStart, off: .chargeStop,
-                         onLabel: "Start", offLabel: "Stop") { value in
-                run(value ? .chargeStart : .chargeStop, label: value ? "Start charging" : "Stop charging")
+    // MARK: Charging
+
+    private var charging: some View {
+        ControlGroup(title: "Charging") {
+            chargingRow
+            ControlRow(systemImage: "gauge.with.dots.needle.67percent", title: "Charge limit",
+                       subtitle: model.status.map { "\($0.batteryLevel)% now" }) {
+                ChargeLimitStepper(context: context)
             }
-            HStack {
-                Text("Charge limit").font(.voltaRowSubtitle).foregroundStyle(Color.voltaTextSecondary)
-                Spacer()
-                LimitStepper(value: model.chargeLimit, isEnabled: canSend(.setChargeLimit(percent: model.chargeLimit ?? 80))) { delta in
-                    Task { await model.adjustChargeLimit(by: delta, coordinator: coordinator, dataSource: dataSource,
-                                                         vehicleID: vehicleID, surfaces: surfaces) }
-                }
-            }.padding(.leading, iconInset).padding(.vertical, VoltaSpacing.sm)
         }
     }
+
+    @ViewBuilder private var chargingRow: some View {
+        let state = model.chargingState
+        let charging = state == .charging
+        let subtitle = Self.chargingSubtitle(state: state, status: model.status)
+        if state == nil {
+            ControlRow(systemImage: "bolt", iconColor: .voltaTextSecondary, title: "Charging", subtitle: subtitle) {
+                button("Start", .chargeStart, accessibility: "Charging state unknown. Start charging")
+                button("Stop", .chargeStop, accessibility: "Charging state unknown. Stop charging")
+            }
+        } else {
+            let pluggedIn = state != .disconnected
+            let command: VehicleCommand = charging ? .chargeStop : .chargeStart
+            ControlRow(systemImage: charging ? "bolt.fill" : "bolt",
+                       iconColor: charging ? .voltaGreen : .voltaTextPrimary.opacity(0.85),
+                       title: "Charging", subtitle: subtitle) {
+                Toggle("Charging", isOn: Binding(get: { charging }, set: { run($0 ? .chargeStart : .chargeStop) }))
+                    .labelsHidden()
+                    .tint(.voltaBlue)
+                    .disabled(!pluggedIn || !canSend(command))
+                    .accessibilityValue(subtitle)
+            }
+        }
+    }
+
+    /// "7.7 kW · 48m to 80%" while charging; "Not plugged in" explains the
+    /// disabled switch.
+    static func chargingSubtitle(state: ChargingState?, status: VehicleStatus?) -> String {
+        switch state {
+        case .charging?:
+            let parts = [status?.chargerPowerKw.map { "\(VoltaFormat.number($0, digits: $0 >= 20 ? 0 : 1)) kW" },
+                         NowCardContent.timeToLimit(status)]
+            let text = parts.compactMap { $0 }.joined(separator: " · ")
+            return text.isEmpty ? "Charging" : text
+        case .complete?: return "Complete · plugged in"
+        case .stopped?: return "Stopped · plugged in"
+        case .disconnected?: return "Not plugged in"
+        case nil: return "State not recorded"
+        }
+    }
+
+    // MARK: Comfort
 
     private var comfort: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionLabel("Comfort", rule: true) { EmptyView() }.padding(.bottom, VoltaSpacing.sm)
-            stateControl(StateDisplay.climate(model.climateOn), title: "Climate", subtitle: "Observed climate state",
-                         value: model.climateOn, on: .climateOn, off: .climateOff, onLabel: "On", offLabel: "Off") { value in
-                run(value ? .climateOn : .climateOff, label: value ? "Start climate" : "Stop climate")
+        ControlGroup(title: "Comfort") {
+            toggleRow(StateDisplay.climate(model.climateOn), title: "Climate",
+                      subtitle: climateSubtitle, value: model.climateOn, on: .climateOn, off: .climateOff,
+                      onLabel: "Start", offLabel: "Stop")
+            ControlRow(systemImage: "thermometer.medium", title: "Temperature") {
+                let target = model.displayedCabinTargetC
+                let command = VehicleCommand.setTemperatures(driverTempC: target ?? 20, passengerTempC: target ?? 20)
+                let enabled = target != nil && canSend(command)
+                ValueStepper(label: "Cabin temperature",
+                             value: target.map { "\(VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0))°" } ?? "—",
+                             accessibilityValue: target.map { units.formatTemperature($0) } ?? "Unknown",
+                             canDecrease: enabled && (target ?? 0) > ControlsModel.cabinRangeC.lowerBound,
+                             canIncrease: enabled && (target ?? 100) < ControlsModel.cabinRangeC.upperBound,
+                             decrease: { context.stepCabinTarget(by: -1) },
+                             increase: { context.stepCabinTarget(by: 1) })
             }
-            HairlineDivider(leadingInset: iconInset)
-            NavigationLink { ClimateControlsView(model: model) } label: {
-                ListRow(systemImage: "thermometer.medium", title: "Climate controls", subtitle: "Temperature, seats, steering & defrost", showsChevron: true)
-            }.buttonStyle(.plain)
+            climateLink
         }
     }
+
+    private var climateSubtitle: String {
+        let state = StateDisplay.climate(model.climateOn).text
+        guard let inside = model.status?.insideTempC else { return state }
+        return "\(state) · \(VoltaFormat.number(units.temperatureValue(celsius: inside), digits: 0))° inside"
+    }
+
+    @ViewBuilder private var climateLink: some View {
+        let row = ControlRow(systemImage: "carseat.left.and.heat.waves", title: "Seats, wheel & defrost") {
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.voltaTextTertiary)
+        }
+        .contentShape(.rect)
+        switch presentation {
+        case .sheet:
+            NavigationLink { ClimateControlsView(model: model) } label: { row }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("button.climate")
+        case .pushed:
+            Button { showClimate = true } label: { row }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("button.climate")
+                .accessibilityAddTraits(secondPane == .climate ? .isSelected : [])
+                .disabled(secondPane == .climate)
+        }
+    }
+
+    // MARK: Security and locate
 
     private var security: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionLabel("Security", rule: true) { EmptyView() }.padding(.bottom, VoltaSpacing.sm)
-            stateControl(StateDisplay.sentry(model.sentry), title: "Sentry", subtitle: "Observed security state",
-                         value: model.sentry, on: .sentryOn, off: .sentryOff, onLabel: "Arm", offLabel: "Disarm") { value in
-                run(value ? .sentryOn : .sentryOff, label: value ? "Arm Sentry" : "Disarm Sentry")
+        ControlGroup(title: "Security & locate") {
+            toggleRow(StateDisplay.sentry(model.sentry), title: "Sentry",
+                      subtitle: model.sentry.map { $0 ? "On" : "Off" } ?? "Unknown",
+                      value: model.sentry, on: .sentryOn, off: .sentryOff, onLabel: "Arm", offLabel: "Disarm",
+                      activeIcon: .voltaRed)
+            TwoUpRow {
+                HalfControl(systemImage: "headlight.high.beam", title: "Lights", button: "Flash",
+                            accessibilityLabel: "Flash lights") { request(.flash) }
+                    .disabled(!canSend(.flash))
+            } trailing: {
+                HalfControl(systemImage: "megaphone", title: "Horn", button: "Honk",
+                            accessibilityLabel: "Honk horn") { request(.honk) }
+                    .disabled(!canSend(.honk))
             }
-        }
-    }
-
-    private var locate: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionLabel("Locate & nearby", rule: true) { EmptyView() }.padding(.bottom, VoltaSpacing.sm)
-            actionRow(icon: "headlight.high.beam.fill", title: "Flash lights", subtitle: "Flash the exterior lights", button: "Flash", command: .flash) {
-                run(.flash, label: "Flash lights")
-            }
-            HairlineDivider(leadingInset: iconInset)
-            actionRow(icon: "megaphone.fill", title: "Honk horn", subtitle: "Sound the vehicle horn", button: "Honk", command: .honk) {
-                confirm(.honk, label: "Honk horn", title: "Honk the horn?", message: "This will immediately sound the vehicle horn and may disturb people nearby.")
-            }
-            HairlineDivider(leadingInset: iconInset)
-            ListRow(systemImage: "location.fill", iconColor: .voltaTextTertiary, title: "Locate sound",
-                    subtitle: "Locate sound isn’t supported by Tesla’s command service") {
-                Text("Unavailable").font(.footnote).foregroundStyle(Color.voltaTextTertiary)
-            }
-            HairlineDivider(leadingInset: iconInset)
             TimelineView(.periodic(from: .now, by: 10)) { context in
                 let nearby = Self.homeLinkCommand(status: model.status, now: context.date)
-                actionRow(icon: "house.fill", title: "HomeLink",
-                          subtitle: nearby == nil ? "Needs a location observed within 5 minutes" : "Activate a nearby garage door",
-                          button: "Activate", command: nearby ?? .triggerHomeLink(latitude: 0, longitude: 0), extraEnabled: nearby != nil) {
-                    guard let command = homeLinkCommand else { return }
-                    confirm(command, label: "Activate HomeLink", title: "Activate HomeLink now?",
-                            message: "This may open or close a nearby garage door. Confirm the area is clear and you can observe the door.")
+                ControlRow(systemImage: "house", title: "HomeLink",
+                           subtitle: nearby == nil ? "Needs a location observed within 5 minutes" : "Uses the car's location") {
+                    ControlButton("Activate") {
+                        guard let command = homeLinkCommand else { return }
+                        request(command)
+                    }
+                    .disabled(nearby == nil || !canSend(nearby ?? .triggerHomeLink(latitude: 0, longitude: 0)))
+                    .accessibilityLabel("Activate HomeLink")
+                }
+            }
+            if let state = model.status?.state, state == .asleep || state == .offline {
+                ControlRow(systemImage: "power", title: "Wake",
+                           subtitle: "\(state.displayName) · last seen \(VoltaFormat.relativeDate(model.status?.updatedAt ?? .now))") {
+                    button("Wake", .wakeUp, accessibility: "Wake the vehicle")
                 }
             }
         }
@@ -335,81 +474,72 @@ struct ControlsView: View {
         return .triggerHomeLink(latitude: location.latitude, longitude: location.longitude)
     }
 
+    // MARK: Building blocks
+
+    /// A system switch tinted the accent blue when the state is known; Start
+    /// and Stop buttons when it is not.
     @ViewBuilder
-    private func stateControl(_ display: StateDisplay, title: String, subtitle: String, value: Bool?,
-                              on: VehicleCommand, off: VehicleCommand, onLabel: String, offLabel: String,
-                              send: @escaping (Bool) -> Void) -> some View {
+    private func toggleRow(_ display: StateDisplay, title: String, subtitle: String, value: Bool?,
+                           on: VehicleCommand, off: VehicleCommand, onLabel: String, offLabel: String,
+                           activeIcon: Color? = nil) -> some View {
         if let value {
-            let command = value ? off : on
-            ToggleRow(systemImage: display.symbol, title: title, subtitle: subtitle, status: display.text,
-                      isOn: Binding(get: { value }, set: { send($0) }), onColor: .voltaGreen, isEnabled: canSend(command))
+            ControlRow(systemImage: display.symbol,
+                       iconColor: value ? (activeIcon ?? .voltaTextPrimary) : .voltaTextPrimary.opacity(0.85),
+                       title: title, subtitle: subtitle) {
+                Toggle(title, isOn: Binding(get: { value }, set: { request($0 ? on : off) }))
+                    .labelsHidden()
+                    .tint(.voltaBlue)
+                    .disabled(!canSend(value ? off : on))
+                    .accessibilityValue(display.text)
+            }
         } else {
-            VStack(spacing: VoltaSpacing.sm) {
-                ListRow(systemImage: display.symbol, iconColor: .voltaTextTertiary, title: title, subtitle: subtitle) {
-                    Text("Unknown").font(.system(.body, weight: .medium)).foregroundStyle(Color.voltaTextTertiary)
-                }
-                HStack(spacing: VoltaSpacing.lg) {
-                    commandButton(offLabel, command: off) { send(false) }
-                    commandButton(onLabel, command: on) { send(true) }
-                }.padding(.leading, iconInset)
-            }.padding(.bottom, VoltaSpacing.sm)
-        }
-    }
-
-    private func actionRow(icon: String, title: String, subtitle: String, button: String,
-                           command: VehicleCommand, extraEnabled: Bool = true,
-                           action: @escaping () -> Void) -> some View {
-        ListRow(systemImage: icon, title: title, subtitle: subtitle) {
-            PillButton(button, action: action)
-                .disabled(!canSend(command) || !extraEnabled)
-        }
-    }
-
-    private func pairRow(icon: String, title: String, subtitle: String,
-                         left: (String, VehicleCommand, () -> Void), right: (String, VehicleCommand, () -> Void)) -> some View {
-        VStack(spacing: VoltaSpacing.md) {
-            ListRow(systemImage: icon, title: title, subtitle: subtitle)
-            HStack(spacing: VoltaSpacing.lg) {
-                commandButton(left.0, command: left.1, action: left.2)
-                commandButton(right.0, command: right.1, action: right.2)
+            ControlRow(systemImage: display.symbol, iconColor: .voltaTextSecondary, title: title, subtitle: "Unknown") {
+                button(onLabel, on, accessibility: "\(title) state unknown. \(on.controlLabel)")
+                button(offLabel, off, accessibility: "\(title) state unknown. \(off.controlLabel)")
             }
-        }.padding(.bottom, VoltaSpacing.lg)
-    }
-
-    private func commandButton(_ title: String, command: VehicleCommand, action: @escaping () -> Void) -> some View {
-        PillButton(title, size: .wide, action: action).disabled(!canSend(command))
-    }
-    private func canSend(_ command: VehicleCommand) -> Bool {
-        coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
-    }
-    private func run(_ command: VehicleCommand, label: String) {
-        Task {
-            if case .triggerHomeLink = command, homeLinkCommand != command {
-                controlNotice = "The vehicle location changed or expired. Refresh status before activating HomeLink."
-                return
-            }
-            controlNotice = nil
-            await model.send(command, label: label, coordinator: coordinator, dataSource: dataSource,
-                             vehicleID: vehicleID, surfaces: surfaces)
         }
     }
-    private func confirm(_ command: VehicleCommand, label: String, title: String, message: String) {
+
+    private func button(_ title: String, _ command: VehicleCommand, accessibility: String) -> some View {
+        ControlButton(title, isBusy: context.isSending(command)) { request(command) }
+            .disabled(!canSend(command))
+            .accessibilityLabel(accessibility)
+    }
+
+    private func canSend(_ command: VehicleCommand) -> Bool { context.canStart(command) }
+
+    /// Asks first when the command has a confirmation, then sends.
+    private func request(_ command: VehicleCommand) {
         guard canSend(command) else { return }
-        confirmation = CommandConfirmation(command: command, label: label, title: title, message: message, button: label)
+        if let required = CommandConfirmation.required(for: command) {
+            confirmation = required
+        } else {
+            run(command)
+        }
+    }
+
+    private func run(_ command: VehicleCommand) {
+        if case .triggerHomeLink = command, homeLinkCommand != command {
+            controlNotice = "The vehicle location changed or expired. Refresh status before activating HomeLink."
+            return
+        }
+        controlNotice = nil
+        context.send(command)
     }
 
     @ViewBuilder private var activityBanner: some View {
         VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
-            Task { await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
+            Task { await context.refresh() }
         }
     }
-    private func needsTeslaConsent(_ reason: String?) -> Bool {
+
+    static func needsTeslaConsent(_ reason: String?) -> Bool {
         ["authorization_required", "reauthorization_required", "command_scope_required"].contains(reason)
     }
-    private func readinessSymbol(_ reason: String?) -> String {
+    static func readinessSymbol(_ reason: String?) -> String {
         needsTeslaConsent(reason) ? "key.horizontal" : "antenna.radiowaves.left.and.right.slash"
     }
-    private func readinessMessage(_ reason: String?) -> String {
+    static func readinessMessage(_ reason: String?) -> String {
         switch reason {
         case "command_scope_required": "Vehicle controls need one-time Tesla consent. Read-only telemetry remains connected."
         case "authorization_required": "Connect Tesla before enabling vehicle controls."
@@ -422,45 +552,14 @@ struct ControlsView: View {
     }
 }
 
-private struct CommandConfirmation: Identifiable {
-    let id = UUID()
-    let command: VehicleCommand
-    let label: String
-    let title: String
-    let message: String
-    let button: String
-}
-
-struct LimitStepper: View {
-    var value: Int?
-    var isEnabled: Bool
-    var change: (Int) -> Void
-    var body: some View {
-        HStack(spacing: 0) {
-            button("minus", delta: -5, label: "Decrease limit")
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(value.map(String.init) ?? "—").font(.system(.title3, weight: .semibold)).monospacedDigit()
-                if value != nil { Text("%").font(.footnote).foregroundStyle(Color.voltaTextSecondary) }
-            }.frame(minWidth: 64).foregroundStyle(value == nil ? Color.voltaTextTertiary : Color.voltaTextPrimary)
-            button("plus", delta: 5, label: "Increase limit")
-        }
-        .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: VoltaRadius.wideButton, style: .continuous).fill(Color.voltaRaised)
-            .overlay(RoundedRectangle(cornerRadius: VoltaRadius.wideButton, style: .continuous).strokeBorder(Color.voltaHairline)))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(value.map { "Charge limit \($0) percent" } ?? "Charge limit unknown")
-    }
-    private var interactive: Bool { isEnabled && value != nil }
-    private func button(_ symbol: String, delta: Int, label: String) -> some View {
-        Button { change(delta) } label: {
-            Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Color.voltaTextPrimary.opacity(interactive ? 1 : 0.4)).frame(width: 48, height: 40)
-        }.buttonStyle(VoltaPressStyle()).disabled(!interactive).accessibilityLabel(label)
-    }
-}
+// MARK: - Seats, wheel & defrost
 
 struct ClimateControlsView: View {
     let model: ControlsModel
+    /// Shown as the second pane of the pushed Controls screen: no bar title
+    /// (with bars on the side a title keeps a horizontal bar alive), an
+    /// inline heading instead.
+    var embedded = false
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
@@ -470,8 +569,9 @@ struct ClimateControlsView: View {
     @State private var driverTargetC: Double
     @State private var passengerTargetC: Double
 
-    init(model: ControlsModel) {
+    init(model: ControlsModel, embedded: Bool = false) {
         self.model = model
+        self.embedded = embedded
         let observed = model.status?.driverTempSettingC ?? 20
         _driverTargetC = State(initialValue: observed)
         _passengerTargetC = State(initialValue: observed)
@@ -481,6 +581,14 @@ struct ClimateControlsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                if embedded {
+                    Text("Seats, wheel & defrost")
+                        .font(.system(.title2, weight: .bold))
+                        .foregroundStyle(Color.voltaTextPrimary)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("screen.climate")
+                        .padding(.top, VoltaSpacing.sm)
+                }
                 VStack(spacing: 0) {
                     ListRow(systemImage: "thermometer.medium", title: "Cabin", subtitle: "Observed inside temperature") {
                         Text(units.formatTemperature(model.status?.insideTempC)).foregroundStyle(Color.voltaTextSecondary)
@@ -506,20 +614,26 @@ struct ClimateControlsView: View {
                 }.padding(.top, VoltaSpacing.lg)
                 Text("Climate controls show explicit actions because heater and defrost state is not present in observed telemetry.")
                     .font(.footnote).foregroundStyle(Color.voltaTextSecondary).padding(.top, VoltaSpacing.xl)
-            }.padding(.horizontal, VoltaSpacing.screen + 4)
+            }
+            .padding(.horizontal, VoltaSpacing.screen + (embedded ? 0 : 4))
+            .padding(.bottom, 96)
         }
         .accessibilityIdentifier("scroll.climate")
         .overlay(alignment: .bottom) {
-            VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
-                Task { await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
+            if !embedded {
+                VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
+                    Task { await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
+                }
             }
         }
         .background(Color.voltaBackground.ignoresSafeArea())
         .toolbarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Climate").font(.voltaScreenTitle).foregroundStyle(Color.voltaTextPrimary)
-                    .accessibilityAddTraits(.isHeader).accessibilityIdentifier("screen.climate")
+            if !embedded {
+                ToolbarItem(placement: .principal) {
+                    Text("Climate").font(.voltaScreenTitle).foregroundStyle(Color.voltaTextPrimary)
+                        .accessibilityAddTraits(.isHeader).accessibilityIdentifier("screen.climate")
+                }
             }
         }
     }
@@ -587,89 +701,6 @@ struct ClimateControlsView: View {
     private func send(_ command: VehicleCommand, label: String) {
         Task { await model.send(command, label: label, coordinator: coordinator, dataSource: dataSource,
                                 vehicleID: vehicleID, surfaces: surfaces) }
-    }
-}
-
-private struct VehicleCommandActivityBanner: View {
-    let coordinator: VehicleCommandCoordinator
-    let dataSource: any VoltaDataSource
-    let vehicleID: Int
-    let refreshObservedStatus: () -> Void
-    private struct Confirmation: Identifiable {
-        let id = UUID()
-        let activity: VehicleCommandCoordinator.Activity
-        let isRetry: Bool
-    }
-    @State private var confirmation: Confirmation?
-
-    var body: some View {
-        Group {
-            if let activity = coordinator.activity(dataSource: dataSource, vehicleID: vehicleID) {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    HStack(spacing: VoltaSpacing.md) {
-                        if activity.phase == .pending { ProgressView().tint(Color.voltaTextPrimary) }
-                        else { Image(systemName: symbol(activity.phase)).foregroundStyle(color(activity.phase)) }
-                        Text(activity.message).font(.subheadline).foregroundStyle(Color.voltaTextPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                        action(activity, now: context.date)
-                    }
-                    .padding(.horizontal, VoltaSpacing.lg).padding(.vertical, VoltaSpacing.md)
-                    .background(.ultraThinMaterial, in: .rect(cornerRadius: VoltaRadius.control))
-                    .padding(.horizontal, VoltaSpacing.screen).padding(.bottom, VoltaSpacing.xl)
-                }
-            }
-        }
-        .alert(item: $confirmation) { item in
-            let activity = item.activity
-            if item.isRetry {
-                return Alert(title: Text("Retry \(activity.label.lowercased())?"),
-                             message: Text("If the original request was not accepted, this can execute it now. " + activity.command.retryCaution),
-                             primaryButton: .cancel(), secondaryButton: .destructive(Text("Retry \(activity.label)")) {
-                    Task {
-                        let result = await coordinator.retry(activity.id, dataSource: dataSource, vehicleID: vehicleID)
-                        if case .succeeded(let simulated) = result, !simulated { refreshObservedStatus() }
-                    }
-                })
-            }
-            return Alert(title: Text("Allow new vehicle commands?"),
-                         message: Text("The earlier \(activity.label.lowercased()) action may have run. Only continue if you checked the vehicle. This clears the saved request and allows a new deliberate action."),
-                         primaryButton: .cancel(), secondaryButton: .destructive(Text("I checked the vehicle")) {
-                coordinator.acknowledgeCheckedVehicle(activity.id, dataSource: dataSource, vehicleID: vehicleID)
-            })
-        }
-    }
-
-    @ViewBuilder private func action(_ activity: VehicleCommandCoordinator.Activity, now: Date) -> some View {
-        if activity.requiresAcknowledgement {
-            Button("I checked the vehicle") { confirmation = Confirmation(activity: activity, isRetry: false) }
-                .buttonStyle(.borderedProminent).fixedSize()
-                .disabled(coordinator.isBusy(dataSource: dataSource, vehicleID: vehicleID))
-        } else if activity.canRetry {
-            let remaining = max(0, activity.retryNotBefore?.timeIntervalSince(now) ?? 0)
-            VStack(spacing: 4) {
-                Button(remaining > 0 ? "Retry in \(Int(ceil(remaining)))s" : "Retry request") {
-                    confirmation = Confirmation(activity: activity, isRetry: true)
-                }
-                .buttonStyle(.bordered).fixedSize()
-                .disabled(remaining > 0 || coordinator.isBusy(dataSource: dataSource, vehicleID: vehicleID))
-                Button("I checked the vehicle") { confirmation = Confirmation(activity: activity, isRetry: false) }
-                    .font(.caption).foregroundStyle(Color.voltaTextSecondary).fixedSize()
-                    .disabled(coordinator.isBusy(dataSource: dataSource, vehicleID: vehicleID))
-            }
-        } else if coordinator.pending(dataSource: dataSource, vehicleID: vehicleID).isEmpty {
-            Button { coordinator.clearActivity(dataSource: dataSource, vehicleID: vehicleID) } label: {
-                Image(systemName: "xmark").foregroundStyle(Color.voltaTextSecondary)
-                    .frame(width: 44, height: 44).contentShape(.rect)
-            }.accessibilityLabel("Dismiss result")
-        }
-    }
-
-    private func symbol(_ phase: VehicleCommandCoordinator.Phase) -> String {
-        switch phase { case .success, .simulated: "checkmark.circle.fill"; case .failure: "xmark.circle.fill"; case .unknown: "questionmark.circle.fill"; case .pending: "clock" }
-    }
-    private func color(_ phase: VehicleCommandCoordinator.Phase) -> Color {
-        switch phase { case .success: .voltaGreen; case .simulated: .voltaBlue; case .failure, .unknown: .voltaAmber; case .pending: .voltaTextSecondary }
     }
 }
 

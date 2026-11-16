@@ -95,17 +95,68 @@ The API binds only to the tailnet; it is never exposed publicly.
 - Large white numerals (SF Pro Rounded is not used; SF Pro Display, heavy,
   tight tracking) with small unit suffixes (`%`, `°F`, `mi`) in secondary gray.
 - Small-caps section labels: 11pt semibold, +1.5 tracking, gray (`#8A8F98`).
-- Accents used sparingly: blue `#3B82F6` (selection, range bar), green
-  `#22C55E` (online, armed, toggles), amber `#F59E0B` (warm/warnings), red
-  `#EF4444` (locked/alerts).
-- Dashboard: dark 3D map at top with car marker and address pill, battery %
-  + est. range, a thin blue range bar, a row of quick-control icons, 2×2
-  metric cards with gradient gauges, a 48-hour activity strip, Today/7D/30D
-  activity summary.
+- Accents used sparingly, one meaning each: blue `#3B82F6` (accent:
+  selection, toggles, range bar), green `#22C55E` (energy going in: charging
+  only), amber `#F59E0B` (needs attention, such as unlocked), red `#EF4444`
+  (Sentry armed, icon only, or a real fault). Status that isn't one of these
+  (Live, Online, command outcomes) stays neutral.
+- Dashboard: see "Dashboard and Controls" below.
 - Floating glass bottom bar and circular buttons (use iOS 26 Liquid Glass
   `.glassEffect` where it fits).
 - Lists: icon + title + subtitle rows, thin dividers, chevrons, generous
   vertical rhythm. Empty states: thin-line icon, bold title, one gray line.
+
+## Dashboard and Controls
+
+Layouts follow the window, never a device model or screen size:
+
+- **Two panes** (`VoltaPanes`, regular width). On iPhone Duo's inner display
+  the panes meet on the hinge, read from the system's division region: open
+  flat each takes its half of the window (bars included); partly folded each
+  gives up the fold's margin and nothing else moves. Without that SDK
+  (`#if compiler(>=6.4.2)` / iOS 27.1) or a hinge in the container, the
+  window's middle or the system arrangement is used.
+- **Dashboard, landscape:** left pane is the stage: map with the wordmark
+  (place and town on the pill only), name with a vehicle switcher and a
+  freshness line ("● Live" only while telemetry is connected), battery and
+  range with the limit tick, and a 4×2 dock of state-first tiles ("Locked /
+  Unlock"). Right pane scrolls: the Now card, Pack / Cabin / Outside tiles,
+  the last 48 h strip and Activity.
+- **Dashboard, upright inner display:** map and battery above the hinge; the
+  Now card, dock and the rest below.
+- **Dashboard, compact width** (outer display, ordinary iPhones): one column
+  under a short map: battery, a compact Now card, dock, tiles, the rest.
+- **Now card** by what the car is doing: charging (power and its curve, which
+  open the live charging sheet; one charge limit stepper; Stop Charging),
+  plugged in, parked (temperatures, climate, "for 1h 28m" from the timeline
+  already loaded), driving (minimal, `NowDrivingCard`), asleep or offline
+  (last seen, Wake).
+- **Dock and Now card** send through `ControlsModel`, the Controls path, with
+  the same confirmations (`CommandConfirmation`). A tile whose state is
+  unknown, or whose command controls aren't enabled for, opens Controls
+  instead. Demo mode stays simulated.
+- **Controls:** pushed two-pane screen in regular-width landscape (Back and
+  Refresh in the side bar; "Seats, wheel & defrost" replaces the right pane),
+  a sheet otherwise. The Dashboard owns one `ControlsModel`, so Controls keeps
+  its state when folding moves it between the two. Groups: Access (Doors
+  states Locked / Unlocked / Unknown with an explicit Lock or Unlock), Charging
+  (toggle disabled when not plugged in; charge port offers the action that
+  changes it, both when unknown), Comfort (climate, temperature stepper,
+  seats, wheel and defrost), Security & Locate, and Sent this session.
+- **Stepped settings** (charge limit, temperature) show the new value at once
+  and send one command 1.2 s after the last step.
+- **Sent this session** (`VehicleCommandLog`, memory only) says what the
+  evidence supports: Sending, Simulated, Accepted, Failed, Outcome unknown,
+  and Confirmed only when a status recorded after the send shows the expected
+  state (lock, climate, Sentry, charging, charge limit, charge port).
+- Never show state the car doesn't report. Text uses text styles, at least
+  11 pt; every action has a 44×44 pt hit region; rows are 56 pt. At
+  accessibility sizes the dock drops to 2 columns, tiles and stats stack, row
+  actions move under their labels, and each pane scrolls on its own.
+- Debug launch arguments: `-dashboardOpenControls YES`,
+  `-dashboardOpenLiveCharge YES`, `-demoCharging YES`, `-logPanes YES` (logs
+  the system's regions), `-dashboardTypeSize accessibility5` (the app caps
+  text at Large, so this is how the accessibility layouts are checked).
 
 ## Verification
 
