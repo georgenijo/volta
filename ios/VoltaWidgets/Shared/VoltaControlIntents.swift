@@ -12,7 +12,9 @@ import os
 // - conform to `LiveActivityIntent`, which the system performs in the app's
 //   process, launching it in the background if needed (vehicle commands also
 //   drive the charging Live Activity);
-// - on iOS 27 and later also declare `allowedExecutionTargets = .main`;
+// - when built with an SDK that has `IntentExecutionTargets` (AppIntents 300+,
+//   the iOS 27 SDK), also declare `allowedExecutionTargets = .main` for iOS 27
+//   devices (see the end of this file); older SDKs rely on the other two;
 // - forward to `VoltaIntentHost.performer`, which only the app registers. If
 //   one ever runs in the extension anyway, it fails with a clear message and
 //   sends nothing.
@@ -134,8 +136,6 @@ struct SetVehicleLockIntent: SetValueIntent, LiveActivityIntent {
     static let description = IntentDescription("Locks or unlocks your car from Control Center or the Lock Screen.")
     static let isDiscoverable = false
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     @Parameter(title: "Locked")
     var value: Bool
@@ -156,8 +156,6 @@ struct SetVehicleClimateIntent: SetValueIntent, LiveActivityIntent {
     static let description = IntentDescription("Turns your car’s climate on or off from Control Center or the Lock Screen.")
     static let isDiscoverable = false
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     @Parameter(title: "Climate On")
     var value: Bool
@@ -178,8 +176,6 @@ struct OpenChargePortControlIntent: AppIntent, LiveActivityIntent {
     static let description = IntentDescription("Opens your car’s charge port door from Control Center or the Lock Screen.")
     static let isDiscoverable = false
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
-    @available(iOS 27.0, *)
-    static var allowedExecutionTargets: IntentExecutionTargets { .main }
 
     init() {}
 
@@ -202,3 +198,38 @@ struct OpenVoltaIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult { .result() }
 }
+
+// MARK: - Execution target (newer SDKs only)
+
+// `IntentExecutionTargets` first appears in the AppIntents module shipped with
+// the iOS 27 SDK (module version 300+). Older SDKs (Xcode 26.x, iOS 26.x SDK)
+// don't declare the type, so the declarations compile only where it exists.
+// Without them the control intents still run in the app process through
+// `LiveActivityIntent`, and the extension still sends nothing.
+#if canImport(AppIntents, _version: 300)
+extension VoltaIntentHost {
+    /// True when this build tells the system to run control intents in the app only.
+    static let declaresAppOnlyExecution = true
+}
+
+extension SetVehicleLockIntent {
+    @available(iOS 27.0, *)
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+}
+
+extension SetVehicleClimateIntent {
+    @available(iOS 27.0, *)
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+}
+
+extension OpenChargePortControlIntent {
+    @available(iOS 27.0, *)
+    static var allowedExecutionTargets: IntentExecutionTargets { .main }
+}
+#else
+extension VoltaIntentHost {
+    /// False: this SDK has no execution targets; `LiveActivityIntent` alone
+    /// places control intents in the app process.
+    static let declaresAppOnlyExecution = false
+}
+#endif

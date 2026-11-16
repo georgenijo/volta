@@ -267,6 +267,17 @@ private final class IntentTokenStore: TokenStoring, Sendable {
     func delete() throws { token.withLock { $0 = nil } }
 }
 
+/// Forwards to the real service and records which actions reached it.
+@MainActor private final class RecordingPerformer: VehicleIntentPerforming {
+    var actions: [VehicleIntentAction] = []
+    private let next: any VehicleIntentPerforming
+    init(_ next: any VehicleIntentPerforming) { self.next = next }
+    func perform(_ action: VehicleIntentAction) async throws -> String {
+        actions.append(action)
+        return try await next.perform(action)
+    }
+}
+
 private final class RequestLog: Sendable {
     private let entries = Mutex<[String]>([])
     func add(_ request: URLRequest) { entries.withLock { $0.append("\(request.httpMethod ?? "GET") \(request.url?.path ?? "")") } }
@@ -446,5 +457,61 @@ private final class RequestLog: Sendable {
         defer { VoltaIntentHost.performer = previous }
         do { _ = try await VoltaIntentHost.perform(.unlock); XCTFail("expected needsApp") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .needsApp) }
+    }
+
+    /// The extension never registers a performer. Each control intent run
+    /// there must reach no command path and tell the user to open Volta, on
+    /// every SDK (with or without `allowedExecutionTargets`).
+    func testEveryControlIntentSendsNothingWhereTheAppIsNotRegistered() async throws {
+        let log = RequestLog()
+        let model = try pairedModel { request in log.add(request); return (500, Data()) }
+        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
+        let previous = VoltaIntentHost.performer
+        defer { VoltaIntentHost.performer = previous }
+
+        // Registered (app process): the action reaches the app's command path.
+        VoltaIntentHost.performer = recorder
+        _ = try? await SetVehicleLockIntent(value: true).perform()
+        XCTAssertEqual(recorder.actions, [.lock])
+
+        // Not registered (extension process): nothing reaches it, nothing is sent.
+        VoltaIntentHost.performer = nil
+        recorder.actions = []
+        let before = log.all.count
+        let runs: [(String, () async throws -> Void)] = [
+            ("unlock", { _ = try await SetVehicleLockIntent(value: false).perform() }),
+            ("lock", { _ = try await SetVehicleLockIntent(value: true).perform() }),
+            ("climate on", { _ = try await SetVehicleClimateIntent(value: true).perform() }),
+            ("climate off", { _ = try await SetVehicleClimateIntent(value: false).perform() }),
+            ("charge port", { _ = try await OpenChargePortControlIntent().perform() }),
+        ]
+        for (name, run) in runs {
+            do { try await run(); XCTFail("\(name) should fail without the app") }
+            catch {
+                XCTAssertEqual((error as? VoltaIntentError)?.kind, .needsApp, name)
+                XCTAssertEqual((error as? VoltaIntentError)?.message, "Open Volta to send vehicle commands. Nothing was sent.")
+            }
+        }
+        XCTAssertTrue(recorder.actions.isEmpty)
+        XCTAssertEqual(log.all.count, before, "no request of any kind left the process")
+    }
+
+    /// Which execution path this build compiled. With an SDK that has
+    /// `IntentExecutionTargets`, the control intents name the app as their only
+    /// target on iOS 27; without it they rely on `LiveActivityIntent`.
+    func testControlIntentsRunInTheAppOnEveryToolchain() {
+        XCTAssertTrue((SetVehicleLockIntent() as Any) is any LiveActivityIntent)
+        XCTAssertTrue((SetVehicleClimateIntent() as Any) is any LiveActivityIntent)
+        XCTAssertTrue((OpenChargePortControlIntent() as Any) is any LiveActivityIntent)
+        #if canImport(AppIntents, _version: 300)
+        XCTAssertTrue(VoltaIntentHost.declaresAppOnlyExecution)
+        if #available(iOS 27.0, *) {
+            XCTAssertEqual(SetVehicleLockIntent.allowedExecutionTargets, .main)
+            XCTAssertEqual(SetVehicleClimateIntent.allowedExecutionTargets, .main)
+            XCTAssertEqual(OpenChargePortControlIntent.allowedExecutionTargets, .main)
+        }
+        #else
+        XCTAssertFalse(VoltaIntentHost.declaresAppOnlyExecution)
+        #endif
     }
 }
