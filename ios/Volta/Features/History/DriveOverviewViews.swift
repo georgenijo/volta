@@ -139,13 +139,13 @@ struct DrivesRouteMap: View {
     static func mapSafe() -> EdgeInsets { EdgeInsets(top: 0, leading: 0, bottom: fade, trailing: 0) }
 
     /// Where routes are kept in a map: at least 24 pt below the bars
-    /// (`topInset` is the page's safe area, which already ends a little under
-    /// the floating toolbar, so the hero adds 12), 32 pt from the sides, and
+    /// (`topInset` is the page's safe area, which ends about 9 pt under the
+    /// floating toolbar, so the hero adds 16), 32 pt from the sides, and
     /// 24 pt above the fade. The short hero's routes are centred, clear of the
     /// logo in the leading corner; a taller map also keeps 24 pt above the
     /// attribution itself.
     static func clearance(topInset: CGFloat, fullBleed: Bool) -> EdgeInsets {
-        EdgeInsets(top: topInset + (fullBleed ? 12 : 24), leading: 32,
+        EdgeInsets(top: topInset + (fullBleed ? 16 : 24), leading: 32,
                    bottom: fade + (fullBleed ? 0 : VoltaMapChrome.attribution) + 24, trailing: 32)
     }
 
@@ -261,20 +261,8 @@ struct DrivesRouteMap: View {
     /// fits into. Framing and drawing use it, so both agree with the tiles
     /// whatever safe area the map inherits.
     private func measureArea(_ proxy: MapProxy, visible: MKMapRect) {
-        guard mapSize.width > 0, mapSize.height > 0,
-              let a = proxy.convert(MKMapPoint(x: visible.minX, y: visible.minY).coordinate, to: .named(Self.space)),
-              let b = proxy.convert(MKMapPoint(x: visible.maxX, y: visible.maxY).coordinate, to: .named(Self.space)) else { return }
-        func r(_ v: CGFloat) -> CGFloat { (v * 2).rounded() / 2 }
-        let measured = EdgeInsets(top: r(a.y), leading: r(a.x), bottom: r(mapSize.height - b.y), trailing: r(mapSize.width - b.x))
-        // Before MapKit has placed the map the conversion can be far off
-        // (hundreds of points outside the map): only an area inside the map counts.
-        let edges = [measured.top, measured.leading, measured.bottom, measured.trailing]
-        guard edges.allSatisfy({ $0.isFinite && $0 >= -0.5 }),
-              measured.top + measured.bottom < mapSize.height - 1,
-              measured.leading + measured.trailing < mapSize.width - 1 else { return }
-        if let old = mapInsets, abs(old.top - measured.top) < 1, abs(old.leading - measured.leading) < 1,
-           abs(old.bottom - measured.bottom) < 1, abs(old.trailing - measured.trailing) < 1 { return }
-        mapInsets = measured
+        let area = MapFitArea.settle(mapInsets, MapFitArea.measure(proxy, visible: visible, size: mapSize, in: Self.space))
+        if area != mapInsets { mapInsets = area }
     }
 
     /// Counts off the main thread; plain maps need no layer. Leaving the

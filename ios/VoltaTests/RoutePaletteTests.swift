@@ -176,17 +176,21 @@ final class RoutePaletteTests: XCTestCase {
         let content = try! XCTUnwrap(voltaBounds(runs.joined().map(MKMapPoint.init)))
         let safe = DrivesRouteMap.mapSafe()
         // 13 mini hero (first layout without its top inset, then the real
-        // one), iPhone Duo hero, heatmap.
-        let cases: [(CGSize, CGFloat, Bool)] = [(CGSize(width: 375, height: 150), 0, true), (CGSize(width: 375, height: 254), 104, true),
-                                                (CGSize(width: 419, height: 232), 122, true), (CGSize(width: 375, height: 320), 0, false)]
+        // one), iPhone Duo hero (grown by the inline title it sits under),
+        // heatmap.
+        let cases: [(CGSize, CGFloat, Bool)] = [(CGSize(width: 375, height: 150), 0, true), (CGSize(width: 375, height: 274), 94, true),
+                                                (CGSize(width: 476, height: 274), 120, true), (CGSize(width: 375, height: 320), 0, false)]
         for (size, top, hero) in cases {
             let rect = try! XCTUnwrap(DrivesRouteMap.camera(runs, size: size, topInset: top, fullBleed: hero))
             let a = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: rect, size: size, safe: safe))
             let b = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: rect, size: size, safe: safe))
             let clear = DrivesRouteMap.clearance(topInset: top, fullBleed: hero)
             let insetTop = clear.top, insetBottom = clear.bottom
-            XCTAssertEqual(insetTop, top + (hero ? 12 : 24))
+            XCTAssertEqual(insetTop, top + (hero ? 16 : 24))
             XCTAssertGreaterThanOrEqual(insetBottom, DrivesRouteMap.fade + 24)
+            // A real layout leaves the routes room: a sliver of a band would
+            // fit them only by zooming out to the whole region.
+            if top > 0 || !hero { XCTAssertGreaterThanOrEqual(size.height - insetTop - insetBottom, 60, "\(size)") }
             // Inside the clearances: under the bars, above the attribution.
             XCTAssertGreaterThanOrEqual(a.y, insetTop - 0.01, "\(size)")
             XCTAssertLessThanOrEqual(b.y, size.height - insetBottom + 0.01, "\(size)")

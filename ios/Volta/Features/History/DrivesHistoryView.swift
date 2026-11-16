@@ -258,10 +258,13 @@ struct DrivesHistoryView: View {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 let mapped = visible.contains { drive in DriveRouteSegments.runs(drive.drawableRoute).contains { $0.count > 1 } }
                 if mapped {
-                    let reveal = page.reveal(0.23, 150...180)
+                    // The inline title (bars on the side) sits on the map: the
+                    // map grows by its row so the routes keep their space.
+                    let title: CGFloat = barsOnSide ? 40 : 0
+                    let reveal = page.reveal(0.23, 150...180) + title
                     // Coloured by road density, like the heatmap, so both all-drives maps agree.
                     DrivesRouteMap(drives: visible, height: reveal + topInset, coloring: .density, fullBleed: true,
-                                   topInset: topInset + (barsOnSide ? 40 : 0))
+                                   topInset: topInset + title)
                         .padding(.top, -topInset)
                         .allowsHitTesting(false)
                         .overlay(alignment: .topLeading) { inlineTitle.historySides(sideBars) }

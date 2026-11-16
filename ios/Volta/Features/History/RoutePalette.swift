@@ -353,9 +353,16 @@ struct RouteLegendStrip: View {
             }
             .foregroundStyle(.white.opacity(0.85))
             if let marks = model.marks {
-                LegendMarks(marks: marks, width: bar.width)
-                    .padding(.leading, bar.minX)
-                    .foregroundStyle(HistoryTheme.secondary)
+                // Over a flexible line, so the marks (placed by the bar's
+                // measured width) never widen the strip themselves: a stale
+                // wide first measurement would otherwise hold it wide.
+                Text(marks.last?.label ?? " ").hidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .topLeading) {
+                        LegendMarks(marks: marks, width: bar.width)
+                            .padding(.leading, bar.minX)
+                            .foregroundStyle(HistoryTheme.secondary)
+                    }
             } else if model.mid != nil || model.note != nil {
                 ZStack(alignment: .leading) {
                     Color.clear.frame(maxWidth: .infinity).frame(height: 1)

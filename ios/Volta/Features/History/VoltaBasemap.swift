@@ -66,6 +66,40 @@ extension MapCameraPosition {
     }
 }
 
+/// The area MapKit fits a camera rect into, as insets from the map's edges.
+/// A map inherits safe areas (bars, a side strip) that MapKit adds to its own
+/// padding, so the padding we give isn't the whole story: where the camera's
+/// visible rect lands on screen is. Framing uses this, so the margins hold
+/// whatever the map inherits.
+enum MapFitArea {
+    /// The visible rect's corners in `space` (a coordinate space declared on
+    /// the map's `MapReader`, which moves with it). Nil until MapKit has
+    /// placed the map: the first conversions can be hundreds of points off,
+    /// so only an area inside the map counts.
+    static func measure(_ proxy: MapProxy, visible: MKMapRect, size: CGSize, in space: String) -> EdgeInsets? {
+        guard size.width > 0, size.height > 0,
+              let a = proxy.convert(MKMapPoint(x: visible.minX, y: visible.minY).coordinate, to: .named(space)),
+              let b = proxy.convert(MKMapPoint(x: visible.maxX, y: visible.maxY).coordinate, to: .named(space)) else { return nil }
+        func r(_ v: CGFloat) -> CGFloat { (v * 2).rounded() / 2 }
+        let measured = EdgeInsets(top: r(a.y), leading: r(a.x), bottom: r(size.height - b.y), trailing: r(size.width - b.x))
+        let edges = [measured.top, measured.leading, measured.bottom, measured.trailing]
+        guard edges.allSatisfy({ $0.isFinite && $0 >= -0.5 }),
+              measured.top + measured.bottom < size.height - 1,
+              measured.leading + measured.trailing < size.width - 1 else { return nil }
+        return measured
+    }
+
+    /// `new` when it moves any edge by a point or more, else `old` (so a
+    /// sub-point wobble doesn't refit the camera).
+    static func settle(_ old: EdgeInsets?, _ new: EdgeInsets?) -> EdgeInsets? {
+        guard let new else { return old }
+        guard let old else { return new }
+        let moved = abs(old.top - new.top) >= 1 || abs(old.leading - new.leading) >= 1
+            || abs(old.bottom - new.bottom) >= 1 || abs(old.trailing - new.trailing) >= 1
+        return moved ? new : old
+    }
+}
+
 /// Bounding rect of `points`, at least `minMeters` across each way so a single
 /// place isn't shown at street level. Nil without points.
 func voltaBounds(_ points: [MKMapPoint], minMeters: Double = 2_000) -> MKMapRect? {
@@ -103,8 +137,11 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
     @State private var camera: MKMapRect?
     @State private var size: CGSize = .zero
     @State private var pinSizes: [Item.ID: CGSize] = [:]
+    /// The area MapKit really fits into (see `MapFitArea`); `safe` until measured.
+    @State private var fitArea: EdgeInsets?
+    private static var space: String { "volta.pinned.map" }
 
-    private struct FrameKey: Equatable { var size: CGSize; var ids: [Item.ID]; var reach: EdgeInsets }
+    private struct FrameKey: Equatable { var size: CGSize; var ids: [Item.ID]; var reach: EdgeInsets; var area: EdgeInsets? }
 
     /// How far the largest pin reaches past its coordinate on each side.
     private var reach: EdgeInsets {
@@ -126,7 +163,10 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
                 .mapControls { }
                 .voltaBasemap()
                 .safeAreaPadding(safe)
-                .onMapCameraChange(frequency: .continuous) { camera = $0.rect }
+                .onMapCameraChange(frequency: .continuous) { context in
+                    camera = context.rect
+                    measure(proxy)
+                }
                 .voltaMapDim(dim, bottom: safe.bottom)
                 .overlay {
                     // MapKit's own projection, in global space, so the pins sit
@@ -150,8 +190,21 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
                 }
                 .clipped()
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+                // Once the map has settled, measure again: the first camera
+                // reports can come before MapKit has placed it.
+                .task(id: size) {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    measure(proxy)
+                }
         }
-        .onChange(of: FrameKey(size: size, ids: items.map(\.id), reach: reach), initial: true) { frame() }
+        .coordinateSpace(.named(Self.space))
+        .onChange(of: FrameKey(size: size, ids: items.map(\.id), reach: reach, area: fitArea), initial: true) { frame() }
+    }
+
+    private func measure(_ proxy: MapProxy) {
+        guard let camera else { return }
+        let area = MapFitArea.settle(fitArea, MapFitArea.measure(proxy, visible: camera, size: size, in: Self.space))
+        if area != fitArea { fitArea = area }
     }
 
     private func frame() {
@@ -161,7 +214,7 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
         let insets = EdgeInsets(top: clearance.top + r.top, leading: clearance.leading + r.leading,
                                 bottom: clearance.bottom + r.bottom, trailing: clearance.trailing + r.trailing)
         // The margins hold as given: pins never trade them for size.
-        let rect = TripRoute.fitted(content, size: size, safe: safe, insets: insets, strict: true)
+        let rect = TripRoute.fitted(content, size: size, safe: fitArea ?? safe, insets: insets, strict: true)
         position = .fitting(rect, replacing: position)
     }
 }

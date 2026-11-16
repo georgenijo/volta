@@ -277,8 +277,11 @@ struct ChargingHistoryView: View {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 let located = visible.compactMap { c in c.location(places.state).coordinate.map { ($0, ChargerKind(c)) } }
+                // The inline title (bars on the side) sits on the map: the map
+                // grows by its row so the pins keep their space.
+                let title: CGFloat = barsOnSide ? 44 : 0
                 SessionsMapHero(coordinates: located.map(\.0), kinds: located.map(\.1),
-                                height: top + page.reveal(barsOnSide ? 0.28 : 0.24, 140...190), topInset: top + (barsOnSide ? 44 : 0)) {
+                                height: top + title + page.reveal(barsOnSide ? 0.28 : 0.24, 140...190), topInset: top + title) {
                     withAnimation(.snappy) { showMap = true }
                 }
                 .overlay(alignment: .topLeading) { inlineTitle.padding(.top, top).historySides(sideBars) }
@@ -419,11 +422,11 @@ struct SessionsMapHero: View {
             let spots = spots
             if !spots.isEmpty {
                 // Whole badges at least 24 pt below the bar (the page's safe
-                // area already ends a little under it) and 24 pt above the
+                // area ends about 9 pt under it) and 24 pt above the
                 // fade; the logo and Legal link sit just above the fade.
                 PinnedMap(items: spots, coordinate: \.coordinate,
                           safe: EdgeInsets(top: 0, leading: 0, bottom: fade, trailing: 0),
-                          clearance: EdgeInsets(top: topInset + 12, leading: 24, bottom: fade + 24, trailing: 24),
+                          clearance: EdgeInsets(top: topInset + 16, leading: 24, bottom: fade + 24, trailing: 24),
                           dim: 0.65, interactive: false, pinAnchor: .center) { spot in
                     if let kind = spot.kind {
                         ChargerBadge(kind: kind)
