@@ -25,12 +25,13 @@ if (process.env.FLEET_TELEMETRY_ENABLED && !['true','false'].includes(process.en
 // Sign in with Apple stays disabled (501) unless the app's bundle ID is configured.
 const apple = process.env.APPLE_BUNDLE_ID ? new AppleVerifier(process.env.APPLE_BUNDLE_ID) : null;
 const app = createApp(new Auth(authDb, apple), new Telemetry(telemetryDb, currency, undefined, fleetEnabled, log, vehicleId), log, tesla, new ChargingHistory(authDb, telemetryDb, tesla), new ServiceLog(authDb), new DriveDetail(telemetryDb, Dem.fromEnv(), log));
-// Commander can spend up to 65 seconds waking and executing a command. Keep the
-// inbound connection alive beyond the relay's 75-second deadline.
 // A rebuilt TeslaMate can renumber cars; say so rather than serve an empty list silently.
 if (vehicleId !== null) telemetryDb`SELECT 1 FROM public.cars WHERE id=${vehicleId}`
   .then(rows => { if (!rows.length) log({ level: 'warn', event: 'vehicle_filter_unknown', message: 'VOLTA_VEHICLE_ID is not a TeslaMate car; /v1/vehicles is empty' }); })
-  .catch(() => {});
+  // Only the error code: connection errors can name hosts.
+  .catch((error: any) => log({ level: 'warn', event: 'vehicle_filter_check_failed', code: String(error?.code ?? error?.name ?? 'unknown') }));
+// Commander can spend up to 65 seconds waking and executing a command. Keep the
+// inbound connection alive beyond the relay's 75-second deadline.
 const server = Bun.serve({ hostname: process.env.HOST || '127.0.0.1', port: integer(process.env.PORT, 'PORT', 8080, 65535), idleTimeout: 90, fetch: app.fetch });
 for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, async () => { server.stop(); await Promise.all([telemetryDb.end(), authDb.end()]); process.exit(0); });
 console.log(JSON.stringify({ event: 'started', port: server.port, version: '0.1.0' }));

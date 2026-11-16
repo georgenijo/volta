@@ -168,12 +168,6 @@ export function sessionDistance(path: {t: Date; latitude: number; longitude: num
   }
   return edges ? sum : null;
 }
-/** `before`: latest EnergyRemaining observation in the 30 min before the window.
- * `bounds`: the latest odometer reading before the start (in the lookback) and
- * the first one in the tail after the end; validated here against real loss.
- * `lean` (summary totals): distance, energy and score are derived exactly as
- * usual, but output-only previews (route, path, series, coverage, regen,
- * temperature, battery levels) are skipped and returned empty or null. */
 /** Summary totals: GPS feeds only the distance fallback, which runs only after
  * the whole-window odometer fails. Skip loading positions until then, and then
  * derive again with them, so distance follows the same precedence as the list
@@ -185,6 +179,12 @@ export async function deriveTotals(window: Window, payloads: Row[], samples: Row
   const {_odometerMeasured,...totals}=row;
   return totals;
 }
+/** `before`: latest EnergyRemaining observation in the 30 min before the window.
+ * `bounds`: the latest odometer reading before the start (in the lookback) and
+ * the first one in the tail after the end; validated here against real loss.
+ * `lean` (summary totals): distance, energy and score are derived exactly as
+ * usual, but output-only previews (route, path, series, coverage, regen,
+ * temperature, battery levels) are skipped and returned empty or null. */
 export function deriveDrive(window: Window, locations: Row[], payloads: Row[], samples: Row[], rated: number | null, gaps: Gap[], before?: Row,
   bounds: {odometerBefore?: Row; odometerAfter?: Row} = {}, splitParts = true, lean = false): Row {
   const allGaps=gaps, real=realGaps(gaps);
