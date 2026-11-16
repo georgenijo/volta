@@ -131,7 +131,11 @@ struct TelemetryFreshness: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey { case connected, lastSeenAt, recordedAt }
     var label: String { label() }
     func label(now: Date = .now) -> String {
-        if let savedAt { return "Saved data from \(VoltaFormat.relativeDate(min(savedAt, now), now: now))" }
+        if let savedAt {
+            // Saved, refreshing: keep when the car itself was last heard from.
+            let saved = "Saved data from \(VoltaFormat.relativeDate(min(savedAt, now), now: now))"
+            return lastSeenAt.map { "\(saved) · car last seen \(VoltaFormat.dateTime($0))" } ?? saved
+        }
         if connected { return "Telemetry connected" }
         return lastSeenAt.map { "Last telemetry as of \(VoltaFormat.dateTime($0))" } ?? "Telemetry disconnected · no observations yet"
     }

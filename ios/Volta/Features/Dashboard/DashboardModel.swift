@@ -45,6 +45,8 @@ final class DashboardModel {
     /// Sections whose latest load failed. Their previous data (if any) is kept;
     /// a section here with no data means "failed", not "empty".
     var failedSections: Set<Section> = []
+    /// When this process last loaded fresh status; nil while only saved data
+    /// is shown (the saved time is in the status's freshness label).
     var lastLoadedAt: Date?
     /// Pending history must not look like a successfully loaded empty section.
     private(set) var loadingSections: Set<Section> = []
@@ -62,6 +64,19 @@ final class DashboardModel {
     private var savedBackend: String?
     /// The shown status came from the saved dashboard, not this process.
     private(set) var showsSavedStatus = false
+
+    /// The status the Controls sheet may start from: never saved status, so
+    /// no control or command is based on it. (`ControlsView` waits for its own
+    /// fresh status either way; see `VehicleCommandCoordinator.hasFreshStatus`.)
+    var controlsInitialStatus: VehicleStatus? { showsSavedStatus ? nil : status }
+
+    /// Whether returning to the foreground should reload: fresh data is over
+    /// 30 s old and no load is still filling the screen. Saved data alone
+    /// never counts, so a launch with saved data sends one set of requests.
+    func foregroundRefreshDue(now: Date = .now) -> Bool {
+        guard loadingSections.isEmpty, let lastLoadedAt else { return false }
+        return now.timeIntervalSince(lastLoadedAt) > 30
+    }
 
     /// Short message for the partial-failure banner, if any section failed.
     var partialFailureMessage: String? {
@@ -120,7 +135,9 @@ final class DashboardModel {
         // back to the server request and preserves the existing missing-vehicle behavior.
         let seededVehicles = isNewModel ? start?.vehicles : nil
         // The app's launch /status for this vehicle, if this is the first dashboard.
-        let prefetch = isNewModel && start?.prefetch?.vehicleID == vehicleID ? start?.prefetch : nil
+        // One sent too long ago (the app was prewarmed or suspended) would show
+        // an old status as fresh.
+        let prefetch = isNewModel && start?.prefetch?.isUsable(for: vehicleID) == true ? start?.prefetch : nil
         if prefetch == nil { start?.prefetch?.cancel() }
 
         let todayRequestedAt = Date.now
@@ -133,8 +150,14 @@ final class DashboardModel {
             let issued = prefetch.map { $0.issued } ?? surfaces?.nextStatusToken()
             let statusTask = prefetch?.status
             async let statusReq = Self.result {
-                if let statusTask { return try await DashboardPrefetch.value(of: statusTask) }
-                return try await dataSource.status(vehicleID: vehicleID)
+                if let statusTask {
+                    do { return try await DashboardPrefetch.value(of: statusTask) } catch {
+                        // A launch request can fail while the app is suspended on
+                        // a good network: send one new request before showing an error.
+                        guard !Task.isCancelled, Self.isTransportFailure(error) else { throw error }
+                    }
+                }
+                return try await dataSource.displayStatus(vehicleID: vehicleID)
             }
             group.addTask { .timeline(await Self.result { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }) }
             for range in SummaryRange.allCases {
@@ -163,6 +186,12 @@ final class DashboardModel {
             // Publish these as soon as status arrives. In particular, a normal
             // vehicle-list refresh must not hold fresh status off screen.
             withAnimation(.smooth) {
+                // History shown from the saved dashboard has no label of its
+                // own once fresh status replaces the saved one: hide it until
+                // this load replaces it, so pending and failed sections show.
+                if showsSavedStatus {
+                    timeline = []; summaries = [:]; todayDay = nil; todayRequest = nil
+                }
                 status = newStatus
                 showsSavedStatus = false
                 refreshError = nil
@@ -182,6 +211,8 @@ final class DashboardModel {
             // cannot hold up the others.
             var freshTimeline: [TimelineSegment]?
             var freshToday: TodaySummary?
+            /// Sections loaded by this load; only these are saved.
+            var freshSummaries: [SummaryRange: ActivitySummary] = [:]
             var cancelledSection = false
             for await response in group {
                 guard token == generation, !Task.isCancelled else { group.cancelAll(); return }
@@ -218,7 +249,8 @@ final class DashboardModel {
                             todayDay = current ? today.day : nil
                             todayRequest = current ? (todayRequestedAt, todayRequestedZone) : nil
                             freshToday = today
-                        } else { summaries[range] = summary }
+                            if current { freshSummaries[.today] = summary }
+                        } else { summaries[range] = summary; freshSummaries[range] = summary }
                         failedSections.remove(.summary(range))
                     case .failure: failedSections.insert(.summary(range))
                     }
@@ -226,7 +258,8 @@ final class DashboardModel {
             }
             guard token == generation, !Task.isCancelled else { return }
             if failedSections.isEmpty { StartupTrace.mark(.sections) }
-            save(status: newStatus, vehicleID: vehicleID, at: statusLoadedAt)
+            save(status: newStatus, vehicleID: vehicleID, at: statusLoadedAt, timeline: freshTimeline,
+                 summaries: freshSummaries, todayRequestedAt: todayRequestedAt, todayRequestedZone: todayRequestedZone)
             // One ordered publication per status request, preserving the
             // existing widget / Live Activity ordering and reporting-day rules.
             guard token == generation, !Task.isCancelled, !cancelledSection else { return }
@@ -253,19 +286,23 @@ final class DashboardModel {
                 todayRequest = (today.requestedAt, today.requestedZone)
             }
         }
-        lastLoadedAt = saved.savedAt
+        // `lastLoadedAt` stays nil: saved data must not look like a recent load.
         phase = .loaded
         StartupTrace.mark(.cachedStatus)
     }
 
-    /// Saves what is on screen after a load with fresh status, for the next launch.
-    private func save(status: VehicleStatus, vehicleID: Int, at savedAt: Date) {
+    /// Saves a load with fresh status for the next launch: only the sections
+    /// this load fetched, so nothing older is saved under `savedAt`. A failed
+    /// section is left out and shows as loading on the next launch.
+    private func save(status: VehicleStatus, vehicleID: Int, at savedAt: Date, timeline: [TimelineSegment]?,
+                      summaries: [SummaryRange: ActivitySummary], todayRequestedAt: Date, todayRequestedZone: String) {
         guard let savedStore, let savedBackend else { return }
+        let hasToday = summaries[.today] != nil
         savedStore.write(SavedDashboard(
             backend: savedBackend, vehicleID: vehicleID, savedAt: savedAt, vehicles: vehicles, status: status,
-            timeline: timeline, summaries: SummaryRange.allCases.compactMap { summaries[$0] },
-            todayRequestedAt: summaries[.today] == nil ? nil : todayRequest?.at,
-            todayRequestedZone: summaries[.today] == nil ? nil : todayRequest?.zone))
+            timeline: timeline ?? [], summaries: SummaryRange.allCases.compactMap { summaries[$0] },
+            todayRequestedAt: hasToday ? todayRequestedAt : nil,
+            todayRequestedZone: hasToday ? todayRequestedZone : nil))
     }
 
     private func apply(_ result: Result<[Vehicle], any Error>, selectedVehicleID: Int) {
@@ -284,6 +321,15 @@ final class DashboardModel {
 
     private static func result<T: Sendable>(_ work: () async throws -> T) async -> Result<T, any Error> {
         do { return .success(try await work()) } catch { return .failure(error) }
+    }
+
+    /// No answer from the server, as opposed to an answer that was an error.
+    nonisolated static func isTransportFailure(_ error: any Error) -> Bool {
+        switch error as? VoltaError {
+        case .transport, .unreachable: return true
+        case .some: return false
+        case nil: return (error as? URLError).map { $0.code != .cancelled } ?? false
+        }
     }
 
     private static func isCancellation(_ result: Result<Void, any Error>) -> Bool {

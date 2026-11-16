@@ -5,6 +5,9 @@ import SwiftUI
 protocol VoltaDataSource: Sendable {
     func vehicles() async throws -> [Vehicle]
     func status(vehicleID: Int) async throws -> VehicleStatus
+    /// Status shown for reading only, such as the dashboard's. It never makes
+    /// vehicle commands available; see `CommandStatusLedger`.
+    func displayStatus(vehicleID: Int) async throws -> VehicleStatus
     func summary(vehicleID: Int, range: SummaryRange) async throws -> ActivitySummary
     func timeline(vehicleID: Int, hours: Int) async throws -> [TimelineSegment]
     func drives(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<DriveSummary>
@@ -29,6 +32,9 @@ protocol VoltaDataSource: Sendable {
     var commandBackendID: String { get }
     /// Demo sources may simulate supported actions, but are never live-ready.
     var simulatesVehicleCommands: Bool { get }
+    /// Commands for this source need a fresh `status(vehicleID:)` first, recorded
+    /// in `CommandStatusLedger`.
+    var commandsRequireFreshStatus: Bool { get }
     func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities
     func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult
 }
@@ -80,6 +86,8 @@ extension EnvironmentValues {
 extension VoltaDataSource {
     var commandBackendID: String { String(reflecting: type(of: self)) }
     var simulatesVehicleCommands: Bool { false }
+    var commandsRequireFreshStatus: Bool { false }
+    func displayStatus(vehicleID: Int) async throws -> VehicleStatus { try await status(vehicleID: vehicleID) }
     func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities { .unavailable }
     func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult {
         throw VehicleCommandFailure(status: 501, code: "commands_unavailable", requestID: nil,

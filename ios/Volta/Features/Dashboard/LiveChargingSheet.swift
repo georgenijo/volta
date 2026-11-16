@@ -18,6 +18,8 @@ struct LiveChargingSheet: View {
     /// The session whose detail is shown; it outlives the status's id so a
     /// finished session keeps its final totals and curve.
     @State private var shownChargeId: Int?
+    /// The latest status refresh failed; what is shown is older.
+    @State private var refreshFailed = false
 
     init(initialStatus: VehicleStatus) {
         _status = State(initialValue: initialStatus)
@@ -61,7 +63,8 @@ struct LiveChargingSheet: View {
     }
 
     private func refresh() async {
-        if let fresh = try? await dataSource.status(vehicleID: vehicleID) { status = fresh }
+        do { status = try await dataSource.status(vehicleID: vehicleID); refreshFailed = false }
+        catch { if !Task.isCancelled { refreshFailed = true } }
         // When charging ends the status may drop the id; the shown session is
         // read once more for its final readings. A different session never
         // shows another's detail, even while its own is not yet servable.
@@ -101,6 +104,16 @@ struct LiveChargingSheet: View {
             }
             LinearGradient(colors: [.clear, .voltaBackground], startPoint: .center, endPoint: .bottom)
                 .allowsHitTesting(false)
+            if let provenance = Self.provenance(status, refreshFailed: refreshFailed) {
+                Label(provenance, systemImage: "clock.arrow.circlepath")
+                    .font(.system(.footnote, weight: .semibold))
+                    .foregroundStyle(Color.voltaAmber)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Color.black.opacity(0.7), in: .capsule)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, VoltaSpacing.md)
+                    .accessibilityIdentifier("liveCharge.provenance")
+            }
             HStack {
                 HStack(spacing: 6) {
                     StatusDot(color: stateColor, size: 7)
@@ -122,17 +135,29 @@ struct LiveChargingSheet: View {
         .clipped()
     }
 
-    private var stateText: String {
+    private var stateText: String { Self.stateText(status) }
+
+    /// Saved status never reads as a live session.
+    static func stateText(_ status: VehicleStatus) -> String {
+        if status.telemetryFreshness?.savedAt != nil { return "SAVED DATA" }
         switch status.chargingState {
-        case .complete: "COMPLETE"
-        case .stopped: "STOPPED"
-        case .disconnected: "UNPLUGGED"
-        default: charging ? "CHARGING" : "NOT CHARGING"
+        case .complete: return "COMPLETE"
+        case .stopped: return "STOPPED"
+        case .disconnected: return "UNPLUGGED"
+        default: return status.isCharging ? "CHARGING" : "NOT CHARGING"
         }
     }
 
     private var stateColor: Color {
-        charging ? .voltaGreen : status.chargingState == .complete ? .voltaBlue : .voltaTextSecondary
+        if status.telemetryFreshness?.savedAt != nil { return .voltaAmber }
+        return charging ? .voltaGreen : status.chargingState == .complete ? .voltaBlue : .voltaTextSecondary
+    }
+
+    /// Where the shown status came from, when it is not a live reading.
+    static func provenance(_ status: VehicleStatus, refreshFailed: Bool, now: Date = .now) -> String? {
+        guard let savedAt = status.telemetryFreshness?.savedAt else { return nil }
+        let age = VoltaFormat.relativeDate(min(savedAt, now), now: now)
+        return refreshFailed ? "Couldn't refresh · saved data from \(age)" : "Saved data from \(age) · refreshing"
     }
 
     // MARK: Place and level

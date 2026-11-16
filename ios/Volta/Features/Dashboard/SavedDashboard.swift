@@ -1,5 +1,7 @@
 import CryptoKit
 import Foundation
+import Synchronization
+import os
 
 /// The last dashboard loaded from a server, kept on this device so a relaunch
 /// can show it, labelled as saved, while fresh data loads.
@@ -39,9 +41,11 @@ struct SavedDashboard: Codable, Equatable, Sendable {
         SHA256.hash(data: Data(backendID.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// `status`, marked so screens label it as saved rather than live.
+    /// `status`, marked so screens label it as saved rather than live. It keeps
+    /// no location observation time, so HomeLink can never act on it.
     var labelledStatus: VehicleStatus {
         var status = status
+        status.locationUpdatedAt = nil
         var freshness = status.telemetryFreshness ?? TelemetryFreshness(connected: false, lastSeenAt: nil, recordedAt: [:])
         freshness.savedAt = savedAt
         status.telemetryFreshness = freshness
@@ -68,13 +72,21 @@ protocol SavedDashboardStoring: AnyObject {
 final class SavedDashboardFile: SavedDashboardStoring {
     var acceptedBackend: String?
     private let url: URL
-    /// Writes and removals run in order, off the main thread.
+    /// Writes run in order, off the main thread.
     private var lastWrite: Task<Void, Never>?
+    /// Bumped by `remove()`. A write lands only while the epoch it was queued
+    /// in is current, checked under the same lock as the file operation, so
+    /// no queued write can recreate the file after `remove()` returns.
+    private let epoch = Fence()
+    private let beforeWrite: (@Sendable () async -> Void)?
+    nonisolated private static let logger = Logger(subsystem: "com.georgenijo.volta", category: "saved-dashboard")
 
-    init(url: URL? = nil) {
+    /// - Parameter beforeWrite: runs before each queued write takes the lock (tests).
+    init(url: URL? = nil, beforeWrite: (@Sendable () async -> Void)? = nil) {
         self.url = url ?? URL.applicationSupportDirectory
             .appending(path: "Volta", directoryHint: .isDirectory)
             .appending(path: "saved-dashboard.json")
+        self.beforeWrite = beforeWrite
     }
 
     func read(backend: String) -> SavedDashboard? {
@@ -86,23 +98,31 @@ final class SavedDashboardFile: SavedDashboardStoring {
 
     func write(_ dashboard: SavedDashboard) {
         guard dashboard.backend == acceptedBackend else { return }
-        let url = url, previous = lastWrite
+        let url = url, previous = lastWrite, epoch = epoch, beforeWrite = beforeWrite
+        let queuedIn = epoch.current
         lastWrite = Task.detached(priority: .utility) {
             await previous?.value
             guard let data = try? JSONEncoder().encode(dashboard) else { return }
-            Self.prepareDirectory(url.deletingLastPathComponent())
-            // A failed write only costs the next launch its instant dashboard.
-            try? data.write(to: url, options: [.atomic, .completeFileProtection])
+            await beforeWrite?()
+            epoch.ifCurrent(queuedIn) {
+                Self.prepareDirectory(url.deletingLastPathComponent())
+                // A failed write only costs the next launch its instant dashboard.
+                do { try data.write(to: url, options: Self.writeOptions) }
+                catch { Self.logger.error("saved dashboard write failed: \(Self.describe(error), privacy: .public)") }
+            }
         }
     }
 
+    /// Readable only while the device is unlocked.
+    nonisolated static let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtection]
+
+    /// Deletes the file before returning; writes queued earlier are dropped.
     func remove() {
-        let url = url, previous = lastWrite
-        // Remove now too: a launch right after unpairing must not find it.
-        try? FileManager.default.removeItem(at: url)
-        lastWrite = Task.detached(priority: .utility) {
-            await previous?.value
-            try? FileManager.default.removeItem(at: url)
+        let url = url
+        epoch.advance {
+            do { try FileManager.default.removeItem(at: url) }
+            catch CocoaError.fileNoSuchFile {}
+            catch { Self.logger.error("saved dashboard removal failed: \(Self.describe(error), privacy: .public)") }
         }
     }
 
@@ -111,10 +131,31 @@ final class SavedDashboardFile: SavedDashboardStoring {
 
     nonisolated private static func prepareDirectory(_ directory: URL) {
         var directory = directory
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        try? directory.setResourceValues(values)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try directory.setResourceValues(values)
+        } catch {
+            logger.error("saved dashboard backup exclusion failed: \(describe(error), privacy: .public)")
+        }
+    }
+
+    /// Error domain and code only: no paths or contents.
+    nonisolated private static func describe(_ error: any Error) -> String {
+        let error = error as NSError
+        return "\(error.domain) \(error.code)"
+    }
+
+    private final class Fence: Sendable {
+        private let value = Mutex<UInt64>(0)
+        var current: UInt64 { value.withLock { $0 } }
+        func ifCurrent(_ expected: UInt64, _ body: () -> Void) {
+            value.withLock { if $0 == expected { body() } }
+        }
+        func advance(_ body: () -> Void) {
+            value.withLock { $0 += 1; body() }
+        }
     }
 }
 
@@ -171,15 +212,26 @@ final class DashboardPrefetch {
     /// The widget-ordering token, taken just before `/status` was sent.
     let issued: StatusRequestToken?
     let status: Task<VehicleStatus, any Error>
+    /// When `/status` was sent. The clock keeps counting while the app is suspended.
+    let sentAt: ContinuousClock.Instant
+    /// How old a prefetch the first dashboard still adopts. Older ones were
+    /// sent before a suspension (or a prewarm), and their answer is not fresh.
+    static let maximumAge: Duration = .seconds(5)
 
-    init(dataSource: any VoltaDataSource, vehicleID: Int, surfaces: (any VehicleSurfaces)?) {
+    init(dataSource: any VoltaDataSource, vehicleID: Int, surfaces: (any VehicleSurfaces)?,
+         sentAt: ContinuousClock.Instant = .now) {
         self.vehicleID = vehicleID
+        self.sentAt = sentAt
         issued = surfaces?.nextStatusToken()
         // Detached: a main-actor task would not start until the first frame is built.
-        status = Task.detached(priority: .userInitiated) { try await dataSource.status(vehicleID: vehicleID) }
+        status = Task.detached(priority: .userInitiated) { try await dataSource.displayStatus(vehicleID: vehicleID) }
     }
 
     func cancel() { status.cancel() }
+
+    func isUsable(for vehicleID: Int, now: ContinuousClock.Instant = .now) -> Bool {
+        vehicleID == self.vehicleID && now - sentAt <= Self.maximumAge
+    }
 
     /// `task`'s result; cancelling the waiter cancels the request.
     nonisolated static func value<T: Sendable>(of task: Task<T, any Error>) async throws -> T {

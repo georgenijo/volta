@@ -25,13 +25,18 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
 
     /// A restored pairing whose `/v1/vehicles` responses come from `vehicles`.
     private func pairedModel(_ settings: UserSettings, saved: MemorySavedDashboards? = nil,
+                             environment: [String: String] = [:],
                              vehicles: @escaping @Sendable () -> Data) throws -> AppModel {
-        StubProtocol.handler.withLock { $0 = { _ in (200, vehicles()) } }
+        let status = try DecodingTests.fixture("status")
+        StubProtocol.handler.withLock {
+            $0 = { request in request.url?.path == "/v1/vehicles" ? (200, vehicles()) : (200, status) }
+        }
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
         settings.serverURL = "https://volta.example"
         let store = SelectionTokenStore(); try store.save("synthetic-token")
         return AppModel(settings: settings, tokenStore: store, session: URLSession(configuration: config),
-                        launchArguments: ["Volta"], surfaces: NoSurfaces(), savedDashboards: saved)
+                        launchArguments: ["Volta"], launchEnvironment: environment, surfaces: NoSurfaces(),
+                        savedDashboards: saved)
     }
 
     /// What the first dashboard would receive as the startup vehicle list.
@@ -164,13 +169,64 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
     func testRestoredPairingSendsOneVehicleRequestBeforeTheRootViewAppears() async throws {
         let calls = Mutex(0)
         let model = try pairedModel(settings()) { calls.withLock { $0 += 1 }; return vehiclesJSON() }
-        await waitUntil { calls.withLock { $0 } == 1 }
+        await waitUntil { model.hasLoadedVehicles }
         XCTAssertEqual(calls.withLock { $0 }, 1, "sent while the first frame is built")
         await model.loadVehicles()
-        XCTAssertEqual(calls.withLock { $0 }, 1, "the first load consumes the launch request")
+        XCTAssertEqual(calls.withLock { $0 }, 1, "the root view's first load finds it already done")
         XCTAssertEqual(model.vehicles.map(\.id), [1, 2])
         await model.loadVehicles()
         XCTAssertEqual(calls.withLock { $0 }, 2, "later loads ask the server again")
+    }
+
+    /// The shell mounts from the saved list, so the dashboard's task and the
+    /// root view's task may run in either order, before or after the answer.
+    func testStartupSendsOneVehicleRequestWhicheverViewAsksFirst() async throws {
+        for schedule in ["dashboard first", "root first", "after the answer"] {
+            let calls = Mutex(0)
+            let settings = settings()
+            settings.selectedVehicleID = 2
+            let model = try pairedModel(settings, saved: MemorySavedDashboards(savedDashboard(backend: pairedBackend))) {
+                calls.withLock { $0 += 1 }; return vehiclesJSON()
+            }
+            XCTAssertEqual(model.vehicles.map(\.name), ["Tesla", "Saved Friday"], schedule)
+            switch schedule {
+            case "dashboard first":
+                let start = model.takeInitialDashboardVehicles(vehicleID: 2)
+                await model.loadVehicles()
+                let list = await start?.vehicles?()
+                XCTAssertEqual(list?.map(\.name), ["Tesla", "Friday"], schedule)
+            case "root first":
+                let root = Task { await model.loadVehicles() }
+                let list = await model.takeInitialDashboardVehicles(vehicleID: 2)?.vehicles?()
+                await root.value
+                XCTAssertEqual(list?.map(\.name), ["Tesla", "Friday"], schedule)
+            default:
+                await waitUntil { model.hasLoadedVehicles }
+                let list = await model.takeInitialDashboardVehicles(vehicleID: 2)?.vehicles?()
+                await model.loadVehicles()
+                XCTAssertEqual(list?.map(\.name), ["Tesla", "Friday"], schedule)
+            }
+            XCTAssertEqual(calls.withLock { $0 }, 1, schedule)
+            await model.loadVehicles()
+            XCTAssertEqual(calls.withLock { $0 }, 2, "\(schedule): later loads ask the server again")
+        }
+    }
+
+    func testPrewarmedLaunchSendsNothingUntilTheAppIsOpened() async throws {
+        let calls = Mutex(0)
+        let settings = settings()
+        settings.selectedVehicleID = 2
+        let model = try pairedModel(settings, saved: MemorySavedDashboards(savedDashboard(backend: pairedBackend)),
+                                    environment: ["ActivePrewarm": "1"]) { calls.withLock { $0 += 1 }; return vehiclesJSON() }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(calls.withLock { $0 }, 0, "a prewarmed process may be suspended for hours")
+        XCTAssertEqual(model.vehicles.count, 2, "the saved list is local and still shown")
+        let start = model.takeInitialDashboardVehicles(vehicleID: 2)
+        XCTAssertNil(start?.prefetch)
+        XCTAssertNotNil(start?.saved)
+        await model.loadVehicles()
+        _ = await start?.vehicles?()
+        XCTAssertEqual(calls.withLock { $0 }, 1, "the opened app sends one request")
     }
 
     func testLockedLaunchSendsNoVehicleRequest() async throws {

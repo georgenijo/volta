@@ -1,4 +1,5 @@
 import XCTest
+import Synchronization
 @testable import Volta
 
 // Saved dashboard and launch-request tests. Kept apart from
@@ -81,6 +82,7 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(freshness.label, "Telemetry connected")
         freshness.savedAt = .now.addingTimeInterval(-300)
         XCTAssertTrue(freshness.label.hasPrefix("Saved data from"))
+        XCTAssertTrue(freshness.label.contains("car last seen"), "the car's own last report stays in the caption")
         let encoded = try? JSONEncoder().encode(freshness)
         let decoded = encoded.flatMap { try? JSONDecoder().decode(TelemetryFreshness.self, from: $0) }
         XCTAssertNil(decoded?.savedAt, "the saved marker is local only and never persisted or decoded")
@@ -229,5 +231,258 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertNil(file.read(backend: "backend-a"))
         await file.drain()
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    // MARK: Review round 1
+
+    func testSavedDataNeverMakesAForegroundReloadDue() async {
+        let source = StubSource(), gate = SectionGate(), calls = Counter(), model = DashboardModel()
+        source.statusHandler = { _ = await calls.next(); await gate.wait(); return makeStatus(battery: 90) }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: saved())) }
+        await waitUntil { model.status != nil }
+        XCTAssertNil(model.lastLoadedAt, "saved data is not a recent load")
+        XCTAssertFalse(model.foregroundRefreshDue(now: .now.addingTimeInterval(3600)),
+                       "becoming active while saved data shows sends nothing more")
+        XCTAssertNil(model.controlsInitialStatus, "the Controls sheet never starts from saved status")
+        await gate.open()
+        await task.value
+        let statuses = await calls.value
+        XCTAssertEqual(statuses, 1)
+        XCTAssertNotNil(model.lastLoadedAt)
+        XCTAssertEqual(model.controlsInitialStatus?.batteryLevel, 90)
+        XCTAssertTrue(model.foregroundRefreshDue(now: .now.addingTimeInterval(31)))
+    }
+
+    func testForegroundReloadWaitsWhileSectionsLoad() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        await model.load(dataSource: source, vehicleID: 1)
+        source.summaryHandler = { range in await gate.wait(); return makeSummary(range) }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1) }
+        await waitUntil { !model.loadingSections.isEmpty }
+        XCTAssertFalse(model.foregroundRefreshDue(now: .now.addingTimeInterval(3600)))
+        await gate.open()
+        await task.value
+    }
+
+    func testFreshStatusHidesSavedHistoryUntilThisLoadReplacesIt() async {
+        let source = StubSource(), gate = SectionGate(), store = MemorySavedDashboards(), model = DashboardModel()
+        store.acceptedBackend = "backend-a"
+        source.timelineHandler = { await gate.wait(); throw VoltaError.unreachable("offline") }
+        source.summaryHandler = { _ in await gate.wait(); throw VoltaError.unreachable("offline") }
+        let task = Task {
+            await model.load(dataSource: source, vehicleID: 1,
+                             initialVehicles: DashboardStart(saved: saved(), store: store, backend: "backend-a"))
+        }
+        await waitUntil { model.status?.batteryLevel == 72 }
+        XCTAssertFalse(model.showsSavedStatus)
+        XCTAssertTrue(model.timeline.isEmpty, "saved history is not shown beside fresh status")
+        XCTAssertTrue(model.summaries.isEmpty)
+        XCTAssertEqual(model.loadingSections.count, 4, "those sections show as loading")
+
+        await gate.open()
+        await task.value
+        XCTAssertEqual(model.failedSections.count, 4, "and then as failed, not as saved data")
+        XCTAssertTrue(model.timeline.isEmpty)
+        let written = store.dashboard
+        XCTAssertEqual(written?.status.batteryLevel, 72)
+        XCTAssertEqual(written?.timeline, [], "failed sections are never saved under the new date")
+        XCTAssertEqual(written?.summaries, [])
+
+        // The next launch shows what that load really fetched, and nothing older.
+        let next = DashboardModel(), nextGate = SectionGate()
+        source.statusHandler = { await nextGate.wait(); return makeStatus() }
+        let relaunch = Task {
+            await next.load(dataSource: source, vehicleID: 1,
+                            initialVehicles: DashboardStart(saved: written, store: store, backend: "backend-a"))
+        }
+        await waitUntil { next.status != nil }
+        XCTAssertTrue(next.showsSavedStatus)
+        XCTAssertTrue(next.timeline.isEmpty)
+        XCTAssertTrue(next.summaries.isEmpty)
+        await nextGate.open()
+        await relaunch.value
+    }
+
+    func testOnlySectionsLoadedFreshAreSaved() async {
+        let source = StubSource(), store = MemorySavedDashboards(), model = DashboardModel()
+        store.acceptedBackend = "backend-a"
+        source.timelineHandler = { [segment] }
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(store: store, backend: "backend-a"))
+        XCTAssertEqual(store.dashboard?.summaries.count, 3)
+        let firstSavedAt = store.dashboard?.savedAt
+
+        // A refresh whose history fails keeps the earlier sections on screen,
+        // but does not save them again under the new date.
+        source.timelineHandler = { throw VoltaError.unreachable("offline") }
+        source.summaryHandler = { _ in throw VoltaError.unreachable("offline") }
+        source.statusHandler = { makeStatus(battery: 55) }
+        await model.load(dataSource: source, vehicleID: 1)
+        XCTAssertEqual(model.timeline.count, 1, "kept on screen with the partial-failure banner")
+        XCTAssertNotNil(model.partialFailureMessage)
+        XCTAssertEqual(store.dashboard?.status.batteryLevel, 55)
+        XCTAssertNotEqual(store.dashboard?.savedAt, firstSavedAt)
+        XCTAssertEqual(store.dashboard?.timeline, [])
+        XCTAssertEqual(store.dashboard?.summaries, [])
+    }
+
+    func testAPrefetchSentTooLongAgoIsNotAdopted() async {
+        let source = StubSource(), calls = Counter(), model = DashboardModel()
+        source.statusHandler = { let call = await calls.next(); return makeStatus(battery: call == 1 ? 11 : 66) }
+        let prefetch = DashboardPrefetch(dataSource: source, vehicleID: 1, surfaces: nil,
+                                         sentAt: .now - .seconds(6))
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
+        XCTAssertTrue(prefetch.status.isCancelled)
+        let statuses = await calls.value
+        XCTAssertEqual(statuses, 2, "the dashboard asks again rather than show an old answer as fresh")
+        XCTAssertFalse(prefetch.isUsable(for: 1))
+    }
+
+    func testAPrefetchThatGotNoAnswerIsRetriedOnce() async {
+        let source = StubSource(), calls = Counter(), model = DashboardModel()
+        source.statusHandler = {
+            if await calls.next() == 1 { throw VoltaError.unreachable("timed out while suspended") }
+            return makeStatus(battery: 66)
+        }
+        let prefetch = DashboardPrefetch(dataSource: source, vehicleID: 1, surfaces: nil)
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
+        let statuses = await calls.value
+        XCTAssertEqual(statuses, 2)
+        XCTAssertEqual(model.status?.batteryLevel, 66)
+        XCTAssertNil(model.refreshError)
+        XCTAssertEqual(model.phase, .loaded)
+
+        // A server error is the answer: no second request.
+        let rejecting = StubSource(), rejected = Counter(), other = DashboardModel()
+        rejecting.statusHandler = { _ = await rejected.next(); throw VoltaError.server(code: "data_unavailable", message: "none") }
+        let failed = DashboardPrefetch(dataSource: rejecting, vehicleID: 1, surfaces: nil)
+        await other.load(dataSource: rejecting, vehicleID: 1, initialVehicles: DashboardStart(prefetch: failed))
+        let rejections = await rejected.value
+        XCTAssertEqual(rejections, 1)
+        XCTAssertEqual(other.phase, .noData)
+    }
+
+    func testRemoveDropsAQueuedWriteThatIsStillRunning() async throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "saved-race-\(UUID())/saved-dashboard.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let gate = SectionGate(), started = Mutex(false)
+        let file = SavedDashboardFile(url: url) { started.withLock { $0 = true }; await gate.wait() }
+        file.acceptedBackend = "backend-a"
+        file.write(saved(backend: "backend-a"))
+        await waitUntil { started.withLock { $0 } }
+        file.remove()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "deleted before remove() returns")
+        await gate.open()
+        await file.drain()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "the queued write cannot recreate it")
+
+        // Writes queued after the removal still land.
+        file.write(saved(backend: "backend-a"))
+        await file.drain()
+        XCTAssertNotNil(file.read(backend: "backend-a"))
+    }
+
+    func testSavedFileIsProtectedAndItsFolderExcludedFromBackup() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "saved-attrs-\(UUID())", directoryHint: .isDirectory)
+        let url = folder.appending(path: "saved-dashboard.json")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = SavedDashboardFile(url: url)
+        file.acceptedBackend = "backend-a"
+        file.write(saved(backend: "backend-a"))
+        await file.drain()
+        let values = try folder.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+        XCTAssertTrue(SavedDashboardFile.writeOptions.contains(.completeFileProtection))
+        let protection = try FileManager.default.attributesOfItem(atPath: url.path)[.protectionKey] as? FileProtectionType
+        #if targetEnvironment(simulator)
+        // The simulator has no data protection and reports none; devices do.
+        if let protection { XCTAssertEqual(protection, .complete) }
+        #else
+        XCTAssertEqual(protection, .complete)
+        #endif
+    }
+
+    func testSavedStatusEnablesNoCommandUntilTheSheetHasFreshStatus() async throws {
+        enum StatusMode { case gated, fails, fresh }
+        let mode = Mutex(StatusMode.fresh), commands = Mutex<[String]>([])
+        let release = DispatchSemaphore(value: 0)
+        let capabilities = try JSONSerialization.data(withJSONObject: [
+            "available": true, "commands": Array(VehicleCommand.supportedNames).sorted()])
+        var fresh = try XCTUnwrap(JSONSerialization.jsonObject(with: DecodingTests.fixture("status")) as? [String: Any])
+        fresh["chargeLimit"] = 90
+        let freshData = try JSONSerialization.data(withJSONObject: fresh)
+        StubProtocol.handler.withLock {
+            $0 = { request in
+                let path = request.url?.path ?? ""
+                if path == "/v1/vehicles/1/commands" { return (200, capabilities) }
+                if path.hasPrefix("/v1/vehicles/1/commands/") {
+                    let name = String(path.dropFirst("/v1/vehicles/1/commands/".count))
+                    commands.withLock { $0.append(name) }
+                    return (200, Data(#"{"ok":true,"command":"\#(name)","requestId":"request_123"}"#.utf8))
+                }
+                switch mode.withLock({ $0 }) {
+                case .gated: release.wait(); return (200, freshData)
+                case .fails: return (503, try DecodingTests.fixture("error"))
+                case .fresh: return (200, freshData)
+                }
+            }
+        }
+        StubProtocol.responseHeaders.withLock { $0 = [:] }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+        let api = APIDataSource(baseURL: URL(string: "https://volta.example")!, token: "synthetic-\(UUID())",
+                                session: URLSession(configuration: config))
+        let coordinator = VehicleCommandCoordinator(store: VehicleCommandIntentStore(inMemory: []))
+
+        // Saved status from the last launch: charge limit 80, a location
+        // observed just now (as saved), which HomeLink would otherwise accept.
+        var savedStatus = makeStatus()
+        savedStatus.location = Location(latitude: 37.4419, longitude: -122.143)
+        savedStatus.locationUpdatedAt = .now
+        var dashboard = saved(); dashboard.status = savedStatus
+        let controls = ControlsModel(status: dashboard.labelledStatus)
+        XCTAssertNil(ControlsView.homeLinkCommand(status: controls.status), "saved status never offers HomeLink")
+
+        // The sheet opens: capabilities succeed while its status is held back.
+        _ = try await api.displayStatus(vehicleID: 1)  // the dashboard's status never counts
+        mode.withLock { $0 = .gated }
+        await coordinator.refreshCapabilities(dataSource: api, vehicleID: 1)
+        XCTAssertTrue(coordinator.supports(.setChargeLimit(percent: 85), dataSource: api, vehicleID: 1))
+        let pending = Task { await controls.refresh(dataSource: api, vehicleID: 1) }
+        XCTAssertFalse(coordinator.canStart(.setChargeLimit(percent: 85), dataSource: api, vehicleID: 1))
+        await controls.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: api, vehicleID: 1)
+        XCTAssertEqual(controls.chargeLimit, 80)
+        release.signal()
+        await pending.value
+        XCTAssertEqual(commands.withLock { $0 }, [], "no command while the sheet's status was pending")
+
+        // Reopened: the status request fails, so the saved values stay unusable.
+        let reopened = ControlsModel(status: dashboard.labelledStatus)
+        mode.withLock { $0 = .fails }
+        await coordinator.refreshCapabilities(dataSource: api, vehicleID: 1)
+        await reopened.refresh(dataSource: api, vehicleID: 1)
+        await reopened.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: api, vehicleID: 1)
+        await reopened.setLocked(false, coordinator: coordinator, dataSource: api, vehicleID: 1)
+        XCTAssertEqual(commands.withLock { $0 }, [], "no command after the refresh failed")
+
+        // A fresh status from the sheet itself enables commands, based on it.
+        mode.withLock { $0 = .fresh }
+        await reopened.refresh(dataSource: api, vehicleID: 1)
+        XCTAssertEqual(reopened.chargeLimit, 90)
+        XCTAssertTrue(coordinator.canStart(.setChargeLimit(percent: 95), dataSource: api, vehicleID: 1))
+        await reopened.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: api, vehicleID: 1)
+        XCTAssertEqual(commands.withLock { $0 }, ["set_charge_limit"])
+    }
+
+    func testLiveChargingNamesSavedDataAndAFailedRefresh() {
+        var status = makeStatus()
+        status.chargingState = .charging; status.chargerPowerKw = 11
+        XCTAssertEqual(LiveChargingSheet.stateText(status), "CHARGING")
+        XCTAssertNil(LiveChargingSheet.provenance(status, refreshFailed: true))
+
+        var dashboard = saved(); dashboard.status = status
+        let savedCharging = dashboard.labelledStatus
+        XCTAssertEqual(LiveChargingSheet.stateText(savedCharging), "SAVED DATA", "a saved session never reads as live")
+        XCTAssertEqual(LiveChargingSheet.provenance(savedCharging, refreshFailed: false)?.hasPrefix("Saved data from"), true)
+        let failed = LiveChargingSheet.provenance(savedCharging, refreshFailed: true)
+        XCTAssertEqual(failed?.hasPrefix("Couldn't refresh · saved data from"), true)
     }
 }

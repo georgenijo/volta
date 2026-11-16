@@ -12,6 +12,7 @@ final class AppModel {
             tesla.setClient(dataSource as? any TeslaAccountClient)
             savedDashboards.acceptedBackend = savedDashboardBackend
             launchVehicles?.cancel(); launchVehicles = nil
+            vehiclesLoad = nil; startupLoad = nil; startupLoadUnclaimed = false
         }
     }
     private(set) var vehicles: [Vehicle] = []
@@ -37,9 +38,18 @@ final class AppModel {
     @ObservationIgnored private var lockGeneration = UUID()
     @ObservationIgnored private var authenticateOnActive = false
     @ObservationIgnored private var dashboardCanUseInitialVehicles = false
-    /// The vehicle request in flight, which a dashboard mounted from the saved
-    /// list awaits instead of sending its own.
+    /// The vehicle load in flight. Every caller joins it rather than sending
+    /// another `/vehicles`: the root view, and a dashboard mounted from the
+    /// saved list, in whichever order their tasks run.
     @ObservationIgnored private var vehiclesLoad: Task<Void, Never>?
+    /// False while `init` runs in an iOS prewarm: the process may then be
+    /// suspended for a long time, so nothing is sent until the user opens the app.
+    @ObservationIgnored private var sendsLaunchRequests = true
+    /// The load started by `restorePairing()`, until a `loadVehicles()` joins it.
+    @ObservationIgnored private var startupLoad: Task<Void, Never>?
+    /// It succeeded before any `loadVehicles()` joined it: the root view's
+    /// first call then has nothing to send.
+    @ObservationIgnored private var startupLoadUnclaimed = false
     /// `/vehicles`, sent when a stored pairing is restored rather than when the
     /// root view first appears; the next vehicle load consumes it.
     @ObservationIgnored private var launchVehicles: Task<[Vehicle], any Error>?
@@ -94,7 +104,7 @@ final class AppModel {
         guard vehicleID == selectedVehicleID else { return start }
         if canUseVehicles {
             start.vehicles = { [vehicles] in vehicles }
-        } else if !hasLoadedVehicles, let load = vehiclesLoad {
+        } else if !hasLoadedVehicles, let load = vehiclesLoad ?? startVehicleLoad() {
             let currentGeneration = generation
             start.vehicles = { [weak self] in
                 await load.value
@@ -122,7 +132,7 @@ final class AppModel {
         launchDashboard = saved
         // The shell mounts in the first frame; its dashboard's status need
         // not wait for that frame to be built.
-        if saved.vehicleID == selectedVehicleID {
+        if saved.vehicleID == selectedVehicleID, sendsLaunchRequests {
             launchPrefetch = DashboardPrefetch(dataSource: dataSource, vehicleID: saved.vehicleID, surfaces: surfaces)
         }
     }
@@ -177,7 +187,7 @@ final class AppModel {
         set { Task { await setAppLockEnabled(newValue) } }
     }
 
-    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil, savedDashboards: (any SavedDashboardStoring)? = nil) {
+    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, launchEnvironment: [String: String] = ProcessInfo.processInfo.environment, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil, savedDashboards: (any SavedDashboardStoring)? = nil) {
         StartupTrace.mark(.appModel)
         let demoIndex = launchArguments.firstIndex(of: "-demo-mode")
         let launchDemo = demoIndex.flatMap { index -> Bool? in
@@ -206,7 +216,12 @@ final class AppModel {
         self.signInServerURL = signInServerURL
         if launchDemo || settings.demoMode {
             pairingState = .demo; dataSource = MockDataSource(empty: launchDemo ? false : settings.emptyDemo)
-        } else { restorePairing() }
+        } else {
+            sendsLaunchRequests = launchEnvironment["ActivePrewarm"] != "1"
+            restorePairing()
+            // Any later restore happens with the user present.
+            sendsLaunchRequests = true
+        }
         isLocked = isPaired && settings.appLockEnabled
         self.savedDashboards.acceptedBackend = savedDashboardBackend
         updateSurfaces()
@@ -233,9 +248,11 @@ final class AppModel {
             isLocked = settings.appLockEnabled
             // Status first: a saved list already stands in for the vehicles.
             restoreSavedDashboard()
-            if !isLocked {
+            if !isLocked, sendsLaunchRequests {
                 // Detached: a main-actor task would not start until the first frame is built.
                 launchVehicles = Task.detached(priority: .userInitiated) { [dataSource] in try await dataSource.vehicles() }
+                // Exists before any view's task runs, so each of them joins it.
+                startupLoad = startVehicleLoad()
             }
         } catch let error as KeychainTokenStore.StoreError where error.status == -25308 {
             needsCredentialRetry = true
@@ -368,17 +385,32 @@ final class AppModel {
             if generation == currentGeneration { unpair() }
         } catch { if generation == currentGeneration { errorMessage = error.localizedDescription } }
     }
+    /// Joins the vehicle load in flight, or starts one.
     func loadVehicles() async {
-        guard isPaired, !isLoadingVehicles, !isLocked else { return }
+        if let load = vehiclesLoad {
+            if load == startupLoad { startupLoad = nil }
+            await load.value
+            return
+        }
+        if startupLoadUnclaimed { startupLoadUnclaimed = false; return }
+        guard let load = startVehicleLoad() else { return }
+        await withTaskCancellationHandler { await load.value } onCancel: { load.cancel() }
+    }
+    @discardableResult private func startVehicleLoad() -> Task<Void, Never>? {
+        guard isPaired, !isLoadingVehicles, !isLocked else { return nil }
         isLoadingVehicles = true
         let load = Task { await performVehicleLoad() }
         vehiclesLoad = load
-        await withTaskCancellationHandler { await load.value } onCancel: { load.cancel() }
+        return load
     }
     private func performVehicleLoad() async {
         let currentGeneration = generation; let source = dataSource
         defer {
-            if generation == currentGeneration { isLoadingVehicles = false; hasLoadedVehicles = true; vehiclesLoad = nil }
+            if generation == currentGeneration {
+                isLoadingVehicles = false; hasLoadedVehicles = true
+                if vehiclesLoad == startupLoad { startupLoad = nil }
+                vehiclesLoad = nil
+            }
         }
         do {
             let launch = launchVehicles
@@ -389,6 +421,7 @@ final class AppModel {
             guard generation == currentGeneration else { return }
             dashboardCanUseInitialVehicles = !hasLoadedVehicles
             self.vehicles = vehicles
+            if let startupLoad, vehiclesLoad == startupLoad { startupLoadUnclaimed = true }
             StartupTrace.mark(.vehicles)
             if !isLaunchDemo { resolveSelection() }
             updateSurfaces()
@@ -456,7 +489,6 @@ final class AppModel {
     func lock() {
         dashboardCanUseInitialVehicles = false
         launchDashboard = nil
-        launchVehicles?.cancel(); launchVehicles = nil
         lockGeneration = UUID(); appLock.cancel(); isUnlocking = false
         if !isLaunchDemo && settings.appLockEnabled && isPaired { isLocked = true }
     }

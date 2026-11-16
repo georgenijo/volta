@@ -1,6 +1,35 @@
 import Foundation
 import Observation
 import SwiftUI
+import Synchronization
+
+/// The order in which fresh `/status` responses arrived, per backend and
+/// vehicle. Commands for a real server are allowed only after a status that
+/// arrived after the latest capability refresh began: the Controls sheet
+/// refreshes capabilities and then status, so its own values, not a status
+/// saved by an earlier launch or fetched for display by another screen, are
+/// what a command is based on.
+enum CommandStatusLedger {
+    private static let state = Mutex<(next: UInt64, latest: [String: UInt64])>((1, [:]))
+
+    static func key(backendID: String, vehicleID: Int) -> String { "\(backendID)|\(vehicleID)" }
+
+    /// A fresh status for this backend and vehicle arrived.
+    static func record(backendID: String, vehicleID: Int) {
+        let key = key(backendID: backendID, vehicleID: vehicleID)
+        state.withLock { $0.latest[key] = $0.next; $0.next += 1 }
+    }
+
+    /// A position in the order; only statuses recorded later count after it.
+    static func mark() -> UInt64 {
+        state.withLock { state in defer { state.next += 1 }; return state.next }
+    }
+
+    static func latest(backendID: String, vehicleID: Int) -> UInt64? {
+        let key = key(backendID: backendID, vehicleID: vehicleID)
+        return state.withLock { $0.latest[key] }
+    }
+}
 
 /// The only vehicle commands the iOS client can construct. Each case encodes
 /// the command's flat, typed API body; callers cannot pass arbitrary fields.
@@ -298,6 +327,8 @@ final class VehicleCommandCoordinator {
     private(set) var capabilities: [String: VehicleCommandCapabilities] = [:]
     private(set) var activities: [String: Activity] = [:]
     private var inFlight: Set<String> = []
+    /// `CommandStatusLedger` position taken when capabilities were last refreshed.
+    private var statusRequiredAfter: [String: UInt64] = [:]
     private var storageUnavailable = false
     private var intentRevision = 0
     /// Requests the server answered definitely in this session (accepted, or
@@ -342,14 +373,26 @@ final class VehicleCommandCoordinator {
         return capability(dataSource: dataSource, vehicleID: vehicleID)?.supports(command) == true
     }
 
+    /// A fresh status arrived since capabilities were last refreshed. Saved or
+    /// display-only status never counts, so a command cannot be based on it.
+    func hasFreshStatus(dataSource: any VoltaDataSource, vehicleID: Int) -> Bool {
+        guard dataSource.commandsRequireFreshStatus else { return true }
+        let id = key(dataSource: dataSource, vehicleID: vehicleID)
+        guard let after = statusRequiredAfter[id],
+              let latest = CommandStatusLedger.latest(backendID: dataSource.commandBackendID, vehicleID: vehicleID) else { return false }
+        return latest > after
+    }
+
     func canStart(_ command: VehicleCommand, dataSource: any VoltaDataSource, vehicleID: Int) -> Bool {
-        supports(command, dataSource: dataSource, vehicleID: vehicleID)
+        hasFreshStatus(dataSource: dataSource, vehicleID: vehicleID)
+            && supports(command, dataSource: dataSource, vehicleID: vehicleID)
             && pending(dataSource: dataSource, vehicleID: vehicleID).isEmpty
             && !isBusy(dataSource: dataSource, vehicleID: vehicleID)
     }
 
     func refreshCapabilities(dataSource: any VoltaDataSource, vehicleID: Int) async {
         let id = key(dataSource: dataSource, vehicleID: vehicleID)
+        statusRequiredAfter[id] = CommandStatusLedger.mark()
         do {
             capabilities[id] = try await dataSource.commandCapabilities(vehicleID: vehicleID)
         } catch is CancellationError {
@@ -382,7 +425,8 @@ final class VehicleCommandCoordinator {
 
     func perform(_ command: VehicleCommand, label: String, dataSource: any VoltaDataSource,
                  vehicleID: Int) async -> Outcome {
-        guard pending(dataSource: dataSource, vehicleID: vehicleID).isEmpty else { return .failed }
+        guard hasFreshStatus(dataSource: dataSource, vehicleID: vehicleID),
+              pending(dataSource: dataSource, vehicleID: vehicleID).isEmpty else { return .failed }
         let record = PendingVehicleCommand(intentID: UUID(), backendID: dataSource.commandBackendID,
                                            vehicleID: vehicleID, command: command, label: label, createdAt: .now)
         return await send(record, dataSource: dataSource)
@@ -509,7 +553,7 @@ final class VehicleCommandCoordinator {
     }
 
     private func key(dataSource: any VoltaDataSource, vehicleID: Int) -> String {
-        "\(dataSource.commandBackendID)|\(vehicleID)"
+        CommandStatusLedger.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID)
     }
 
     private static func retryDate(_ value: String?) -> Date? {
