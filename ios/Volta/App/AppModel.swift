@@ -9,6 +9,9 @@ final class AppModel {
     private(set) var dataSource: any VoltaDataSource = MockDataSource(empty: true) {
         didSet {
             connectionGeneration &+= 1
+            // The replaced source must never send another command, even one
+            // already past every check upstream.
+            (oldValue as? APIDataSource)?.invalidateCommands()
             dashboardCanUseInitialVehicles = false
             tesla.setClient(dataSource as? any TeslaAccountClient)
             savedDashboards.acceptedBackend = savedDashboardBackend
@@ -20,6 +23,10 @@ final class AppModel {
     /// Changes whenever the data source is replaced (pairing, demo mode,
     /// disconnecting), so work that awaited can tell its source is stale.
     @ObservationIgnored private(set) var connectionGeneration = 0
+    /// Test hook passed to each API data source; see `APIDataSource`.
+    private let willStartCommand: (@Sendable () -> Void)?
+    /// Set when a control asks to open the Controls screen (to unlock there).
+    var controlsRequested = false
     /// The effective selection depends on it, so the saved-dashboard fence
     /// follows every change (the saved list restored at launch or unlock too).
     private(set) var vehicles: [Vehicle] = [] { didSet { followSelectionInSavedDashboards() } }
@@ -194,7 +201,7 @@ final class AppModel {
         set { Task { await setAppLockEnabled(newValue) } }
     }
 
-    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, launchEnvironment: [String: String] = ProcessInfo.processInfo.environment, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil, savedDashboards: (any SavedDashboardStoring)? = nil) {
+    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, launchEnvironment: [String: String] = ProcessInfo.processInfo.environment, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil, savedDashboards: (any SavedDashboardStoring)? = nil, willStartCommand: (@Sendable () -> Void)? = nil) {
         StartupTrace.mark(.appModel)
         let demoIndex = launchArguments.firstIndex(of: "-demo-mode")
         let launchDemo = demoIndex.flatMap { index -> Bool? in
@@ -207,6 +214,7 @@ final class AppModel {
         // The saved dashboard lives beside the stored credential; test token
         // stores get one in memory.
         self.savedDashboards = savedDashboards ?? (tokenStore is KeychainTokenStore ? SavedDashboardFile() : MemorySavedDashboards())
+        self.willStartCommand = willStartCommand
         self.surfaces = surfaces ?? WidgetSync(settings: settings)
         tesla = TeslaLinkModel(webAuth: teslaWebAuth ?? TeslaWebAuthenticator())
         commandCoordinator = VehicleCommandCoordinator(store: commandIntentStore ?? (launchDemo ? VehicleCommandIntentStore(inMemory: []) : nil))
@@ -279,7 +287,7 @@ final class AppModel {
     }
     private func makeAPI(url: URL, token: String) -> APIDataSource {
         let currentGeneration = generation
-        return APIDataSource(baseURL: url, token: token, session: session) { [weak self] in
+        return APIDataSource(baseURL: url, token: token, session: session, willStartCommand: willStartCommand) { [weak self] in
             await self?.handleUnauthorized(generation: currentGeneration)
         }
     }

@@ -184,12 +184,14 @@ final class VehicleReadoutTests: XCTestCase {
                        .init(text: "Unknown", symbol: "lock"))
         XCTAssertEqual(VehicleToggleLabel.lock(observed: nil, isOn: true, readout: nil).text, "Locking…",
                        "a tap on an unknown lock shows the request, not a state")
+        // Unlocking happens in the app, so the locked state says where.
         XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: true, readout: fresh),
-                       .init(text: "Locked", symbol: "lock.fill"))
-        XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: false, readout: fresh).text, "Unlocking…")
+                       .init(text: "Unlock in Volta", symbol: "lock.fill", title: "Car Locked"))
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: false, readout: fresh).text, "Opening Volta…",
+                       "turning the toggle off never claims the car is unlocking")
         XCTAssertEqual(VehicleToggleLabel.lock(observed: false, isOn: false, readout: fresh).text, "Unlocked")
         let stale = readout { $0.updatedAt = now.addingTimeInterval(-2 * 3600) }
-        XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: true, readout: stale).text, "Locked · 2h")
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: true, readout: stale).title, "Car Locked · 2h")
         XCTAssertEqual(VehicleToggleLabel.climate(observed: nil, isOn: false, readout: nil),
                        .init(text: "Unknown", symbol: "fan"))
         XCTAssertEqual(VehicleToggleLabel.climate(observed: false, isOn: true, readout: fresh).text, "Turning On…")
@@ -365,11 +367,17 @@ private final class IntentTokenStore: TokenStoring, Sendable {
 /// Forwards to the real service and records which actions reached it.
 @MainActor private final class RecordingPerformer: VehicleIntentPerforming {
     var actions: [VehicleIntentAction] = []
+    var controlsShown = 0
     private let next: any VehicleIntentPerforming
     init(_ next: any VehicleIntentPerforming) { self.next = next }
-    func perform(_ action: VehicleIntentAction) async throws -> String {
+    func perform(_ action: VehicleIntentAction,
+                 confirm: (@MainActor (String) async throws -> Void)?) async throws -> String {
         actions.append(action)
-        return try await next.perform(action)
+        return try await next.perform(action, confirm: confirm)
+    }
+    func showControls() {
+        controlsShown += 1
+        next.showControls()
     }
 }
 
@@ -394,6 +402,7 @@ private final class RequestLog: Sendable {
 
     /// A paired model whose server answers through `handler`.
     private func pairedModel(surfaces: IntentSurfaces = IntentSurfaces(),
+                             willStartCommand: (@Sendable () -> Void)? = nil,
                              handler: @escaping @Sendable (URLRequest) throws -> (Int, Data)) throws -> AppModel {
         StubProtocol.handler.withLock { $0 = handler }
         addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
@@ -402,7 +411,8 @@ private final class RequestLog: Sendable {
         let store = IntentTokenStore(); try store.save("synthetic-token")
         return AppModel(settings: settings, tokenStore: store, session: URLSession(configuration: config),
                         launchArguments: ["Volta"], surfaces: surfaces,
-                        commandIntentStore: VehicleCommandIntentStore(inMemory: []))
+                        commandIntentStore: VehicleCommandIntentStore(inMemory: []),
+                        willStartCommand: willStartCommand)
     }
 
     private func json(_ text: String) -> Data { Data(text.utf8) }
@@ -464,7 +474,7 @@ private final class RequestLog: Sendable {
             return (404, Data())
         }
         let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
-        do { _ = try await service.perform(.unlock); XCTFail("expected teslaNotLinked") }
+        do { _ = try await service.perform(.lock); XCTFail("expected teslaNotLinked") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .teslaNotLinked) }
         XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") }, "no command was sent")
     }
@@ -479,7 +489,7 @@ private final class RequestLog: Sendable {
             return (404, Data())
         }
         let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
-        do { _ = try await service.perform(.openFrunk); XCTFail("expected notAllowed") }
+        do { _ = try await service.perform(.honk); XCTFail("expected notAllowed") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .notAllowed) }
         XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
     }
@@ -547,8 +557,9 @@ private final class RequestLog: Sendable {
     }
 
     /// A server that allows every intent command and accepts any POST.
-    private func allowingModel(log: RequestLog, onCapabilities: (@Sendable () -> Void)? = nil) throws -> AppModel {
-        try pairedModel { request in
+    private func allowingModel(log: RequestLog, onCapabilities: (@Sendable () -> Void)? = nil,
+                               willStartCommand: (@Sendable () -> Void)? = nil) throws -> AppModel {
+        try pairedModel(willStartCommand: willStartCommand) { request in
             log.add(request)
             switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
             case ("GET", "/v1/vehicles/42/commands"):
@@ -568,12 +579,12 @@ private final class RequestLog: Sendable {
     private func useRunner(_ service: VehicleIntentService,
                            confirm: @escaping @MainActor (any AppIntent, VehicleIntentConfirmation) async throws -> Void) {
         let previousService = VehicleActionRunner.service
-        let previousConfirm = VehicleActionRunner.requestConfirmation
+        let previousConfirm = VoltaIntentHost.requestConfirmation
         VehicleActionRunner.service = { service }
-        VehicleActionRunner.requestConfirmation = confirm
+        VoltaIntentHost.requestConfirmation = confirm
         addTeardownBlock { @MainActor in
             VehicleActionRunner.service = previousService
-            VehicleActionRunner.requestConfirmation = previousConfirm
+            VoltaIntentHost.requestConfirmation = previousConfirm
         }
     }
 
@@ -585,9 +596,11 @@ private final class RequestLog: Sendable {
         struct Cancelled: Error {}
         let asked = Box<[VehicleIntentAction]>([])
         let capabilityChecksBeforePrompt = Box<[Bool]>([])
+        let runStart = Box(0)
         useRunner(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { intent, confirmation in
             asked.value.append(confirmation.action)
-            capabilityChecksBeforePrompt.value.append(log.all.contains("GET /v1/vehicles/42/commands"))
+            // Only this invocation's requests: its own capability check ran first.
+            capabilityChecksBeforePrompt.value.append(log.all.dropFirst(runStart.value).contains("GET /v1/vehicles/42/commands"))
             XCTAssertTrue(confirmation.prompt.contains("Friday"))
             throw Cancelled()
         }
@@ -598,6 +611,7 @@ private final class RequestLog: Sendable {
             (.sentryOff, { _ = try await DisarmSentryIntent().perform() }),
         ]
         for (action, run) in runs {
+            runStart.value = log.all.count
             do { try await run(); XCTFail("\(action) should wait for confirmation") }
             catch { XCTAssertTrue(error is Cancelled, "\(action): \(error)") }
         }
@@ -683,11 +697,150 @@ private final class RequestLog: Sendable {
         XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
     }
 
+    /// Only the connection generation changes (same demo state, same car,
+    /// the source replaced by an equivalent one): still nothing is sent.
+    func testReplacingTheSourceAloneDuringConfirmationSendsNothing() async throws {
+        let model = AppModel(settings: settings(), tokenStore: IntentTokenStore(), launchArguments: ["Volta"],
+                             surfaces: IntentSurfaces(), commandIntentStore: VehicleCommandIntentStore(inMemory: []))
+        model.tryDemoMode()
+        let before = CommandContext(model)
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do {
+            _ = try await service.perform(.unlock) { _ in model.tryDemoMode() }
+            XCTFail("expected connectionChanged")
+        } catch { XCTAssertEqual(error as? VoltaIntentError, .connectionChanged) }
+        let after = CommandContext(model)
+        XCTAssertEqual(after.pairingState, before.pairingState)
+        XCTAssertEqual(after.selectedVehicleID, before.selectedVehicleID)
+        XCTAssertNotEqual(after.connectionGeneration, before.connectionGeneration, "only the generation moved")
+        XCTAssertNil(model.commandCoordinator.activity(dataSource: model.dataSource, vehicleID: MockDataSource.vehicleID),
+                     "the command never reached the coordinator")
+    }
+
+    /// The last window: the app disconnects after every upstream check, just
+    /// before the transport starts the POST. The replaced source refuses.
+    func testDisconnectingJustBeforeTheTransportSendsNothing() async throws {
+        let log = RequestLog()
+        let ref = ModelRef()
+        let model = try allowingModel(log: log, willStartCommand: {
+            DispatchQueue.main.sync { MainActor.assumeIsolated { _ = ref.model?.unpair() } }
+        })
+        ref.model = model
+        let source = model.dataSource
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do { _ = try await service.perform(.lock); XCTFail("expected connectionChanged") }
+        catch {
+            XCTAssertEqual(error as? VoltaIntentError, .connectionChanged)
+            XCTAssertTrue((error as? VoltaIntentError)?.message.contains("nothing was sent") == true)
+        }
+        XCTAssertFalse(model.isPaired)
+        XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") }, "the POST was never started")
+        XCTAssertTrue(model.commandCoordinator.pending(dataSource: source, vehicleID: 42).isEmpty,
+                      "a refused send is not left as an unresolved command")
+    }
+
+    func testAnInvalidatedSourceRefusesCommandsButStillReads() async throws {
+        let log = RequestLog()
+        StubProtocol.handler.withLock { $0 = { request in
+            log.add(request)
+            return (200, Data(#"{"available":true,"reason":null,"commands":["lock"]}"#.utf8))
+        } }
+        addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+        let source = APIDataSource(baseURL: URL(string: "https://volta.example")!, token: "synthetic-token",
+                                   session: URLSession(configuration: config))
+        let copy = source
+        XCTAssertTrue(copy.acceptsCommands)
+        source.invalidateCommands()
+        XCTAssertFalse(copy.acceptsCommands, "every copy shares the gate")
+        do {
+            _ = try await copy.command(vehicleID: 42, command: .lock, intentID: UUID())
+            XCTFail("expected a refusal")
+        } catch let failure as VehicleCommandFailure {
+            XCTAssertEqual(failure.code, "connection_changed")
+            XCTAssertFalse(failure.isUnresolved, "nothing was sent, so nothing is unresolved")
+        }
+        XCTAssertTrue(log.all.isEmpty, "no request was made")
+        _ = try await copy.commandCapabilities(vehicleID: 42)
+        XCTAssertEqual(log.all, ["GET /v1/vehicles/42/commands"], "reads still work")
+    }
+
+    private func useControlHost(_ performer: any VehicleIntentPerforming,
+                                continueInApp: @escaping @MainActor (any AppIntent) async throws -> Void) {
+        let previousPerformer = VoltaIntentHost.performer
+        let previousContinue = VoltaIntentHost.continueInApp
+        VoltaIntentHost.performer = performer
+        VoltaIntentHost.continueInApp = continueInApp
+        addTeardownBlock { @MainActor in
+            VoltaIntentHost.performer = previousPerformer
+            VoltaIntentHost.continueInApp = previousContinue
+        }
+    }
+
+    /// A control can't show a confirmation, so turning the lock toggle off in
+    /// the app process opens Volta's Controls screen and sends nothing.
+    func testLockControlUnlockOpensVoltaAndSendsNothing() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
+        let opened = Box(0)
+        useControlHost(recorder) { intent in
+            XCTAssertTrue(intent is SetVehicleLockIntent)
+            opened.value += 1
+        }
+        _ = try await SetVehicleLockIntent(value: false).perform()
+        XCTAssertEqual(opened.value, 1, "Volta was brought to the front")
+        XCTAssertEqual(recorder.controlsShown, 1)
+        XCTAssertTrue(model.controlsRequested, "the Controls screen opens there")
+        XCTAssertTrue(recorder.actions.isEmpty, "the unlock never reached the command path")
+        XCTAssertTrue(log.all.isEmpty, "zero requests")
+    }
+
+    /// If the system can't bring Volta forward, the tap fails and still sends nothing.
+    func testLockControlUnlockSendsNothingWhenVoltaCannotOpen() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        struct Unavailable: Error {}
+        useControlHost(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _ in
+            throw Unavailable()
+        }
+        do { _ = try await SetVehicleLockIntent(value: false).perform(); XCTFail("expected the error") }
+        catch { XCTAssertTrue(error is Unavailable) }
+        XCTAssertTrue(log.all.isEmpty, "zero requests")
+    }
+
+    func testLockControlStillLocksImmediately() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let opened = Box(0)
+        useControlHost(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _ in
+            opened.value += 1
+        }
+        _ = try await SetVehicleLockIntent(value: true).perform()
+        XCTAssertEqual(opened.value, 0, "locking doesn't open the app")
+        XCTAssertEqual(log.all.filter { $0.hasPrefix("POST") }, ["POST /v1/vehicles/42/commands/lock"])
+    }
+
+    /// No control route can send an action the confirmation table marks sensitive.
+    func testNoControlSendsAConfirmationRequiredAction() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
+        useControlHost(recorder) { _ in }
+        for action in VehicleIntentAction.allCases where action.requiresConfirmation {
+            try await VoltaIntentHost.performControl(action, for: SetVehicleLockIntent())
+        }
+        XCTAssertTrue(recorder.actions.isEmpty)
+        XCTAssertTrue(log.all.isEmpty)
+        // And the control intents only ever map to these actions.
+        XCTAssertFalse([VehicleIntentAction.lock, .climateOn, .climateOff, .openChargePort].contains(where: \.requiresConfirmation))
+    }
+
     func testControlIntentWithoutTheAppFailsClosed() async {
         let previous = VoltaIntentHost.performer
         VoltaIntentHost.performer = nil
         defer { VoltaIntentHost.performer = previous }
-        do { _ = try await VoltaIntentHost.perform(.unlock); XCTFail("expected needsApp") }
+        do { try await VoltaIntentHost.performControl(.unlock, for: SetVehicleLockIntent()); XCTFail("expected needsApp") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .needsApp) }
     }
 

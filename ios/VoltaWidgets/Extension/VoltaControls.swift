@@ -43,16 +43,16 @@ struct VehicleLockControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: VoltaControlKind.lock, provider: SnapshotControlProvider()) { state in
             ControlWidgetToggle(isOn: state.locked == true, action: SetVehicleLockIntent()) {
-                Text("Car Lock")
+                Text(VehicleToggleLabel.lock(observed: state.locked, isOn: state.locked == true, readout: state.readout).title ?? "Car Lock")
             } valueLabel: { isOn in
                 let label = VehicleToggleLabel.lock(observed: state.locked, isOn: isOn, readout: state.readout)
                 Label(label.text, systemImage: label.symbol)
-                    .controlWidgetActionHint(isOn ? "Unlock" : "Lock")
+                    .controlWidgetActionHint(isOn ? "Open Volta to Unlock" : "Lock")
             }
             .tint(WTheme.blue)
         }
         .displayName("Car Lock")
-        .description("Lock or unlock your car. Unlocking needs Face ID or your passcode.")
+        .description("Lock your car, or open Volta to unlock it.")
     }
 }
 

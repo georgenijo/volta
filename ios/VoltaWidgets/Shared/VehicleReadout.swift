@@ -292,14 +292,21 @@ enum VehicleToggleLabel {
     struct Content: Equatable, Sendable {
         var text: String
         var symbol: String
+        /// The control's title line; nil keeps the control's own name.
+        var title: String? = nil
     }
 
+    /// Unlocking happens in the app (a control can't confirm it), so the
+    /// locked state says where to unlock, and turning the toggle off says
+    /// Volta is opening rather than that the car is unlocking.
     static func lock(observed: Bool?, isOn: Bool, readout: VehicleReadout?) -> Content {
         if isOn != (observed == true) {
-            return Content(text: isOn ? "Locking…" : "Unlocking…", symbol: isOn ? "lock.fill" : "lock.open.fill")
+            return isOn ? Content(text: "Locking…", symbol: "lock.fill") : Content(text: "Opening Volta…", symbol: "lock.fill")
         }
         switch observed {
-        case true?: return Content(text: settled("Locked", readout), symbol: "lock.fill")
+        case true?:
+            // The value line is short, so the state moves to the title.
+            return Content(text: unlockHint, symbol: "lock.fill", title: settled("Car Locked", readout))
         case false?: return Content(text: settled("Unlocked", readout), symbol: "lock.open.fill")
         case nil: return Content(text: VehicleReadoutUnknown.value, symbol: "lock")
         }
@@ -315,6 +322,8 @@ enum VehicleToggleLabel {
         case nil: return Content(text: VehicleReadoutUnknown.value, symbol: "fan")
         }
     }
+
+    static let unlockHint = "Unlock in Volta"
 
     private static func settled(_ text: String, _ readout: VehicleReadout?) -> String {
         readout?.controlValue(text) ?? text

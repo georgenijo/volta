@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Synchronization
 
 /// The HTTPS Volta endpoint. Redirects are rejected so tokens cannot cross hosts.
 struct APIDataSource: VoltaDataSource {
@@ -8,15 +9,28 @@ struct APIDataSource: VoltaDataSource {
     private let session: URLSession
     private let commandSession: URLSession
     private let onUnauthorized: @Sendable () async -> Void
+    /// Shared by every copy of this source; see `invalidateCommands()`.
+    private let commandGate = CommandGate()
+    /// Test hook: runs just before a command request is started.
+    private let willStartCommand: (@Sendable () -> Void)?
 
     init(baseURL: URL, token: String, session: URLSession? = nil, commandSession: URLSession? = nil,
+         willStartCommand: (@Sendable () -> Void)? = nil,
          onUnauthorized: @escaping @Sendable () async -> Void = {}) {
         self.baseURL = baseURL
         self.token = token
         self.session = session ?? Self.sharedSession
         self.commandSession = commandSession ?? session ?? Self.sharedCommandSession
+        self.willStartCommand = willStartCommand
         self.onUnauthorized = onUnauthorized
     }
+
+    /// Called when the app stops using this source (disconnect, re-pair,
+    /// demo mode). From then on it refuses to start any vehicle command, for
+    /// every caller and every copy, even one already on its way here. Reads
+    /// are unaffected.
+    func invalidateCommands() { commandGate.close() }
+    var acceptsCommands: Bool { commandGate.isOpen }
 
     static func validatedServerURL(_ text: String) throws -> URL {
         guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -211,8 +225,9 @@ struct APIDataSource: VoltaDataSource {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(intentID.uuidString, forHTTPHeaderField: "Idempotency-Key")
         request.timeoutInterval = 90
+        willStartCommand?()
         do {
-            let (data, rawResponse) = try await commandSession.data(for: request)
+            let (data, rawResponse) = try await startCommand(request)
             guard let response = rawResponse as? HTTPURLResponse else {
                 throw VehicleCommandFailure(status: nil, code: "command_outcome_unknown", requestID: nil,
                                             retryAfter: nil, replayed: false)
@@ -243,6 +258,32 @@ struct APIDataSource: VoltaDataSource {
         }
     }
 
+    /// Starts the POST only while the gate is open, under the same lock
+    /// `invalidateCommands()` takes: either the request was already handed to
+    /// URLSession, or it is never created.
+    private func startCommand(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        let running = RunningTask()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, URLResponse), any Error>) in
+                let started = commandGate.whileOpen {
+                    let task = commandSession.dataTask(with: request) { data, response, error in
+                        if let error { continuation.resume(throwing: error) }
+                        else if let data, let response { continuation.resume(returning: (data, response)) }
+                        else { continuation.resume(throwing: URLError(.badServerResponse)) }
+                    }
+                    task.resume()
+                    running.set(task)
+                }
+                if !started {
+                    continuation.resume(throwing: VehicleCommandFailure(status: nil, code: "connection_changed", requestID: nil,
+                                                                        retryAfter: nil, replayed: false))
+                }
+            }
+        } onCancel: {
+            running.cancel()
+        }
+    }
+
     private static func requestID(in data: Data) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return object["requestId"] as? String
@@ -270,6 +311,38 @@ extension APIDataSource: TeslaAccountClient {
     private func decodeTesla<T: Decodable>(_ data: Data) throws -> T {
         do { return try Self.makeDecoder().decode(T.self, from: data) }
         catch { throw VoltaError.transport("The server response could not be decoded.") }
+    }
+}
+
+/// Whether a data source may still start vehicle commands.
+final class CommandGate: Sendable {
+    private let open = Mutex(true)
+
+    var isOpen: Bool { open.withLock { $0 } }
+    func close() { open.withLock { $0 = false } }
+
+    /// Runs `body` only while open, holding the lock `close()` takes.
+    func whileOpen(_ body: () -> Void) -> Bool {
+        open.withLock { isOpen in
+            guard isOpen else { return false }
+            body()
+            return true
+        }
+    }
+}
+
+/// The command request in flight, so cancelling the Swift task cancels it.
+private final class RunningTask: Sendable {
+    private let state = Mutex<(task: URLSessionDataTask?, cancelled: Bool)>((nil, false))
+
+    func set(_ task: URLSessionDataTask) {
+        let cancelled = state.withLock { state in state.task = task; return state.cancelled }
+        if cancelled { task.cancel() }
+    }
+
+    func cancel() {
+        let task = state.withLock { state in state.cancelled = true; return state.task }
+        task?.cancel()
     }
 }
 

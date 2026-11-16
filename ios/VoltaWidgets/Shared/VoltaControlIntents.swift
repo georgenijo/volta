@@ -120,11 +120,50 @@ struct VoltaIntentError: Error, Equatable, CustomLocalizedStringResourceConverti
         message: "Volta’s connection changed while this command was being prepared, so nothing was sent. Try again.")
 }
 
+/// What Siri asks before sending an action that requires confirmation.
+struct VehicleIntentConfirmation: Equatable, Sendable {
+    enum Verb: Equatable, Sendable { case `continue`, open, turnOff }
+    var action: VehicleIntentAction
+    var verb: Verb
+    var prompt: String
+
+    /// The prompt for every action that requires confirmation; nil otherwise.
+    init?(_ action: VehicleIntentAction, vehicleName name: String) {
+        guard action.requiresConfirmation else { return nil }
+        self.action = action
+        switch action {
+        case .unlock:
+            (verb, prompt) = (.continue, "Unlock \(name)? This unlocks all doors remotely.")
+        case .openFrunk:
+            (verb, prompt) = (.open, "Open the frunk on \(name)? It can only be closed by hand, so make sure nothing is above it.")
+        case .openTrunk:
+            (verb, prompt) = (.open, "Open the trunk on \(name)? Check clearance first.")
+        case .sentryOff:
+            (verb, prompt) = (.turnOff, "Turn off Sentry Mode on \(name)? It stops watching and recording around the car.")
+        default:
+            return nil
+        }
+    }
+
+    var actionName: ConfirmationActionName {
+        switch verb {
+        case .continue: .continue
+        case .open: .open
+        case .turnOff: .turnOff
+        }
+    }
+}
+
 /// Implemented by the app; performs one command for the selected vehicle and
-/// returns the sentence to speak.
+/// returns the sentence to speak. `confirm` runs after every check passes and
+/// before anything is sent; it receives the vehicle name and throws to cancel.
+/// Actions that require confirmation are refused when it is nil.
 @MainActor
 protocol VehicleIntentPerforming: AnyObject {
-    func perform(_ action: VehicleIntentAction) async throws -> String
+    func perform(_ action: VehicleIntentAction,
+                 confirm: (@MainActor (String) async throws -> Void)?) async throws -> String
+    /// Shows Volta's Controls screen the next time the app is in front.
+    func showControls()
 }
 
 /// Where shared intents find the app's command path. Only the app sets it.
@@ -134,26 +173,69 @@ enum VoltaIntentHost {
     /// Action names and the process only; never vehicle data or credentials.
     static let log = Logger(subsystem: "com.georgenijo.volta", category: "intents")
 
-    static func perform(_ action: VehicleIntentAction) async throws -> String {
+    /// Shows the system confirmation for `intent`; throws when the person
+    /// cancels or the system can't ask. Tests substitute it.
+    static var requestConfirmation: @MainActor (any AppIntent, VehicleIntentConfirmation) async throws -> Void = { intent, confirmation in
+        try await intent.requestConfirmation(actionName: confirmation.actionName,
+                                             dialog: IntentDialog("\(confirmation.prompt)"))
+    }
+
+    /// The confirmation step for `action`, from the one table
+    /// (`requiresConfirmation`); nil for actions that send without asking.
+    /// Every route (Siri, Shortcuts, controls) gets its step here.
+    static func confirmStep(_ action: VehicleIntentAction,
+                            for intent: some AppIntent) -> (@MainActor (String) async throws -> Void)? {
+        guard action.requiresConfirmation else { return nil }
+        return { name in
+            guard let confirmation = VehicleIntentConfirmation(action, vehicleName: name) else {
+                throw VoltaIntentError.confirmationRequired
+            }
+            do { try await requestConfirmation(intent, confirmation) }
+            catch {
+                log.info("Confirmation for \(action.rawValue, privacy: .public) ended: \(String(describing: type(of: error)), privacy: .public)")
+                throw error
+            }
+        }
+    }
+
+    /// Brings Volta to the front for `intent`. Tests substitute it.
+    static var continueInApp: @MainActor (any AppIntent) async throws -> Void = { intent in
+        try await intent.continueInForeground(nil, alwaysConfirm: false)
+    }
+
+    /// What a control does when tapped. Controls can't ask for confirmation
+    /// (the system cancels the request without showing it), so an action
+    /// that requires one is never sent from a control: the tap opens Volta's
+    /// Controls screen instead, where the person confirms it.
+    static func performControl(_ action: VehicleIntentAction, for intent: some AppIntent) async throws {
         let process = ProcessInfo.processInfo.processName
         guard let performer else {
             log.error("Control action \(action.rawValue, privacy: .public) reached \(process, privacy: .public) without the app; nothing sent")
             throw VoltaIntentError.needsApp
         }
+        if action.requiresConfirmation {
+            log.info("Control action \(action.rawValue, privacy: .public) needs confirmation; opening Volta, nothing sent")
+            performer.showControls()
+            try await continueInApp(intent)
+            return
+        }
         log.info("Control action \(action.rawValue, privacy: .public) running in \(process, privacy: .public)")
-        return try await performer.perform(action)
+        _ = try await performer.perform(action, confirm: nil)
     }
 }
 
 // MARK: - Control intents
 
-/// Lock toggle. Unlocking can come from it, so the whole intent requires an
-/// unlocked device; Lock Screen controls ask for Face ID or the passcode.
+/// Lock toggle. Locking is immediate. Unlocking needs confirmation, which a
+/// control can't show, so turning it off sends nothing and opens Volta's
+/// Controls screen. It still requires an unlocked device as a whole.
 struct SetVehicleLockIntent: SetValueIntent, LiveActivityIntent {
     static let title: LocalizedStringResource = "Set Car Lock"
-    static let description = IntentDescription("Locks or unlocks your car from Control Center or the Lock Screen.")
+    static let description = IntentDescription("Locks your car, or opens Volta to unlock it, from Control Center or the Lock Screen.")
     static let isDiscoverable = false
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+    /// Runs in the background; comes to the front only to unlock in the app.
+    static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
 
     @Parameter(title: "Locked")
     var value: Bool
@@ -163,7 +245,7 @@ struct SetVehicleLockIntent: SetValueIntent, LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        _ = try await VoltaIntentHost.perform(value ? .lock : .unlock)
+        try await VoltaIntentHost.performControl(value ? .lock : .unlock, for: self)
         return .result()
     }
 }
@@ -183,7 +265,7 @@ struct SetVehicleClimateIntent: SetValueIntent, LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        _ = try await VoltaIntentHost.perform(value ? .climateOn : .climateOff)
+        try await VoltaIntentHost.performControl(value ? .climateOn : .climateOff, for: self)
         return .result()
     }
 }
@@ -199,7 +281,7 @@ struct OpenChargePortControlIntent: AppIntent, LiveActivityIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        _ = try await VoltaIntentHost.perform(.openChargePort)
+        try await VoltaIntentHost.performControl(.openChargePort, for: self)
         return .result()
     }
 }

@@ -179,9 +179,16 @@ unlocked device (`authenticationPolicy = .requiresAuthentication`). An unlocked
 device is not consent: from Siri and Shortcuts, every action marked
 `VehicleIntentAction.requiresConfirmation` (unlock, frunk, trunk, Sentry off)
 also asks before sending, and the service refuses those actions without that
-step. A command is prepared against the app's current connection; if pairing,
-demo mode, the data source or the selected car changes during an await, nothing
-is sent.
+step. Controls can't show a confirmation (the system cancels the request
+without showing it), so no control sends one of those actions: turning the lock
+toggle off sends nothing and opens Volta's Controls screen, and the locked state
+reads "Car Locked · Unlock in Volta". Locking from the control is immediate.
+
+A command is prepared against the app's current connection; if pairing, demo
+mode, the data source or the selected car changes during an await, nothing is
+sent. When the app replaces its data source, the old `APIDataSource` is
+invalidated and refuses to start any command, checked under the same lock that
+starts the request, so a command already past every check still sends nothing.
 
 "Where's my car" reads only `savedPlace`: the name of a saved place (never the
 street address widgets may show in `placeName`) and the position's own

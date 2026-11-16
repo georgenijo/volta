@@ -113,40 +113,6 @@ struct CheckSecurityIntent: AppIntent {
 
 // MARK: - Action intents
 
-/// What Siri asks before sending an action that requires confirmation.
-struct VehicleIntentConfirmation: Equatable, Sendable {
-    enum Verb: Equatable, Sendable { case `continue`, open, turnOff }
-    var action: VehicleIntentAction
-    var verb: Verb
-    var prompt: String
-
-    /// The prompt for every action that requires confirmation; nil otherwise.
-    init?(_ action: VehicleIntentAction, vehicleName name: String) {
-        guard action.requiresConfirmation else { return nil }
-        self.action = action
-        switch action {
-        case .unlock:
-            (verb, prompt) = (.continue, "Unlock \(name)? This unlocks all doors remotely.")
-        case .openFrunk:
-            (verb, prompt) = (.open, "Open the frunk on \(name)? It can only be closed by hand, so make sure nothing is above it.")
-        case .openTrunk:
-            (verb, prompt) = (.open, "Open the trunk on \(name)? Check clearance first.")
-        case .sentryOff:
-            (verb, prompt) = (.turnOff, "Turn off Sentry Mode on \(name)? It stops watching and recording around the car.")
-        default:
-            return nil
-        }
-    }
-
-    var actionName: ConfirmationActionName {
-        switch verb {
-        case .continue: .continue
-        case .open: .open
-        case .turnOff: .turnOff
-        }
-    }
-}
-
 /// Runs every Siri and Shortcuts command. Whether to ask first comes from
 /// `VehicleIntentAction.requiresConfirmation`, never from the intent, so an
 /// intent can't forget to ask.
@@ -154,26 +120,10 @@ struct VehicleIntentConfirmation: Equatable, Sendable {
 enum VehicleActionRunner {
     /// The command service. Tests substitute one with a stubbed server.
     static var service: @MainActor () -> VehicleIntentService = { .shared }
-    /// Shows the system confirmation for `intent`; throws when the person
-    /// cancels. Tests substitute it, since the system prompt needs Siri.
-    static var requestConfirmation: @MainActor (any AppIntent, VehicleIntentConfirmation) async throws -> Void = { intent, confirmation in
-        try await intent.requestConfirmation(actionName: confirmation.actionName,
-                                             dialog: IntentDialog("\(confirmation.prompt)"))
-    }
 
     static func run<Intent: AppIntent>(_ action: VehicleIntentAction,
                                        for intent: Intent) async throws -> some IntentResult & ProvidesDialog {
-        let text: String
-        if action.requiresConfirmation {
-            text = try await service().perform(action) { name in
-                guard let confirmation = VehicleIntentConfirmation(action, vehicleName: name) else {
-                    throw VoltaIntentError.confirmationRequired
-                }
-                try await requestConfirmation(intent, confirmation)
-            }
-        } else {
-            text = try await service().perform(action, confirm: nil)
-        }
+        let text = try await service().perform(action, confirm: VoltaIntentHost.confirmStep(action, for: intent))
         return .result(dialog: IntentDialog("\(text)"))
     }
 }

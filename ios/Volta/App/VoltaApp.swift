@@ -78,6 +78,10 @@ private struct VoltaRootView: View {
             } else {
                 MainShell().id("\(model.pairingState)-\(model.selectedVehicleID)")
                     .onAppear { StartupTrace.mark(.shell) }
+                    // The lock control opens this to unlock, where it is confirmed.
+                    .sheet(isPresented: Bindable(model).controlsRequested) {
+                        ControlsView(initialStatus: nil, vehicleName: model.selectedVehicle?.name)
+                    }
             }
         }
         // Keep the main screen's navigation and scroll state mounted while locked.

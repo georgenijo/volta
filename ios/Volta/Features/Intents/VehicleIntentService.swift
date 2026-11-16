@@ -62,28 +62,25 @@ final class VehicleIntentService: VehicleIntentPerforming {
 
     // MARK: Commands
 
-    /// A tap on a Control Center or Lock Screen control. The tap is the
-    /// person's request, so no further prompt is shown.
+    func showControls() { model().controlsRequested = true }
+
+    /// Sends without a confirmation step; refused for actions that need one.
     func perform(_ action: VehicleIntentAction) async throws -> String {
-        try await send(action, consent: .controlTap)
+        try await perform(action, confirm: nil)
     }
 
-    /// Siri and Shortcuts. `confirm` runs after every check passes and before
-    /// anything is sent; it receives the vehicle name and throws to cancel.
-    /// Actions that require confirmation are refused without it.
+    /// Every route: Siri, Shortcuts and controls. `confirm` runs after every
+    /// check passes and before anything is sent; it receives the vehicle name
+    /// and throws to cancel. Actions that require confirmation are refused
+    /// without it, whichever route sent them.
     func perform(_ action: VehicleIntentAction,
                  confirm: (@MainActor (String) async throws -> Void)?) async throws -> String {
-        if let confirm { return try await send(action, consent: .confirm(confirm)) }
-        guard !action.requiresConfirmation else { throw VoltaIntentError.confirmationRequired }
-        return try await send(action, consent: .notNeeded)
+        guard confirm != nil || !action.requiresConfirmation else { throw VoltaIntentError.confirmationRequired }
+        return try await send(action, confirm: confirm)
     }
 
-    private enum Consent {
-        case controlTap, notNeeded
-        case confirm(@MainActor (String) async throws -> Void)
-    }
-
-    private func send(_ action: VehicleIntentAction, consent: Consent) async throws -> String {
+    private func send(_ action: VehicleIntentAction,
+                      confirm: (@MainActor (String) async throws -> Void)?) async throws -> String {
         let model = model()
         // Launched in the background before first unlock: retry the Keychain
         // before capturing the context, since restoring replaces the source.
@@ -110,7 +107,7 @@ final class VehicleIntentService: VehicleIntentPerforming {
             isBusy: coordinator.isBusy(dataSource: target.dataSource, vehicleID: target.vehicleID)) {
             throw blocked
         }
-        if case .confirm(let confirm) = consent {
+        if let confirm {
             try await confirm(target.vehicleName)
             try context.ensureCurrent(model)
         }
@@ -125,6 +122,8 @@ final class VehicleIntentService: VehicleIntentPerforming {
             if !simulated { await publishObservedStatus(model: model, target: target) }
             return VehicleIntentGate.successDialog(action, vehicleName: target.vehicleName, simulated: simulated)
         case .failed:
+            // The source was replaced after the last check; it refused to send.
+            if CommandContext(model) != context { throw VoltaIntentError.connectionChanged }
             throw VoltaIntentError(kind: .commandFailed, message: message ?? "Volta couldn’t \(action.verbPhrase) \(target.vehicleName).")
         case .unknown:
             throw VoltaIntentError(kind: .outcomeUnknown, message: message
