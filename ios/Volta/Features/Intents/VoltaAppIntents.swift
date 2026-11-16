@@ -113,11 +113,67 @@ struct CheckSecurityIntent: AppIntent {
 
 // MARK: - Action intents
 
+/// What Siri asks before sending an action that requires confirmation.
+struct VehicleIntentConfirmation: Equatable, Sendable {
+    enum Verb: Equatable, Sendable { case `continue`, open, turnOff }
+    var action: VehicleIntentAction
+    var verb: Verb
+    var prompt: String
+
+    /// The prompt for every action that requires confirmation; nil otherwise.
+    init?(_ action: VehicleIntentAction, vehicleName name: String) {
+        guard action.requiresConfirmation else { return nil }
+        self.action = action
+        switch action {
+        case .unlock:
+            (verb, prompt) = (.continue, "Unlock \(name)? This unlocks all doors remotely.")
+        case .openFrunk:
+            (verb, prompt) = (.open, "Open the frunk on \(name)? It can only be closed by hand, so make sure nothing is above it.")
+        case .openTrunk:
+            (verb, prompt) = (.open, "Open the trunk on \(name)? Check clearance first.")
+        case .sentryOff:
+            (verb, prompt) = (.turnOff, "Turn off Sentry Mode on \(name)? It stops watching and recording around the car.")
+        default:
+            return nil
+        }
+    }
+
+    var actionName: ConfirmationActionName {
+        switch verb {
+        case .continue: .continue
+        case .open: .open
+        case .turnOff: .turnOff
+        }
+    }
+}
+
+/// Runs every Siri and Shortcuts command. Whether to ask first comes from
+/// `VehicleIntentAction.requiresConfirmation`, never from the intent, so an
+/// intent can't forget to ask.
 @MainActor
 enum VehicleActionRunner {
-    static func run(_ action: VehicleIntentAction,
-                    confirm: (@MainActor (String) async throws -> Void)? = nil) async throws -> some IntentResult & ProvidesDialog {
-        let text = try await VehicleIntentService.shared.perform(action, confirm: confirm)
+    /// The command service. Tests substitute one with a stubbed server.
+    static var service: @MainActor () -> VehicleIntentService = { .shared }
+    /// Shows the system confirmation for `intent`; throws when the person
+    /// cancels. Tests substitute it, since the system prompt needs Siri.
+    static var requestConfirmation: @MainActor (any AppIntent, VehicleIntentConfirmation) async throws -> Void = { intent, confirmation in
+        try await intent.requestConfirmation(actionName: confirmation.actionName,
+                                             dialog: IntentDialog("\(confirmation.prompt)"))
+    }
+
+    static func run<Intent: AppIntent>(_ action: VehicleIntentAction,
+                                       for intent: Intent) async throws -> some IntentResult & ProvidesDialog {
+        let text: String
+        if action.requiresConfirmation {
+            text = try await service().perform(action) { name in
+                guard let confirmation = VehicleIntentConfirmation(action, vehicleName: name) else {
+                    throw VoltaIntentError.confirmationRequired
+                }
+                try await requestConfirmation(intent, confirmation)
+            }
+        } else {
+            text = try await service().perform(action, confirm: nil)
+        }
         return .result(dialog: IntentDialog("\(text)"))
     }
 }
@@ -131,7 +187,7 @@ struct LockVehicleIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.lock)
+        try await VehicleActionRunner.run(.lock, for: self)
     }
 }
 
@@ -145,10 +201,7 @@ struct UnlockVehicleIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.unlock) { name in
-            try await requestConfirmation(actionName: .continue,
-                dialog: IntentDialog("Unlock \(name)? This unlocks all doors remotely."))
-        }
+        try await VehicleActionRunner.run(.unlock, for: self)
     }
 }
 
@@ -176,7 +229,7 @@ struct SetClimateIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(state == .on ? .climateOn : .climateOff)
+        try await VehicleActionRunner.run(state == .on ? .climateOn : .climateOff, for: self)
     }
 }
 
@@ -204,7 +257,7 @@ struct SetChargingIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(command == .start ? .chargeStart : .chargeStop)
+        try await VehicleActionRunner.run(command == .start ? .chargeStart : .chargeStop, for: self)
     }
 }
 
@@ -232,7 +285,7 @@ struct SetChargePortIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(command == .open ? .openChargePort : .closeChargePort)
+        try await VehicleActionRunner.run(command == .open ? .openChargePort : .closeChargePort, for: self)
     }
 }
 
@@ -245,21 +298,21 @@ struct ArmSentryIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.sentryOn)
+        try await VehicleActionRunner.run(.sentryOn, for: self)
     }
 }
 
 struct DisarmSentryIntent: AppIntent {
     static let title: LocalizedStringResource = "Turn Off Sentry Mode"
     static let description = IntentDescription(
-        "Turns off Sentry Mode. Requires Face ID or your passcode.", categoryName: "Controls")
+        "Turns off Sentry Mode. Requires Face ID or your passcode, and asks you to confirm.", categoryName: "Controls")
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
     init() {}
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.sentryOff)
+        try await VehicleActionRunner.run(.sentryOff, for: self)
     }
 }
 
@@ -272,7 +325,7 @@ struct FlashLightsIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.flashLights)
+        try await VehicleActionRunner.run(.flashLights, for: self)
     }
 }
 
@@ -285,7 +338,7 @@ struct HonkHornIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.honk)
+        try await VehicleActionRunner.run(.honk, for: self)
     }
 }
 
@@ -299,10 +352,7 @@ struct OpenFrunkIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.openFrunk) { name in
-            try await requestConfirmation(actionName: .open,
-                dialog: IntentDialog("Open the frunk on \(name)? It can only be closed by hand, so make sure nothing is above it."))
-        }
+        try await VehicleActionRunner.run(.openFrunk, for: self)
     }
 }
 
@@ -316,9 +366,6 @@ struct OpenTrunkIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await VehicleActionRunner.run(.openTrunk) { name in
-            try await requestConfirmation(actionName: .open,
-                dialog: IntentDialog("Open the trunk on \(name)? Check clearance first."))
-        }
+        try await VehicleActionRunner.run(.openTrunk, for: self)
     }
 }

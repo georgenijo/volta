@@ -30,7 +30,10 @@ struct VehicleReadout: Sendable {
 
     /// "just now", "4 minutes ago", "3 hours ago".
     var age: String {
-        let seconds = snapshot.age(at: now)
+        Self.relative(snapshot.age(at: now))
+    }
+
+    private static func relative(_ seconds: TimeInterval) -> String {
         if seconds < 60 { return "just now" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
@@ -91,10 +94,45 @@ struct VehicleReadout: Sendable {
         return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
     }
 
-    /// The place name the snapshot recorded, or nil. Never coordinates.
+    /// The saved place the car is at, or nil. Never an address or
+    /// coordinates: only `savedPlace` is read, not the widgets' `placeName`.
     var place: String? {
-        guard let raw = snapshot.placeName?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        guard let raw = snapshot.savedPlace?.name?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
         return raw
+    }
+
+    /// Whether the snapshot knows where the car is (it may not be at a saved place).
+    var hasLocation: Bool { snapshot.savedPlace != nil }
+
+    /// How old the position is; nil when unknown. Battery and charging
+    /// updates advance `updatedAt` without moving the position, so the
+    /// location answer never uses the overall age.
+    var locationAge: String? {
+        snapshot.savedPlace?.recordedAt.map { Self.relative(max(0, now.timeIntervalSince($0))) }
+    }
+
+    var locationIsStale: Bool {
+        guard let recordedAt = snapshot.savedPlace?.recordedAt else { return false }
+        return now.timeIntervalSince(recordedAt) >= WidgetSnapshot.staleAfter
+    }
+
+    /// Ends the location answer.
+    var locationAgeSentence: String {
+        guard hasLocation else { return "" }
+        guard let locationAge else { return "The location’s age is unknown." }
+        return locationIsStale ? "This location is from \(locationAge), so it may be out of date." : "Located \(locationAge)."
+    }
+
+    /// Big value on the location snippet.
+    var locationTitle: String {
+        place ?? (hasLocation ? "Not at a saved place" : VehicleReadoutUnknown.value)
+    }
+
+    /// Footer on the location snippet.
+    var locationFooter: String {
+        guard hasLocation else { return "Location unknown" }
+        guard let locationAge else { return "Location age unknown" }
+        return locationIsStale ? "Located \(locationAge) · may be out of date" : "Located \(locationAge)"
     }
 
     enum Charging: Equatable, Sendable { case charging, complete, pluggedIn, unplugged, unknown }
@@ -154,15 +192,16 @@ struct VehicleReadout: Sendable {
         return "\(sentence) \(ageSentence)"
     }
 
+    /// Uses only the saved place name and the position's own timestamp.
     var locationDialog: String {
+        let driving = snapshot.state == .driving
         let sentence: String
-        switch (place, snapshot.state == .driving) {
-        case (let place?, false): sentence = "\(name) is at \(place)."
-        case (let place?, true): sentence = "\(name) is driving. It was last at \(place)."
-        case (nil, true): sentence = "\(name) is driving. Its location is unknown."
-        case (nil, false): sentence = "\(possessive) location is unknown."
+        switch (place, hasLocation) {
+        case (let place?, _): sentence = driving ? "\(name) is driving. It was last at \(place)." : "\(name) is at \(place)."
+        case (nil, true): sentence = driving ? "\(name) is driving, away from your saved places." : "\(name) isn’t at a saved place."
+        case (nil, false): sentence = driving ? "\(name) is driving. Its location is unknown." : "\(possessive) location is unknown."
         }
-        return "\(sentence) \(ageSentence)"
+        return hasLocation ? "\(sentence) \(locationAgeSentence)" : sentence
     }
 
     var securityDialog: String {

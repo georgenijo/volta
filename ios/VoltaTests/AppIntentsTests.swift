@@ -14,7 +14,8 @@ private func snapshot(_ edit: (inout WidgetSnapshot) -> Void = { _ in }) -> Widg
         batteryLevel: 72, chargeLimit: 80, estRangeKm: 328, ratedRangeKm: 354,
         chargingState: .disconnected, chargerPowerKw: nil, minutesToFull: nil,
         insideTempC: 21, outsideTempC: 16, climateOn: false, locked: true, sentryMode: true,
-        placeName: "Home", today: nil, timeline: [])
+        placeName: "Home", today: nil, timeline: [],
+        savedPlace: .init(name: "Home", recordedAt: now.addingTimeInterval(-4 * 60)))
     edit(&value)
     return value
 }
@@ -70,17 +71,89 @@ final class VehicleReadoutTests: XCTestCase {
         XCTAssertEqual(readout { $0.chargingState = nil; $0.state = .charging }.charging, .charging)
     }
 
-    func testLocationIsPlaceNameOnlyNeverCoordinates() {
-        XCTAssertEqual(readout().locationDialog, "Friday is at Home. Updated 4 minutes ago.")
-        XCTAssertEqual(readout { $0.placeName = nil }.locationDialog, "Friday’s location is unknown. Updated 4 minutes ago.")
-        XCTAssertNil(readout { $0.placeName = "  " }.place)
+    func testLocationIsSavedPlaceNameOnlyNeverCoordinates() {
+        XCTAssertEqual(readout().locationDialog, "Friday is at Home. Located 4 minutes ago.")
+        XCTAssertEqual(readout { $0.savedPlace = nil }.locationDialog, "Friday’s location is unknown.")
+        XCTAssertNil(readout { $0.savedPlace?.name = "  " }.place)
+        XCTAssertEqual(readout { $0.savedPlace?.name = nil }.locationDialog,
+                       "Friday isn’t at a saved place. Located 4 minutes ago.")
         XCTAssertEqual(readout { $0.state = .driving }.locationDialog,
-                       "Friday is driving. It was last at Home. Updated 4 minutes ago.")
-        XCTAssertEqual(readout { $0.state = .driving; $0.placeName = nil }.locationDialog,
-                       "Friday is driving. Its location is unknown. Updated 4 minutes ago.")
-        // The snapshot has no coordinate fields; nothing numeric beyond the age appears.
-        let spoken = readout { $0.placeName = nil }.locationDialog
+                       "Friday is driving. It was last at Home. Located 4 minutes ago.")
+        XCTAssertEqual(readout { $0.state = .driving; $0.savedPlace = nil }.locationDialog,
+                       "Friday is driving. Its location is unknown.")
+        XCTAssertEqual(readout { $0.state = .driving; $0.savedPlace?.name = nil }.locationDialog,
+                       "Friday is driving, away from your saved places. Located 4 minutes ago.")
+        // Widgets' placeName is never read for speech.
+        XCTAssertEqual(readout { $0.placeName = "Elsewhere" }.locationDialog, "Friday is at Home. Located 4 minutes ago.")
+        let spoken = readout { $0.savedPlace = nil }.locationDialog
         XCTAssertNil(spoken.range(of: #"\d+\.\d+"#, options: .regularExpression))
+        XCTAssertEqual(readout().locationTitle, "Home")
+        XCTAssertEqual(readout { $0.savedPlace?.name = nil }.locationTitle, "Not at a saved place")
+        XCTAssertEqual(readout { $0.savedPlace = nil }.locationTitle, "Unknown")
+    }
+
+    /// Battery and charging updates advance `updatedAt` while the position
+    /// stays old; the location answer uses the position's own time.
+    func testLocationAgeComesFromThePositionNotTheStatus() {
+        let old = readout {
+            $0.updatedAt = now.addingTimeInterval(-20)
+            $0.savedPlace = .init(name: "Home", recordedAt: now.addingTimeInterval(-26 * 3600))
+        }
+        XCTAssertEqual(old.ageSentence, "Updated just now.", "the status itself is fresh")
+        XCTAssertEqual(old.locationDialog, "Friday is at Home. This location is from 1 day ago, so it may be out of date.")
+        XCTAssertFalse(old.locationDialog.contains("just now"))
+        XCTAssertTrue(old.locationIsStale)
+        XCTAssertEqual(VehicleIntentSnippet.footerText(.location, readout: old), "Located 1 day ago · may be out of date")
+        XCTAssertEqual(VehicleIntentSnippet.footerText(.battery, readout: old), "Updated just now")
+
+        let undated = readout { $0.updatedAt = now; $0.savedPlace?.recordedAt = nil }
+        XCTAssertEqual(undated.locationDialog, "Friday is at Home. The location’s age is unknown.")
+        XCTAssertEqual(VehicleIntentSnippet.footerText(.location, readout: undated), "Location age unknown")
+        XCTAssertEqual(VehicleIntentSnippet.footerText(.location, readout: readout { $0.savedPlace = nil }), "Location unknown")
+    }
+
+    /// From the bridge to the answer: away from a saved place the status
+    /// carries only a street address, which widgets show but Siri never says.
+    func testAnAddressFromTheServerIsNeverSpokenOrShown() throws {
+        let address = "1 Example Street"
+        let status = VehicleStatus(
+            vehicleId: 42, state: .online, updatedAt: now, batteryLevel: 72, usableBatteryLevel: nil,
+            ratedRangeKm: nil, estRangeKm: 328, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil,
+            minutesToFull: nil, insideTempC: nil, outsideTempC: nil, climateOn: nil, driverTempSettingC: nil,
+            locked: true, sentryMode: true, odometerKm: nil,
+            location: Location(latitude: 37.4419, longitude: -122.1430, heading: 90, address: address, placeName: nil),
+            locationUpdatedAt: now.addingTimeInterval(-2 * 60), firmware: nil)
+        let bridged = WidgetSnapshot(status: status, vehicleName: "Friday", summary: nil, timeline: nil, now: now)
+        XCTAssertEqual(bridged.placeName, address, "widgets still show the address, as before")
+        XCTAssertEqual(bridged.savedPlace, .init(name: nil, recordedAt: now.addingTimeInterval(-2 * 60)))
+
+        let answer = VehicleReadout(bridged, now: now)
+        XCTAssertEqual(answer.locationDialog, "Friday isn’t at a saved place. Located 2 minutes ago.")
+        let texts = [answer.locationDialog, answer.locationTitle, VehicleIntentSnippet.footerText(.location, readout: answer),
+                     answer.name, answer.place ?? ""]
+        for text in texts {
+            for part in address.split(separator: " ") {
+                XCTAssertFalse(text.contains(part), "\(text) contains \(part)")
+            }
+            XCTAssertFalse(text.contains("37.44"))
+            XCTAssertFalse(text.contains("122.14"))
+        }
+    }
+
+    /// Snapshots written before `savedPlace` existed may hold an address in
+    /// `placeName`; they are never trusted for speech.
+    func testSnapshotsFromEarlierBuildsAreNotSpoken() throws {
+        let legacy = snapshot { $0.placeName = "1 Example Street"; $0.savedPlace = nil }
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(legacy)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(fields["savedPlace"], "an earlier build's file has no savedPlace key")
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(WidgetSnapshot.self, from: data)
+        XCTAssertEqual(decoded.placeName, "1 Example Street")
+        let answer = VehicleReadout(decoded, now: now)
+        XCTAssertEqual(answer.locationDialog, "Friday’s location is unknown.")
+        XCTAssertEqual(answer.locationTitle, "Unknown")
     }
 
     func testSecurityAnswerCoversUnknowns() {
@@ -125,7 +198,7 @@ final class VehicleReadoutTests: XCTestCase {
 
     func testVehicleNameFallbackAndPossessive() {
         XCTAssertTrue(readout { $0.vehicleName = " " }.batteryDialog.hasPrefix("Your car is at 72%"))
-        XCTAssertTrue(readout { $0.vehicleName = "Atlas"; $0.placeName = nil }.locationDialog.hasPrefix("Atlas’ location"))
+        XCTAssertTrue(readout { $0.vehicleName = "Atlas"; $0.savedPlace = nil }.locationDialog.hasPrefix("Atlas’ location"))
     }
 
     @MainActor
@@ -161,6 +234,23 @@ final class IntentAuthenticationPolicyTests: XCTestCase {
     func testActionFlagsMatchTheIntents() {
         XCTAssertEqual(Set(VehicleIntentAction.allCases.filter(\.requiresAuthentication)),
                        [.unlock, .openFrunk, .openTrunk, .sentryOff])
+        XCTAssertEqual(Set(VehicleIntentAction.allCases.filter(\.requiresConfirmation)),
+                       [.unlock, .openFrunk, .openTrunk, .sentryOff])
+    }
+
+    /// A device unlock is not consent: every sensitive action is also in the
+    /// confirmation list and has a prompt; no other action has one.
+    func testEverySensitiveActionAsksForConfirmation() {
+        for action in VehicleIntentAction.allCases {
+            if action.requiresAuthentication {
+                XCTAssertTrue(action.requiresConfirmation, "\(action) is sensitive but not confirmed")
+            }
+            let confirmation = VehicleIntentConfirmation(action, vehicleName: "Friday")
+            XCTAssertEqual(confirmation != nil, action.requiresConfirmation, "\(action)")
+            if let confirmation { XCTAssertTrue(confirmation.prompt.contains("Friday")) }
+        }
+        XCTAssertEqual(VehicleIntentConfirmation(.sentryOff, vehicleName: "Friday")?.prompt,
+                       "Turn off Sentry Mode on Friday? It stops watching and recording around the car.")
     }
 
     func testControlIntentsStayOutOfShortcutsAndRunInTheApp() {
@@ -245,6 +335,11 @@ final class VehicleIntentGateTests: XCTestCase {
 }
 
 // MARK: - Service wiring
+
+/// Lets a stub server reach the model it serves.
+private final class ModelRef: @unchecked Sendable {
+    weak var model: AppModel?
+}
 
 @MainActor private final class Box<Value> {
     var value: Value
@@ -448,6 +543,143 @@ private final class RequestLog: Sendable {
             XCTFail("expected cancel")
         } catch { XCTAssertTrue(error is Cancelled) }
         XCTAssertEqual(askedFor.value, "your car", "the name falls back when the vehicle list is unavailable")
+        XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
+    }
+
+    /// A server that allows every intent command and accepts any POST.
+    private func allowingModel(log: RequestLog, onCapabilities: (@Sendable () -> Void)? = nil) throws -> AppModel {
+        try pairedModel { request in
+            log.add(request)
+            switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
+            case ("GET", "/v1/vehicles/42/commands"):
+                onCapabilities?()
+                return (200, Data(#"{"available":true,"reason":null,"commands":["lock","unlock","actuate_trunk","sentry_on","sentry_off"]}"#.utf8))
+            case ("POST", let path) where path.hasPrefix("/v1/vehicles/42/commands/"):
+                let name = path.split(separator: "/").last.map(String.init) ?? ""
+                return (200, Data(#"{"ok":true,"command":"\#(name)","requestId":"request_1"}"#.utf8))
+            case ("GET", "/v1/vehicles"):
+                return (200, try JSONSerialization.data(withJSONObject: [["id": 42, "name": "Friday"]]))
+            default:
+                return (404, Data())
+            }
+        }
+    }
+
+    private func useRunner(_ service: VehicleIntentService,
+                           confirm: @escaping @MainActor (any AppIntent, VehicleIntentConfirmation) async throws -> Void) {
+        let previousService = VehicleActionRunner.service
+        let previousConfirm = VehicleActionRunner.requestConfirmation
+        VehicleActionRunner.service = { service }
+        VehicleActionRunner.requestConfirmation = confirm
+        addTeardownBlock { @MainActor in
+            VehicleActionRunner.service = previousService
+            VehicleActionRunner.requestConfirmation = previousConfirm
+        }
+    }
+
+    /// Through each sensitive intent's own `perform()`: the prompt is shown
+    /// after the capability checks, and cancelling it sends nothing.
+    func testSensitiveIntentsAskBeforeSendingAndCancellingSendsNothing() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        struct Cancelled: Error {}
+        let asked = Box<[VehicleIntentAction]>([])
+        let capabilityChecksBeforePrompt = Box<[Bool]>([])
+        useRunner(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { intent, confirmation in
+            asked.value.append(confirmation.action)
+            capabilityChecksBeforePrompt.value.append(log.all.contains("GET /v1/vehicles/42/commands"))
+            XCTAssertTrue(confirmation.prompt.contains("Friday"))
+            throw Cancelled()
+        }
+        let runs: [(VehicleIntentAction, () async throws -> Void)] = [
+            (.unlock, { _ = try await UnlockVehicleIntent().perform() }),
+            (.openFrunk, { _ = try await OpenFrunkIntent().perform() }),
+            (.openTrunk, { _ = try await OpenTrunkIntent().perform() }),
+            (.sentryOff, { _ = try await DisarmSentryIntent().perform() }),
+        ]
+        for (action, run) in runs {
+            do { try await run(); XCTFail("\(action) should wait for confirmation") }
+            catch { XCTAssertTrue(error is Cancelled, "\(action): \(error)") }
+        }
+        XCTAssertEqual(asked.value, [.unlock, .openFrunk, .openTrunk, .sentryOff])
+        XCTAssertEqual(capabilityChecksBeforePrompt.value, [true, true, true, true])
+        XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") }, "nothing was sent")
+    }
+
+    func testConfirmedSentryOffSendsAndRoutineIntentsDoNotAsk() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let asked = Box<[VehicleIntentAction]>([])
+        useRunner(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _, confirmation in
+            asked.value.append(confirmation.action)
+        }
+        _ = try await DisarmSentryIntent().perform()
+        _ = try await ArmSentryIntent().perform()
+        XCTAssertEqual(asked.value, [.sentryOff], "only the sensitive one asked")
+        XCTAssertEqual(log.all.filter { $0.hasPrefix("POST") },
+                       ["POST /v1/vehicles/42/commands/sentry_off", "POST /v1/vehicles/42/commands/sentry_on"])
+    }
+
+    /// The service itself refuses a confirmation-required action from Siri or
+    /// Shortcuts without a confirmation step.
+    func testConfirmationRequiredActionsAreRefusedWithoutAPrompt() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        for action in VehicleIntentAction.allCases where action.requiresConfirmation {
+            do { _ = try await service.perform(action, confirm: nil); XCTFail("\(action) needs confirmation") }
+            catch { XCTAssertEqual(error as? VoltaIntentError, .confirmationRequired) }
+        }
+        XCTAssertTrue(log.all.isEmpty, "refused before any request")
+    }
+
+    func testSwitchingToDemoDuringConfirmationSendsNothing() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do {
+            _ = try await service.perform(.unlock) { _ in model.tryDemoMode() }
+            XCTFail("expected connectionChanged")
+        } catch { XCTAssertEqual(error as? VoltaIntentError, .connectionChanged) }
+        XCTAssertTrue(model.isDemoMode)
+        XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") }, "the real token sent nothing")
+    }
+
+    func testDisconnectingDuringConfirmationSendsNothing() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do {
+            _ = try await service.perform(.openTrunk) { _ in model.unpair() }
+            XCTFail("expected connectionChanged")
+        } catch { XCTAssertEqual(error as? VoltaIntentError, .connectionChanged) }
+        XCTAssertFalse(model.isPaired)
+        XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
+    }
+
+    func testDisconnectingWhileCapabilitiesLoadSendsNothing() async throws {
+        let log = RequestLog()
+        let ref = ModelRef()
+        let model = try allowingModel(log: log, onCapabilities: {
+            // The request is in flight while the person disconnects in the app.
+            DispatchQueue.main.sync { MainActor.assumeIsolated { _ = ref.model?.unpair() } }
+        })
+        ref.model = model
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do { _ = try await service.perform(.lock); XCTFail("expected connectionChanged") }
+        catch { XCTAssertEqual(error as? VoltaIntentError, .connectionChanged) }
+        XCTAssertFalse(model.isPaired)
+        XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
+    }
+
+    func testSelectingAnotherCarDuringConfirmationSendsNothing() async throws {
+        let log = RequestLog()
+        let model = try allowingModel(log: log)
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do {
+            _ = try await service.perform(.unlock) { _ in model.settings.selectedVehicleID = 7 }
+            XCTFail("expected connectionChanged")
+        } catch { XCTAssertEqual(error as? VoltaIntentError, .connectionChanged) }
         XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
     }
 

@@ -175,7 +175,18 @@ The app reloads controls (`ControlCenter.shared.reloadAllControls()`) whenever i
 writes or clears the snapshot and after every accepted command.
 
 Unlock, frunk, trunk, Sentry off, the lock toggle and "where's my car" require an
-unlocked device (`authenticationPolicy = .requiresAuthentication`).
+unlocked device (`authenticationPolicy = .requiresAuthentication`). An unlocked
+device is not consent: from Siri and Shortcuts, every action marked
+`VehicleIntentAction.requiresConfirmation` (unlock, frunk, trunk, Sentry off)
+also asks before sending, and the service refuses those actions without that
+step. A command is prepared against the app's current connection; if pairing,
+demo mode, the data source or the selected car changes during an await, nothing
+is sent.
+
+"Where's my car" reads only `savedPlace`: the name of a saved place (never the
+street address widgets may show in `placeName`) and the position's own
+timestamp, which can be older than `updatedAt`. Snapshots written before
+`savedPlace` existed have no such field, so their location is spoken as unknown.
 
 ## Data path
 

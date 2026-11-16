@@ -65,7 +65,7 @@ struct VehicleIntentSnippet: View {
             }
         case .location:
             VStack(alignment: .leading, spacing: 4) {
-                bigValue(readout.place ?? "Unknown", known: readout.place != nil)
+                bigValue(readout.locationTitle, known: readout.place != nil)
                     .lineLimit(2)
                 if readout.snapshot.state == .driving {
                     Text("Driving · last known place").font(.subheadline).foregroundStyle(.secondary)
@@ -83,10 +83,17 @@ struct VehicleIntentSnippet: View {
     }
 
     private var footer: some View {
-        Label(readout.isStale ? "From \(readout.age) · may be out of date" : "Updated \(readout.age)",
-              systemImage: readout.isStale ? "clock.badge.exclamationmark" : "clock")
+        // Location has its own timestamp; the overall age would overstate it.
+        let stale = kind == .location ? readout.locationIsStale : readout.isStale
+        return Label(Self.footerText(kind, readout: readout),
+                     systemImage: stale ? "clock.badge.exclamationmark" : "clock")
             .font(.caption)
-            .foregroundStyle(readout.isStale ? Color.voltaAmber : .secondary)
+            .foregroundStyle(stale ? Color.voltaAmber : .secondary)
+    }
+
+    static func footerText(_ kind: Kind, readout: VehicleReadout) -> String {
+        if kind == .location { return readout.locationFooter }
+        return readout.isStale ? "From \(readout.age) · may be out of date" : "Updated \(readout.age)"
     }
 
     private func bigValue(_ text: String, known: Bool = true) -> some View {

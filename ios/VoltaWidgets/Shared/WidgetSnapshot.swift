@@ -63,6 +63,8 @@ struct WidgetSnapshot: Codable, Hashable, Sendable {
     var climateOn: Bool?
     var locked: Bool?
     var sentryMode: Bool?
+    /// Shown by widgets: the saved place name, or else the street address.
+    /// Siri and Shortcuts never read it; they use `savedPlace`.
     var placeName: String?
     var today: Today?
     /// Start of the reporting day `today` covers (see `ReportingDay`). Totals
@@ -78,6 +80,20 @@ struct WidgetSnapshot: Codable, Hashable, Sendable {
     var timeline: [Segment]
     var distanceUnit: DistanceUnit = .miles
     var temperatureUnit: TemperatureUnit = .fahrenheit
+    /// What Siri and Shortcuts may say about location. Nil when the status
+    /// had no position, and in snapshots from builds before this field, whose
+    /// `placeName` may hold a street address, so those are never spoken.
+    var savedPlace: SavedPlace? = nil
+
+    /// A position reduced to what may be spoken: the name of a place the
+    /// owner saved (never an address or coordinates), and when the position
+    /// was recorded, which can be older than `updatedAt`.
+    struct SavedPlace: Codable, Hashable, Sendable {
+        /// The saved place the car is at; nil when it isn't at one.
+        var name: String?
+        /// When the position was recorded; nil when the server didn't say.
+        var recordedAt: Date?
+    }
 
     var isCharging: Bool { chargingState == .charging || state == .charging }
     /// Range shown in widgets: estimated, falling back to rated.

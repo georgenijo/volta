@@ -38,6 +38,18 @@ enum VehicleIntentAction: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Actions Siri and Shortcuts send only after the person confirms, so an
+    /// unattended automation can't run them. The single list: the action
+    /// runner asks whenever this is true, and the command service refuses
+    /// these actions without a confirmation step. A device unlock is not
+    /// consent; every authenticated action must also be listed here.
+    var requiresConfirmation: Bool {
+        switch self {
+        case .unlock, .openFrunk, .openTrunk, .sentryOff: true
+        default: false
+        }
+    }
+
     /// "lock", "turn on climate": the phrase after "couldn't" / "Volta will".
     var verbPhrase: String {
         switch self {
@@ -87,6 +99,7 @@ struct VoltaIntentError: Error, Equatable, CustomLocalizedStringResourceConverti
         case commandsDisabled, teslaNotLinked, teslaConsentNeeded, vehicleNotConfigured
         case notAllowed, serverUnreachable, unresolvedCommand, busy, storageUnavailable
         case commandFailed, outcomeUnknown, needsApp
+        case confirmationRequired, connectionChanged
     }
 
     var kind: Kind
@@ -101,6 +114,10 @@ struct VoltaIntentError: Error, Equatable, CustomLocalizedStringResourceConverti
     static let noReading = VoltaIntentError(kind: .noReading, message: VehicleReadoutUnknown.noReadingDialog)
     static let needsApp = VoltaIntentError(kind: .needsApp,
         message: "Open Volta to send vehicle commands. Nothing was sent.")
+    static let confirmationRequired = VoltaIntentError(kind: .confirmationRequired,
+        message: "This command needs your confirmation, so nothing was sent.")
+    static let connectionChanged = VoltaIntentError(kind: .connectionChanged,
+        message: "Volta’s connection changed while this command was being prepared, so nothing was sent. Try again.")
 }
 
 /// Implemented by the app; performs one command for the selected vehicle and

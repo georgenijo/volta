@@ -8,6 +8,7 @@ final class AppModel {
     private(set) var pairingState: PairingState = .unpaired
     private(set) var dataSource: any VoltaDataSource = MockDataSource(empty: true) {
         didSet {
+            connectionGeneration &+= 1
             dashboardCanUseInitialVehicles = false
             tesla.setClient(dataSource as? any TeslaAccountClient)
             savedDashboards.acceptedBackend = savedDashboardBackend
@@ -16,6 +17,9 @@ final class AppModel {
             vehiclesLoad = nil; startupLoad = nil; startupLoadUnclaimed = false
         }
     }
+    /// Changes whenever the data source is replaced (pairing, demo mode,
+    /// disconnecting), so work that awaited can tell its source is stale.
+    @ObservationIgnored private(set) var connectionGeneration = 0
     /// The effective selection depends on it, so the saved-dashboard fence
     /// follows every change (the saved list restored at launch or unlock too).
     private(set) var vehicles: [Vehicle] = [] { didSet { followSelectionInSavedDashboards() } }

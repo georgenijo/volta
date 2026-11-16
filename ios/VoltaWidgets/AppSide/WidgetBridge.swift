@@ -81,7 +81,9 @@ extension WidgetSnapshot {
             todayZone: todayDay?.zone,
             timeline: segments,
             distanceUnit: units.distance == .miles ? .miles : .kilometers,
-            temperatureUnit: units.temperature == .fahrenheit ? .fahrenheit : .celsius
+            temperatureUnit: units.temperature == .fahrenheit ? .fahrenheit : .celsius,
+            // Only the saved place name, never the address: Siri reads this.
+            savedPlace: status.location.map { SavedPlace(name: $0.placeName, recordedAt: status.locationUpdatedAt) }
         )
     }
 }

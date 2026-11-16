@@ -62,21 +62,43 @@ final class VehicleIntentService: VehicleIntentPerforming {
 
     // MARK: Commands
 
+    /// A tap on a Control Center or Lock Screen control. The tap is the
+    /// person's request, so no further prompt is shown.
     func perform(_ action: VehicleIntentAction) async throws -> String {
-        try await perform(action, confirm: nil)
+        try await send(action, consent: .controlTap)
     }
 
-    /// `confirm` runs after every check passes and before anything is sent;
-    /// it receives the vehicle name and throws to cancel.
+    /// Siri and Shortcuts. `confirm` runs after every check passes and before
+    /// anything is sent; it receives the vehicle name and throws to cancel.
+    /// Actions that require confirmation are refused without it.
     func perform(_ action: VehicleIntentAction,
                  confirm: (@MainActor (String) async throws -> Void)?) async throws -> String {
+        if let confirm { return try await send(action, consent: .confirm(confirm)) }
+        guard !action.requiresConfirmation else { throw VoltaIntentError.confirmationRequired }
+        return try await send(action, consent: .notNeeded)
+    }
+
+    private enum Consent {
+        case controlTap, notNeeded
+        case confirm(@MainActor (String) async throws -> Void)
+    }
+
+    private func send(_ action: VehicleIntentAction, consent: Consent) async throws -> String {
         let model = model()
+        // Launched in the background before first unlock: retry the Keychain
+        // before capturing the context, since restoring replaces the source.
+        if !model.isDemoMode, model.needsCredentialRetry { model.restorePairing() }
+        // Every await below can let the app change pairing, demo mode, data
+        // source or vehicle. Recheck after each one; a stale target sends nothing.
+        let context = CommandContext(model)
         let target = try await commandTarget(model: model)
+        try context.ensureCurrent(model)
         let command = action.command
         let coordinator = model.commandCoordinator
         let simulates = target.dataSource.simulatesVehicleCommands
         if !simulates {
             let failure = await coordinator.refreshCapabilities(dataSource: target.dataSource, vehicleID: target.vehicleID)
+            try context.ensureCurrent(model)
             if let failure { throw Self.mapRequestError(failure, action: action) }
         }
         if let blocked = VehicleIntentGate.check(
@@ -88,7 +110,10 @@ final class VehicleIntentService: VehicleIntentPerforming {
             isBusy: coordinator.isBusy(dataSource: target.dataSource, vehicleID: target.vehicleID)) {
             throw blocked
         }
-        if let confirm { try await confirm(target.vehicleName) }
+        if case .confirm(let confirm) = consent {
+            try await confirm(target.vehicleName)
+            try context.ensureCurrent(model)
+        }
         let outcome = await coordinator.perform(command, label: action.label, dataSource: target.dataSource,
                                                 vehicleID: target.vehicleID)
         // Controls show the requested state while the action runs; reload so
@@ -114,8 +139,6 @@ final class VehicleIntentService: VehicleIntentPerforming {
             let name = (try? await source.vehicles())?.first { $0.id == MockDataSource.vehicleID }?.name ?? "Friday"
             return IntentCommandTarget(dataSource: source, vehicleID: MockDataSource.vehicleID, vehicleName: name)
         }
-        // Launched in the background before first unlock: retry the Keychain now.
-        if model.needsCredentialRetry { model.restorePairing() }
         if model.needsCredentialRetry { throw VoltaIntentError.deviceLocked }
         guard model.isPaired else { throw VoltaIntentError.notSignedIn }
         let source = model.dataSource
@@ -160,6 +183,26 @@ final class VehicleIntentService: VehicleIntentPerforming {
             return VoltaIntentError(kind: .serverUnreachable,
                 message: "Volta couldn’t reach your server\(what). Check that Tailscale is connected, then try again. Nothing was sent.")
         }
+    }
+}
+
+/// What a command was prepared against. If any part changes while the
+/// command awaits (the person disconnects, switches to demo mode, re-pairs or
+/// picks another car), the prepared target is stale and nothing is sent.
+@MainActor
+struct CommandContext: Equatable {
+    var pairingState: AppModel.PairingState
+    var connectionGeneration: Int
+    var selectedVehicleID: Int?
+
+    init(_ model: AppModel) {
+        pairingState = model.pairingState
+        connectionGeneration = model.connectionGeneration
+        selectedVehicleID = model.settings.selectedVehicleID
+    }
+
+    func ensureCurrent(_ model: AppModel) throws {
+        guard CommandContext(model) == self else { throw VoltaIntentError.connectionChanged }
     }
 }
 
