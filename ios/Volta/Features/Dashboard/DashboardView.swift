@@ -327,7 +327,7 @@ struct DashboardView: View {
             VStack(spacing: 0) {
                 // The map runs on behind the battery and fades out there, so
                 // the car sits lower and the pill clears the wordmark.
-                stageMap(status, runsUnder: 150).frame(maxHeight: .infinity)
+                stageMap(status, runsUnder: 80).frame(maxHeight: .infinity)
                 stageControls(status, dock: true)
             }
         }
@@ -362,7 +362,9 @@ struct DashboardView: View {
                                        .init(color: .voltaBackground.opacity(0.85), location: 0.45),
                                        .init(color: .voltaBackground, location: 0.7)],
                                startPoint: .top, endPoint: .bottom)
-                    .frame(height: 90 + runsUnder * 1.3)
+                    // Ends just above the battery, so the pill and marker in
+                    // the middle of the map stay clear of it.
+                    .frame(height: 60 + runsUnder * 1.2)
                     .allowsHitTesting(false)
             }
             .padding(.bottom, -runsUnder)

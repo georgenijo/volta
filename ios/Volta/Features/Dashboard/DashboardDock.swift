@@ -25,6 +25,8 @@ struct DockTile: Identifiable, Equatable {
     var tone: Tone
     var tap: Tap
     var accessibilityLabel: String
+    /// A switched-on state (climate running): the plate is filled.
+    var isOn = false
 
     var id: Kind { kind }
 
@@ -55,11 +57,14 @@ struct DockTile: Identifiable, Equatable {
         case false?: tile(.lock, "lock.open", "Unlocked", "Lock", .attention, .lock, label: "Doors unlocked. Lock")
         case nil: tile(.lock, "lock", "Doors", "Unknown", .unknown, nil, label: "Lock state unknown. Opens Controls")
         }
-        let climate: DockTile = switch climateOn {
-        case true?: tile(.climate, "fan.fill", "Climate on", "Turn off", .neutral, .climateOff, label: "Climate on. Turn off")
-        case false?: tile(.climate, "fan", "Climate off", "Turn on", .neutral, .climateOn, label: "Climate off. Turn on")
-        case nil: tile(.climate, "fan", "Climate", "Unknown", .unknown, nil, label: "Climate state unknown. Opens Controls")
-        }
+        let climate: DockTile = { switch climateOn {
+        case true?:
+            var on = tile(.climate, "fan.fill", "Climate on", "Turn off", .neutral, .climateOff, label: "Climate on. Turn off")
+            on.isOn = true
+            return on
+        case false?: return tile(.climate, "fan", "Climate off", "Turn on", .neutral, .climateOn, label: "Climate off. Turn on")
+        case nil: return tile(.climate, "fan", "Climate", "Unknown", .unknown, nil, label: "Climate state unknown. Opens Controls")
+        } }()
         let sentryTile: DockTile = switch sentry {
         case true?: tile(.sentry, "shield.lefthalf.filled", "Sentry on", "Turn off", .armed, .sentryOff, label: "Sentry on. Turn off")
         case false?: tile(.sentry, "shield", "Sentry off", "Turn on", .neutral, .sentryOn, label: "Sentry off. Turn on")
@@ -90,7 +95,7 @@ struct DashboardDock: View {
     var body: some View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: VoltaSpacing.sm),
                             count: typeSize.isAccessibilitySize ? 2 : 4)
-        LazyVGrid(columns: columns, spacing: VoltaSpacing.sm) {
+        LazyVGrid(columns: columns, spacing: VoltaSpacing.md) {
             ForEach(tiles) { tile in
                 DockTileButton(tile: tile, isSending: sending(tile)) { tap(tile) }
                     .disabled(blocked(tile))
@@ -101,47 +106,44 @@ struct DashboardDock: View {
     }
 }
 
+/// A round plate with the control's symbol, then its state and what a tap
+/// does. No box: the plate is the button, as in Control Center.
 private struct DockTileButton: View {
     var tile: DockTile
     var isSending: Bool
     var action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.dynamicTypeSize) private var typeSize
-    @ScaledMetric(relativeTo: .body) private var iconHeight: CGFloat = 22
+    @ScaledMetric(relativeTo: .body) private var plate: CGFloat = 52
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 3) {
+            VStack(spacing: 6) {
                 ZStack {
+                    Circle().fill(plateFill)
                     Image(systemName: tile.symbol)
-                        .font(.system(.body, weight: .regular))
+                        .symbolVariant(.fill)
+                        .font(.system(.title3, weight: .medium))
                         .foregroundStyle(iconColor)
                         .opacity(isSending ? 0 : 1)
-                    if isSending { ProgressView().controlSize(.small).tint(.white) }
+                    if isSending { ProgressView().controlSize(.small).tint(tile.isOn ? .black : .white) }
                 }
-                .frame(height: iconHeight)
-                Text(tile.title)
-                    .font(.system(.subheadline, weight: .semibold))
-                    .foregroundStyle(titleColor)
-                Text(tile.action)
-                    .font(.footnote)
-                    .foregroundStyle(Color.voltaTextSecondary)
+                .frame(width: plate, height: plate)
+                VStack(spacing: 1) {
+                    Text(tile.title)
+                        .font(.system(.subheadline, weight: .semibold))
+                        .foregroundStyle(titleColor)
+                    Text(tile.action)
+                        .font(.footnote)
+                        .foregroundStyle(Color.voltaTextSecondary)
+                }
+                // Two columns at accessibility sizes leave room to wrap instead.
+                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.75)
             }
-            // Two columns at accessibility sizes leave room to wrap instead.
-            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
-            .multilineTextAlignment(.center)
-            .minimumScaleFactor(0.75)
-            .padding(.horizontal, VoltaSpacing.xs)
-            .padding(.vertical, VoltaSpacing.sm)
+            .padding(.vertical, VoltaSpacing.xs)
             .frame(maxWidth: .infinity, minHeight: 62)
-            .background {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.voltaCard)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                    }
-            }
             .contentShape(.rect)
         }
         .buttonStyle(VoltaPressStyle())
@@ -150,12 +152,23 @@ private struct DockTileButton: View {
         .accessibilityIdentifier(tile.kind == .controls ? "button.controls" : "dock.\(tile.kind.rawValue)")
     }
 
-    private var iconColor: Color {
+    private var plateFill: Color {
+        if tile.isOn { return .voltaTextPrimary }
         switch tile.tone {
-        case .attention: .voltaAmber
-        case .armed: .voltaRed
-        case .unknown: .voltaTextSecondary
-        case .neutral: .voltaTextPrimary
+        case .attention: return .voltaAmber.opacity(0.2)
+        case .armed: return .voltaRed.opacity(0.2)
+        case .unknown: return .white.opacity(0.06)
+        case .neutral: return .white.opacity(0.1)
+        }
+    }
+
+    private var iconColor: Color {
+        if tile.isOn { return .black }
+        switch tile.tone {
+        case .attention: return .voltaAmber
+        case .armed: return .voltaRed
+        case .unknown: return .voltaTextSecondary
+        case .neutral: return .voltaTextPrimary
         }
     }
 

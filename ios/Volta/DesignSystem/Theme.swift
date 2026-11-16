@@ -25,6 +25,9 @@ extension Color {
     static let voltaRaised = Color(hex: 0x2C2C2C)
     /// 1px hairline borders and dividers.
     static let voltaHairline = Color.white.opacity(0.08)
+    /// Fill of a button with no outline (capsules, round plates). Translucent,
+    /// so it reads one step up from whatever card or background is behind it.
+    static let voltaControlFill = Color.white.opacity(0.12)
 
     static let voltaTextPrimary = Color.white
     /// 6.1:1 on a card, 5.2:1 on a raised control.
@@ -45,6 +48,7 @@ extension ShapeStyle where Self == Color {
     static var voltaCard: Color { .voltaCard }
     static var voltaRaised: Color { .voltaRaised }
     static var voltaHairline: Color { .voltaHairline }
+    static var voltaControlFill: Color { .voltaControlFill }
     static var voltaTextPrimary: Color { .voltaTextPrimary }
     static var voltaTextSecondary: Color { .voltaTextSecondary }
     static var voltaTextTertiary: Color { .voltaTextTertiary }

@@ -119,8 +119,8 @@ Layouts follow the window, never a device model or screen size:
 - **Dashboard, landscape:** left pane is the stage: map with the wordmark
   (place and town on the pill only), name with a vehicle switcher and a
   freshness line ("● Live" only while telemetry is connected), battery and
-  range with the limit tick, and a 4×2 dock of state-first tiles ("Locked /
-  Unlock"). Right pane scrolls: the Now card, Pack / Cabin / Outside tiles,
+  range with the limit tick, and a 4×2 dock of round icon plates, each with
+  its state and then the action ("Locked / Unlock"). Right pane scrolls: the Now card, Pack / Cabin / Outside tiles,
   the last 48 h strip and Activity.
 - **Dashboard, upright inner display:** map and battery above the hinge; the
   Now card, dock and the rest below.
@@ -128,8 +128,8 @@ Layouts follow the window, never a device model or screen size:
   under a short map: battery, a compact Now card, dock, tiles, the rest.
 - **Now card** by what the car is doing: charging (power and its curve, which
   open the live charging sheet; one charge limit stepper; Stop Charging),
-  plugged in, parked (temperatures, climate, "for 1h 28m" from the timeline
-  already loaded), driving (minimal, `NowDrivingCard`), asleep or offline
+  plugged in, parked (climate, "for 1h 28m" from the timeline already loaded,
+  and the temperatures in one column, where the tiles are a screen below), driving (minimal, `NowDrivingCard`), asleep or offline
   (last seen, Wake).
 - **Dock and Now card** send through `ControlsModel`, the Controls path, with
   the same confirmations (`CommandConfirmation`). A tile whose state is
@@ -149,14 +149,20 @@ Layouts follow the window, never a device model or screen size:
   evidence supports: Sending, Simulated, Accepted, Failed, Outcome unknown,
   and Confirmed only when a status recorded after the send shows the expected
   state (lock, climate, Sentry, charging, charge limit, charge port).
+- **Buttons** have no outline: round plates in the dock and steppers, capsules
+  for row and full-width actions, on a translucent fill
+  (`voltaControlFill`). Sentry armed is a red plate, unlocked amber, a
+  control that is on white.
 - Never show state the car doesn't report. Text uses text styles, at least
   11 pt; every action has a 44×44 pt hit region; rows are 56 pt. At
   accessibility sizes the dock drops to 2 columns, tiles and stats stack, row
   actions move under their labels, and each pane scrolls on its own.
 - Debug launch arguments: `-dashboardOpenControls YES`,
   `-dashboardOpenLiveCharge YES`, `-demoCharging YES`, `-logPanes YES` (logs
-  the system's regions), `-dashboardTypeSize accessibility5` (the app caps
-  text at Large, so this is how the accessibility layouts are checked).
+  the system's regions), `-dashboardTypeSize accessibility5` (renders
+  Dashboard and Controls at that size without changing the device setting).
+- **Text size:** Dashboard, Controls and Parked follow the system text size
+  (`followsSystemTextSize()`); other screens keep the app's cap at Large.
 
 ## Verification
 

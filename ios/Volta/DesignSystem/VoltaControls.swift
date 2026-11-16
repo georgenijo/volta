@@ -1,8 +1,9 @@
 import SwiftUI
 
 // Grouped control rows shared by Controls and the Dashboard: 56 pt rows in a
-// card with hairline dividers, 36 pt visible buttons inside 44 pt hit
-// regions, 44 pt stepper segments, and two-up rows that stack when narrow.
+// card with hairline dividers, 36 pt capsule buttons inside 44 pt hit
+// regions, round stepper plates, and two-up rows that stack when narrow.
+// Buttons carry no outline: a translucent fill is the whole shape.
 
 // MARK: - Group
 
@@ -115,7 +116,7 @@ extension ControlRow where Trailing == EmptyView {
 
 // MARK: - Button
 
-/// A raised 36 pt button ("Open", "Vent", "Flash") inside a 44 pt hit region.
+/// A 36 pt capsule ("Open", "Vent", "Flash") inside a 44 pt hit region.
 struct ControlButton: View {
     enum Style { case neutral, accent }
     var title: String
@@ -138,18 +139,11 @@ struct ControlButton: View {
                 Text(title).opacity(isBusy ? 0 : 1)
             }
             .font(.system(.callout, weight: .semibold))
-            .foregroundStyle(Color.voltaTextPrimary)
+            .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
             .lineLimit(1)
-            .padding(.horizontal, VoltaSpacing.md + 2)
+            .padding(.horizontal, VoltaSpacing.lg)
             .frame(minWidth: 64, minHeight: 36)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(style == .accent ? Color.voltaBlueFill : Color.voltaRaised)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                    }
-            }
+            .background(style == .accent ? Color.voltaBlueFill : Color.voltaControlFill, in: .capsule)
             // The visible button is 36 pt; the tap target is at least 44 pt.
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(.rect)
@@ -159,7 +153,7 @@ struct ControlButton: View {
     }
 }
 
-/// A full-width 52 pt action ("Stop Charging", "Start Climate").
+/// A full-width 50 pt capsule action ("Stop Charging", "Start Climate").
 struct ControlWideButton: View {
     var title: String
     var systemImage: String?
@@ -188,18 +182,15 @@ struct ControlWideButton: View {
                 Text(title)
             }
             .font(.system(.body, weight: .semibold))
-            .foregroundStyle(Color.voltaTextPrimary)
+            .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
             .multilineTextAlignment(.center)
-            .padding(.horizontal, VoltaSpacing.md)
+            .padding(.horizontal, VoltaSpacing.lg)
+            .padding(.vertical, VoltaSpacing.xs)
             .frame(maxWidth: .infinity, minHeight: 50)
-            .background {
-                RoundedRectangle(cornerRadius: VoltaRadius.wideButton, style: .continuous)
-                    .fill(style == .accent ? Color.voltaBlueFill : Color.voltaRaised)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: VoltaRadius.wideButton, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                    }
-            }
+            // A capsule while the title fits on one line; wrapped text at
+            // large sizes still sits inside the rounded ends.
+            .background(style == .accent ? Color.voltaBlueFill : Color.voltaControlFill,
+                        in: .rect(cornerRadius: 25, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(VoltaPressStyle())
@@ -209,7 +200,8 @@ struct ControlWideButton: View {
 
 // MARK: - Stepper
 
-/// "−  80%  +" with 44 pt segments. VoiceOver reads it as one adjustable
+/// "−  80%  +": round minus and plus plates with 44 pt targets around the
+/// value. VoiceOver reads it as one adjustable
 /// element ("Charge limit, 80 percent").
 struct ValueStepper: View {
     var label: String
@@ -220,6 +212,7 @@ struct ValueStepper: View {
     var decrease: () -> Void
     var increase: () -> Void
     @ScaledMetric(relativeTo: .body) private var valueWidth: CGFloat = 58
+    @ScaledMetric(relativeTo: .body) private var plate: CGFloat = 36
 
     var body: some View {
         HStack(spacing: 0) {
@@ -235,14 +228,6 @@ struct ValueStepper: View {
             segment("plus", enabled: canIncrease, action: increase)
         }
         .frame(minHeight: 44)
-        .background {
-            RoundedRectangle(cornerRadius: VoltaRadius.control, style: .continuous)
-                .fill(Color.voltaRaised)
-                .overlay {
-                    RoundedRectangle(cornerRadius: VoltaRadius.control, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                }
-        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(accessibilityValue)
@@ -258,9 +243,12 @@ struct ValueStepper: View {
     private func segment(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(.body, weight: .semibold))
+                .font(.system(.subheadline, weight: .bold))
                 .foregroundStyle(Color.voltaTextPrimary.opacity(enabled ? 1 : 0.35))
-                .frame(minWidth: 48, minHeight: 44)
+                .frame(width: plate, height: plate)
+                .background(Color.voltaControlFill.opacity(enabled ? 1 : 0.5), in: .circle)
+                // The round plate is 36 pt; the tap target is 44 pt.
+                .frame(minWidth: 44, minHeight: 44)
                 .contentShape(.rect)
         }
         .buttonStyle(VoltaPressStyle())

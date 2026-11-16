@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - PillButton
 
-/// Raised dark rounded button: compact ("Open", "Flash") or full-width ("Vent").
+/// Capsule button with no outline: compact ("Open", "Flash") or full-width ("Vent").
 ///
 ///     PillButton("Open") { ... }
 ///     PillButton("Close", size: .wide) { ... }
@@ -44,16 +44,8 @@ struct PillButton: View {
             .frame(minWidth: size == .compact ? 84 : nil, maxWidth: size == .wide ? .infinity : nil)
             .padding(.horizontal, VoltaSpacing.lg)
             .padding(.vertical, size == .wide ? 15 : 10)
-            .background {
-                RoundedRectangle(cornerRadius: size == .wide ? VoltaRadius.wideButton : VoltaRadius.control,
-                                 style: .continuous)
-                    .fill(style == .accent ? Color.voltaBlueFill : Color.voltaRaised)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: size == .wide ? VoltaRadius.wideButton : VoltaRadius.control,
-                                         style: .continuous)
-                            .strokeBorder(Color.voltaHairline, lineWidth: 1)
-                    }
-            }
+            .background(style == .accent ? Color.voltaBlueFill : Color.voltaControlFill,
+                        in: .rect(cornerRadius: 25, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(VoltaPressStyle())

@@ -447,8 +447,7 @@ struct ParkedRangeMenu: View {
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 44)
-            .background(HistoryTheme.card, in: .capsule)
-            .overlay { Capsule().strokeBorder(HistoryTheme.hairline) }
+            .background(Color.voltaControlFill, in: .capsule)
             .contentShape(.capsule)
         }
         .accessibilityLabel("Date range, \(range.menuTitle)")
