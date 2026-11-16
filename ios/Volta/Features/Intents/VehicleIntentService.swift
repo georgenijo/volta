@@ -208,10 +208,13 @@ enum VehicleIntentGate {
     /// "Locking Friday." Accepted means Tesla took the request; the car's
     /// observed state may lag, so the wording never claims it already happened.
     static func successDialog(_ action: VehicleIntentAction, vehicleName name: String, simulated: Bool) -> String {
-        if simulated {
-            return "Demo mode simulated: \(action.verbPhrase). No vehicle was contacted."
-        }
-        return switch action {
+        let text = realDialog(action, vehicleName: name)
+        guard simulated else { return text }
+        return "Simulated in demo mode: \(text.prefix(1).lowercased())\(text.dropFirst()) No vehicle was contacted."
+    }
+
+    private static func realDialog(_ action: VehicleIntentAction, vehicleName name: String) -> String {
+        switch action {
         case .lock: "Locking \(name)."
         case .unlock: "Unlocking \(name)."
         case .climateOn: "Turning on climate in \(name)."

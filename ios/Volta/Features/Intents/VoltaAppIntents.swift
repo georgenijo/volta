@@ -156,8 +156,8 @@ enum ClimatePowerState: String, AppEnum {
     case on, off
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Climate"
     static let caseDisplayRepresentations: [ClimatePowerState: DisplayRepresentation] = [
-        .on: DisplayRepresentation(title: "On", synonyms: ["Start"]),
-        .off: DisplayRepresentation(title: "Off", synonyms: ["Stop"]),
+        .on: DisplayRepresentation(title: "Climate On", synonyms: ["on climate", "on the climate", "on my car’s climate"]),
+        .off: DisplayRepresentation(title: "Climate Off", synonyms: ["off climate", "off the climate", "off my car’s climate"]),
     ]
 }
 
@@ -169,7 +169,7 @@ struct SetClimateIntent: AppIntent {
     @Parameter(title: "Climate", default: .on)
     var state: ClimatePowerState
 
-    static var parameterSummary: some ParameterSummary { Summary("Turn climate \(\.$state)") }
+    static var parameterSummary: some ParameterSummary { Summary("Turn \(\.$state)") }
 
     init() {}
     init(state: ClimatePowerState) { self.state = state }
@@ -212,8 +212,8 @@ enum ChargePortCommand: String, AppEnum {
     case open, close
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Charge Port"
     static let caseDisplayRepresentations: [ChargePortCommand: DisplayRepresentation] = [
-        .open: "Open",
-        .close: DisplayRepresentation(title: "Close", synonyms: ["Shut"]),
+        .open: DisplayRepresentation(title: "Open Charge Port", synonyms: ["open the charge port", "open my charge port"]),
+        .close: DisplayRepresentation(title: "Close Charge Port", synonyms: ["close the charge port", "close my charge port"]),
     ]
 }
 
@@ -225,7 +225,7 @@ struct SetChargePortIntent: AppIntent {
     @Parameter(title: "Charge Port", default: .open)
     var command: ChargePortCommand
 
-    static var parameterSummary: some ParameterSummary { Summary("\(\.$command) the charge port") }
+    static var parameterSummary: some ParameterSummary { Summary("\(\.$command)") }
 
     init() {}
     init(command: ChargePortCommand) { self.command = command }

@@ -73,9 +73,8 @@ struct VoltaShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: SetClimateIntent(),
             phrases: [
-                "Turn \(\.$state) climate with \(.applicationName)",
-                "Turn \(\.$state) my car’s climate with \(.applicationName)",
-                "Turn \(\.$state) climate in \(.applicationName)",
+                "Turn \(\.$state) with \(.applicationName)",
+                "Turn \(\.$state) in \(.applicationName)",
                 "Precondition my car with \(.applicationName)",
             ],
             shortTitle: "Climate",
@@ -83,9 +82,8 @@ struct VoltaShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: SetChargePortIntent(),
             phrases: [
-                "\(\.$command) my charge port with \(.applicationName)",
-                "\(\.$command) the charge port with \(.applicationName)",
-                "\(\.$command) the charge port in \(.applicationName)",
+                "\(\.$command) with \(.applicationName)",
+                "\(\.$command) in \(.applicationName)",
             ],
             shortTitle: "Charge Port",
             systemImageName: "powerplug")

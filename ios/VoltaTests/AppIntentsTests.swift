@@ -216,7 +216,7 @@ final class VehicleIntentGateTests: XCTestCase {
     func testSuccessWordingNeverClaimsTheCarAlreadyChanged() {
         XCTAssertEqual(VehicleIntentGate.successDialog(.lock, vehicleName: "Friday", simulated: false), "Locking Friday.")
         XCTAssertEqual(VehicleIntentGate.successDialog(.honk, vehicleName: "Friday", simulated: true),
-                       "Demo mode simulated: honk the horn. No vehicle was contacted.")
+                       "Simulated in demo mode: honking the horn on Friday. No vehicle was contacted.")
     }
 
     func testRequestErrorsMapToSpokenReasons() {
@@ -302,7 +302,7 @@ private final class RequestLog: Sendable {
         let model = demoModel()
         let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         let text = try await service.perform(.lock)
-        XCTAssertEqual(text, "Demo mode simulated: lock. No vehicle was contacted.")
+        XCTAssertEqual(text, "Simulated in demo mode: locking Friday. No vehicle was contacted.")
     }
 
     func testUnpairedReadsAndCommandsAskToSignIn() async {
