@@ -131,10 +131,13 @@ struct DashboardStart {
     var store: (any SavedDashboardStoring)?
     /// `store`'s key for the current backend.
     var backend: String?
+    /// The first dashboard's requests, already sent while the first frame was built.
+    var prefetch: DashboardPrefetch?
 
     init(vehicles: (@MainActor @Sendable () async -> [Vehicle]?)? = nil, saved: SavedDashboard? = nil,
-         store: (any SavedDashboardStoring)? = nil, backend: String? = nil) {
+         store: (any SavedDashboardStoring)? = nil, backend: String? = nil, prefetch: DashboardPrefetch? = nil) {
         self.vehicles = vehicles; self.saved = saved; self.store = store; self.backend = backend
+        self.prefetch = prefetch
     }
 
     /// A list that is already loaded.
@@ -155,4 +158,47 @@ final class MemorySavedDashboards: SavedDashboardStoring {
         self.dashboard = dashboard
     }
     func remove() { dashboard = nil }
+}
+
+/// The requests a dashboard makes on its first load, sent by `AppModel` at
+/// launch, when the saved dashboard means the shell will mount at once. The
+/// first dashboard for the same vehicle consumes them instead of sending its
+/// own; whoever discards them cancels them.
+@MainActor
+final class DashboardPrefetch {
+    let vehicleID: Int
+    /// The widget-ordering token, taken just before `/status` was sent.
+    let issued: StatusRequestToken?
+    /// When and in which zone `/summary?range=today` was requested.
+    let requestedAt: Date
+    let requestedZone: String
+    let status: Task<VehicleStatus, any Error>
+    let timeline: Task<[TimelineSegment], any Error>
+    let summaries: [SummaryRange: Task<ActivitySummary, any Error>]
+
+    /// Sends status first, then the slowest history first, so the requests a
+    /// screen needs soonest are never queued behind the others.
+    init(dataSource: any VoltaDataSource, vehicleID: Int, surfaces: (any VehicleSurfaces)?) {
+        self.vehicleID = vehicleID
+        requestedAt = .now
+        requestedZone = TimeZone.current.identifier
+        issued = surfaces?.nextStatusToken()
+        status = Task { try await dataSource.status(vehicleID: vehicleID) }
+        var summaries: [SummaryRange: Task<ActivitySummary, any Error>] = [:]
+        for range in SummaryRange.allCases.reversed() {
+            summaries[range] = Task { try await dataSource.summary(vehicleID: vehicleID, range: range) }
+        }
+        self.summaries = summaries
+        timeline = Task { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }
+    }
+
+    func cancel() {
+        status.cancel(); timeline.cancel()
+        summaries.values.forEach { $0.cancel() }
+    }
+
+    /// `task`'s result; cancelling the waiter cancels the request.
+    nonisolated static func value<T: Sendable>(of task: Task<T, any Error>) async throws -> T {
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
 }

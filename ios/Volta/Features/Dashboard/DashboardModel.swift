@@ -119,18 +119,37 @@ final class DashboardModel {
         // only when it contains the selected vehicle; an invalid seed falls
         // back to the server request and preserves the existing missing-vehicle behavior.
         let seededVehicles = isNewModel ? start?.vehicles : nil
+        // The app's launch requests for this vehicle, if this is the first dashboard.
+        let prefetch = isNewModel && start?.prefetch?.vehicleID == vehicleID ? start?.prefetch : nil
+        if prefetch == nil { start?.prefetch?.cancel() }
 
-        let todayRequestedAt = Date.now
-        let todayRequestedZone = TimeZone.current.identifier
+        let todayRequestedAt = prefetch?.requestedAt ?? .now
+        let todayRequestedZone = prefetch?.requestedZone ?? TimeZone.current.identifier
 
         await withTaskGroup(of: SectionResponse.self) { group in
             async let vehiclesReq = Self.vehicleResult(dataSource: dataSource, vehicleID: vehicleID,
                                                        seededVehicles: seededVehicles)
-            let issued = surfaces?.nextStatusToken()  // before /status: orders widget publishes
-            async let statusReq = Self.result { try await dataSource.status(vehicleID: vehicleID) }
-            group.addTask { .timeline(await Self.result { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }) }
-            for range in SummaryRange.allCases {
-                group.addTask { .summary(range, await Self.result { try await dataSource.summary(vehicleID: vehicleID, range: range) }) }
+            // Taken before /status (here or by the prefetch): orders widget publishes.
+            let issued = prefetch.map { $0.issued } ?? surfaces?.nextStatusToken()
+            let statusTask = prefetch?.status, timelineTask = prefetch?.timeline
+            async let statusReq = Self.result {
+                if let statusTask { return try await DashboardPrefetch.value(of: statusTask) }
+                return try await dataSource.status(vehicleID: vehicleID)
+            }
+            group.addTask {
+                .timeline(await Self.result {
+                    if let timelineTask { return try await DashboardPrefetch.value(of: timelineTask) }
+                    return try await dataSource.timeline(vehicleID: vehicleID, hours: 48)
+                })
+            }
+            for range in SummaryRange.allCases.reversed() {
+                let summaryTask = prefetch?.summaries[range]
+                group.addTask {
+                    .summary(range, await Self.result {
+                        if let summaryTask { return try await DashboardPrefetch.value(of: summaryTask) }
+                        return try await dataSource.summary(vehicleID: vehicleID, range: range)
+                    })
+                }
             }
 
             let statusResult = await statusReq

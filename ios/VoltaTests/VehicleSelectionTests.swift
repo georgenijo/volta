@@ -124,6 +124,8 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
         let start = model.takeInitialDashboardVehicles(vehicleID: 2)
         XCTAssertEqual(start?.saved?.status.batteryLevel, 64)
         XCTAssertNotNil(start?.store)
+        XCTAssertEqual(start?.prefetch?.vehicleID, 2, "the dashboard's requests were sent at launch")
+        start?.prefetch?.cancel()
         XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2)?.saved, "only the first dashboard shows it")
         await model.loadVehicles()
         XCTAssertEqual(model.vehicles.map(\.name), ["Tesla", "Friday"], "the fresh list replaces the saved one")
@@ -157,6 +159,22 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
         let lockedModel = try pairedModel(locked, saved: MemorySavedDashboards(savedDashboard(backend: pairedBackend))) { vehiclesJSON() }
         XCTAssertTrue(lockedModel.isLocked)
         XCTAssertTrue(lockedModel.vehicles.isEmpty, "nothing loads behind the lock screen")
+    }
+
+    func testLaunchPrefetchIsDiscardedOnBackgroundOrVehicleSwitch() throws {
+        let settings = settings()
+        settings.selectedVehicleID = 2
+        let model = try pairedModel(settings, saved: MemorySavedDashboards(savedDashboard(backend: pairedBackend))) { vehiclesJSON() }
+        model.didEnterBackground()
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2)?.prefetch)
+
+        let switching = self.settings()
+        switching.selectedVehicleID = 2
+        let other = try pairedModel(switching, saved: MemorySavedDashboards(savedDashboard(backend: pairedBackend))) { vehiclesJSON() }
+        other.selectedVehicleID = 1
+        let start = other.takeInitialDashboardVehicles(vehicleID: 1)
+        XCTAssertNil(start?.prefetch)
+        XCTAssertNil(start?.saved)
     }
 
     func testUnpairAndDemoModeForgetTheSavedDashboard() throws {

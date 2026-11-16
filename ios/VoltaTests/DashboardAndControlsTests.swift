@@ -194,6 +194,34 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         await task.value
     }
 
+    func testLaunchPrefetchReplacesTheFirstLoadsRequests() async {
+        let source = StubSource(), statusCalls = Counter(), summaryCalls = Counter(), model = DashboardModel()
+        source.statusHandler = { _ = await statusCalls.next(); return makeStatus(battery: 66) }
+        source.summaryHandler = { range in _ = await summaryCalls.next(); return makeSummary(range) }
+        let prefetch = DashboardPrefetch(dataSource: source, vehicleID: 1, surfaces: nil)
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
+        let statuses = await statusCalls.value, summaries = await summaryCalls.value
+        XCTAssertEqual(statuses, 1, "the dashboard awaits the launch request instead of sending another")
+        XCTAssertEqual(summaries, 3)
+        XCTAssertEqual(model.status?.batteryLevel, 66)
+        XCTAssertEqual(model.summaries.count, 3)
+
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
+        let refreshed = await statusCalls.value
+        XCTAssertEqual(refreshed, 2, "a loaded dashboard never reuses launch responses")
+    }
+
+    func testLaunchPrefetchForAnotherVehicleIsCancelledAndNotShown() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        let other = StubSource()
+        other.statusHandler = { await gate.wait(); return makeStatus(battery: 5) }
+        let prefetch = DashboardPrefetch(dataSource: other, vehicleID: 2, surfaces: nil)
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
+        XCTAssertEqual(model.status?.batteryLevel, 72)
+        XCTAssertTrue(prefetch.status.isCancelled)
+        await gate.open()
+    }
+
     func testSavedDashboardRoundTripsThroughTheFile() async throws {
         let url = FileManager.default.temporaryDirectory.appending(path: "saved-dashboard-\(UUID()).json")
         defer { try? FileManager.default.removeItem(at: url) }

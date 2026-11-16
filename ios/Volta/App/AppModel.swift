@@ -42,7 +42,11 @@ final class AppModel {
     /// The last dashboard saved for this backend; see `SavedDashboard`.
     @ObservationIgnored private let savedDashboards: any SavedDashboardStoring
     /// The saved dashboard read at launch, offered once to the first dashboard.
-    @ObservationIgnored private var launchDashboard: SavedDashboard?
+    @ObservationIgnored private var launchDashboard: SavedDashboard? {
+        didSet { if launchDashboard == nil { launchPrefetch?.cancel(); launchPrefetch = nil } }
+    }
+    /// That dashboard's requests, sent at launch; see `DashboardPrefetch`.
+    @ObservationIgnored private var launchPrefetch: DashboardPrefetch?
     /// Widget snapshot + Live Activities. Told about every pairing, demo and
     /// vehicle change; see `surfaceContext`.
     @ObservationIgnored let surfaces: any VehicleSurfaces
@@ -59,6 +63,7 @@ final class AppModel {
         set {
             guard !isLaunchDemo else { return }
             dashboardCanUseInitialVehicles = false
+            launchDashboard = nil
             settings.selectedVehicleID = newValue; settings.selectedVehicleIsExplicit = true
             updateSurfaces()
         }
@@ -73,12 +78,15 @@ final class AppModel {
     func takeInitialDashboardVehicles(vehicleID: Int) -> DashboardStart? {
         let canUseVehicles = dashboardCanUseInitialVehicles
         dashboardCanUseInitialVehicles = false
-        let saved = launchDashboard
+        let saved = launchDashboard, prefetch = launchPrefetch
+        launchPrefetch = nil
         launchDashboard = nil
-        guard isPaired, !isLocked else { return nil }
+        guard isPaired, !isLocked else { prefetch?.cancel(); return nil }
         let backend = savedDashboardBackend
+        // DashboardModel cancels a prefetch it cannot use.
         var start = DashboardStart(saved: saved?.vehicleID == vehicleID ? saved : nil,
-                                   store: backend == nil ? nil : savedDashboards, backend: backend)
+                                   store: backend == nil ? nil : savedDashboards, backend: backend,
+                                   prefetch: prefetch)
         guard vehicleID == selectedVehicleID else { return start }
         if canUseVehicles {
             start.vehicles = { [vehicles] in vehicles }
@@ -108,6 +116,11 @@ final class AppModel {
               saved.vehicles.contains(where: { $0.id == saved.vehicleID }) else { return }
         vehicles = saved.vehicles
         launchDashboard = saved
+        // The shell mounts in the first frame; its dashboard's requests need
+        // not wait for that frame to be built.
+        if saved.vehicleID == selectedVehicleID {
+            launchPrefetch = DashboardPrefetch(dataSource: dataSource, vehicleID: saved.vehicleID, surfaces: surfaces)
+        }
     }
     private func forgetSavedDashboard() {
         launchDashboard = nil
@@ -429,6 +442,7 @@ final class AppModel {
     }
     func lock() {
         dashboardCanUseInitialVehicles = false
+        launchDashboard = nil
         lockGeneration = UUID(); appLock.cancel(); isUnlocking = false
         if !isLaunchDemo && settings.appLockEnabled && isPaired { isLocked = true }
     }
