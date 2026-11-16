@@ -120,20 +120,30 @@ Layouts follow the window, never a device model or screen size:
   (place and town on the pill only), name with a vehicle switcher and a
   freshness line ("● Live" only while telemetry is connected), battery and
   range with the limit tick, and a 4×2 dock of round icon plates, each with
-  its state and then the action ("Locked / Unlock"). Right pane scrolls: the Now card, Pack / Cabin / Outside tiles,
-  the last 48 h strip and Activity.
+  its state and then the action ("Locked / Unlock"). Right pane scrolls: the
+  Now card, four metric cards, the last 48 h strip and Activity.
 - **Dashboard, upright inner display:** map and battery above the hinge; the
   Now card, dock and the rest below.
 - **Dashboard, compact width** (outer display, ordinary iPhones): one column
-  under a short map: battery, a compact Now card, dock, tiles, the rest. Where
+  under a short map: battery, a compact Now card, dock, metric cards, the rest. Where
   the bars sit on the side the map is shorter, so the first dock row is on
   screen without scrolling.
 - **Now card** by what the car is doing: charging (power and its curve, which
   open the live charging sheet; one charge limit stepper with Stop Charging
   beside it), plugged in, parked ("for 1h 28m" from the timeline already
-  loaded with the climate button beside it; in one column, where the tiles
+  loaded with the climate button beside it; in one column, where the cards
   are a screen below, the two temperatures as well), driving (minimal,
-  `NowDrivingCard`), asleep or offline (last seen, Wake).
+  `NowDrivingCard`), asleep or offline (last seen, Wake). The card is tinted
+  green while charging and blue while parked; other states stay neutral.
+- **Metric cards** (2×2, `MetricCard`): Pack Temp, 30D Eff, Climate and
+  Weather. Each has a coloured icon, a reading and a gradient gauge whose
+  knob glides to its value. Pack is blue when cold, green in its working
+  range, amber when warm and red when hot; the Climate fan is green and
+  turns while climate runs; the Weather symbol breathes. A note sits beside
+  the reading only where both fit, otherwise under it. All motion stops
+  with Reduce Motion.
+- **Last 48 h strip:** drives red, charging green, online blue, drawn at
+  full strength (3:1 or better against the empty cells).
 - **Dock and Now card** send through `ControlsModel`, the Controls path, with
   the same confirmations (`CommandConfirmation`). A tile whose state is
   unknown, or whose command controls aren't enabled for, opens Controls
@@ -163,7 +173,7 @@ Layouts follow the window, never a device model or screen size:
   are chosen per tile (filled for small glyphs, outlines for the cars).
 - Never show state the car doesn't report. Text uses text styles, at least
   11 pt; every action has a 44×44 pt hit region; rows are 56 pt. At
-  accessibility sizes the dock drops to 2 columns, tiles and stats stack, row
+  accessibility sizes the dock drops to 2 columns, cards and stats stack, row
   actions move under their labels, and each pane scrolls on its own.
 - Debug launch arguments: `-dashboardOpenControls YES`,
   `-dashboardOpenLiveCharge YES`, `-demoCharging YES`, `-logPanes YES` (logs

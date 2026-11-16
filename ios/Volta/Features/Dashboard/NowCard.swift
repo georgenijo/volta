@@ -91,24 +91,37 @@ struct NowCard: View {
         }
         .padding(style == .compact ? VoltaSpacing.lg + 2 : VoltaSpacing.xl - 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background { background(charging: variant == .charging) }
+        .background { background(accent: Self.accent(for: variant)) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("card.now")
     }
 
-    private func background(charging: Bool) -> some View {
+    /// The card's colour says what the car is doing: green while energy goes
+    /// in, blue while it sits parked and awake. Other states stay neutral.
+    static func accent(for variant: NowVariant) -> Color? {
+        switch variant {
+        case .charging: .voltaGreen
+        case .parked: .voltaBlue
+        case .pluggedIn, .driving, .unreachable: nil
+        }
+    }
+
+    /// Blue light enough to read as small text on the card (6:1).
+    static let parkedText = Color(hex: 0x60A5FA)
+
+    private func background(accent: Color?) -> some View {
         RoundedRectangle(cornerRadius: VoltaRadius.card + 4, style: .continuous)
             .fill(Color.voltaCard)
             .overlay {
-                if charging {
+                if let accent {
                     RoundedRectangle(cornerRadius: VoltaRadius.card + 4, style: .continuous)
-                        .fill(LinearGradient(colors: [Color.voltaGreen.opacity(0.10), .clear],
+                        .fill(LinearGradient(colors: [accent.opacity(0.12), .clear],
                                              startPoint: .topLeading, endPoint: .bottom))
                 }
             }
             .overlay {
                 RoundedRectangle(cornerRadius: VoltaRadius.card + 4, style: .continuous)
-                    .strokeBorder(charging ? Color.voltaGreen.opacity(0.35) : Color.voltaHairline, lineWidth: 1)
+                    .strokeBorder(accent?.opacity(0.35) ?? Color.voltaHairline, lineWidth: 1)
             }
     }
 
@@ -329,7 +342,8 @@ struct NowCard: View {
 
     private var parkedHeader: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            header("Parked", trailing: parkedSince.map { "for \(Self.elapsed(from: $0, to: context.date))" }, green: false)
+            header("Parked", trailing: parkedSince.map { "for \(Self.elapsed(from: $0, to: context.date))" },
+                   green: false, color: Self.parkedText)
         }
     }
 
@@ -337,7 +351,7 @@ struct NowCard: View {
     private var parkedDuration: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             VStack(alignment: .leading, spacing: VoltaSpacing.xs) {
-                headerTitle("Parked", green: false)
+                headerTitle("Parked", green: false, color: Self.parkedText)
                 if let parkedSince {
                     Text("for \(Self.elapsed(from: parkedSince, to: context.date))")
                         .font(.system(.title3, weight: .semibold))
@@ -391,15 +405,15 @@ struct NowCard: View {
 
     // MARK: Parts
 
-    private func header(_ title: String, trailing: String?, green: Bool) -> some View {
+    private func header(_ title: String, trailing: String?, green: Bool, color: Color? = nil) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .firstTextBaseline) {
-                headerTitle(title, green: green)
+                headerTitle(title, green: green, color: color)
                 Spacer(minLength: VoltaSpacing.sm)
                 if let trailing { headerTrailing(trailing) }
             }
             VStack(alignment: .leading, spacing: VoltaSpacing.xs) {
-                headerTitle(title, green: green)
+                headerTitle(title, green: green, color: color)
                 if let trailing { headerTrailing(trailing) }
             }
         }
@@ -407,12 +421,12 @@ struct NowCard: View {
         .accessibilityAddTraits(.isHeader)
     }
 
-    private func headerTitle(_ title: String, green: Bool) -> some View {
+    private func headerTitle(_ title: String, green: Bool, color: Color? = nil) -> some View {
         Text(title)
             .font(.system(.footnote, weight: .semibold))
             .tracking(2)
             .textCase(.uppercase)
-            .foregroundStyle(green ? Color.voltaGreen : Color.voltaTextSecondary)
+            .foregroundStyle(color ?? (green ? Color.voltaGreen : Color.voltaTextSecondary))
     }
 
     private func headerTrailing(_ text: String) -> some View {

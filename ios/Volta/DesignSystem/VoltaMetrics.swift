@@ -60,6 +60,9 @@ struct GradientGauge: View {
     /// Optional secondary marker (e.g. outside temp on the climate card).
     var secondaryValue: Double? = nil
     var height: CGFloat = 4
+    /// False until the gauge appears, so the knob glides in from the start.
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let temperature: [Color] = [.voltaBlue, .voltaBlue, .voltaGreen, .voltaGreen, .voltaRed, .voltaRed]
     static let daylight: [Color] = [Color(hex: 0x334155), .voltaAmber, .voltaAmber, Color(hex: 0xA855F7), Color(hex: 0x334155)]
@@ -82,13 +85,19 @@ struct GradientGauge: View {
                 }
                 if let value {
                     knobView
-                        .offset(x: clamp(value) * (w - 20))
+                        .offset(x: (settled || reduceMotion ? clamp(value) : 0) * (w - 20))
                 }
             }
             .frame(maxHeight: .infinity)
+            .animation(reduceMotion ? nil : .spring(duration: 0.8, bounce: 0.25), value: value)
+            .animation(reduceMotion ? nil : .spring(duration: 0.8, bounce: 0.25), value: secondaryValue)
         }
         .frame(height: 20)
         .accessibilityHidden(true)
+        .onAppear {
+            guard !settled else { return }
+            withAnimation(reduceMotion ? nil : .spring(duration: 0.9, bounce: 0.25).delay(0.15)) { settled = true }
+        }
     }
 
     @ViewBuilder private var knobView: some View {
@@ -97,6 +106,7 @@ struct GradientGauge: View {
             Circle().fill(color)
                 .frame(width: 20, height: 20)
                 .overlay(Circle().strokeBorder(Color.voltaCard, lineWidth: 3))
+                .shadow(color: color.opacity(0.7), radius: 6)
         case .ring:
             Circle().fill(Color.white)
                 .frame(width: 20, height: 20)
@@ -132,6 +142,10 @@ struct MetricCard<Accessory: View>: View {
     }
 
     var systemImage: String
+    /// The header icon's colour: what the reading means (warm, on, efficient).
+    var iconColor: Color
+    /// The header icon turns while this is true (a fan that is running).
+    var iconSpins: Bool
     var title: String
     var value: String
     var unit: String?
@@ -140,13 +154,18 @@ struct MetricCard<Accessory: View>: View {
     var gauge: GradientGauge?
     var tint: Color?
     var accessory: Accessory
-    @State private var isNarrow = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Grows with the text so a large icon never runs into the title.
+    @ScaledMetric(relativeTo: .footnote) private var iconWidth: CGFloat = 20
 
-    init(systemImage: String, title: String, value: String, unit: String? = nil,
+    init(systemImage: String, iconColor: Color = .voltaTextSecondary, iconSpins: Bool = false,
+         title: String, value: String, unit: String? = nil,
          badge: Badge? = nil, headerAccessory: AnyView? = nil,
          gauge: GradientGauge? = nil, tint: Color? = nil,
          @ViewBuilder accessory: () -> Accessory) {
         self.systemImage = systemImage
+        self.iconColor = iconColor
+        self.iconSpins = iconSpins
         self.title = title
         self.value = value
         self.unit = unit
@@ -162,8 +181,9 @@ struct MetricCard<Accessory: View>: View {
             HStack(spacing: VoltaSpacing.sm) {
                 Image(systemName: systemImage)
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Color.voltaTextSecondary)
-                    .frame(width: 20)
+                    .foregroundStyle(iconColor)
+                    .symbolEffect(.rotate, options: .repeat(.continuous), isActive: iconSpins && !reduceMotion)
+                    .frame(width: iconWidth)
                 Text(title)
                     .font(.voltaCardTitle)
                     .tracking(1.5)
@@ -178,17 +198,17 @@ struct MetricCard<Accessory: View>: View {
                 if let headerAccessory { headerAccessory }
             }
             Spacer(minLength: VoltaSpacing.lg)
-            if isNarrow {
-                // Too narrow for the reading and its note side by side.
+            // The note sits beside the reading only where both fit at full
+            // size with air between them; otherwise it goes underneath.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    BigNumber(value, unit: unit, size: 36)
+                    Spacer(minLength: VoltaSpacing.md)
+                    note
+                }
                 VStack(alignment: .leading, spacing: VoltaSpacing.xs) {
                     BigNumber(value, unit: unit, size: 36)
                     HStack(alignment: .firstTextBaseline, spacing: VoltaSpacing.sm) { note }
-                }
-            } else {
-                HStack(alignment: .firstTextBaseline) {
-                    BigNumber(value, unit: unit, size: 36)
-                    Spacer(minLength: 4)
-                    note
                 }
             }
             if let gauge {
@@ -196,15 +216,11 @@ struct MetricCard<Accessory: View>: View {
             }
         }
         .padding(VoltaSpacing.lg)
-        .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
+        // Cards in one grid row share the tallest one's height.
+        .frame(maxWidth: .infinity, minHeight: 140, maxHeight: .infinity, alignment: .topLeading)
         .voltaCardBackground(tint: tint)
-        .onGeometryChange(for: Bool.self) { $0.size.width < Self.narrowWidth } action: { isNarrow = $0 }
         .accessibilityElement(children: .combine)
     }
-
-    /// Below this card width the note moves under the reading instead of
-    /// squeezing it (a half-folded iPhone Duo pane, for example).
-    private static var narrowWidth: CGFloat { 162 }
 
     @ViewBuilder
     private var note: some View {
@@ -219,10 +235,12 @@ struct MetricCard<Accessory: View>: View {
 }
 
 extension MetricCard where Accessory == EmptyView {
-    init(systemImage: String, title: String, value: String, unit: String? = nil,
+    init(systemImage: String, iconColor: Color = .voltaTextSecondary, iconSpins: Bool = false,
+         title: String, value: String, unit: String? = nil,
          badge: Badge? = nil, headerAccessory: AnyView? = nil,
          gauge: GradientGauge? = nil, tint: Color? = nil) {
-        self.init(systemImage: systemImage, title: title, value: value, unit: unit,
+        self.init(systemImage: systemImage, iconColor: iconColor, iconSpins: iconSpins,
+                  title: title, value: value, unit: unit,
                   badge: badge, headerAccessory: headerAccessory, gauge: gauge, tint: tint) { EmptyView() }
     }
 }

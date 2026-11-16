@@ -28,6 +28,7 @@ struct DashboardView: View {
     @Environment(AppModel.self) private var app: AppModel?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.barsOnSide) private var barsOnSide
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var model = DashboardModel()
     @State private var controls = ControlsModel(status: nil)
@@ -326,7 +327,7 @@ struct DashboardView: View {
                 VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
                     banners
                     nowCard(.standard)
-                    metricTiles(displayStatus)
+                    metricGrid(displayStatus)
                     details
                 }
                 .padding(.horizontal, VoltaSpacing.screen)
@@ -425,7 +426,7 @@ struct DashboardView: View {
                     banners
                     nowCard(.wide)
                     dock
-                    metricTiles(status)
+                    metricGrid(status)
                     details
                 }
                 .padding(.horizontal, VoltaSpacing.screen)
@@ -515,7 +516,7 @@ struct DashboardView: View {
                     hero(status).padding(.top, VoltaSpacing.xs)
                     nowCard(.compact).padding(.top, VoltaSpacing.lg + 2)
                     dock.padding(.top, VoltaSpacing.md)
-                    metricTiles(status).padding(.top, VoltaSpacing.md)
+                    metricGrid(status).padding(.top, VoltaSpacing.md)
                     details.padding(.top, VoltaSpacing.xl + 4)
                 }
                 .padding(.horizontal, VoltaSpacing.screen)
@@ -719,7 +720,7 @@ struct DashboardView: View {
             Spacer(minLength: VoltaSpacing.sm)
             let freshness = Self.freshness(status)
             HStack(spacing: 6) {
-                if freshness.isLive { StatusDot(color: .voltaTextPrimary, size: 6) }
+                if freshness.isLive { StatusDot(color: .voltaGreen, size: 6) }
                 Text(freshness.text)
                     .font(.footnote)
                     .foregroundStyle(Color.voltaTextSecondary)
@@ -775,22 +776,122 @@ struct DashboardView: View {
         }
     }
 
-    /// Pack, Cabin and Outside: value, unit, and a caption on its own line.
-    private func metricTiles(_ status: VehicleStatus) -> some View {
-        let pack = MetricTile(title: "Pack", value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
-                              caption: status.packTempMaxC == nil ? "Streams when awake"
-                                : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "Maximum cell")
-        let cabin = MetricTile(title: "Cabin", value: temperatureNumber(status.insideTempC), unit: units.temperatureUnit,
-                               caption: "Climate \(StateDisplay.climate(status.climateOn).text.lowercased())")
-        let outside = MetricTile(title: "Outside", value: temperatureNumber(status.outsideTempC), unit: units.temperatureUnit,
-                                 caption: "At the car")
-        return Group {
+    /// Pack temperature, 30-day efficiency, climate and weather: each card has
+    /// its icon, a reading and a coloured gauge (one column at accessibility sizes).
+    private func metricGrid(_ status: VehicleStatus) -> some View {
+        Group {
             if typeSize.isAccessibilitySize {
-                VStack(spacing: VoltaSpacing.sm) { pack; cabin; outside }
+                VStack(spacing: VoltaSpacing.md) {
+                    packCard(status)
+                    efficiencyCard
+                    climateCard(status)
+                    weatherCard(status)
+                }
             } else {
-                HStack(spacing: VoltaSpacing.sm + 2) { pack; cabin; outside }
-                    .fixedSize(horizontal: false, vertical: true)
+                Grid(horizontalSpacing: VoltaSpacing.md, verticalSpacing: VoltaSpacing.md) {
+                    GridRow { packCard(status); efficiencyCard }
+                    GridRow { climateCard(status); weatherCard(status) }
+                }
             }
+        }
+    }
+
+    private func packCard(_ status: VehicleStatus) -> some View {
+        let tone = Self.packTone(status.packTempMaxC)
+        return MetricCard(systemImage: "minus.plus.batteryblock", iconColor: tone ?? .voltaTextSecondary,
+                          title: "Pack Temp",
+                          value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
+                          gauge: GradientGauge(value: status.packTempMaxC.map(Self.tempFraction),
+                                               knob: .filled(tone ?? .voltaAmber)),
+                          tint: tone) {
+            Text(status.packTempMaxC == nil ? "Streams when awake"
+                 : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "Maximum cell")
+                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
+        }
+    }
+
+    /// The pack reading's colour: blue when cold, green in its working range,
+    /// amber when warm, red when hot. Nil when the car is not reporting it.
+    static func packTone(_ celsius: Double?) -> Color? {
+        guard let celsius else { return nil }
+        switch celsius {
+        case ..<10: return .voltaBlue
+        case ..<35: return .voltaGreen
+        case ..<50: return .voltaAmber
+        default: return .voltaRed
+        }
+    }
+
+    private var efficiencyCard: some View {
+        let eff = model.summaries[.thirtyDays]?.efficiencyWhPerKm
+        let value = eff.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—"
+        // 100 Wh/km (great) … 250 Wh/km (heavy).
+        let fraction = eff.map { ($0 - 100) / 150 }
+        return MetricCard(systemImage: "leaf.fill", iconColor: eff == nil ? .voltaTextSecondary : .voltaGreen,
+                          title: "30D Eff", value: value, unit: units.efficiencyUnit,
+                          gauge: GradientGauge(value: fraction,
+                                               colors: [.voltaGreen, .voltaGreen, .voltaAmber, .voltaRed],
+                                               knob: .filled(.voltaGreen)),
+                          tint: nil) {
+            Text(Self.efficiencyDetail(model.summaries[.thirtyDays],
+                                       loading: model.loadingSections.contains(.summary(.thirtyDays))))
+                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
+        }
+    }
+
+    private func climateCard(_ status: VehicleStatus) -> some View {
+        let on = status.climateOn ?? false
+        return MetricCard(systemImage: "fan.fill", iconColor: on ? .voltaGreen : .voltaTeal, iconSpins: on,
+                          title: "Climate",
+                          value: temperatureNumber(status.insideTempC), unit: units.temperatureUnit,
+                          badge: .init(text: status.climateOn == nil ? "—" : (on ? "On" : "Off"),
+                                       color: on ? .voltaGreen : .voltaTextSecondary, inHeader: true),
+                          gauge: GradientGauge(value: status.insideTempC.map(Self.tempFraction), knob: .ring,
+                                               secondaryValue: status.outsideTempC.map(Self.tempFraction)),
+                          tint: on ? .voltaGreen : .voltaTeal) {
+            if let outside = status.outsideTempC {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("OUT").font(.caption2.weight(.medium)).tracking(1.2)
+                        .foregroundStyle(Color.voltaTextSecondary)
+                    Text("\(VoltaFormat.number(units.temperatureValue(celsius: outside), digits: 0))°")
+                        .font(.system(.title3, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                }
+                .fixedSize()
+            }
+        }
+    }
+
+    private func weatherCard(_ status: VehicleStatus) -> some View {
+        let hour = Calendar.current.component(.hour, from: .now)
+        let night = hour < 6 || hour >= 19
+        let t = status.outsideTempC
+        let extreme = t.map { $0 <= 0 || $0 >= 35 } ?? false
+        let symbol: String = {
+            guard let t else { return "cloud.fill" }
+            if t <= 0 { return "snowflake" }
+            return night ? "moon.stars.fill" : (t >= 24 ? "sun.max.fill" : "cloud.sun.fill")
+        }()
+        let dayFraction = (Double(hour) + Double(Calendar.current.component(.minute, from: .now)) / 60) / 24
+        return MetricCard(systemImage: night ? "moon.fill" : "sun.max.fill",
+                          iconColor: night ? Color(hex: 0xA5B4FC) : .voltaAmber,
+                          title: "Weather",
+                          value: temperatureNumber(t), unit: units.temperatureUnit,
+                          headerAccessory: extreme
+                            ? AnyView(Image(systemName: "exclamationmark.triangle.fill")
+                                .symbolRenderingMode(.multicolor)
+                                .foregroundStyle(Color.voltaAmber)
+                                .accessibilityLabel(t.map { $0 <= 0 ? "Freezing" : "Very hot" } ?? ""))
+                            : nil,
+                          gauge: GradientGauge(value: dayFraction, colors: GradientGauge.daylight, knob: .ring),
+                          tint: .voltaBlue) {
+            Image(systemName: symbol)
+                // Moon and stars take two colours; the other symbols bring their own.
+                .symbolRenderingMode(symbol == "moon.stars.fill" ? .palette : .multicolor)
+                .font(.system(size: 30))
+                .foregroundStyle(Color(hex: 0xC7D2FE), Color.voltaAmber)
+                .symbolEffect(.breathe, options: .repeat(.continuous), isActive: !reduceMotion)
+                .accessibilityHidden(true)
         }
     }
 
@@ -810,44 +911,8 @@ struct DashboardView: View {
     static func tempFraction(_ celsius: Double) -> Double { (celsius + 5) / 50 }
 }
 
-// MARK: - Metric tile
-
-/// "PACK / 100 °F / Min 88°F": value 32 pt (the widest that fits "100" in a
-/// third of a pane), unit 17 pt, caption 13 pt, all scaled with Dynamic Type.
-struct MetricTile: View {
-    var title: String
-    var value: String
-    var unit: String
-    var caption: String
-    @ScaledMetric(relativeTo: .largeTitle) private var valueSize: CGFloat = 32
-    @ScaledMetric(relativeTo: .body) private var unitSize: CGFloat = 17
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).voltaLabelStyle()
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value)
-                    .font(.system(size: valueSize, weight: .heavy))
-                    .tracking(-valueSize * 0.02)
-                    .monospacedDigit()
-                    .foregroundStyle(Color.voltaTextPrimary)
-                Text(unit)
-                    .font(.system(size: unitSize))
-                    .foregroundStyle(Color.voltaTextSecondary)
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            Text(caption)
-                .font(.footnote)
-                .foregroundStyle(Color.voltaTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, VoltaSpacing.md)
-        .padding(.vertical, VoltaSpacing.md)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .voltaCardBackground(radius: 18)
-        .accessibilityElement(children: .combine)
-    }
+extension Color {
+    fileprivate static let voltaTeal = Color(hex: 0x14B8A6)
 }
 
 extension ControlsModel {

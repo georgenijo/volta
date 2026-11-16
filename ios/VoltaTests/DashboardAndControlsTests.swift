@@ -877,6 +877,32 @@ private actor SentLimits {
 
     // MARK: Now card
 
+    func testPackToneFollowsThePackTemperature() {
+        XCTAssertNil(DashboardView.packTone(nil), "no reading, no colour")
+        XCTAssertEqual(DashboardView.packTone(-5), .voltaBlue)
+        XCTAssertEqual(DashboardView.packTone(9.9), .voltaBlue)
+        XCTAssertEqual(DashboardView.packTone(10), .voltaGreen)
+        XCTAssertEqual(DashboardView.packTone(34.9), .voltaGreen)
+        XCTAssertEqual(DashboardView.packTone(37.8), .voltaAmber)
+        XCTAssertEqual(DashboardView.packTone(50), .voltaRed)
+    }
+
+    func testNowCardIsTintedOnlyWhileChargingOrParked() {
+        XCTAssertEqual(NowCard.accent(for: .charging), .voltaGreen)
+        XCTAssertEqual(NowCard.accent(for: .parked), .voltaBlue)
+        XCTAssertNil(NowCard.accent(for: .pluggedIn))
+        XCTAssertNil(NowCard.accent(for: .driving))
+        XCTAssertNil(NowCard.accent(for: .unreachable(.asleep)))
+    }
+
+    func testStripColoursDrivesChargingAndOnlineAndLeavesSleepEmpty() {
+        XCTAssertEqual(ActivityStrip.color(for: .drive), .voltaRed)
+        XCTAssertEqual(ActivityStrip.color(for: .charge), .voltaGreen)
+        XCTAssertEqual(ActivityStrip.color(for: .idle), .voltaBlue)
+        XCTAssertNil(ActivityStrip.color(for: .asleep))
+        XCTAssertNil(ActivityStrip.color(for: .offline))
+    }
+
     func testNowVariantFollowsWhatTheCarIsDoing() {
         XCTAssertEqual(NowVariant.of(status(charging: .charging)), .charging)
         XCTAssertEqual(NowVariant.of(status(.charging, charging: nil)), .charging, "state alone says charging")
