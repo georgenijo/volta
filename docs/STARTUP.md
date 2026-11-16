@@ -15,25 +15,44 @@ appear while that list is pending; a list failure does not discard successful hi
 
 ## Saved dashboard and launch requests
 
-After each load with fresh status, the dashboard saves what it shows (vehicles,
-status, 48-hour timeline, summaries) to one file in Application Support:
-`.completeFileProtection`, excluded from backups, and keyed to the backend
-(server address plus a digest of the device token) and vehicle. On the next
-launch `AppModel` reads it before the first frame, so the tab shell and the
-saved dashboard appear in that frame. The status is labelled "Saved data from …"
-until fresh status replaces it; a failed refresh keeps it with the usual
-"Couldn't refresh" banner. Saved data never reaches widgets or Live Activities.
-Yesterday's saved "Today" totals are hidden by the existing reporting-day rule.
-Unpairing, demo mode and a revoked token delete the file, and a load that
-outlives its pairing cannot write it. Nothing is read or sent while app lock is
-on; unlocking restores it.
+After each load with fresh status, the dashboard saves the vehicles, that
+status, and the history sections that same load fetched (48-hour timeline,
+summaries) to one file in Application Support: `.completeFileProtection`,
+excluded from backups, and keyed to the backend (server address plus a digest
+of the device token) and vehicle. A section that failed or was cancelled is left
+out rather than saved again under the new date. On the next launch `AppModel`
+reads the file before the first frame, so the tab shell and the saved dashboard
+appear in that frame.
+
+- The status is labelled "Saved data from … · car last seen …" until fresh
+  status replaces it. A failed refresh keeps it with the usual "Couldn't
+  refresh" banner. When fresh status arrives, saved history is hidden until
+  this load replaces it, so its sections show loading or failed states rather
+  than unlabelled old data.
+- No command is based on saved status: while `ControlsModel` holds it, no
+  control is enabled and `send` refuses. Saved status also keeps no location
+  time, so HomeLink never offers itself. The dock and map draw saved lock and
+  Sentry states without the unlocked or armed colour. The live charging sheet
+  says "SAVED DATA", and names a failed refresh.
+- Saved data leaves `lastLoadedAt` nil, so becoming active while it shows does
+  not start a second load; nor does it while sections are still loading.
+- Saved data never reaches widgets or Live Activities. Yesterday's saved
+  "Today" totals are hidden by the existing reporting-day rule.
+- Unpairing, demo mode and a revoked token delete the file before `remove()`
+  returns, and a write queued before that cannot recreate it. A load that
+  outlives its pairing cannot write it. Write, removal and backup-exclusion
+  failures are logged by error domain and code.
+- Nothing is read or sent while app lock is on; unlocking restores it.
 
 A restored pairing sends `/status` (only when a saved dashboard will mount the
 shell) and then `/vehicles` from `AppModel.init`, in detached tasks, so neither
-waits for the first frame to be laid out. The first dashboard awaits that
-status, with its widget-ordering token taken just before it was sent. History
-is not sent early: over HTTP/1.1 every extra launch request opens its own TLS
-connection and delayed status.
+waits for the first frame to be laid out. The vehicle load exists before any
+view's task runs: the root view and the first dashboard join it in either
+order, and a load that already finished is not repeated. The first dashboard
+awaits that status, with its widget-ordering token taken just before it was
+sent. A launch in an iOS prewarm sends nothing, because the process may then be
+suspended for hours. The dashboard drops a launch status sent more than 5 s
+before it mounts, and retries once a launch status that got no answer.
 
 `DashboardModelTests` suspends history requests with explicit gates to verify
 that status and faster sections become usable while slower work remains pending.
@@ -99,9 +118,19 @@ runs the readiness test while streaming the app's `startup` log milestones
 `status`, `sections`, in milliseconds since process start), then prints each
 launch and the medians. It also reports each milestone relative to `appModel`:
 the time before it is mostly the simulator's dyld and Swift conformance setup,
-which swings with host load. `firstFrame` is the first display refresh after the
-root view appears. Each readiness launch now stays open four seconds so history
-milestones are recorded.
+which swings with host load. Every milestone after `appModel` is logged at the
+first display refresh after it was reached, when the frame showing it has been
+committed: `cachedStatus` is saved data on screen, `status` fresh status on
+screen, and `sections` every history section on screen. Each readiness launch
+stays open four seconds so history milestones are recorded.
+
+The live API speaks HTTP/2, where parallel requests share one connection.
+`scripts/startup-fixture-h2.py` puts the fixture behind a loopback-only HTTP/2
+front end (it needs `pip install h2` in a scratch virtual env). It charges the
+two connection round trips once per client connection, and the fixture, run
+with `--plain` on another loopback port, charges one per request. Forwarding
+adds roughly 50–100 ms of local overhead per request; compare HTTP/2 runs with
+each other, not with HTTP/1.1 runs.
 
 The readiness test retains one warm-up and five measured fresh-process launches
 in `startup-samples.json`; compare medians and ranges excluding trial zero.

@@ -302,7 +302,7 @@ class FixtureServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], state: BenchmarkState, context: ssl.SSLContext) -> None:
+    def __init__(self, address: tuple[str, int], state: BenchmarkState, context: ssl.SSLContext | None) -> None:
         super().__init__(address, FixtureHandler)
         self.state = state
         self.context = context
@@ -312,6 +312,11 @@ class FixtureServer(ThreadingHTTPServer):
         # worker, never on the accept loop where it could block every request.
         try:
             request.settimeout(30)
+            if self.context is None:
+                # Plain loopback behind startup-fixture-h2.py, which charges
+                # the client connection's round trips itself.
+                self.RequestHandlerClass(request, client_address, self)
+                return
             # Simulated link: TCP and TLS 1.3 each cost one round trip.
             self.state.round_trip(2)
             with self.context.wrap_socket(request, server_side=True) as secure:
@@ -563,6 +568,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Local port (default: {DEFAULT_PORT}).")
     parser.add_argument("--profile", choices=tuple(PROFILE_LATENCIES), default="instant", help="Controlled simulated-latency profile (default: instant).")
     parser.add_argument("--log", type=Path, help="Optional JSONL request timing log; excludes headers and request bodies.")
+    parser.add_argument("--plain", action="store_true",
+                        help="Serve plain HTTP on loopback for scripts/startup-fixture-h2.py; no TLS, no connection round trips.")
     parser.add_argument("--self-test", action="store_true", help="Validate synthetic response shapes and profile definitions, then exit.")
     return parser.parse_args(argv)
 
@@ -572,17 +579,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.self_test:
         self_validate()
         return 0
-    if args.cert is None or args.key is None:
-        raise SystemExit("--cert and --key are required unless --self-test is used")
     if not (1 <= args.port <= 65_535):
         raise SystemExit("--port must be between 1 and 65535")
-    if not args.cert.is_file() or not args.key.is_file():
-        raise SystemExit("--cert and --key must name readable files")
     state = BenchmarkState(args.profile, args.log)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certfile=str(args.cert), keyfile=str(args.key))
+    context: ssl.SSLContext | None = None
+    if not args.plain:
+        if args.cert is None or args.key is None:
+            raise SystemExit("--cert and --key are required unless --self-test or --plain is used")
+        if not args.cert.is_file() or not args.key.is_file():
+            raise SystemExit("--cert and --key must name readable files")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=str(args.cert), keyfile=str(args.key))
     server = FixtureServer((HOST, args.port), state, context)
-    print(f"Synthetic Volta startup fixture: https://{HOST}:{args.port} (profile={args.profile})")
+    scheme = "http" if args.plain else "https"
+    print(f"Synthetic Volta startup fixture: {scheme}://{HOST}:{args.port} (profile={args.profile})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
