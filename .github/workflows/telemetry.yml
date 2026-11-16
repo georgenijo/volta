@@ -47,6 +47,8 @@ jobs:
         run: bash ../deploy/telemetry/ops/test-check.sh
       - name: offline credential setup checks
         run: python3 ../deploy/telemetry/ops/test-prepare-secrets.py
+      - name: router forward keeper tests (fake UPnP router)
+        run: python3 -I ../deploy/telemetry/ops/test-port-keeper.py
       - name: compose config
         run: |
           TELEMETRY_CERT_DIR=/tmp/c TELEMETRY_SECRET_DIR=/tmp/s \

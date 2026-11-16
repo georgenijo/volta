@@ -1,0 +1,16 @@
+[Unit]
+Description=Keep the router's UPnP forward to the Volta telemetry receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+# systemd reads this root-only file before dropping privileges.
+EnvironmentFile=/opt/volta-telemetry/telemetry.env
+ExecStart=/usr/bin/python3 -I /opt/volta/deploy/telemetry/ops/port-keeper.py
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET

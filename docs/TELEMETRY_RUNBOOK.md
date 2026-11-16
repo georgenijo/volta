@@ -26,7 +26,8 @@ resolve straight to the router (DNS only).
   Confirm the portal's credit treatment and billing cycle; $10 credit is shared.
 - Router: reserve the node's wired LAN address and forward external TCP 443 to
   it, port 8448. Behind a second router (double NAT), forward 443 on the outer
-  router to the inner router's WAN address too.
+  router to the inner router's WAN address too. A router that drops forwards
+  on restart (UPnP-only routers) needs the keeper below.
 - DNS: a DNS-only (grey cloud) record for the receiver name under the partner
   domain, pointing at the home connection (for a dynamic address, a CNAME to
   the router's DDNS name). No other public endpoint is authorized.
@@ -159,6 +160,24 @@ calibration (`volta_telemetry.power_calibration`, source `operator_live_gate`,
 plus evidence note). Until then drive power remains null. Module temperatures
 need live unit acceptance; acceleration uses Tesla's documented m/s². Elevation reuses only
 nearby private TeslaMate SRTM observations; never call third-party coordinate APIs.
+
+## Router forward keeper
+
+Some routers (the Deco included) hold the 443 forward only as a UPnP mapping,
+drop it on restart and serve their UPnP description at a path that changes. A
+lost forward stops all telemetry silently: the car keeps retrying and the
+receiver sees nothing. `deploy/telemetry/ops/port-keeper.py` finds the router
+with SSDP from `TELEMETRY_RECEIVER_BIND`, checks external TCP 443 and adds it
+toward port 8448 when it is missing. It never replaces a mapping that points
+at another host or port; that exits 1 and shows as a failed unit.
+
+```sh
+sudo install -m 0644 deploy/telemetry/ops/volta-telemetry-upnp.service \
+  deploy/telemetry/ops/volta-telemetry-upnp.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now volta-telemetry-upnp.timer
+sudo systemctl start volta-telemetry-upnp.service && journalctl -u volta-telemetry-upnp -n 3
+python3 -I deploy/telemetry/ops/test-port-keeper.py   # local tests, fake router
+```
 
 ## Meter outage and recovery
 
