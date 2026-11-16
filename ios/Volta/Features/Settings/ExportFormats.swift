@@ -8,9 +8,10 @@ import Foundation
 
 enum CSVExport {
     /// RFC 4180: a field holding a comma, quote, CR or LF is quoted, with
-    /// quotes doubled. Rows end in CRLF.
+    /// quotes doubled. Rows end in CRLF. Checked on Unicode scalars: Swift
+    /// treats "\r\n" as one Character, equal to neither "\r" nor "\n".
     static func escape(_ field: String) -> String {
-        guard field.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" }) else { return field }
+        guard field.unicodeScalars.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" }) else { return field }
         return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
 
@@ -27,7 +28,7 @@ enum CSVExport {
     /// prefixed with an apostrophe. Numbers never go through here.
     static func text(_ value: String?) -> String {
         guard let value else { return "" }
-        guard let first = value.first, "=+-@\t\r".contains(first) else { return value }
+        guard let first = value.unicodeScalars.first, "=+-@\t\r".unicodeScalars.contains(first) else { return value }
         return "'" + value
     }
 
@@ -94,20 +95,39 @@ enum GPXExport {
         var breakBefore: Bool
     }
 
+    /// Longer than this between two positions is a gap in the recording: the
+    /// same threshold the trip screens use, so no line crosses missing data.
+    static let gapThreshold = TripTimeline.gapThreshold
+
     /// The drive's recorded positions: TeslaMate's path, or, when that is
     /// empty, the Fleet Telemetry samples that carry a position. Invalid
-    /// coordinates are dropped.
+    /// coordinates are dropped. `breakBefore` is set at a recorded break, a gap
+    /// longer than `gapThreshold`, and after a dropped point that carried a break.
     static func points(_ detail: DriveDetail) -> [Point] {
         let path = detail.path.map {
             Point(t: $0.t, latitude: $0.latitude, longitude: $0.longitude, elevationM: $0.elevationM, breakBefore: $0.routeBreakBefore ?? false)
         }
-        let telemetry = (detail.telemetry?.samples ?? []).compactMap { s -> Point? in
-            guard let lat = s.latitude, let lon = s.longitude else { return nil }
-            return Point(t: s.t, latitude: lat, longitude: lon, elevationM: s.elevationM, breakBefore: s.routeBreakBefore)
+        let telemetry = (detail.telemetry?.samples ?? []).map { s in
+            Point(t: s.t, latitude: s.latitude ?? .nan, longitude: s.longitude ?? .nan, elevationM: s.elevationM, breakBefore: s.routeBreakBefore)
         }
-        return (path.isEmpty ? telemetry : path)
-            .filter { $0.latitude.isFinite && $0.longitude.isFinite && abs($0.latitude) <= 90 && abs($0.longitude) <= 180 && !($0.latitude == 0 && $0.longitude == 0) }
-            .sorted { $0.t < $1.t }
+        var result: [Point] = []
+        var pendingBreak = false
+        for var point in (path.isEmpty ? telemetry : path).sorted(by: { $0.t < $1.t }) {
+            guard isValid(point) else {
+                pendingBreak = pendingBreak || point.breakBefore
+                continue
+            }
+            let gap = result.last.map { point.t.timeIntervalSince($0.t) > gapThreshold } ?? false
+            point.breakBefore = !result.isEmpty && (point.breakBefore || pendingBreak || gap)
+            pendingBreak = false
+            result.append(point)
+        }
+        return result
+    }
+
+    private static func isValid(_ p: Point) -> Bool {
+        p.latitude.isFinite && p.longitude.isFinite && abs(p.latitude) <= 90 && abs(p.longitude) <= 180
+            && !(p.latitude == 0 && p.longitude == 0)
     }
 
     static func escape(_ text: String) -> String {
@@ -120,7 +140,7 @@ enum GPXExport {
 
     private static func coordinate(_ value: Double) -> String { CSVExport.number(value, digits: 7) }
 
-    /// GPX 1.1 with one track; a new segment starts at every recorded break.
+    /// GPX 1.1 with one track; a new segment starts at every break `points` marks.
     /// nil when the drive has no recorded position.
     static func document(_ detail: DriveDetail, name: String) -> String? {
         let points = points(detail)

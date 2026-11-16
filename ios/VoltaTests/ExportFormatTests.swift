@@ -15,6 +15,17 @@ final class ExportFormatTests: XCTestCase {
         XCTAssertEqual(CSVExport.row(["a", "b,c", ""]), "a,\"b,c\",\r\n")
     }
 
+    func testCSVQuotesAFieldHoldingCRLF() {
+        // "\r\n" is a single Character in Swift, equal to neither "\r" nor "\n".
+        let field = "Suite 5\r\nPalo Alto"
+        XCTAssertEqual(field.count, field.unicodeScalars.count - 1, "the CRLF is one grapheme")
+        XCTAssertEqual(CSVExport.escape(field), "\"Suite 5\r\nPalo Alto\"")
+        let csv = CSVExport.document(header: ["id", "address"], rows: [["1", field]])
+        XCTAssertEqual(csv, "id,address\r\n1,\"Suite 5\r\nPalo Alto\"\r\n")
+        // A leading CRLF is also guarded as text.
+        XCTAssertEqual(CSVExport.text("\r\n=1"), "'\r\n=1")
+    }
+
     func testCSVTextGuardsFormulas() {
         XCTAssertEqual(CSVExport.text("=HYPERLINK(\"x\")"), "'=HYPERLINK(\"x\")")
         XCTAssertEqual(CSVExport.text("+1"), "'+1")
@@ -98,6 +109,30 @@ final class ExportFormatTests: XCTestCase {
         // Well-formed XML.
         let parser = XMLParser(data: Data(gpx.utf8))
         XCTAssertTrue(parser.parse(), parser.parserError.map(String.init(describing:)) ?? "")
+    }
+
+    func testGPXSplitsLegacyGapsWithoutRecordedBreaks() throws {
+        // Legacy positions carry no routeBreakBefore: a 20-minute hole still starts a new segment.
+        let points = GPXExport.points(detail([point(0, 37.40, -122.10), point(60, 37.41, -122.11),
+                                              point(60 + 20 * 60, 37.50, -122.20), point(60 + 21 * 60, 37.51, -122.21)]))
+        XCTAssertEqual(points.map(\.breakBefore), [false, false, true, false])
+        // Exactly the threshold is not a gap; just over it is.
+        let edge = GPXExport.points(detail([point(0, 37.4, -122.1), point(120, 37.41, -122.11), point(241, 37.42, -122.12)]))
+        XCTAssertEqual(edge.map(\.breakBefore), [false, false, true])
+        let gpx = try XCTUnwrap(GPXExport.document(detail([point(0, 37.40, -122.10), point(60, 37.41, -122.11),
+                                                           point(60 + 20 * 60, 37.50, -122.20)]), name: "x"))
+        XCTAssertEqual(gpx.components(separatedBy: "<trkseg>").count - 1, 2)
+    }
+
+    func testGPXKeepsABreakFromADroppedPoint() {
+        // The point that carried the break is invalid; the break moves to the next kept point.
+        let points = GPXExport.points(detail([point(0, 37.40, -122.10), point(5, 0, 0, breakBefore: true),
+                                              point(10, 37.41, -122.11), point(15, 37.42, -122.12)]))
+        XCTAssertEqual(points.count, 3)
+        XCTAssertEqual(points.map(\.breakBefore), [false, true, false])
+        // A break on the first kept point opens nothing: there is no segment before it.
+        let leading = GPXExport.points(detail([point(0, .nan, -122.1, breakBefore: true), point(5, 37.4, -122.1)]))
+        XCTAssertEqual(leading.map(\.breakBefore), [false])
     }
 
     func testGPXFallsBackToTelemetryAndIsNilWithoutPositions() throws {
