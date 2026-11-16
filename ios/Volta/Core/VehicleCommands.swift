@@ -348,25 +348,30 @@ final class VehicleCommandCoordinator {
             && !isBusy(dataSource: dataSource, vehicleID: vehicleID)
     }
 
-    func refreshCapabilities(dataSource: any VoltaDataSource, vehicleID: Int) async {
+    /// Returns the error when the capability request failed (the previous
+    /// capability, if any, is kept), so Siri can say the server is unreachable.
+    @discardableResult
+    func refreshCapabilities(dataSource: any VoltaDataSource, vehicleID: Int) async -> (any Error)? {
         let id = key(dataSource: dataSource, vehicleID: vehicleID)
+        var failure: (any Error)?
         do {
             capabilities[id] = try await dataSource.commandCapabilities(vehicleID: vehicleID)
         } catch is CancellationError {
-            return
+            return CancellationError()
         } catch {
+            failure = error
             if capabilities[id] == nil { capabilities[id] = .unavailable }
         }
         // Reopening the sheet must not turn an active send into a recoverable
         // unknown result or expose acknowledgement before it finishes.
-        guard !isBusy(dataSource: dataSource, vehicleID: vehicleID) else { return }
+        guard !isBusy(dataSource: dataSource, vehicleID: vehicleID) else { return failure }
         let saved = pending(dataSource: dataSource, vehicleID: vehicleID)
         if storageUnavailable {
             capabilities[id] = VehicleCommandCapabilities(available: false, reason: "intent_storage_unavailable", commands: [])
             activities[id] = Activity(id: UUID(), command: .wakeUp, label: "Command storage", phase: .failure,
                                       message: "Secure command storage is unavailable. No vehicle command will be sent.",
                                       canRetry: false)
-            return
+            return failure
         }
         if let record = saved.first {
             let expired = record.isExpired()
@@ -378,6 +383,7 @@ final class VehicleCommandCoordinator {
                                       canRetry: !expired && record.command.allowsSavedRetry, retryNotBefore: record.retryNotBefore,
                                       requiresAcknowledgement: expired || !record.command.allowsSavedRetry)
         }
+        return failure
     }
 
     func perform(_ command: VehicleCommand, label: String, dataSource: any VoltaDataSource,
