@@ -45,21 +45,9 @@ extension ChargeSummary {
     /// Street, then place name, then the first address component (same as the detail title).
     var title: String { ChargePlace.title(self) }
 
-    var kindIcon: String {
-        switch kind {
-        case .home: "house.fill"
-        case .fast: "bolt.fill"
-        case .other: "powerplug.portrait.fill"
-        }
-    }
+    var kindIcon: String { ChargerKind(self).systemImage }
 
-    var kindTint: Color {
-        switch kind {
-        case .home: HistoryTheme.green
-        case .fast: HistoryTheme.blue
-        case .other: Color(hex: 0x7DD3C0)
-        }
-    }
+    var kindTint: Color { ChargerKind(self).fill }
 
     /// "AC" / "DC", where the place is unknown.
     var currentLabel: String { fastCharger ? "DC" : "AC" }
@@ -288,7 +276,8 @@ struct ChargingHistoryView: View {
         let top = page.safeArea.top
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                SessionsMapHero(coordinates: visible.compactMap { $0.location(places.state).coordinate },
+                let located = visible.compactMap { c in c.location(places.state).coordinate.map { ($0, ChargerKind(c)) } }
+                SessionsMapHero(coordinates: located.map(\.0), kinds: located.map(\.1),
                                 height: top + page.reveal(barsOnSide ? 0.28 : 0.24, 140...190), topInset: top + (barsOnSide ? 44 : 0)) {
                     withAnimation(.snappy) { showMap = true }
                 }
@@ -355,7 +344,7 @@ struct ChargingHistoryView: View {
             let kwh = VoltaFormat.energy(PartialSum(cluster.items.map(\.energyAddedKwh)).value, fractionDigits: 0)
             return HistoryMapPin(id: cluster.id, coordinate: cluster.coordinate, title: cluster.title(\.title),
                                  subtitle: "\(cluster.items.count)× · \(kwh)",
-                                 systemImage: first.kindIcon, tint: first.kindTint)
+                                 systemImage: first.kindIcon, tint: first.kindTint, charger: ChargerKind(first))
         }
         let needsPlaces = visible.contains { $0.needsPlaces }
         return HistorySessionsMap(pins: pins, summary: grouping.summary, retryPlaces: {
@@ -398,18 +387,26 @@ struct ChargingHistoryView: View {
 /// totals. Nothing is geocoded or searched; with no coordinates it stays blank.
 struct SessionsMapHero: View {
     var coordinates: [CLLocationCoordinate2D]
+    /// Charger kind per coordinate (same order): pins become kind badges.
+    /// Nil draws plain dots in `pin`.
+    var kinds: [ChargerKind]? = nil
     var height: CGFloat
-    var fade: CGFloat = 80
+    var fade: CGFloat = 64
     /// Space at the top the camera keeps clear: the status bar and system bar.
     var topInset: CGFloat = 110
     var pin: Color = HistoryTheme.pin
     var expand: () -> Void
 
-    /// One pin per spot, to roughly 100 m.
-    private var spots: [CLLocationCoordinate2D] {
+    /// One pin per spot, to roughly 100 m; the first session's kind marks it.
+    private var spotKinds: [(coordinate: CLLocationCoordinate2D, kind: ChargerKind?)] {
         var seen = Set<String>()
-        return coordinates.filter { seen.insert(String(format: "%.3f,%.3f", $0.latitude, $0.longitude)).inserted }
+        return coordinates.enumerated().compactMap { index, c in
+            guard seen.insert(String(format: "%.3f,%.3f", c.latitude, c.longitude)).inserted else { return nil }
+            return (c, kinds.flatMap { index < $0.count ? $0[index] : nil })
+        }
     }
+
+    private var spots: [CLLocationCoordinate2D] { spotKinds.map(\.coordinate) }
 
     private var region: MKCoordinateRegion? {
         let spots = spots
@@ -424,11 +421,15 @@ struct SessionsMapHero: View {
         ZStack {
             HistoryTheme.background
             if let region {
-                let spots = spots
+                let spotKinds = spotKinds, spots = spots
                 // Framed below the bar; the Maps logo and Legal link stay above the fade.
                 GreyTileMap(framing: .region(region, pins: spots),
-                            insets: EdgeInsets(top: topInset, leading: 0, bottom: fade, trailing: 0), dim: 0.65) {
-                    Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
+                            insets: EdgeInsets(top: topInset, leading: 0, bottom: fade, trailing: 0), dim: 0.65) { index in
+                    if let kind = spotKinds[index].kind {
+                        ChargerBadge(kind: kind)
+                    } else {
+                        Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
+                    }
                 }
                 .allowsHitTesting(false)
                 .id(spots.map { "\($0.latitude),\($0.longitude)" }.joined(separator: ";"))
@@ -473,7 +474,8 @@ struct GreyTileMap<Pin: View>: View {
     /// Area the camera frames; the Maps logo and Legal link sit above the bottom inset.
     var insets: EdgeInsets
     var dim: Double = 0
-    @ViewBuilder var pin: Pin
+    /// The pin for the pin at an index (`.camera` has one, index 0).
+    @ViewBuilder var pin: (Int) -> Pin
 
     var body: some View {
         map
@@ -484,8 +486,8 @@ struct GreyTileMap<Pin: View>: View {
             .overlay { Color.black.opacity(dim).allowsHitTesting(false) }
             .overlay {
                 GeometryReader { geo in
-                    ForEach(Array(points(in: geo.size).enumerated()), id: \.offset) { _, point in
-                        pin.position(point)
+                    ForEach(Array(points(in: geo.size).enumerated()), id: \.offset) { index, point in
+                        pin(index).position(point)
                     }
                 }
                 .allowsHitTesting(false)
@@ -544,7 +546,7 @@ struct ChargingHero: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 15) {
                 Text("\(scope) • \(count)".uppercased())
-                    .font(.system(size: 9, weight: .medium)).tracking(1.8)
+                    .scaledFont(11, weight: .medium).tracking(0.8)
                     .foregroundStyle(HistoryTheme.secondary)
                     .lineLimit(1).minimumScaleFactor(0.7)
                 HStack(alignment: .firstTextBaseline, spacing: 9) {
@@ -615,22 +617,22 @@ private struct EnergyMixGlyph: View {
 
 // MARK: - Day header
 
-/// Calendar badge and day (blue for charges), the day's totals on the right,
-/// then a full-width hairline.
+/// Calendar glyph (secondary) and day (primary text: it is a heading, not a
+/// link), the day's totals on the right, then a full-width hairline.
 struct ChargeDayHeader: View {
     var day: Date
     var title: String
     var trailing: String
-    var tint: Color = HistoryTheme.blue
+    var tint: Color = .white
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 9) {
-                CalendarDayBadge(day: day, tint: tint)
+                CalendarDayBadge(day: day, tint: HistoryTheme.secondary)
                 Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(tint).lineLimit(1)
                 Spacer(minLength: 8)
                 Text(trailing)
-                    .font(.system(size: 11, weight: .regular)).monospacedDigit()
+                    .scaledFont(11).monospacedDigit()
                     .foregroundStyle(HistoryTheme.secondary)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }
@@ -686,7 +688,7 @@ struct ChargeRow: View {
                         Text("→").foregroundStyle(HistoryTheme.tertiary)
                         Text(charge.end?.historyTime ?? "Now")
                     }
-                    .font(.system(size: 10.5, weight: .regular)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                    .scaledFont(11).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 1) {
@@ -694,7 +696,7 @@ struct ChargeRow: View {
                         .font(.system(size: 14.5, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
                     if let kw = averagePowerKw {
                         Text("\(VoltaFormat.number(kw)) kW")
-                            .font(.system(size: 10, weight: .regular)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
+                            .scaledFont(11).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                     }
                 }
                 .fixedSize()
@@ -707,9 +709,9 @@ struct ChargeRow: View {
                 metric("clock", VoltaFormat.duration(charge.durationMin))
                 Circle().fill(HistoryTheme.tertiary).frame(width: 2.5, height: 2.5)
                 metric("creditcard.fill", costText)
-                if needsRate { SetRateButton(settings: model?.settings, size: 10.5, link: true) }
+                if needsRate { SetRateButton(settings: model?.settings, size: 11, link: true) }
                 Spacer(minLength: 8)
-                Text(place).font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+                Text(place).scaledFont(11).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
                 ChargePlaceBadge(charge: charge, size: 16)
             }
             .padding(.top, 14)
@@ -745,7 +747,7 @@ struct ChargeRow: View {
     private func metric(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 10, weight: .medium))
-            Text(text).font(.system(size: 10.5, weight: .regular)).monospacedDigit()
+            Text(text).scaledFont(11).monospacedDigit()
         }
         .foregroundStyle(HistoryTheme.secondary)
         .lineLimit(1).fixedSize()
@@ -754,25 +756,13 @@ struct ChargeRow: View {
 
 // MARK: - Place badge
 
-/// The Tesla network's red "T" badge, otherwise the place kind's icon.
+/// The place's charger badge, as on the maps: the Tesla network's red "T",
+/// otherwise the kind's glyph on its colour.
 struct ChargePlaceBadge: View {
     var charge: ChargeSummary
     var size: CGFloat
 
-    var body: some View {
-        Group {
-            if ChargePlace.network(charge) != nil {
-                Circle().fill(HistoryTheme.teslaRed)
-                    .overlay(Text("T").font(.system(size: size * 0.55, weight: .heavy)).foregroundStyle(.white))
-                    .overlay(Circle().strokeBorder(.white, lineWidth: max(0.7, size * 0.05)))
-            } else {
-                Circle().fill(charge.kindTint.opacity(0.18))
-                    .overlay(Image(systemName: charge.kindIcon).font(.system(size: size * 0.5, weight: .semibold)).foregroundStyle(charge.kindTint))
-            }
-        }
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
+    var body: some View { ChargerBadge(kind: ChargerKind(charge), size: size) }
 }
 
 extension HistoryTheme {

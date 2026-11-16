@@ -35,6 +35,8 @@ struct DriveDetailView: View {
 
     /// Wattly's text margin on a 402 pt wide phone.
     static let margin: CGFloat = 28
+    /// The map's fade into the page; MapKit's logo and Legal link sit just above it.
+    static let mapFade: CGFloat = 64
 
     @State private var page = HistoryWindow()
 
@@ -219,17 +221,11 @@ struct DriveDetailView: View {
                 } label: {
                     Label("Color route by \(mode.title.lowercased())", systemImage: mode.systemImage)
                 }
-                .tint(HistoryTheme.green)
+                .tint(Color.voltaTextPrimary)
                 .accessibilityIdentifier("trip.mode")
             } else {
-                ForEach(TripMapMode.allCases) { m in
-                    Button { mode = m } label: {
-                        Label("Color route by \(m.title.lowercased())", systemImage: m.systemImage)
-                    }
-                    .tint(mode == m ? HistoryTheme.green : Color.voltaTextPrimary)
-                    .accessibilityAddTraits(mode == m ? .isSelected : [])
-                    .accessibilityIdentifier("trip.mode.\(m.rawValue)")
-                }
+                // The selected mode is a neutral pill: green is not a selection colour.
+                ForEach(TripMapMode.allCases) { m in modeButton(m) }
             }
         }
         .historyPriority()
@@ -255,6 +251,22 @@ struct DriveDetailView: View {
         .historyPriority()
     }
 
+    @ViewBuilder private func modeButton(_ m: TripMapMode) -> some View {
+        let button = Button { mode = m } label: {
+            Label("Color route by \(m.title.lowercased())", systemImage: m.systemImage)
+        }
+        Group {
+            if mode == m {
+                button.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
+                    .tint(Color.white.opacity(0.18)).foregroundStyle(Color.voltaTextPrimary)
+            } else {
+                button.tint(Color.voltaTextPrimary)
+            }
+        }
+        .accessibilityAddTraits(mode == m ? .isSelected : [])
+        .accessibilityIdentifier("trip.mode.\(m.rawValue)")
+    }
+
     // MARK: Map
 
     private var routeMap: some View {
@@ -265,8 +277,12 @@ struct DriveDetailView: View {
                 switch state {
                 case .route, .single:
                     if let snapshot, let route = snapshot.routes[mode] {
-                        TripMapView(timeline: snapshot.timeline, route: route, mode: mode, highlight: highlight,
-                                    bottomInset: 64, underEdges: sideBars.barEdges.union(.vertical))
+                        let style = TripRouteStyle(mode: mode, valueRange: route.valueRange,
+                                                   reference: EfficiencyReference(ratedWhPerKm: summary.ratedWhPerKm))
+                        TripMapView(timeline: snapshot.timeline, route: route, style: style, highlight: highlight,
+                                    bottomInset: Self.mapFade, legend: style.legend(units: units),
+                                    legendLeading: Self.margin - 12 + sideBars.leading,
+                                    underEdges: sideBars.barEdges.union(.vertical))
                     } else {
                         mapPlaceholder(nil)
                     }
@@ -283,11 +299,11 @@ struct DriveDetailView: View {
                                    .init(color: HistoryTheme.background.opacity(0.85), location: 0.6),
                                    .init(color: HistoryTheme.background, location: 1)],
                            startPoint: .top, endPoint: .bottom)
-                .frame(height: 64)
+                .frame(height: Self.mapFade)
                 .allowsHitTesting(false)
             if let snapshot, case .route = state, let text = mapCaption(snapshot) {
                 Text(text)
-                    .font(.system(size: 11, weight: .medium))
+                    .scaledFont(11, weight: .medium)
                     .foregroundStyle(.white.opacity(0.6))
                     .padding(.bottom, 8)
                     .accessibilityIdentifier("trip.map.caption")

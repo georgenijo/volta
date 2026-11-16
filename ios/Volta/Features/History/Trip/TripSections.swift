@@ -3,9 +3,10 @@ import SwiftUI
 // MARK: - Trip chrome
 
 extension View {
-    /// Small uppercase tracked label (10.5 pt), tertiary by default.
-    func tripLabel(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 8.5) -> some View {
-        self.font(.system(size: size, weight: .medium)).tracking(size * 0.2).textCase(.uppercase).foregroundStyle(color)
+    /// Small uppercase tracked label: 11 pt at least, following Dynamic Type,
+    /// tertiary by default. `size` is the design size; smaller asks get 11.
+    func tripLabel(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 11) -> some View {
+        self.scaledFont(size, weight: .medium).tracking(min(0.8, size * 0.07)).textCase(.uppercase).foregroundStyle(color)
             .lineLimit(1)
     }
 
@@ -63,15 +64,6 @@ struct TripHeaderValue: View {
     }
 }
 
-/// Small solid dot used beside itinerary endpoints.
-struct TripGlowDot: View {
-    var color: Color
-    var size: CGFloat = 8
-    var body: some View {
-        Circle().fill(color).frame(width: size, height: size)
-    }
-}
-
 // MARK: - Hero
 
 /// Distance on the left, efficiency with its gradient slider on the right,
@@ -96,8 +88,8 @@ struct TripHero: View {
                 efficiency.padding(.top, 2)
             }
             VStack(alignment: .leading, spacing: 12) {
-                stop(summary.startCity ?? summary.startAddress, level: summary.startBatteryLevel, color: HistoryTheme.green)
-                stop(summary.endCity ?? summary.endAddress, level: summary.endBatteryLevel, color: HistoryTheme.red)
+                stop(summary.startCity ?? summary.startAddress, level: summary.startBatteryLevel, marker: .start)
+                stop(summary.endCity ?? summary.endAddress, level: summary.endBatteryLevel, marker: .end)
             }
             .padding(.top, 30)
             Text(TripHero.dateLine(summary))
@@ -115,15 +107,15 @@ struct TripHero: View {
                     .font(.system(size: 30, weight: .bold)).monospacedDigit().foregroundStyle(.white)
                 Text(units.efficiencyUnit).font(.system(size: 13, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
             }
-            TripEfficiencySlider(whPerKm: wh).frame(width: 118)
+            TripEfficiencySlider(whPerKm: wh, reference: EfficiencyReference(ratedWhPerKm: summary.ratedWhPerKm)).frame(width: 118)
         }
         .accessibilityElement(children: .combine)
     }
 
-    private func stop(_ address: String?, level: Int?, color: Color) -> some View {
+    private func stop(_ address: String?, level: Int?, marker: RouteEndpoint) -> some View {
         let place = TripPlace(address)
         return HStack(alignment: .center, spacing: 0) {
-            TripGlowDot(color: color, size: 8).frame(width: 21, alignment: .leading)
+            RouteEndpointMarker(kind: marker, size: 10).frame(width: 21, alignment: .leading)
             Text(place.primary)
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(address == nil ? HistoryTheme.secondary : .white)
@@ -151,28 +143,33 @@ struct TripHero: View {
     }
 }
 
-/// Efficiency on a fixed green → blue → violet → red band, so a position means
-/// the same thing on every trip.
+/// Efficiency on the shared route ramp (efficient → as rated → thirsty), with
+/// a tick at the reference, so a position means the same thing on every trip
+/// and on the map. Regen (negative consumption) pins to the efficient end.
 struct TripEfficiencySlider: View {
     var whPerKm: Double?
-    static let colors: [Color] = [HistoryTheme.green, HistoryTheme.blue, HistoryTheme.purple, HistoryTheme.red]
+    var reference = EfficiencyReference(ratedWhPerKm: nil)
 
-    static func fraction(_ whPerKm: Double) -> Double {
-        let band = TripPalette.efficiencyBand
-        return min(1, max(0, (whPerKm - band.lowerBound) / (band.upperBound - band.lowerBound)))
+    /// Position along the bar, 0...1.
+    static func fraction(_ whPerKm: Double, reference: EfficiencyReference) -> Double {
+        let domain = RoutePalette.efficiency.domain
+        return min(1, max(0, (whPerKm / reference.whPerKm - domain.lowerBound) / (domain.upperBound - domain.lowerBound)))
     }
 
     var body: some View {
+        let domain = RoutePalette.efficiency.domain
+        let tick = (1 - domain.lowerBound) / (domain.upperBound - domain.lowerBound)
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(LinearGradient(colors: Self.colors, startPoint: .leading, endPoint: .trailing)).opacity(0.45)
-                    .frame(height: 3)
+                Capsule().fill(LinearGradient(stops: RoutePalette.efficiency.gradientStops(), startPoint: .leading, endPoint: .trailing))
+                    .frame(height: 4)
+                Capsule().fill(.white.opacity(0.7)).frame(width: 1.5, height: 9)
+                    .offset(x: geo.size.width * tick - 0.75)
                 if let whPerKm {
-                    let f = Self.fraction(whPerKm)
-                    let color = TripPalette.color(f, stops: [.init(r: 0.37, g: 0.80, b: 0.58), .init(r: 0.23, g: 0.51, b: 0.96),
-                                                              .init(r: 0.65, g: 0.55, b: 0.98), .init(r: 0.94, g: 0.27, b: 0.27)])
-                    Circle().fill(color).frame(width: 10, height: 10)
-                        .shadow(color: color.opacity(0.8), radius: 5)
+                    let f = Self.fraction(whPerKm, reference: reference)
+                    Circle().fill(RoutePalette.efficiency(whPerKm: whPerKm, reference: reference).color)
+                        .frame(width: 10, height: 10)
+                        .overlay(Circle().strokeBorder(RoutePalette.casing.color, lineWidth: 2))
                         .offset(x: f * (geo.size.width - 10))
                 }
             }
@@ -226,7 +223,7 @@ struct TripStatsRow: View {
                 if let regenKwh {
                     HStack(spacing: 7) {
                         Text(VoltaFormat.number(regenKwh))
-                            .font(.system(size: 8.5, weight: .semibold)).monospacedDigit().foregroundStyle(HistoryTheme.green)
+                            .scaledFont(11, weight: .semibold).monospacedDigit().foregroundStyle(HistoryTheme.green)
                         Text("Regen").tripLabel(size: 8)
                     }
                 }
@@ -237,7 +234,7 @@ struct TripStatsRow: View {
                    color: .white) {
                 HStack(spacing: 7) {
                     Text("Max").tripLabel(size: 8)
-                    Text(maxText).font(.system(size: 8.5, weight: .semibold)).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                    Text(maxText).scaledFont(11, weight: .semibold).monospacedDigit().foregroundStyle(.white.opacity(0.85))
                 }
             }
         }
@@ -491,16 +488,8 @@ extension DriveScoreBreakdown {
 }
 
 enum TripScoreStyle {
-    /// Component and ring colour by value.
-    static func tint(_ value: Int?) -> Color {
-        guard let value else { return HistoryTheme.secondary }
-        switch value {
-        case 85...: return Color(hex: 0x6FD3AE)
-        case 70..<85: return Color(hex: 0x5BA9C9)
-        case 55..<70: return HistoryTheme.amber
-        default: return Color(hex: 0xE5695F)
-        }
-    }
+    /// Component and ring colour by value: the same bands as every score ring.
+    static func tint(_ value: Int?) -> Color { DriveScoreTint.color(value) }
 
     /// One word for the overall score, shown top right.
     static func word(_ score: Int?) -> String? {
@@ -551,7 +540,7 @@ struct ScoreBreakdownRow: View {
                 Text(title).tripLabel(HistoryTheme.secondary, size: 8)
                 Spacer(minLength: 6)
                 Text(value.map(String.init) ?? "—")
-                    .font(.system(size: 10.5, weight: .medium)).monospacedDigit()
+                    .scaledFont(11, weight: .medium).monospacedDigit()
                     .foregroundStyle(value == nil ? HistoryTheme.tertiary : .white)
             }
             GeometryReader { geo in

@@ -126,15 +126,6 @@ final class TripTests: XCTestCase {
         XCTAssertEqual(TripChart.minuteLabel(180), "3h")
     }
 
-    func testPaletteIsContinuousAndClamped() {
-        let lo = TripPalette.rgb(-1, stops: TripPalette.speed), hi = TripPalette.rgb(2, stops: TripPalette.speed)
-        XCTAssertEqual(lo, TripPalette.speed.first)
-        XCTAssertEqual(hi, TripPalette.speed.last)
-        let mid = TripPalette.rgb(1.0 / 6, stops: TripPalette.speed)
-        XCTAssertGreaterThan(mid.r, TripPalette.speed[0].r)
-        XCTAssertLessThan(mid.r, TripPalette.speed[1].r)
-    }
-
     // MARK: Derived metrics
 
     func testRegenIsWithheldOnSparseSamplesInsteadOfIntegratingGaps() {
@@ -432,7 +423,7 @@ final class TripTests: XCTestCase {
         XCTAssertEqual(TripAnalysis.maxSpeed(summary: nil, timeline: timeline), .atLeast(90))
         guard case .unavailable = SmoothnessScore.evaluate(timeline) else { return XCTFail("no consecutive speeds") }
         for mode in [TripMapMode.speed, .elevation] {
-            XCTAssertTrue(TripRoute(timeline, mode: mode).pieces.allSatisfy { $0.fraction == nil }, "\(mode)")
+            XCTAssertTrue(TripRoute(timeline, mode: mode).pieces.allSatisfy { $0.value == nil }, "\(mode)")
         }
         // Control: the same trip with every observation recorded.
         let full = stride(from: 0.0, through: 3600, by: 3).map { t in point(t, speed: 60, elevation: 100 - t / 60) }
@@ -440,7 +431,7 @@ final class TripTests: XCTestCase {
         XCTAssertEqual(TripAnalysis.descent(fullTimeline).number ?? 0, 60, accuracy: 2.01)
         guard case .value = TripAnalysis.descent(fullTimeline) else { return XCTFail("fully recorded descent is a value") }
         XCTAssertEqual(TripAnalysis.maxSpeed(summary: nil, timeline: fullTimeline), .value(60))
-        XCTAssertTrue(TripRoute(fullTimeline, mode: .speed).pieces.allSatisfy { $0.fraction != nil })
+        XCTAssertTrue(TripRoute(fullTimeline, mode: .speed).pieces.allSatisfy { $0.value != nil })
     }
 
     func testAlternatingMissingObservationsCoverNothing() {
@@ -599,7 +590,7 @@ final class TripTests: XCTestCase {
             XCTAssertEqual(piece.coordinates.last?.latitude, points[piece.indices.upperBound].latitude, file: file, line: line)
             XCTAssertEqual(piece.mapPoints.count, piece.coordinates.count, file: file, line: line)
             let supported = (piece.indices.lowerBound..<piece.indices.upperBound).map { TripRoute.supports(mode, points[$0], points[$0 + 1]) }
-            if piece.fraction != nil {
+            if piece.value != nil {
                 XCTAssertTrue(supported.allSatisfy { $0 }, "colored piece contains an unsupported interval", file: file, line: line)
             } else {
                 XCTAssertTrue(supported.allSatisfy { $0 } || supported.allSatisfy { !$0 }, "pieces are homogeneous", file: file, line: line)
@@ -613,7 +604,7 @@ final class TripTests: XCTestCase {
         for mode in TripMapMode.allCases {
             let route = TripRoute(timeline, mode: mode)
             XCTAssertEqual(route.coloredSeconds(timeline) / timeline.spanSeconds, 0.125, accuracy: 1e-9, "\(mode)")
-            let colored = route.pieces.filter { $0.fraction != nil }
+            let colored = route.pieces.filter { $0.value != nil }
             XCTAssertEqual(colored.count, 150, "\(mode)")
             // Each colored piece is exactly the supported 3 s between the two readings of a block.
             for piece in colored {
@@ -632,13 +623,13 @@ final class TripTests: XCTestCase {
         let dense = TripTimeline(path: stride(from: 0.0, through: 3600, by: 3).map { point($0, lat: 37 + $0 / 100_000) })
         for mode in TripMapMode.allCases {
             let route = TripRoute(dense, mode: mode)
-            XCTAssertTrue(route.pieces.allSatisfy { $0.fraction != nil }, "\(mode)")
+            XCTAssertTrue(route.pieces.allSatisfy { $0.value != nil }, "\(mode)")
             XCTAssertLessThanOrEqual(route.pieces.count, 160)
             assertRouteGeometry(route, dense, mode)
         }
         // A single valid reading never colors anything.
         let single = TripTimeline(path: stride(from: 0.0, through: 600, by: 3).map { point($0, speed: $0 == 300 ? 50 : nil, lat: 37 + $0 / 100_000) })
-        XCTAssertTrue(TripRoute(single, mode: .speed).pieces.allSatisfy { $0.fraction == nil })
+        XCTAssertTrue(TripRoute(single, mode: .speed).pieces.allSatisfy { $0.value == nil })
         // A non-finite reading splits the color around it.
         let nan = TripTimeline(path: stride(from: 0.0, through: 600, by: 3).map { point($0, elevation: $0 == 300 ? .nan : 30, lat: 37 + $0 / 100_000) })
         let nanRoute = TripRoute(nan, mode: .elevation)
@@ -646,12 +637,12 @@ final class TripTests: XCTestCase {
         XCTAssertEqual(nanRoute.coloredSeconds(nan), 594, accuracy: 1e-9)
         // Efficiency needs speed and power at both ends and a moving car.
         let parked = TripTimeline(path: stride(from: 0.0, through: 600, by: 3).map { point($0, speed: 0, power: 1, lat: 37 + $0 / 100_000) })
-        XCTAssertTrue(TripRoute(parked, mode: .efficiency).pieces.allSatisfy { $0.fraction == nil })
+        XCTAssertTrue(TripRoute(parked, mode: .efficiency).pieces.allSatisfy { $0.value == nil })
         let noPower = TripTimeline(path: stride(from: 0.0, through: 600, by: 3).enumerated().map { n, t in
             point(t, power: n % 2 == 0 ? 10 : nil, lat: 37 + t / 100_000)
         })
-        XCTAssertTrue(TripRoute(noPower, mode: .efficiency).pieces.allSatisfy { $0.fraction == nil })
-        XCTAssertTrue(TripRoute(noPower, mode: .speed).pieces.allSatisfy { $0.fraction != nil }, "speed itself is dense")
+        XCTAssertTrue(TripRoute(noPower, mode: .efficiency).pieces.allSatisfy { $0.value == nil })
+        XCTAssertTrue(TripRoute(noPower, mode: .speed).pieces.allSatisfy { $0.value != nil }, "speed itself is dense")
         // GPS gaps stay gaps in every mode, colored or not.
         let gapped = TripTimeline(path: alternatingRows(hours: 0.1) + stride(from: 900.0, through: 1200, by: 3).map { point($0, lat: 38 + $0 / 100_000) })
         for mode in TripMapMode.allCases {
@@ -720,7 +711,7 @@ final class TripTests: XCTestCase {
         XCTAssertEqual(speed.signal.observationCount, Set(speed.points.map(\.segment)).count, "every speed is its own segment")
         XCTAssertGreaterThan(speed.signal.observationCount, 20)
         XCTAssertTrue(TripChartSeries(timeline) { $0.batteryLevel.map(Double.init) }.signal.isDense)
-        XCTAssertTrue(TripRoute(timeline, mode: .efficiency).pieces.allSatisfy { $0.fraction == nil })
+        XCTAssertTrue(TripRoute(timeline, mode: .efficiency).pieces.allSatisfy { $0.value == nil })
     }
 
     /// R1-3: descent needs elevation coverage, not GPS coverage.

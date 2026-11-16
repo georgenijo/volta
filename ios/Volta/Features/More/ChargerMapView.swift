@@ -22,11 +22,12 @@ struct ChargerMapView: View {
                             ForEach(mapped) { location in
                                 Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude!, longitude: location.longitude!)) {
                                     Button { push?(.chargerPlace(location)) } label: {
-                                        Image(systemName: "bolt.fill").padding(12).foregroundStyle(.white).background(ScreenKit.blue, in: Circle())
+                                        ChargerBadge(kind: ChargerKind(placeName: location.name))
                                     }.accessibilityLabel("\(location.name), \(location.sessionCount) sessions")
                                 }
                             }
-                        }.mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
+                        }.mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
+                            .environment(\.colorScheme, .dark)
                             .modifier(ScreenKit.MapHeight())
                             .clipShape(.rect(cornerRadius: 22))
                     } else {

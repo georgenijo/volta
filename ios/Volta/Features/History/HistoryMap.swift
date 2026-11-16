@@ -98,6 +98,8 @@ struct HistoryMapPin: Identifiable {
     var subtitle: String
     var systemImage: String
     var tint: Color
+    /// Charging places draw their kind's badge instead of the tinted dot.
+    var charger: ChargerKind? = nil
 }
 
 /// Dark, flat map showing session locations.
@@ -120,20 +122,24 @@ struct HistorySessionsMap: View {
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(.white)
                                 Text(pin.subtitle.uppercased())
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .tracking(1)
+                                    .scaledFont(11, weight: .semibold)
+                                    .tracking(0.8)
                                     .foregroundStyle(HistoryTheme.secondary)
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                             .background(HistoryTheme.card.opacity(0.92), in: .rect(cornerRadius: 10))
                             .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(HistoryTheme.hairline) }
-                            ZStack {
-                                Circle().fill(pin.tint.opacity(0.25)).frame(width: 30, height: 30)
-                                Circle().fill(pin.tint).frame(width: 18, height: 18)
-                                Image(systemName: pin.systemImage)
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.black.opacity(0.75))
+                            if let charger = pin.charger {
+                                ChargerBadge(kind: charger)
+                            } else {
+                                ZStack {
+                                    Circle().fill(pin.tint.opacity(0.25)).frame(width: 30, height: 30)
+                                    Circle().fill(pin.tint).frame(width: 18, height: 18)
+                                    Image(systemName: pin.systemImage)
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.black.opacity(0.75))
+                                }
                             }
                         }
                     }
@@ -446,44 +452,10 @@ struct HistoryLocationCard: View {
     }
 }
 
-// MARK: - Route coloring
+// MARK: - Route metrics
 
-enum RouteColoring: String, CaseIterable, Identifiable {
-    case speed = "Speed"
-    case efficiency = "Efficiency"
-    var id: String { rawValue }
-}
-
-struct RouteSegment: Identifiable {
-    var id: Int
-    var coordinates: [CLLocationCoordinate2D]
-    var color: Color
-}
-
+/// Metrics of a stretch of recorded route; colours come from `RoutePalette`.
 enum RouteBuilder {
-    /// Splits a drive path into short colored polylines, downsampled so long
-    /// drives stay cheap to render.
-    static func segments(_ path: [DrivePoint], coloring: RouteColoring, maxSegments: Int = 240) -> [RouteSegment] {
-        guard path.count > 1 else { return [] }
-        let stride = max(1, Int((Double(path.count - 1) / Double(maxSegments)).rounded(.up)))
-        var indices = Array(Swift.stride(from: 0, to: path.count, by: stride))
-        if indices.last != path.count - 1 { indices.append(path.count - 1) }
-        var result: [RouteSegment] = []
-        for (n, pair) in zip(indices, indices.dropFirst()).enumerated() {
-            let slice = path[pair.0...pair.1]
-            let value: Double?
-            switch coloring {
-            case .speed: value = averageSpeedKph(slice)
-            case .efficiency: value = efficiencyWhPerKm(slice)
-            }
-            result.append(RouteSegment(
-                id: n,
-                coordinates: slice.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) },
-                color: color(for: value, coloring: coloring)))
-        }
-        return result
-    }
-
     static func averageSpeedKph<C: Collection>(_ points: C) -> Double? where C.Element == DrivePoint {
         let speeds = points.compactMap(\.speedKph)
         return speeds.isEmpty ? nil : speeds.reduce(0, +) / Double(speeds.count)
@@ -502,42 +474,6 @@ enum RouteBuilder {
         let avgSpeed = speed / Double(n)
         guard avgSpeed > 3 else { return nil }
         return (power / Double(n)) * 1000 / avgSpeed
-    }
-
-    static func color(for value: Double?, coloring: RouteColoring) -> Color {
-        guard let value else { return HistoryTheme.secondary }
-        switch coloring {
-        case .speed:
-            // km/h: city → highway
-            switch value {
-            case ..<35: return HistoryTheme.blue
-            case ..<70: return HistoryTheme.green
-            case ..<105: return HistoryTheme.amber
-            default: return HistoryTheme.red
-            }
-        case .efficiency:
-            // Wh/km: regen → hungry
-            switch value {
-            case ..<0: return HistoryTheme.purple
-            case ..<130: return HistoryTheme.green
-            case ..<190: return HistoryTheme.amber
-            default: return HistoryTheme.red
-            }
-        }
-    }
-
-    static func legend(_ coloring: RouteColoring, units: UnitPreferences) -> [(String, Color)] {
-        switch coloring {
-        case .speed:
-            let f = { (kph: Double) in VoltaFormat.number(units.distanceValue(km: kph), digits: 0) }
-            let u = units.distance == .miles ? "mph" : "km/h"
-            return [("<\(f(35))", HistoryTheme.blue), ("\(f(35))–\(f(70))", HistoryTheme.green),
-                    ("\(f(70))–\(f(105))", HistoryTheme.amber), (">\(f(105)) \(u)", HistoryTheme.red)]
-        case .efficiency:
-            let f = { (wh: Double) in VoltaFormat.number(units.efficiencyValue(whPerKm: wh), digits: 0) }
-            return [("Regen", HistoryTheme.purple), ("<\(f(130))", HistoryTheme.green),
-                    ("\(f(130))–\(f(190))", HistoryTheme.amber), (">\(f(190)) \(units.efficiencyUnit)", HistoryTheme.red)]
-        }
     }
 }
 

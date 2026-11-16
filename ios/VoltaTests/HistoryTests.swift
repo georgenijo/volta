@@ -470,7 +470,6 @@ final class HistoryRouteAndChartTests: XCTestCase {
     func testEfficiencyUsesOnlyPairedSamples() {
         // Missing power must not read as 0 Wh/km (excellent efficiency).
         XCTAssertNil(RouteBuilder.efficiencyWhPerKm([point(0, speed: 80, power: nil), point(1, speed: 90, power: nil)]))
-        XCTAssertEqual(RouteBuilder.color(for: nil, coloring: .efficiency), HistoryTheme.secondary)
         // Unpaired samples are ignored rather than averaged in as zeros.
         let mixed = [point(0, speed: 100, power: 15), point(1, speed: 100, power: nil), point(2, speed: nil, power: 30)]
         XCTAssertEqual(try XCTUnwrap(RouteBuilder.efficiencyWhPerKm(mixed)), 150, accuracy: 1e-9)
@@ -478,9 +477,6 @@ final class HistoryRouteAndChartTests: XCTestCase {
         XCTAssertNil(RouteBuilder.efficiencyWhPerKm([point(0, speed: 0, power: 5)]))
         // Regen is still negative.
         XCTAssertLessThan(try XCTUnwrap(RouteBuilder.efficiencyWhPerKm([point(0, speed: 50, power: -20)])), 0)
-
-        let segments = RouteBuilder.segments([point(0, speed: 80, power: nil), point(1, speed: 80, power: nil)], coloring: .efficiency)
-        XCTAssertEqual(segments.map(\.color), [HistoryTheme.secondary])
     }
 
     // Finding 11

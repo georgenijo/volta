@@ -5,17 +5,7 @@ import SwiftUI
 // row payload; no tiles, no lookups.
 
 enum DriveScoreBand {
-    static func tint(_ score: Int?) -> Color {
-        guard let score else { return HistoryTheme.secondary }
-        return score >= 85 ? HistoryTheme.green : score >= 70 ? HistoryTheme.blue : HistoryTheme.amber
-    }
-}
-
-extension HistoryTheme {
-    /// The hero score dial runs blue into teal, as in the references.
-    static let dialTeal = Color(hex: 0x4FA3B5)
-    /// Route light on the drives map.
-    static let route = Color(hex: 0x56B6DE)
+    static func tint(_ score: Int?) -> Color { DriveScoreTint.color(score) }
 }
 
 // MARK: - Surface
@@ -37,13 +27,12 @@ extension View {
 
 // MARK: - Score
 
-/// Open 270° dial with the score inside. Cards tint by band; the hero runs blue to teal.
+/// Open 270° dial with the score inside, tinted by band (`DriveScoreTint`)
+/// everywhere: the Drives header and every card.
 struct ScoreDial: View {
     var score: Int?
     var size: CGFloat = 40
     var caption: String? = nil
-    /// Hero style: a blue-to-teal arc instead of the band tint.
-    var gradient = false
     private var value: Int? { score.flatMap { (0...100).contains($0) ? $0 : nil } }
     private var line: CGFloat { max(2.5, size * 0.06) }
 
@@ -56,10 +45,7 @@ struct ScoreDial: View {
             if let value {
                 let fraction = Double(value) / 100
                 Circle().trim(from: 0, to: 0.75 * fraction)
-                    .stroke(gradient ? AnyShapeStyle(AngularGradient(colors: [HistoryTheme.blue, HistoryTheme.dialTeal], center: .center,
-                                                                     startAngle: .degrees(0), endAngle: .degrees(max(1, 270 * fraction))))
-                                     : AnyShapeStyle(tint),
-                            style: StrokeStyle(lineWidth: line, lineCap: .round))
+                    .stroke(tint, style: StrokeStyle(lineWidth: line, lineCap: .round))
                     .rotationEffect(.degrees(135))
             }
             VStack(spacing: size * 0.02) {
@@ -80,7 +66,7 @@ struct ScoreDial: View {
 
 // MARK: - Route
 
-/// The drive's own path as a thin grey watermark behind the card.
+/// The drive's own path as a thin grey line, no glow.
 struct RouteWatermark: View {
     var points: [DriveRoutePoint]
     var opacity: Double = 0.3
@@ -95,18 +81,36 @@ struct RouteWatermark: View {
                 }
             }
             .stroke(.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-            .background {
-                // A soft shadow line, as the references draw the route.
-                Path { path in
-                    for run in runs {
-                        path.move(to: run[0]); run.dropFirst().forEach { path.addLine(to: $0) }
-                    }
-                }
-                .stroke(.white, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                .blur(radius: 2).opacity(0.35)
-            }
             .opacity(opacity)
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A drive's path in its own small box on a card: a thin white line fitted
+/// with a 4 pt inset, a ring at the start and a dot at the end.
+struct RouteSketch: View {
+    var points: [DriveRoutePoint]
+    static let size = CGSize(width: 72, height: 48)
+
+    var body: some View {
+        Canvas { ctx, size in
+            let runs = DriveRouteSegments.normalized(points, in: size, inset: 4)
+            let lines = runs.filter { $0.count > 1 }
+            var path = Path()
+            for run in lines { path.move(to: run[0]); run.dropFirst().forEach { path.addLine(to: $0) } }
+            ctx.stroke(path, with: .color(.white.opacity(0.35)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            let valid = runs.flatMap { $0 }
+            guard let start = valid.first, let end = valid.last else { return }
+            if hypot(end.x - start.x, end.y - start.y) < 4 {
+                RouteEndpointMarker.draw(.both, in: &ctx, at: start, size: 7)
+            } else {
+                RouteEndpointMarker.draw(.end, in: &ctx, at: end, size: 7)
+                RouteEndpointMarker.draw(.start, in: &ctx, at: start, size: 7)
+            }
+        }
+        .frame(width: Self.size.width, height: Self.size.height)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -131,11 +135,18 @@ extension UnitPreferences {
 }
 
 struct DrivesHero: View {
+    /// "12 drives", or "30 drives loaded" while older pages are still on the
+    /// server: the totals cover only the pages fetched so far.
+    static func countText(_ count: Int, partial: Bool) -> String {
+        "\(count) \(count == 1 ? "drive" : "drives")\(partial ? " loaded" : "")"
+    }
+
     /// What the totals cover, e.g. "Loaded drives · partial"; read aloud with the hero.
     var scope: String
     var totals: DriveTotals
     var durationMin: Double
     /// Estimated cost (`DrivePricing.total`): display string and coverage note.
+    /// "—" (no rate applies) drops the item rather than showing a bare dash.
     var cost: (display: String, note: String?) = ("—", nil)
     var partial: Bool
     @Environment(\.units) private var units
@@ -150,7 +161,13 @@ struct DrivesHero: View {
                     Text(units.distanceUnit).font(.system(size: 17, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 Spacer(minLength: 0)
-                ScoreDial(score: totals.score, size: 61, gradient: true).padding(.trailing, -3)
+                VStack(spacing: 4) {
+                    ScoreDial(score: totals.score, size: 61)
+                    Text("Drive score").scaledFont(11, weight: .medium).foregroundStyle(HistoryTheme.secondary)
+                        .lineLimit(1).fixedSize()
+                        .accessibilityHidden(true)
+                }
+                .padding(.trailing, -3)
             }
             .accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
             .accessibilityLabel(scope)
@@ -159,21 +176,22 @@ struct DrivesHero: View {
             VStack(alignment: .leading, spacing: 6) {
                 HistoryFlowStats(items: [
                     ("clock", VoltaFormat.duration(durationMin)),
-                    ("road.lanes", "\(totals.drives)\(partial ? "+" : "") \(totals.drives == 1 && !partial ? "drive" : "drives")"),
+                    ("road.lanes", DrivesHero.countText(totals.drives, partial: partial)),
                 ], textSize: 14, iconSize: 12.5, spacing: 11, iconSpacing: 8)
                 // Energy and efficiency come only from drives with recorded energy
-                // (DriveTotals); cost is "—" unless a known rate applies.
+                // (DriveTotals); cost shows only when a known rate applies.
                 HistoryFlowStats(items: [
                     ("bolt.fill", totals.energyUsedKwh.value.map { VoltaFormat.energy($0) } ?? "— kWh"),
                     ("leaf.fill", units.formatEfficiencyPrecise(totals.efficiencyWhPerKm)),
-                    ("creditcard.fill", cost.display),
-                ], textSize: 14, iconSize: 12.5, spacing: 11, iconSpacing: 8)
+                ] + (cost.display == "—" ? [] : [("creditcard.fill", cost.display)]),
+                textSize: 14, iconSize: 12.5, spacing: 11, iconSpacing: 8)
             }
         }
     }
 }
 
-/// One row of hero stats: green icon, white value, dot separators.
+/// One row of hero stats: neutral icon, white value, dot separators. Green
+/// is kept for energy in and efficient driving.
 struct HistoryFlowStats: View {
     var items: [(icon: String, text: String)]
     var textSize: CGFloat = 20
@@ -186,7 +204,7 @@ struct HistoryFlowStats: View {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 if index > 0 { Circle().fill(HistoryTheme.tertiary).frame(width: 3, height: 3) }
                 HStack(spacing: iconSpacing) {
-                    Image(systemName: item.icon).font(.system(size: iconSize, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+                    Image(systemName: item.icon).font(.system(size: iconSize, weight: .semibold)).foregroundStyle(HistoryTheme.secondary)
                     Text(item.text).font(.system(size: textSize, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
                         .lineLimit(1).minimumScaleFactor(0.7)
                 }
@@ -252,6 +270,7 @@ struct DriveCard: View {
     var drive: DriveSummary
     var showsDate = false
     @Environment(\.units) private var units
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(AppModel.self) private var model: AppModel?
 
     private var cost: String? {
@@ -262,13 +281,16 @@ struct DriveCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
-                itinerary
-                Spacer(minLength: 0)
+                // Names take what's left and truncate; the sketch keeps its box.
+                itinerary.frame(maxWidth: .infinity, alignment: .leading)
+                if !typeSize.isAccessibilitySize, drive.drawableRoute.count > 1 {
+                    RouteSketch(points: drive.drawableRoute)
+                }
                 VStack(alignment: .trailing, spacing: 9) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: drive.distanceKm)))
                             .font(.system(size: 21, weight: .bold)).monospacedDigit()
-                        Text(units.distanceUnit.uppercased()).font(.system(size: 9, weight: .semibold)).tracking(1).foregroundStyle(HistoryTheme.secondary)
+                        Text(units.distanceUnit.uppercased()).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.white)
                     HStack(spacing: 5) {
@@ -278,9 +300,10 @@ struct DriveCard: View {
                     }
                     .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                     if showsDate {
-                        Text(drive.start.formatted(.dateTime.month(.abbreviated).day().year())).font(.system(size: 11)).foregroundStyle(HistoryTheme.tertiary)
+                        Text(drive.start.formatted(.dateTime.month(.abbreviated).day().year())).scaledFont(11).foregroundStyle(HistoryTheme.tertiary)
                     }
                 }
+                .fixedSize()
                 .padding(.top, 1)
             }
             .padding(.leading, 18).padding(.trailing, 16)
@@ -298,26 +321,22 @@ struct DriveCard: View {
             .padding(.top, 14)
         }
         .padding(.top, 14).padding(.bottom, 13)
-        .background {
-            RouteWatermark(points: drive.drawableRoute, opacity: 0.2)
-                .padding(.horizontal, 130).padding(.vertical, 8)
-        }
         .driveSurface(radius: 18)
         .accessibilityElement(children: .combine)
     }
 
     private var itinerary: some View {
         VStack(alignment: .leading, spacing: 0) {
-            place(drive.startPlace, color: HistoryTheme.green)
+            place(drive.startPlace, marker: .start)
             Rectangle().fill(HistoryTheme.tertiary.opacity(0.7)).frame(width: 1, height: 5)
-                .padding(.leading, 3.5).padding(.vertical, 0.5)
-            place(drive.endPlace, color: HistoryTheme.blue)
+                .padding(.leading, 4.5).padding(.vertical, 0.5)
+            place(drive.endPlace, marker: .end)
         }
     }
 
-    private func place(_ name: String, color: Color) -> some View {
-        HStack(spacing: 13) {
-            Circle().fill(color).frame(width: 8, height: 8)
+    private func place(_ name: String, marker: RouteEndpoint) -> some View {
+        HStack(spacing: 12) {
+            RouteEndpointMarker(kind: marker, size: 9)
             Text(name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.75)
         }
@@ -354,7 +373,7 @@ struct DriveShortcut: View {
     var systemImage: String
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: systemImage).font(.system(size: 16, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+            Image(systemName: systemImage).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
             Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
                 .lineLimit(1).fixedSize()
             Spacer(minLength: 4)

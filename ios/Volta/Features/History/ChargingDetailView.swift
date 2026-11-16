@@ -82,7 +82,8 @@ struct ChargingDetailView: View {
         .toolbar { toolbar }
         .fullScreenCover(isPresented: $showingMap) {
             if let coordinate = location.coordinate {
-                ChargeLocationMap(coordinate: coordinate, title: ChargePlace.title(summary), subtitle: ChargePlace.subtitle(summary))
+                ChargeLocationMap(coordinate: coordinate, title: ChargePlace.title(summary), subtitle: ChargePlace.subtitle(summary),
+                                  kind: ChargerKind(summary))
             }
         }
         .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
@@ -195,7 +196,7 @@ struct ChargingDetailView: View {
                     // Centred below the header; the Maps logo and Legal link stay above the fade.
                     GreyTileMap(framing: .camera(coordinate, distance: 1500),
                                 insets: EdgeInsets(top: top, leading: 0, bottom: Self.mapFade, trailing: 0),
-                                dim: 0.1) { ChargePin() }
+                                dim: 0.1) { _ in ChargerBadge(kind: ChargerKind(summary)) }
                     .allowsHitTesting(false)
                     .overlay {
                         // The whole backdrop opens the full-screen map.
@@ -259,7 +260,7 @@ struct ChargingDetailView: View {
             HStack(spacing: 8) {
                 ChargePlaceBadge(charge: summary, size: 16)
                 Text(ChargePlace.subtitle(summary) ?? summary.currentLabel)
-                    .font(.system(size: 10.5, weight: .regular))
+                    .scaledFont(11)
                     .foregroundStyle(HistoryTheme.secondary)
                     .lineLimit(1).minimumScaleFactor(0.8)
             }
@@ -284,7 +285,7 @@ struct ChargingDetailView: View {
             }
             if let km = rangeAddedKm {
                 Text("\(km < 0 ? "−" : "+")\(VoltaFormat.number(units.distanceValue(km: abs(km)), digits: 0)) \(units.distanceUnit) of range")
-                    .font(.system(size: 10.5, weight: .regular)).monospacedDigit()
+                    .scaledFont(11).monospacedDigit()
                     .foregroundStyle(HistoryTheme.secondary)
                     .padding(.top, 5.3)
             }
@@ -334,7 +335,7 @@ struct ChargingDetailView: View {
         let day = Text(summary.start.formatted(.dateTime.weekday(.wide).month(.wide).day()))
         let end = summary.end?.historyTime ?? "now"
         return Text("\(day)\(dot)\(summary.start.historyTime)\(arrow)\(end)\(dot)\(VoltaFormat.longDuration(summary.durationMin))")
-            .font(.system(size: 10.5, weight: .regular)).monospacedDigit()
+            .scaledFont(11).monospacedDigit()
             .foregroundStyle(HistoryTheme.secondary)
             .lineLimit(1).minimumScaleFactor(0.75)
     }
@@ -376,14 +377,14 @@ struct ChargingDetailView: View {
                 DetailSectionHeader(title: Text("ENERGY FLOW")) {
                     if flow.isEstimated {
                         Text("Estimated")
-                            .font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.amber)
+                            .scaledFont(11, weight: .medium).foregroundStyle(HistoryTheme.amber)
                             .padding(.horizontal, 8).padding(.vertical, 4.5)
                             .overlay(Capsule().strokeBorder(HistoryTheme.amber.opacity(0.55), lineWidth: 1))
                             .accessibilityLabel("Estimated at \(Int(ChargeEnergyFlow.assumedEfficiency * 100))% charging efficiency")
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
-                    Text("From grid").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                    Text("From grid").scaledFont(11).foregroundStyle(HistoryTheme.secondary)
                     Spacer()
                     energyValue(flow.gridKwh, size: 15)
                 }
@@ -392,12 +393,12 @@ struct ChargingDetailView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
                         energyValue(flow.addedKwh, size: 13)
-                        Text("Added to battery").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                        Text("Added to battery").scaledFont(11).foregroundStyle(HistoryTheme.secondary)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
                         energyValue(flow.lossKwh, size: 13, dim: true)
-                        Text("Lost").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                        Text("Lost").scaledFont(11).foregroundStyle(HistoryTheme.secondary)
                     }
                 }
                 .padding(.top, 12)
@@ -409,7 +410,7 @@ struct ChargingDetailView: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(VoltaFormat.number(kwh)).font(.system(size: size, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(dim ? HistoryTheme.secondary : .white)
-            Text("kWh").font(.system(size: 10.5, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+            Text("kWh").scaledFont(11).foregroundStyle(HistoryTheme.secondary)
         }
     }
 
@@ -529,7 +530,7 @@ struct ChargingDetailView: View {
     private func legend(_ title: String, color: Color) -> some View {
         HStack(spacing: 5) {
             Capsule().fill(color).frame(width: 12, height: 2)
-            Text(title).font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(HistoryTheme.tertiary)
+            Text(title).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.tertiary)
         }
     }
 
@@ -666,16 +667,6 @@ struct ChargingDetailView: View {
 
 // MARK: - Pieces
 
-/// Plain red location dot with a white ring.
-private struct ChargePin: View {
-    var body: some View {
-        Circle().fill(HistoryTheme.pin)
-            .frame(width: 29, height: 29)
-            .overlay(Circle().strokeBorder(.white, lineWidth: 3))
-            .shadow(color: .black.opacity(0.35), radius: 4, y: 1)
-    }
-}
-
 /// Tracked section title with an optional trailing accessory. Callers pass the
 /// name uppercased so units like "kW" keep their case.
 private struct DetailSectionHeader<Trailing: View>: View {
@@ -685,7 +676,7 @@ private struct DetailSectionHeader<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .center) {
             title
-                .font(.system(size: 10, weight: .semibold)).tracking(2.5)
+                .scaledFont(11, weight: .semibold).tracking(0.8)
                 .foregroundStyle(.white.opacity(0.88))
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .accessibilityAddTraits(.isHeader)
@@ -730,12 +721,13 @@ struct ChargeLocationMap: View {
     var coordinate: CLLocationCoordinate2D
     var title: String
     var subtitle: String?
+    var kind: ChargerKind = .unknown
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Map(initialPosition: .camera(MapCamera(centerCoordinate: coordinate, distance: 1800, heading: 0, pitch: 45))) {
-            Annotation("", coordinate: coordinate) { ChargePin() }
+            Annotation("", coordinate: coordinate) { ChargerBadge(kind: kind, size: 34) }
         }
         .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
         .mapControls { MapCompass(); MapPitchToggle() }

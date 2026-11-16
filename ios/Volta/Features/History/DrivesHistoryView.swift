@@ -260,7 +260,7 @@ struct DrivesHistoryView: View {
                 if mapped {
                     let reveal = page.reveal(0.23, 150...180)
                     DrivesRouteMap(drives: visible, height: reveal + topInset, fullBleed: true,
-                                   topInset: topInset + (barsOnSide ? 40 : 0), legalInset: 56)
+                                   topInset: topInset + (barsOnSide ? 40 : 0))
                         .padding(.top, -topInset)
                         .allowsHitTesting(false)
                         .overlay(alignment: .topLeading) { inlineTitle.historySides(sideBars) }
