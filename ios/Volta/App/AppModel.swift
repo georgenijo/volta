@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import LocalAuthentication
 
 @MainActor @Observable
 final class AppModel {
@@ -545,11 +546,21 @@ final class AppModel {
             if unlocked && !hasLoadedVehicles { restoreSavedDashboard(); await loadVehicles() }
         } catch {
             if generation == currentGeneration && lockGeneration == currentLock {
-                errorMessage = error.localizedDescription
                 controlsRequest = nil
+                // The system or the app ended the prompt; the user refused nothing.
+                guard !Self.isInterruption(error) else { return }
+                errorMessage = error.localizedDescription
                 refusedUnlocks += 1
             }
         }
+    }
+
+    /// An authentication prompt ended by the system (a call, the app going to
+    /// the background) or by the app, not by the user.
+    nonisolated static func isInterruption(_ error: any Error) -> Bool {
+        let error = error as NSError
+        return error.domain == LAError.errorDomain
+            && [LAError.systemCancel.rawValue, LAError.appCancel.rawValue].contains(error.code)
     }
 }
 

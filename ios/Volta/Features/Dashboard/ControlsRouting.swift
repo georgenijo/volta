@@ -19,17 +19,29 @@ enum ControlsRouting {
         return locked ? nil : .sheet
     }
 
-    /// Whether Controls stay open when the app locks with them in `host`. A
-    /// sheet on screen closes; pushed Controls stay, behind the lock overlay.
-    static func keepsControlsOnLock(host: ControlsView.Presentation?) -> Bool {
-        host != .sheet
+    /// What decides the host besides `wantsControls`. The Dashboard observes
+    /// it as one value, so a lock and a fold in the same update are one change.
+    struct Surroundings: Equatable {
+        var locked: Bool
+        var pushedLayout: Bool
     }
 
-    /// Whether Controls stay open after the user cancels (or fails) an unlock.
-    /// Controls the lock is hiding close, so a later unlock doesn't bring them
-    /// back unasked; pushed Controls are still where they were.
-    static func keepsControlsAfterRefusedUnlock(host: ControlsView.Presentation?) -> Bool {
-        host == .pushed
+    /// `wantsControls` after the app locks, unlocks or changes layout. `host`
+    /// is where Controls were before this change. Locking closes a sheet on
+    /// screen (pushed Controls stay, behind the lock overlay); the host then
+    /// moves for the new layout (`host(...)`), so the answer doesn't depend
+    /// on which of a lock and a fold arrived first in one update.
+    static func wantsControls(afterChange wantsControls: Bool, host: ControlsView.Presentation?,
+                              from old: Surroundings, to new: Surroundings) -> Bool {
+        if new.locked, !old.locked, host == .sheet { return false }
+        return wantsControls
+    }
+
+    /// `wantsControls` after the user cancels (or fails) an unlock. Controls
+    /// the lock is hiding close, so a later unlock doesn't bring them back
+    /// unasked; pushed Controls are still where they were.
+    static func wantsControls(afterRefusedUnlock wantsControls: Bool, host: ControlsView.Presentation?) -> Bool {
+        wantsControls && host == .pushed
     }
 
     /// The Dashboard's response to the lock control's request (see

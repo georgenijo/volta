@@ -161,6 +161,12 @@ final class ScreenScreenshotTests: XCTestCase {
         capture("controls-top")
         try scroll("controls", screenshot: "controls-bottom")
         XCTAssertTrue(element("list.commandLog").exists, "Sent this session closes the Controls list")
+
+        // Opened before the Dashboard's first appearance (the launch argument): shown once it appears.
+        app.terminate()
+        app.launchArguments = ["-demo-mode", "YES", "-VoltaDisableMotion", "-dashboardOpenControls", "YES"]
+        app.launch()
+        try waitForScreen("controls")
     }
 
     /// The Dashboard's dock and Now card send through the same path as Controls.

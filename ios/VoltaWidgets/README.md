@@ -199,7 +199,10 @@ closes it. The pushed route sits under the root shield, so it needs no cover of
 its own, and it stays open behind the lock overlay. `ControlsRouting` holds
 these rules: no Controls sheet is ever shown while locked, so pushed Controls
 folded to the sheet layout while locked wait and appear in the sheet after a
-successful unlock; a cancelled unlock closes them.
+successful unlock; an unlock the user cancels or fails closes them (a prompt
+the system or the app interrupts does not). The lock and the layout are one
+observed value, so a lock and a fold in the same update give the same result
+in either order.
 
 A command is prepared against the app's current connection; if pairing, demo
 mode, the data source or the selected car changes during an await, nothing is

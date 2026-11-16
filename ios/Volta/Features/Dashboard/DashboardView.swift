@@ -122,7 +122,6 @@ struct DashboardView: View {
             }
             syncControlsHost()
         }
-        .onChange(of: controlsPushed) { syncControlsHost() }
         .onChange(of: controlsSheetDismissals) { syncControlsHost() }
         .onChange(of: controls.climateOpen) { syncControlsHost() }
         .onChange(of: path) {
@@ -179,12 +178,12 @@ struct DashboardView: View {
             if ControlsRouting.opensControlsForRequest(app) { showControls = true }
         }
         // Locking closes the Controls sheet and never shows one; inactivity only covers it.
-        .onChange(of: app?.isLocked == true) { _, locked in
-            if locked, !ControlsRouting.keepsControlsOnLock(host: controlsHost) { showControls = false }
+        .onChange(of: ControlsRouting.Surroundings(locked: app?.isLocked == true, pushedLayout: controlsPushed)) { old, new in
+            showControls = ControlsRouting.wantsControls(afterChange: showControls, host: controlsHost, from: old, to: new)
             syncControlsHost()
         }
         .onChange(of: app?.refusedUnlocks) {
-            if !ControlsRouting.keepsControlsAfterRefusedUnlock(host: controlsHost) { showControls = false }
+            showControls = ControlsRouting.wantsControls(afterRefusedUnlock: showControls, host: controlsHost)
         }
         .sheet(isPresented: $showLiveCharge, onDismiss: { Task { await load() } }) {
             if let status = model.status {
