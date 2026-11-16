@@ -110,12 +110,14 @@ struct NowCard: View {
         }
     }
 
-    /// Blue light enough to read as small text on the card (6:1).
-    static let parkedText = Color(hex: 0x60A5FA)
+    /// Blue that reads as small text on the card: 6.4:1 on the dark card,
+    /// 6.7:1 on the light one.
+    static let parkedText = Color(light: 0x1D4ED8, dark: 0x60A5FA)
 
     private func background(accent: Color?) -> some View {
         RoundedRectangle(cornerRadius: VoltaRadius.card + 4, style: .continuous)
             .fill(Color.voltaCard)
+            .shadow(color: .voltaCardShadow, radius: 6, y: 2)
             .overlay {
                 if let accent {
                     RoundedRectangle(cornerRadius: VoltaRadius.card + 4, style: .continuous)
@@ -511,7 +513,7 @@ struct PowerSparkline: View {
             }
             if let end = points.max(by: { $0.t < $1.t }) {
                 let p = point(end)
-                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.white))
+                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.voltaInk))
             }
         }
     }

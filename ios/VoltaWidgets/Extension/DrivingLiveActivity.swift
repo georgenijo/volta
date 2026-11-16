@@ -10,8 +10,7 @@ struct DrivingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: DrivingActivityAttributes.self) { context in
             DrivingLockScreenView(attributes: context.attributes, state: context.state, isStale: context.isStale)
-                .activityBackgroundTint(WTheme.background.opacity(0.92))
-                .activitySystemActionForegroundColor(.white)
+                .modifier(WActivityChrome())
                 .widgetURL(URL(string: "volta://drives"))
         } dynamicIsland: { context in
             let a = context.attributes, s = context.state
@@ -117,7 +116,7 @@ struct DrivingMetricsRow: View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 1) {
                 DriveElapsed(startedAt: attributes.startedAt, state: state, isStale: isStale)
-                    .font(.system(size: 15, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                    .font(.system(size: 15, weight: .bold)).monospacedDigit().foregroundStyle(WTheme.text)
                     .lineLimit(1)
                 WLabel(state.phase == .ended ? "Duration" : "Elapsed")
             }
@@ -128,7 +127,7 @@ struct DrivingMetricsRow: View {
     }
     private func metric(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+            Text(value).font(.system(size: 15, weight: .bold)).foregroundStyle(WTheme.text)
                 .lineLimit(1).minimumScaleFactor(0.7)
             WLabel(label)
         }
@@ -147,7 +146,7 @@ struct DrivingLockScreenView: View {
             HStack(spacing: 6) {
                 Image(systemName: look.symbol).foregroundStyle(look.tint)
                 WLabel(look.title, color: look.tint)
-                WLabel("· " + attributes.vehicleName, color: .white.opacity(0.8))
+                WLabel("· " + attributes.vehicleName, color: WTheme.ink.opacity(0.8))
                 Spacer()
                 if isStale && state.phase == .driving {
                     WLabel("Stale", color: WTheme.amber)

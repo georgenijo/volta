@@ -7,6 +7,13 @@ struct ElectricityRateSheet: View {
     var onSave: (_ home: Double?, _ dcFast: Double?) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
+
+    /// The system placeholder is about 1.7:1 on a white field; light mode uses
+    /// tertiary text (5.2:1). Dark keeps the system placeholder, as on main.
+    private var placeholder: Color {
+        scheme == .dark ? Color(uiColor: .placeholderText) : .voltaTextTertiary
+    }
     @State private var homeText = ""
     @State private var dcText = ""
     @FocusState private var focus: Field?
@@ -53,7 +60,6 @@ struct ElectricityRateSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
         .presentationBackground(ScreenKit.background)
         .onAppear {
@@ -71,10 +77,10 @@ struct ElectricityRateSheet: View {
                 .foregroundStyle(ScreenKit.secondary)
             HStack(spacing: 6) {
                 Text(symbol).font(.system(size: 20, weight: .semibold)).foregroundStyle(ScreenKit.secondary)
-                TextField(prompt, text: text)
+                TextField(text: text, prompt: Text(prompt).foregroundStyle(placeholder)) { Text(prompt) }
                     .keyboardType(.decimalPad)
                     .font(.system(size: 22, weight: .semibold)).monospacedDigit()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.voltaTextPrimary)
                     .focused($focus, equals: field)
                     .accessibilityLabel(title)
                     .accessibilityIdentifier(identifier)
@@ -148,7 +154,7 @@ struct SetRateButton: View {
 }
 
 #Preview("Electricity rate") {
-    Color.black.sheet(isPresented: .constant(true)) {
+    Color.voltaBackground.sheet(isPresented: .constant(true)) {
         ElectricityRateSheet(rates: ElectricityRates(home: 0.15, dcFast: nil, currency: "USD")) { _, _ in }
     }
 }

@@ -75,7 +75,7 @@ struct ChargerMapView: View {
                 }
             }
         }
-        .screenKitPage("Charger Map")
+        .screenKitPage("Charger Map", screen: "charger-map")
         // The task starts again when the page moves, as when iPhone Duo folds;
         // only another vehicle reloads.
         .task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load() } }

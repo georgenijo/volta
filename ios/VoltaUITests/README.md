@@ -55,6 +55,8 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | Controls (A) | `list.commandLog`, `banner.commandActivity` | "Sent this session" list; the latest command's result banner |
 | Settings (C) | `button.account` | Pushes Account from Settings |
 | Settings (C) | `row.settings.charging`, `screen.settings-charging`, `button.electricity-rate` | Charging settings row, its page, and the rate card that opens the form |
+| Settings (C) | `row.settings.<title>`, `screen.vehicle-settings`, `screen.general-settings`, `screen.places`, `screen.security`, `screen.data-management`, `screen.support`, `screen.account` | Every Settings row (`row.settings.data-management`) and the pages they open |
+| More (C) | `row.more.<slug>`, `screen.charging-insights`, `screen.tires`, `screen.maintenance`, `screen.lease`, `screen.charger-map` | More rows and the page headings they open |
 | Settings (C) | `screen.electricity-rate`, `field.rate.home`, `field.rate.dc`, `button.rate.save`, `button.rate.cancel` | Electricity rate sheet |
 | History (B) | `button.rate.set` | "Set rate" next to an unknown cost |
 | History (B) | `button.charging.costs`, `button.charging.energy-mix` | Charging shortcut pills |

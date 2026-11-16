@@ -18,7 +18,7 @@ extension View {
                 .fill(HistoryTheme.card)
                 .overlay {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .strokeBorder(.white.opacity(0.05), lineWidth: 1)
+                        .strokeBorder(Color.voltaInk.opacity(0.05), lineWidth: 1)
                 }
         }
         .clipShape(.rect(cornerRadius: radius, style: .continuous))
@@ -40,7 +40,7 @@ struct ScoreDial: View {
         let tint = DriveScoreBand.tint(value)
         ZStack {
             Circle().trim(from: 0, to: 0.75)
-                .stroke(.white.opacity(0.1), style: StrokeStyle(lineWidth: line, lineCap: .round))
+                .stroke(Color.voltaInk.opacity(0.1), style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if let value {
                 let fraction = Double(value) / 100
@@ -51,7 +51,7 @@ struct ScoreDial: View {
             VStack(spacing: size * 0.02) {
                 Text(value.map(String.init) ?? "–")
                     .font(.system(size: size * (caption == nil ? 0.36 : 0.32), weight: .semibold))
-                    .monospacedDigit().foregroundStyle(.white)
+                    .monospacedDigit().foregroundStyle(.voltaTextPrimary)
                 if let caption {
                     Text(caption).font(.system(size: max(8, size * 0.1), weight: .semibold)).tracking(1.2)
                         .textCase(.uppercase).foregroundStyle(HistoryTheme.secondary)
@@ -80,7 +80,7 @@ struct RouteWatermark: View {
                     path.move(to: run[0]); run.dropFirst().forEach { path.addLine(to: $0) }
                 }
             }
-            .stroke(.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            .stroke(Color.voltaInk, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
             .opacity(opacity)
         }
         .allowsHitTesting(false)
@@ -108,7 +108,7 @@ struct RouteSketch: View {
             let lines = runs.filter { $0.count > 1 }
             var path = Path()
             for run in lines { path.move(to: run[0]); run.dropFirst().forEach { path.addLine(to: $0) } }
-            ctx.stroke(path, with: .color(.white.opacity(0.35)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            ctx.stroke(path, with: .color(Color.voltaInk.opacity(0.35)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
             let valid = runs.flatMap { $0 }
             guard let start = valid.first, let end = valid.last else { return }
             if hypot(end.x - start.x, end.y - start.y) < 4 {
@@ -165,7 +165,7 @@ struct DrivesHero: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0))
                         .font(.system(size: 60, weight: .bold)).tracking(-1)
-                        .foregroundStyle(.white).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                        .foregroundStyle(.voltaTextPrimary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
                     Text(units.distanceUnit).font(.system(size: 17, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 Spacer(minLength: 0)
@@ -213,7 +213,7 @@ struct HistoryFlowStats: View {
                 if index > 0 { Circle().fill(HistoryTheme.tertiary).frame(width: 3, height: 3) }
                 HStack(spacing: iconSpacing) {
                     Image(systemName: item.icon).font(.system(size: iconSize, weight: .semibold)).foregroundStyle(HistoryTheme.secondary)
-                    Text(item.text).font(.system(size: textSize, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                    Text(item.text).font(.system(size: textSize, weight: .semibold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                         .lineLimit(1).minimumScaleFactor(0.7)
                 }
                 .accessibilityElement(children: .combine)
@@ -253,8 +253,8 @@ struct DriveDayHeader: View {
                     .frame(width: 13, height: 12, alignment: .bottom).padding(.bottom, 1)
                     .overlay(alignment: .top) { Rectangle().frame(height: 1.5).padding(.horizontal, 1.5).padding(.top, 1.5) }
                     .overlay(RoundedRectangle(cornerRadius: 2.5, style: .continuous).strokeBorder(lineWidth: 1.2))
-                    .foregroundStyle(.white.opacity(0.85))
-                Text(group.title).font(.system(size: 16, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                    .foregroundStyle(Color.voltaInk.opacity(0.85))
+                Text(group.title).font(.system(size: 16, weight: .medium)).foregroundStyle(.voltaTextPrimary).lineLimit(1)
                 Spacer(minLength: 8)
                 Text("\(count) \(count == 1 ? "drive" : "drives") · \(units.formatDistance(group.items.reduce(0) { $0 + $1.distanceKm }))")
                     .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.secondary).lineLimit(1)
@@ -350,7 +350,7 @@ struct DriveCard: View {
                             .font(.system(size: 21, weight: .bold)).monospacedDigit()
                         Text(units.distanceUnit.uppercased()).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.voltaTextPrimary)
                     HStack(spacing: 5) {
                         Text(drive.start.historyTime)
                         Image(systemName: "arrow.right").font(.system(size: 9, weight: .medium))
@@ -398,7 +398,7 @@ struct DriveCard: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             RouteEndpointMarker(kind: marker, size: 9)
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 5 }
-            CardPlaceName(name: name, oneLine: oneLine).foregroundStyle(.white)
+            CardPlaceName(name: name, oneLine: oneLine).foregroundStyle(.voltaTextPrimary)
         }
         .frame(minHeight: 22)
     }
@@ -433,15 +433,15 @@ struct DriveShortcut: View {
     var systemImage: String
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: systemImage).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
-            Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+            Image(systemName: systemImage).font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.voltaInk.opacity(0.85))
+            Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.voltaTextPrimary)
                 .lineLimit(1).fixedSize()
             Spacer(minLength: 4)
             Image(systemName: "arrow.up.right").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
         }
         .padding(.leading, 13).padding(.trailing, 14)
         .frame(height: 42)
-        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).strokeBorder(Color.voltaInk.opacity(0.1), lineWidth: 1))
         .contentShape(.rect(cornerRadius: 17))
     }
 }

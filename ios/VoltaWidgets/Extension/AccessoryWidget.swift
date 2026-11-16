@@ -103,12 +103,12 @@ struct AccessoryBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.25))
-                Capsule().fill(.white)
+                Capsule().fill(.white.opacity(0.25))  // appearance: fixed (accessory widgets render vibrant; the system tints white)
+                Capsule().fill(.white)  // appearance: fixed (vibrant)
                     .frame(width: max(5, geo.size.width * min(1, max(0, fraction))))
                     .widgetAccentable()
                 if let marker {
-                    Rectangle().fill(.white.opacity(0.8)).frame(width: 1.5, height: 9)
+                    Rectangle().fill(.white.opacity(0.8)).frame(width: 1.5, height: 9)  // appearance: fixed (vibrant)
                         .offset(x: geo.size.width * min(1, max(0, marker)) - 0.75)
                 }
             }

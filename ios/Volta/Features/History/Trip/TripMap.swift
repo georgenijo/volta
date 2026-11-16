@@ -27,15 +27,18 @@ struct TripRouteStyle: Equatable {
     /// The rolling window efficiency is averaged over (efficiency mode only).
     var windowKm: Double? = nil
 
-    func rgb(_ value: Double) -> RoutePalette.RGB {
+    /// The colour for `value` on the map of `appearance` (dark by default).
+    func rgb(_ value: Double, in appearance: RoutePalette.Appearance = .dark) -> RoutePalette.RGB {
         switch mode {
         case .speed:
-            return RoutePalette.speed(kph: value)
+            return RoutePalette.speed(kph: value, in: appearance)
         case .efficiency:
-            return RoutePalette.efficiency(whPerKm: value, reference: reference)
+            return RoutePalette.efficiency(whPerKm: value, reference: reference, in: appearance)
         case .elevation:
-            guard let range = valueRange, range.upperBound > range.lowerBound else { return RoutePalette.elevation(fraction: 0) }
-            return RoutePalette.elevation(fraction: (value - range.lowerBound) / (range.upperBound - range.lowerBound))
+            guard let range = valueRange, range.upperBound > range.lowerBound else {
+                return RoutePalette.elevation(fraction: 0, in: appearance)
+            }
+            return RoutePalette.elevation(fraction: (value - range.lowerBound) / (range.upperBound - range.lowerBound), in: appearance)
         }
     }
 
@@ -655,19 +658,22 @@ struct TripRouteProjection {
 private struct TripRouteCanvas: View {
     var projection: TripRouteProjection
     var style: TripRouteStyle
+    @Environment(\.colorScheme) private var scheme
 
     private static func key(_ c: RoutePalette.RGB) -> Int { c.bucketKey }
 
     var body: some View {
+        let appearance = RoutePalette.Appearance(scheme)
         Canvas { ctx, _ in
             let p = projection
             for (a, b) in p.gaps {
                 var path = Path()
                 path.move(to: a)
                 path.addLine(to: b)
-                ctx.stroke(path, with: .color(.white.opacity(0.35)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [2, 6]))
+                ctx.stroke(path, with: .color(Color.voltaInk.opacity(0.35)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [2, 6]))
             }
-            // One dark casing under the whole route; then the stretches whose
+            // One casing under the whole route (dark on the dark map, a white
+            // halo on the light one); then the stretches whose
             // metric wasn't recorded (thin grey); then colour by value.
             var casing = Path(), missing = Path()
             var buckets: [Int: (color: RoutePalette.RGB, path: Path)] = [:]
@@ -688,7 +694,7 @@ private struct TripRouteCanvas: View {
                 for q in piece.points.dropFirst() { path.addLine(to: q) }
                 casing.addPath(path)
                 guard let value = piece.value else { flush(); missing.addPath(path); continue }
-                let color: RoutePalette.RGB = style.rgb(value)
+                let color: RoutePalette.RGB = style.rgb(value, in: appearance)
                 let key: Int = Self.key(color)
                 if var r = run, r.key == key, r.end == first {
                     for q in piece.points.dropFirst() { r.path.addLine(to: q) }
@@ -701,8 +707,8 @@ private struct TripRouteCanvas: View {
             }
             flush()
             let round = { (w: CGFloat) in StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round) }
-            ctx.stroke(casing, with: .color(RoutePalette.casing.color), style: round(RoutePalette.casingWidth))
-            ctx.stroke(missing, with: .color(RoutePalette.missing.color), style: round(RoutePalette.missingWidth))
+            ctx.stroke(casing, with: .color(RoutePalette.casingColor), style: round(RoutePalette.casingWidth))
+            ctx.stroke(missing, with: .color(RoutePalette.missingColor), style: round(RoutePalette.missingWidth))
             let square = StrokeStyle(lineWidth: RoutePalette.lineWidth, lineCap: .butt, lineJoin: .round)
             for key in buckets.keys.sorted() {
                 let bucket = buckets[key]!
@@ -714,9 +720,9 @@ private struct TripRouteCanvas: View {
             if let end = p.end { RouteEndpointMarker.draw(.end, in: &ctx, at: end, size: 14) }
             if let start = p.start { RouteEndpointMarker.draw(p.loop ? .both : .start, in: &ctx, at: start, size: 14) }
             if let h = p.highlight {
-                ctx.fill(Self.circle(h, 13), with: .color(.white.opacity(0.18)))
-                ctx.fill(Self.circle(h, 8), with: .color(RoutePalette.casing.color))
-                ctx.fill(Self.circle(h, 6), with: .color(.white))
+                ctx.fill(Self.circle(h, 13), with: .color(Color.voltaInk.opacity(0.18)))
+                ctx.fill(Self.circle(h, 8), with: .color(RoutePalette.casingColor))
+                ctx.fill(Self.circle(h, 6), with: .color(RoutePalette.markerColor))
             }
         }
     }

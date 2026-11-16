@@ -52,13 +52,16 @@ enum ChargerKind: Hashable, Sendable {
         }
     }
 
+    /// Badge fills: the same in both appearances by design, like a charger
+    /// network's sign. Each sits on a white ring, so it reads on light and dark
+    /// maps alike.
     var fill: Color {
         switch self {
-        case .home: Color(hex: 0x3B82F6)
-        case .publicAC: Color(hex: 0x5ECB93)
+        case .home: Color(hex: 0x3B82F6)  // appearance: fixed (badge)
+        case .publicAC: Color(hex: 0x5ECB93)  // appearance: fixed (badge)
         case .supercharger: HistoryTheme.teslaRed
-        case .dcFast: Color(hex: 0xF59E0B)
-        case .unknown: Color(hex: 0x6B7078)
+        case .dcFast: Color(hex: 0xF59E0B)  // appearance: fixed (badge)
+        case .unknown: Color(hex: 0x6B7078)  // appearance: fixed (badge)
         }
     }
 
@@ -84,16 +87,16 @@ struct ChargerBadge: View {
         ZStack {
             Circle().fill(kind.fill)
             if kind == .supercharger {
-                Text("T").font(.system(size: size * 0.5, weight: .heavy)).foregroundStyle(.white)
+                Text("T").font(.system(size: size * 0.5, weight: .heavy)).foregroundStyle(.voltaOnAccent)
             } else {
                 Image(systemName: kind.systemImage)
                     .font(.system(size: size * 13 / 28, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.voltaOnAccent)
             }
         }
         .frame(width: size, height: size)
-        .overlay(Circle().strokeBorder(.white, lineWidth: ring))
-        .shadow(color: .black.opacity(size >= 24 ? 0.35 : 0), radius: 3, y: 1)
+        .overlay(Circle().strokeBorder(Color.voltaOnAccent, lineWidth: ring))
+        .shadow(color: Color.voltaShadow.opacity(size >= 24 ? 0.35 : 0), radius: 3, y: 1)
         .accessibilityHidden(true)
     }
 }

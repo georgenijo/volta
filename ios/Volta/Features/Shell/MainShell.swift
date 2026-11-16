@@ -64,7 +64,6 @@ struct MainShell: View {
             selection = ControlsRouting.shellTab(requested: requested, current: selection)
         }
         .sensoryFeedback(.selection, trigger: selection)
-        .preferredColorScheme(.dark)
     }
 
     @ViewBuilder

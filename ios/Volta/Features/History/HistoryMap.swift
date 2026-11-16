@@ -130,7 +130,7 @@ struct HistorySessionsMap: View {
                 VStack(spacing: 1) {
                     Text(pin.title)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.voltaTextPrimary)
                     Text(pin.subtitle.uppercased())
                         .scaledFont(11, weight: .semibold)
                         .tracking(0.8)
@@ -158,14 +158,14 @@ struct HistorySessionsMap: View {
                 Circle().fill(pin.tint).frame(width: 18, height: 18)
                 Image(systemName: pin.systemImage)
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.black.opacity(0.75))
+                    .foregroundStyle(Color.voltaOnState)
             }
         }
     }
 
     @ViewBuilder private var status: some View {
         if summary.pending > 0 {
-            ProgressView().tint(.white)
+            ProgressView().tint(Color.voltaTextPrimary)
         } else if summary.placesFailed || summary.unmapped > 0 {
             VStack(spacing: 8) {
                 Text(summary.message)
@@ -301,7 +301,7 @@ struct HistoryMapScopeBar<Item: Codable & Hashable & Sendable & Identifiable>: V
                         .foregroundStyle(HistoryTheme.secondary)
                     Text(feed.hasMore ? "\(count) loaded so far" : "\(count) in range")
                         .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(Color.voltaInk.opacity(0.9))
                 }
                 Spacer(minLength: 8)
                 trailing
@@ -329,7 +329,7 @@ struct HistoryMapScopeBar<Item: Codable & Hashable & Sendable & Identifiable>: V
             .foregroundStyle(HistoryTheme.blue)
             .buttonStyle(.plain)
         } else if feed.isLoadingMore || feed.isRefreshing {
-            ProgressView().tint(.white)
+            ProgressView().tint(Color.voltaTextPrimary)
         } else if feed.hasMore {
             Button("Load more") { Task { await feed.loadMore() } }
                 .font(.system(size: 14, weight: .semibold))
@@ -353,7 +353,7 @@ struct HistoryClusterSheet<Item: Identifiable, Row: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text(title)
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.voltaTextPrimary)
                     .padding(.top, 24)
                 Text(items.count == 1 ? "1 session" : "\(items.count) sessions")
                     .font(.system(size: 13))
@@ -371,7 +371,6 @@ struct HistoryClusterSheet<Item: Identifiable, Row: View>: View {
         .background(HistoryTheme.background.ignoresSafeArea())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -425,7 +424,7 @@ struct HistoryLocationCard: View {
                 .foregroundStyle(HistoryTheme.secondary)
             Text(address ?? "Address not recorded")
                 .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(address == nil ? HistoryTheme.secondary : .white)
+                .foregroundStyle(address == nil ? HistoryTheme.secondary : Color.voltaTextPrimary)
                 .lineLimit(2)
         }
         .accessibilityElement(children: .combine)
@@ -450,7 +449,7 @@ struct HistoryLocationCard: View {
                                 .shadow(color: tint.opacity(0.6), radius: 8)
                             Image(systemName: systemImage)
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.black.opacity(0.75))
+                                .foregroundStyle(Color.voltaOnState)
                         }
                         .position(x: geo.size.width / 2, y: (geo.size.height - fade) / 2)
                     }

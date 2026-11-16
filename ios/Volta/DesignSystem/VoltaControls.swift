@@ -146,11 +146,11 @@ struct ControlButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                if isBusy { ProgressView().controlSize(.small).tint(.white) }
+                if isBusy { ProgressView().controlSize(.small).tint(style == .accent ? Color.voltaOnAccent : Color.voltaTextPrimary) }
                 Text(title).opacity(isBusy ? 0 : 1)
             }
             .font(.system(.callout, weight: .medium))
-            .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
+            .foregroundStyle(style == .accent ? Color.voltaOnAccent : Color.voltaTextPrimary)
             .lineLimit(1)
             .padding(.horizontal, VoltaSpacing.lg)
             .padding(.vertical, 7)
@@ -190,14 +190,14 @@ struct ControlWideButton: View {
         Button(action: action) {
             HStack(spacing: VoltaSpacing.sm) {
                 if isBusy {
-                    ProgressView().controlSize(.small).tint(.white)
+                    ProgressView().controlSize(.small).tint(style == .accent ? Color.voltaOnAccent : Color.voltaTextPrimary)
                 } else if let systemImage {
                     Image(systemName: systemImage)
                 }
                 Text(title)
             }
             .font(.system(.body, weight: .semibold))
-            .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
+            .foregroundStyle(style == .accent ? Color.voltaOnAccent : Color.voltaTextPrimary)
             .multilineTextAlignment(.center)
             .padding(.horizontal, hugsTitle ? VoltaSpacing.lg + 2 : VoltaSpacing.lg)
             // Grows with the text at large sizes instead of crowding it.
@@ -374,5 +374,4 @@ struct HalfControl: View {
         .padding(20)
     }
     .voltaScreenBackground()
-    .preferredColorScheme(.dark)
 }

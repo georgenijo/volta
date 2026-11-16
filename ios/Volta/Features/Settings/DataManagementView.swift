@@ -177,14 +177,14 @@ struct DataManagementView: View {
                         Image(systemName: symbol).font(.title3).foregroundStyle(ScreenKit.blue)
                             .frame(width: 28).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(title).font(.headline).foregroundStyle(.white)
+                            Text(title).font(.headline).foregroundStyle(.voltaTextPrimary)
                             Text(subtitle).font(.footnote).foregroundStyle(ScreenKit.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     if let export, export.kind == kind {
                         if let title = export.title {
-                            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.voltaTextPrimary)
                         }
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 18) { stats(export) }
@@ -195,7 +195,7 @@ struct DataManagementView: View {
                             Label(export.urls.count > 1 ? "Share \(export.urls.count) files" : kind == .gpx ? "Share GPX file" : "Share export",
                                   systemImage: "square.and.arrow.up")
                                 .font(.callout.weight(.semibold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.voltaOnAccent)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 15)
                                 .background(Color.voltaBlueFill, in: .rect(cornerRadius: VoltaRadius.wideButton, style: .continuous))
@@ -236,7 +236,7 @@ struct DataManagementView: View {
 
     private func stat(_ value: String, _ label: String) -> some View {
         HStack(spacing: 4) {
-            Text(value).font(.subheadline.weight(.bold)).foregroundStyle(.white).monospacedDigit()
+            Text(value).font(.subheadline.weight(.bold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
             if !label.isEmpty { Text(label).font(.subheadline).foregroundStyle(ScreenKit.secondary) }
         }
     }
@@ -418,7 +418,6 @@ private struct DrivePickerSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.large])
         .presentationBackground(ScreenKit.background)
         .task { await load(reset: true) }

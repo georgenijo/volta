@@ -35,7 +35,7 @@ struct AboutView: View {
                 }
             }
         }
-        .screenKitPage("Support")
+        .screenKitPage("Support", screen: "support")
     }
 }
 

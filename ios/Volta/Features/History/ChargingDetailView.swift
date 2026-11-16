@@ -253,7 +253,7 @@ struct ChargingDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(ChargePlace.title(summary))
                 .font(.system(size: 17.5, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.voltaTextPrimary)
                 .lineLimit(2).minimumScaleFactor(0.75)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("screen.charge-detail")
@@ -270,7 +270,7 @@ struct ChargingDetailView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(summary.energyAddedKwh.map { "+" + VoltaFormat.number($0) } ?? "—")
                         .font(.system(size: 47, weight: .bold)).tracking(-0.5)
-                        .monospacedDigit().foregroundStyle(.white)
+                        .monospacedDigit().foregroundStyle(.voltaTextPrimary)
                         .lineLimit(1).minimumScaleFactor(0.6)
                     Text("kWh").font(.system(size: 15, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
@@ -301,7 +301,7 @@ struct ChargingDetailView: View {
         if let cost = costEstimate {
             VStack(alignment: .trailing, spacing: 1.7) {
                 Text(VoltaFormat.money(cost.amount, currency: cost.currency))
-                    .font(.system(size: 27, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                    .font(.system(size: 27, weight: .bold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                     .accessibilityIdentifier("charge.cost")
                 HStack(spacing: 5) {
                     if cost.isEstimated { Text("Est.").foregroundStyle(HistoryTheme.amber) }
@@ -409,7 +409,7 @@ struct ChargingDetailView: View {
     private func energyValue(_ kwh: Double, size: CGFloat, dim: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(VoltaFormat.number(kwh)).font(.system(size: size, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(dim ? HistoryTheme.secondary : .white)
+                .foregroundStyle(dim ? HistoryTheme.secondary : Color.voltaTextPrimary)
             Text("kWh").scaledFont(11).foregroundStyle(HistoryTheme.secondary)
         }
     }
@@ -446,7 +446,7 @@ struct ChargingDetailView: View {
                 HStack {
                     Text(row.0).font(.system(size: 16, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                     Spacer()
-                    Text(row.1).font(.system(size: 16, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                    Text(row.1).font(.system(size: 16, weight: .semibold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                 }
                 .padding(.vertical, 14)
                 if index < rows.count - 1 { Rectangle().fill(HistoryTheme.hairline).frame(height: 1) }
@@ -523,7 +523,7 @@ struct ChargingDetailView: View {
     private func peakValue(_ text: String, color: Color) -> some View {
         HStack(spacing: 6) {
             Circle().fill(color).frame(width: 7, height: 7)
-            Text(text).font(.system(size: 20, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+            Text(text).font(.system(size: 20, weight: .semibold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
         }
     }
 
@@ -677,7 +677,7 @@ private struct DetailSectionHeader<Trailing: View>: View {
         HStack(alignment: .center) {
             title
                 .scaledFont(11, weight: .semibold).tracking(0.8)
-                .foregroundStyle(.white.opacity(0.88))
+                .foregroundStyle(Color.voltaInk.opacity(0.88))
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
@@ -702,11 +702,12 @@ private struct ChargeEnergyBar: View {
                     .overlay(alignment: .leading) {
                         Text("\(Int((share * 100).rounded()))%")
                             .font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                            .foregroundStyle(.black.opacity(0.8))
+                            // Dark ink on the bright dark-mode green, white on the deep light-mode green (5.4:1).
+                            .foregroundStyle(Color(light: .white, dark: .black.opacity(0.8)))
                             .padding(.leading, 8)
                     }
                 if share < 1 {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.white.opacity(0.2))
+                    RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.voltaInk.opacity(0.2))
                 }
             }
         }
@@ -731,14 +732,13 @@ struct ChargeLocationMap: View {
         }
         .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
         .mapControls { MapCompass(); MapPitchToggle() }
-        .environment(\.colorScheme, .dark)
         .ignoresSafeArea()
         .overlay(alignment: .top) {
             HStack(alignment: .center, spacing: 12) {
                 GlassCircleButton(systemImage: "xmark", size: 48, accessibilityLabel: "Close map") { dismiss() }
                     .accessibilityIdentifier("charge.map.close")
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                    Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).lineLimit(1)
                     if let subtitle {
                         Text(subtitle).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
                     }
@@ -749,24 +749,20 @@ struct ChargeLocationMap: View {
             }
             .padding(.horizontal, HistoryTheme.gutter)
         }
-        .preferredColorScheme(.dark)
     }
 }
 
 #Preview("Charge detail · home") {
     NavigationStack { ChargingDetailView(charge: MockDataSource.previewCharge()) }
         .environment(\.dataSource, MockDataSource())
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Charge detail · supercharger") {
     NavigationStack { ChargingDetailView(charge: MockDataSource.previewCharge(fast: true)) }
         .environment(\.dataSource, MockDataSource())
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Charge detail · error") {
     NavigationStack { ChargingDetailView(charge: MockDataSource.previewCharge()) }
         .environment(\.dataSource, HistoryPreviewFailingSource())
-        .preferredColorScheme(.dark)
 }

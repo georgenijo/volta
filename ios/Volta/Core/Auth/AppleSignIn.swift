@@ -30,6 +30,8 @@ struct AppleSignInButton: View {
     var onToken: (String) -> Void
     var onFailure: (String) -> Void
 
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
         SignInWithAppleButton(label) { request in
             request.requestedScopes = []
@@ -41,8 +43,9 @@ struct AppleSignInButton: View {
             case .failed(let message): onFailure(message)
             }
         }
-        // White is Apple's style for dark backgrounds, and Volta is always dark.
-        .signInWithAppleButtonStyle(.white)
+        // Apple's styles: white on a dark background, black on a light one.
+        // The button takes a style, not a colour, so this follows the scheme.
+        .signInWithAppleButtonStyle(scheme == .dark ? .white : .black)  // appearance: Apple's button styles
         .frame(maxWidth: .infinity).frame(height: 50)
     }
 }

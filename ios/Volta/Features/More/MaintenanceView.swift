@@ -77,7 +77,7 @@ struct MaintenanceView: View {
                                 Text("Date due unknown — record the last completion.").font(.caption).foregroundStyle(ScreenKit.secondary)
                             }
                             if let progress = item.progress { ProgressView(value: progress).tint(progress >= 1 ? ScreenKit.amber : ScreenKit.mint) }
-                            Button("Record completion") { completing = item }.buttonStyle(.bordered)
+                            Button("Record completion") { completing = item }.buttonStyle(.bordered).tint(Color.voltaBlueText)
                         }
                     }
                 }
@@ -104,7 +104,7 @@ struct MaintenanceView: View {
                 }
             }
         }
-        .screenKitPage("Maintenance")
+        .screenKitPage("Maintenance", screen: "maintenance")
         .task(id: vehicleID) { await load() }
         .refreshable { await load() }
         .onChange(of: vehicleID) { _, _ in adding = false; completing = nil; editingItem = nil; editingEvent = nil; deletingItem = nil; deletingEvent = nil }
@@ -222,7 +222,7 @@ private struct ServiceItemForm: View {
                         draft.months = existing.intervalMonths.map(String.init) ?? ""
                     } else { applyPreset() }
                 }
-        }.preferredColorScheme(.dark)
+        }
     }
     private func applyPreset() {
         guard draft.preset < ServiceItemInput.presets.count else { draft.name = ""; draft.distance = ""; draft.months = ""; return }
@@ -265,7 +265,7 @@ private struct ServiceCompletionForm: View {
                     draft.date = existing?.completedAt ?? .now
                     draft.odometer = odometerKm.map { ServiceFormValidation.number(units.distanceValue(km: $0)) } ?? ""
                 }
-        }.preferredColorScheme(.dark)
+        }
     }
     private func submit() async {
         let km: Double?

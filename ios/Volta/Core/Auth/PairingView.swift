@@ -83,8 +83,9 @@ struct PairingView: View {
                 .disabled(!canSignIn).opacity(canSignIn ? 1 : 0.5)
                 .overlay {
                     if model.isPairing {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white)
-                        ProgressView().tint(.black).accessibilityLabel("Signing in")
+                        // Covers the Apple button in its own colours (white on dark, black on light).
+                        RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(light: .black, dark: .white))
+                        ProgressView().tint(Color(light: .white, dark: .black)).accessibilityLabel("Signing in")
                     }
                 }
                 .accessibilityIdentifier("button.signInWithApple")

@@ -9,6 +9,13 @@ struct VehicleIntentSnippet: View {
     let kind: Kind
     let readout: VehicleReadout
     let isDemo: Bool
+    @Environment(\.colorScheme) private var scheme
+
+    /// Secondary text. The system's `.secondary` falls to about 3.4:1 on the light
+    /// snippet glass, so light uses `voltaTextSecondary`; dark keeps the system style.
+    private var secondary: AnyShapeStyle {
+        scheme == .dark ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.voltaTextSecondary)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -36,7 +43,7 @@ struct VehicleIntentSnippet: View {
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Color.voltaBlue.opacity(0.18), in: .capsule)
-                    .foregroundStyle(Color.voltaBlue)
+                    .foregroundStyle(Color.voltaBlueText)
             }
         }
     }
@@ -48,7 +55,7 @@ struct VehicleIntentSnippet: View {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     bigValue(readout.batteryPercent)
                     Text(readout.shortRange.map { "\($0) \(readout.rangeKind)" } ?? "Range unknown")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.subheadline).foregroundStyle(secondary)
                 }
                 BatteryBar(level: readout.snapshot.batteryLevel, limit: readout.snapshot.chargeLimit, tint: tint)
             }
@@ -56,19 +63,19 @@ struct VehicleIntentSnippet: View {
             VStack(alignment: .leading, spacing: 4) {
                 bigValue(readout.shortRange ?? "Unknown", known: readout.shortRange != nil)
                 Text("\(readout.rangeKind.capitalized) range · battery \(readout.batteryPercent)")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.subheadline).foregroundStyle(secondary)
             }
         case .charging:
             VStack(alignment: .leading, spacing: 4) {
                 bigValue(chargingTitle, known: readout.charging != .unknown)
-                Text(chargingDetail).font(.subheadline).foregroundStyle(.secondary)
+                Text(chargingDetail).font(.subheadline).foregroundStyle(secondary)
             }
         case .location:
             VStack(alignment: .leading, spacing: 4) {
                 bigValue(readout.locationTitle, known: readout.place != nil)
                     .lineLimit(2)
                 if readout.snapshot.state == .driving {
-                    Text("Driving · last known place").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Driving · last known place").font(.subheadline).foregroundStyle(secondary)
                 }
             }
         case .security:
@@ -88,7 +95,7 @@ struct VehicleIntentSnippet: View {
         return Label(Self.footerText(kind, readout: readout),
                      systemImage: stale ? "clock.badge.exclamationmark" : "clock")
             .font(.caption)
-            .foregroundStyle(stale ? Color.voltaAmber : .secondary)
+            .foregroundStyle(stale ? AnyShapeStyle(Color.voltaAmber) : secondary)
     }
 
     static func footerText(_ kind: Kind, readout: VehicleReadout) -> String {
@@ -100,15 +107,15 @@ struct VehicleIntentSnippet: View {
         Text(text)
             .font(.system(size: 34, weight: .semibold, design: .rounded))
             .monospacedDigit()
-            .foregroundStyle(known ? .primary : .secondary)
+            .foregroundStyle(known ? AnyShapeStyle(.primary) : secondary)
             .minimumScaleFactor(0.6)
             .lineLimit(1)
     }
 
     private func stateTile(title: String, value: String, symbol: String, known: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: symbol).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            Text(value).font(.title3.weight(.semibold)).foregroundStyle(known ? .primary : .secondary)
+            Label(title, systemImage: symbol).font(.caption.weight(.semibold)).foregroundStyle(secondary)
+            Text(value).font(.title3.weight(.semibold)).foregroundStyle(known ? AnyShapeStyle(.primary) : secondary)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

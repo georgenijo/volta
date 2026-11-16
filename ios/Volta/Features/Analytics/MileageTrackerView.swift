@@ -64,7 +64,7 @@ struct MileageTrackerView: View {
                                   xEnd: .value("End", entry.interval.end.addingTimeInterval(-inset)),
                                   yStart: .value("Zero", 0.0),
                                   yEnd: .value("Distance", units.distanceValue(km: b.distanceKm)))
-                        .foregroundStyle(b.start == focus?.start ? AnyShapeStyle(ScreenKit.blue.gradient) : AnyShapeStyle(ScreenKit.blue.opacity(0.35)))
+                        .foregroundStyle(b.start == focus?.start ? AnyShapeStyle(ScreenKit.blue.gradient) : AnyShapeStyle(MileageTrackerView.pastBar))
                         .clipShape(.rect(cornerRadius: 3))
                     if b.start == visible.first?.start {
                         RuleMark(y: .value("Average", units.distanceValue(km: average)))
@@ -97,7 +97,7 @@ struct MileageTrackerView: View {
                                    subtitle: "\(b.driveCount) drive\(b.driveCount == 1 ? "" : "s")" + (b.energyUsedKwh.map { " · \(VoltaFormat.energy($0, fractionDigits: 0))" } ?? ""),
                                    showsDivider: index < rows.count - 1) {
                     Text(units.formatDistance(b.distanceKm, fractionDigits: 0))
-                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).monospacedDigit()
+                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                 }
             }
         }
@@ -127,11 +127,16 @@ struct MileageTrackerView: View {
 }
 
 #Preview("Populated") {
-    NavigationStack { MileageTrackerView() }.preferredColorScheme(.dark)
+    NavigationStack { MileageTrackerView() }
 }
 
 #Preview("Empty") {
     NavigationStack { MileageTrackerView() }
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
+}
+
+extension MileageTrackerView {
+    /// Unselected bars carry the history, so in light they are 3:1 on the card;
+    /// dark keeps main's `voltaBlue` at 35%.
+    static let pastBar = Color(light: Color(hex: 0x6692F1), dark: Color(hex: 0x3B82F6).opacity(0.35))
 }

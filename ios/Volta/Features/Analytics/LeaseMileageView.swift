@@ -198,7 +198,7 @@ struct LeaseMileageView: View {
                 SectionLabel(p.phase == .ended ? "At lease end" : "Projected at lease end", trailing: day(p.end))
                 if p.phase == .ended {
                     Text("Final mileage unavailable")
-                        .font(.title3.weight(.semibold)).foregroundStyle(.white)
+                        .font(.title3.weight(.semibold)).foregroundStyle(.voltaTextPrimary)
                     Text("Volta has no odometer reading from the end of the term, so it can't say how far the car went within it. The reading on your return paperwork is the figure that counts.")
                         .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -219,7 +219,7 @@ struct LeaseMileageView: View {
                         Text(over > 0 ? "\(units.formatDistance(over, fractionDigits: 0)) over allowance"
                                       : "\(units.formatDistance(-over, fractionDigits: 0)) under allowance")
                             .font(.callout.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.voltaTextPrimary)
                     }
                     Text("Estimate: your pace so far, continued to the end of the term. Your contract's excess-mileage rate applies to any overage.")
                         .font(.footnote).foregroundStyle(ScreenKit.secondary)
@@ -298,7 +298,7 @@ struct LeaseMileageView: View {
                             PointMark(x: .value("Date", today), y: .value("Distance", units.distanceValue(km: used)))
                                 .symbol(.diamond)
                                 .symbolSize(70)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.voltaTextPrimary)
                         }
                     }
                     .chartXScale(domain: p.start...max(p.end, p.start.addingTimeInterval(86_400)))
@@ -402,7 +402,7 @@ struct LeaseMileageView: View {
         legendDash("Allowance", color: ScreenKit.secondary)
         if odometer != nil {
             HStack(spacing: 6) {
-                Image(systemName: "diamond.fill").font(.system(size: 8)).foregroundStyle(.white).accessibilityHidden(true)
+                Image(systemName: "diamond.fill").font(.system(size: 8)).foregroundStyle(.voltaTextPrimary).accessibilityHidden(true)
                 Text("Odometer").font(.caption).foregroundStyle(ScreenKit.secondary)
             }
         }
@@ -415,7 +415,7 @@ struct LeaseMileageView: View {
 
     private func legendTick(_ label: String) -> some View {
         HStack(spacing: 6) {
-            Capsule().fill(.white).frame(width: 2, height: 10).accessibilityHidden(true)
+            Capsule().fill(Color.voltaTextPrimary).frame(width: 2, height: 10).accessibilityHidden(true)
             Text(label).font(.caption).foregroundStyle(ScreenKit.secondary)
         }
     }
@@ -478,7 +478,7 @@ private struct LeaseProgressBar: View {
             .opacity(used == nil ? 0.4 : 1)
             .overlay(alignment: .leading) {
                 GeometryReader { proxy in
-                    Capsule().fill(.white)
+                    Capsule().fill(Color.voltaTextPrimary)
                         .frame(width: 2, height: 16)
                         .offset(x: max(0, min(proxy.size.width - 2, proxy.size.width * time - 1)), y: -4)
                 }
@@ -550,7 +550,7 @@ struct LeaseTermsSheet: View {
                             VStack(alignment: .leading, spacing: 8) { termButtons }
                         }
                         Stepper(value: $months, in: LeaseTerms.termRange) {
-                            Text("\(months) months").font(.body.weight(.semibold)).foregroundStyle(.white).monospacedDigit()
+                            Text("\(months) months").font(.body.weight(.semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                         }
                         .padding(.horizontal, 16).padding(.vertical, 10)
                         .background(ScreenKit.card, in: .rect(cornerRadius: 14))
@@ -601,7 +601,6 @@ struct LeaseTermsSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.large])
         .presentationBackground(ScreenKit.background)
         .onAppear {
@@ -618,7 +617,7 @@ struct LeaseTermsSheet: View {
             Button { months = value } label: {
                 Text("\(value) mo")
                     .font(.subheadline.weight(.semibold)).monospacedDigit()
-                    .foregroundStyle(months == value ? .white : ScreenKit.secondary)
+                    .foregroundStyle(months == value ? Color.voltaTextPrimary : ScreenKit.secondary)
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(months == value ? Color.voltaRaised : ScreenKit.card, in: .capsule)
                     .overlay(Capsule().strokeBorder(months == value ? ScreenKit.blue : ScreenKit.hairline, lineWidth: 1))
@@ -641,7 +640,7 @@ struct LeaseTermsSheet: View {
                 TextField(prompt, text: text)
                     .keyboardType(.numberPad)
                     .font(.title3.weight(.semibold)).monospacedDigit()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.voltaTextPrimary)
                     .focused($focus, equals: field)
                     .accessibilityLabel(title)
                     .accessibilityIdentifier(identifier)

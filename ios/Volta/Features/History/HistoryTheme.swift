@@ -10,14 +10,14 @@ enum HistoryTheme {
     static let hairline = Color.voltaHairline
     static let secondary = Color.voltaTextSecondary
     static let tertiary = Color.voltaTextTertiary
-    static let track = Color.white.opacity(0.08)
+    static let track = Color.voltaInk.opacity(0.08)  // a step quieter than `voltaTrack`, as it always was
 
     static let blue = Color.voltaBlue
     static let green = Color.voltaGreen
     static let amber = Color.voltaAmber
     static let red = Color.voltaRed
     /// Regen / secondary series only.
-    static let purple = Color(hex: 0xA78BFA)
+    static let purple = Color.voltaPurple
 
     static let cardRadius: CGFloat = VoltaRadius.card
     static let gutter: CGFloat = VoltaSpacing.lg
@@ -68,7 +68,7 @@ struct HistoryValue: View {
     var value: String
     var unit: String? = nil
     var size: CGFloat = 22
-    var color: Color = .white
+    var color: Color = .voltaTextPrimary
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
@@ -210,7 +210,7 @@ struct HistoryInlineMetric: View {
                 .foregroundStyle(tint)
             Text(text)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.88))
+                .foregroundStyle(Color.voltaInk.opacity(0.88))
                 .monospacedDigit()
         }
         .lineLimit(1)

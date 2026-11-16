@@ -65,7 +65,7 @@ struct ChargeCurveChart: View {
             }
             if let selected, selectedPower != nil || selectedSoc != nil {
                 RuleMark(x: .value("Selected", (selectedPower ?? selectedSoc)?.t ?? selected))
-                    .foregroundStyle(Color.white.opacity(0.28))
+                    .foregroundStyle(Color.voltaInk.opacity(0.28))
                     .annotation(position: .top, spacing: 2, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         VStack(spacing: 1) {
                             HStack(spacing: 6) {
@@ -76,7 +76,7 @@ struct ChargeCurveChart: View {
                                     Text("\(VoltaFormat.number(s.value, digits: 0))%").foregroundStyle(socColor)
                                 }
                             }
-                            .font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                            .font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                             Text(((selectedPower ?? selectedSoc)?.t ?? selected).historyTime)
                                 .font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                         }
@@ -97,7 +97,7 @@ struct ChargeCurveChart: View {
         .chartXAxis(.hidden)
         .chartYAxis {
             AxisMarks(position: .leading, values: powerTicks) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.voltaInk.opacity(0.06))
                 AxisValueLabel {
                     if let v = value.as(Double.self) { Text(VoltaFormat.number(v, digits: 0)) }
                 }
@@ -177,10 +177,10 @@ struct ChargeTemperatureChart: View {
             }
             if let selected, let reading = reading(at: selected) {
                 RuleMark(x: .value("Selected", reading.t))
-                    .foregroundStyle(Color.white.opacity(0.28))
+                    .foregroundStyle(Color.voltaInk.opacity(0.28))
                     .annotation(position: .top, spacing: 2, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         VStack(spacing: 1) {
-                            Text(reading.label).font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                            Text(reading.label).font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                             Text(reading.t.historyTime).font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                         }
                         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -196,7 +196,7 @@ struct ChargeTemperatureChart: View {
         }
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.voltaInk.opacity(0.06))
                 AxisValueLabel().font(.system(size: 12, weight: .medium)).foregroundStyle(tint.opacity(0.85))
             }
         }
@@ -257,13 +257,13 @@ struct ChargeTraceChart: View {
             }
             if let first = readings.first {
                 RuleMark(x: .value("Selected", first.point.t))
-                    .foregroundStyle(Color.white.opacity(0.28))
+                    .foregroundStyle(Color.voltaInk.opacity(0.28))
                     .annotation(position: .top, spacing: 2, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         VStack(spacing: 1) {
                             HStack(spacing: 6) {
                                 ForEach(readings, id: \.trace.id) { reading in
                                     Text("\(VoltaFormat.number(reading.point.value, digits: digits)) \(unit)")
-                                        .foregroundStyle(traces.count > 1 ? reading.trace.color : .white)
+                                        .foregroundStyle(traces.count > 1 ? reading.trace.color : Color.voltaTextPrimary)
                                 }
                             }
                             .font(.system(size: 12, weight: .bold)).monospacedDigit()
@@ -282,7 +282,7 @@ struct ChargeTraceChart: View {
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1)).foregroundStyle(Color.voltaInk.opacity(0.06))
                 AxisValueLabel().font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.tertiary)
             }
         }
@@ -299,11 +299,11 @@ struct ChargeSocBarView: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            level(bar.start, color: .white)
+            level(bar.start, color: Color.voltaTextPrimary)
             GeometryReader { geo in
                 let w = geo.size.width
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.14))
+                    Capsule().fill(Color.voltaInk.opacity(0.14))
                     Capsule().fill(tint)
                         .frame(width: max(5, w * (bar.upper - bar.lower)))
                         .offset(x: w * bar.lower)

@@ -532,7 +532,7 @@ struct ChargingHero: View {
                 HStack(alignment: .firstTextBaseline, spacing: 9) {
                     Text(energy.map { VoltaFormat.number($0, digits: $0 >= 100 ? 0 : 1) } ?? "—")
                         .font(.system(size: 47, weight: .heavy)).monospacedDigit()
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.voltaTextPrimary)
                         .lineLimit(1).minimumScaleFactor(0.6)
                     Text("kWh").font(.system(size: 13, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
@@ -567,7 +567,7 @@ private struct ChargingShortcut<Icon: View>: View {
             HStack(spacing: 8) {
                 icon.fixedSize()
                 // Sized to its text: on a narrow window the longer title takes the wider pill.
-                Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
+                Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.voltaTextPrimary)
                     .lineLimit(1).fixedSize()
                 Spacer(minLength: 4)
                 Image(systemName: "arrow.up.right")
@@ -575,7 +575,7 @@ private struct ChargingShortcut<Icon: View>: View {
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 45)
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.white.opacity(0.1), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.voltaInk.opacity(0.1), lineWidth: 1))
             .contentShape(.rect(cornerRadius: 20))
         }
         .buttonStyle(VoltaPressStyle())
@@ -603,7 +603,7 @@ struct ChargeDayHeader: View {
     var day: Date
     var title: String
     var trailing: String
-    var tint: Color = .white
+    var tint: Color = .voltaTextPrimary
 
     var body: some View {
         VStack(spacing: 0) {
@@ -660,7 +660,7 @@ struct ChargeRow: View {
                     HStack(alignment: .center, spacing: 8.3) {
                         Circle().fill(HistoryTheme.green).frame(width: 7.7, height: 7.7).frame(width: 16)
                         Text(charge.city ?? charge.title)
-                            .font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
+                            .font(.system(size: 16, weight: .bold)).foregroundStyle(.voltaTextPrimary)
                             .lineLimit(1).minimumScaleFactor(0.75)
                     }
                     HStack(spacing: 4) {
@@ -673,7 +673,7 @@ struct ChargeRow: View {
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(charge.energyAddedKwh.map { "+" + VoltaFormat.energy($0) } ?? "—")
-                        .font(.system(size: 14.5, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+                        .font(.system(size: 14.5, weight: .semibold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                     if let kw = averagePowerKw {
                         Text("\(VoltaFormat.number(kw)) kW")
                             .scaledFont(11).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
@@ -747,25 +747,22 @@ struct ChargePlaceBadge: View {
 
 extension HistoryTheme {
     /// Session location dot on maps.
-    static let pin = Color(hex: 0xD9604C)
+    static let pin = Color(hex: 0xD9604C)  // appearance: fixed (a map marker, reads on both maps)
     /// Tesla Supercharger badge.
-    static let teslaRed = Color(hex: 0xE0453A)
+    static let teslaRed = Color(hex: 0xE0453A)  // appearance: fixed (the network's red)
 }
 
 #Preview("Charging") {
     ChargingHistoryView()
         .environment(\.dataSource, MockDataSource())
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Charging · empty") {
     ChargingHistoryView()
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Charging · error") {
     ChargingHistoryView()
         .environment(\.dataSource, HistoryPreviewFailingSource())
-        .preferredColorScheme(.dark)
 }

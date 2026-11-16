@@ -107,12 +107,12 @@ struct HistoryLineChart: View {
             }
             if showsZero, domain.lowerBound < 0 {
                 RuleMark(y: .value("Zero", 0))
-                    .foregroundStyle(Color.white.opacity(0.18))
+                    .foregroundStyle(Color.voltaInk.opacity(0.18))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
             if let p = selectedPoint {
                 RuleMark(x: .value("Selected", p.t))
-                    .foregroundStyle(Color.white.opacity(0.25))
+                    .foregroundStyle(Color.voltaInk.opacity(0.25))
                 PointMark(x: .value("Selected", p.t), y: .value(unit, p.value))
                     .foregroundStyle(color)
                     .symbolSize(70)
@@ -120,7 +120,7 @@ struct HistoryLineChart: View {
                         VStack(spacing: 1) {
                             Text("\(VoltaFormat.number(p.value, digits: digits)) \(unit)")
                                 .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.voltaTextPrimary)
                             Text(p.t.historyTime)
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(HistoryTheme.secondary)
@@ -141,7 +141,7 @@ struct HistoryLineChart: View {
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [2, 4])).foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [2, 4])).foregroundStyle(Color.voltaInk.opacity(0.06))
                 AxisValueLabel()
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(HistoryTheme.tertiary)
@@ -277,7 +277,7 @@ struct HistoryHeroNumeral: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(value)
                 .font(.system(size: size, weight: .bold)).fontWidth(.expanded).tracking(size > 60 ? -2 : -1)
-                .foregroundStyle(.white)
+                .foregroundStyle(.voltaTextPrimary)
                 .monospacedDigit().lineLimit(1).minimumScaleFactor(0.45)
             if let unit {
                 Text(unit).font(.system(size: size > 60 ? 20 : 17, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
@@ -393,9 +393,9 @@ struct SessionDayHeader: View {
                 Text(day.formatted(.dateTime.day()))
                     .font(.system(size: 12, weight: .bold)).monospacedDigit()
                     .frame(width: 28, height: 28)
-                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(.white.opacity(0.2), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.voltaInk.opacity(0.2), lineWidth: 1))
                     .foregroundStyle(HistoryTheme.secondary)
-                Text(title).font(.system(size: 22, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                Text(title).font(.system(size: 22, weight: .semibold)).foregroundStyle(.voltaTextPrimary).lineLimit(1)
                 Spacer(minLength: 8)
                 Text(trailing)
                     .font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary).lineLimit(1)
@@ -435,7 +435,7 @@ struct SegmentDial: View {
         let gap = live.count > 1 ? 0.035 : 0
         ZStack {
             Circle().trim(from: 0, to: 0.75)
-                .stroke(.white.opacity(0.08), style: StrokeStyle(lineWidth: line, lineCap: .round))
+                .stroke(Color.voltaInk.opacity(0.08), style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if total > 0 {
                 ForEach(Array(arcs(live, total: total, gap: gap).enumerated()), id: \.offset) { _, arc in
@@ -446,7 +446,7 @@ struct SegmentDial: View {
             }
             VStack(spacing: size * 0.02) {
                 Text(center).font(.system(size: size * 0.3, weight: .semibold, design: .rounded)).monospacedDigit()
-                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
+                    .foregroundStyle(.voltaTextPrimary).lineLimit(1).minimumScaleFactor(0.6)
                 Text(caption).font(.system(size: max(8, size * 0.1), weight: .semibold)).tracking(1.2)
                     .textCase(.uppercase).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
             }

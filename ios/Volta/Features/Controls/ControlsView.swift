@@ -55,7 +55,6 @@ struct ControlsView: View {
             case .pushed: pushed
             }
         }
-        .preferredColorScheme(.dark)
         .task(id: vehicleID) { if secondPane == .main { await load() } }
         .alert(item: $confirmation) { item in
             Alert(title: Text(item.title), message: Text(item.message),
@@ -712,7 +711,7 @@ struct ClimateControlsView: View {
 
 #Preview("Controls") {
     @Previewable @State var shown = true
-    Color.black.sheet(isPresented: $shown) {
+    Color.voltaBackground.sheet(isPresented: $shown) {
         ControlsView(initialStatus: nil, vehicleName: "Friday").environment(\.dataSource, MockDataSource())
     }
 }

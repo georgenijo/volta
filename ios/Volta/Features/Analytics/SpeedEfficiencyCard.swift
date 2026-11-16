@@ -44,7 +44,7 @@ struct SpeedEfficiencyCard: View {
                         ScreenKit.ValueRow(title: label(bin, withUnit: true), subtitle: subtitle(bin), showsDivider: index < bins.count - 1) {
                             Text(bin.whPerKm.map { units.formatEfficiency($0) } ?? "—")
                                 .font(.callout.weight(.semibold)).monospacedDigit()
-                                .foregroundStyle(bin.isEmpty ? ScreenKit.tertiary : bin.isSparse ? ScreenKit.secondary : .white)
+                                .foregroundStyle(bin.isEmpty ? ScreenKit.tertiary : bin.isSparse ? ScreenKit.secondary : Color.voltaTextPrimary)
                         }
                         .accessibilityElement(children: .combine)
                     }
@@ -127,5 +127,5 @@ private extension String {
 }
 
 #Preview {
-    ScrollView { SpeedEfficiencyCard(drives: []).padding() }.preferredColorScheme(.dark)
+    ScrollView { SpeedEfficiencyCard(drives: []).padding() }
 }

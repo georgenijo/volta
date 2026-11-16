@@ -77,7 +77,7 @@ struct ActivityStrip: View {
             let rect = CGRect(origin: .zero, size: size)
             let clip = Path(roundedRect: rect, cornerRadius: 7, style: .continuous)
             context.clip(to: clip)
-            context.fill(clip, with: .color(Color.white.opacity(0.035)))
+            context.fill(clip, with: .color(Color.voltaInk.opacity(0.035)))
 
             // Hour cells.
             let gap: CGFloat = 2
@@ -86,7 +86,7 @@ struct ActivityStrip: View {
             for i in 0..<hours {
                 cells.addRect(CGRect(x: CGFloat(i) * (cell + gap), y: 0, width: cell, height: size.height))
             }
-            context.fill(cells, with: .color(Color.white.opacity(0.06)))
+            context.fill(cells, with: .color(Color.voltaInk.opacity(0.06)))
 
             // Segments, drawn as continuous bars, then masked to the cells.
             context.drawLayer { layer in
@@ -153,7 +153,6 @@ struct ActivityStrip: View {
     }
     .padding(VoltaSpacing.screen)
     .voltaScreenBackground()
-    .preferredColorScheme(.dark)
 }
 
 /// Marks one dashboard section as showing saved data, not data from now.

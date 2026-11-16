@@ -80,7 +80,7 @@ struct BatteryHealthView: View {
             VStack(alignment: .leading, spacing: 16) {
                 SectionLabel("Usable capacity")
                 capacityRow("Now", h.capacityNowKwh, of: h.capacityNewKwh, tint: ScreenKit.green)
-                capacityRow("When new", h.capacityNewKwh, of: h.capacityNewKwh, tint: Color.white.opacity(0.35))
+                capacityRow("When new", h.capacityNewKwh, of: h.capacityNewKwh, tint: Color.voltaInk.opacity(0.35))
                 if let now = h.capacityNowKwh, let new = h.capacityNewKwh {
                     Text("\(VoltaFormat.number(new - now, digits: 1)) kWh less than new")
                         .font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
@@ -186,11 +186,10 @@ struct BatteryHealthView: View {
 }
 
 #Preview("Populated") {
-    NavigationStack { BatteryHealthView() }.preferredColorScheme(.dark)
+    NavigationStack { BatteryHealthView() }
 }
 
 #Preview("Empty") {
     NavigationStack { BatteryHealthView() }
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
 }

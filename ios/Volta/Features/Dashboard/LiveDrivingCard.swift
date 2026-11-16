@@ -87,8 +87,8 @@ struct LiveDrivingCard: View {
     /// Blue light enough to read as small text on the card (6:1).
     static let blueText = NowCard.parkedText
     /// Status colours with no theme token: stale readings, and no readings at all.
-    static let staleAmber = Color(hex: 0xFF9F0A)
-    static let noDataGray = Color(hex: 0x8E8E93)
+    static let staleAmber = Color(light: 0xA84E0A, dark: 0xFF9F0A)
+    static let noDataGray = Color(light: 0x6C6C70, dark: 0x8E8E93)
 
     /// The gear pill sits on the speed's baseline.
     private func gear(_ display: LiveDriveDisplay) -> some View {
@@ -255,7 +255,7 @@ struct GearSelector: View {
                 let selected = item == gear
                 Text(item.rawValue)
                     .font(.system(size: cell * 0.56, weight: selected ? .heavy : .semibold, design: .rounded))
-                    .foregroundStyle(selected ? (isLive ? Color.voltaTextPrimary : Color.voltaTextSecondary) : Color.voltaTextTertiary)
+                    .foregroundStyle(selected ? (isLive ? Color.voltaOnAccent : Color.voltaTextSecondary) : Color.voltaTextTertiary)
                     .frame(width: cell, height: cell)
                     .background {
                         if selected {

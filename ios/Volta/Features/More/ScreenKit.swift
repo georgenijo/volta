@@ -14,7 +14,7 @@ enum ScreenKit {
     static let amber = Color.voltaAmber
     static let red = Color.voltaRed
     /// Softer green used for VEHICLE-section icons, as in the references.
-    static let mint = Color(red: 0x4A / 255, green: 0xC2 / 255, blue: 0x86 / 255)
+    static let mint = Color(light: 0x1A7D49, dark: 0x4AC286)  // light: 5.2:1 on a card
     static let horizontalPadding = VoltaSpacing.screen
     static let bottomBarClearance = VoltaSpacing.tabBarClearance
 
@@ -59,7 +59,7 @@ enum ScreenKit {
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(tint)
                         .frame(width: 30)
-                    Text(title).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                    Text(title).font(.system(size: 18, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
                     Spacer(minLength: 8)
                     if let trailing {
                         Text(trailing).font(.system(size: 13, weight: .medium)).foregroundStyle(ScreenKit.secondary)
@@ -81,7 +81,7 @@ enum ScreenKit {
         var title: String
         var subtitle: String
         var trailing: String? = nil
-        var trailingTint: Color = .white
+        var trailingTint: Color = .voltaTextPrimary
         var showsChevron = true
         var body: some View {
             VStack(spacing: 0) {
@@ -93,7 +93,7 @@ enum ScreenKit {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(title.uppercased())
                             .font(.system(size: 14, weight: .semibold)).tracking(2)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.voltaTextPrimary)
                         Text(subtitle)
                             .font(.system(size: 14))
                             .foregroundStyle(ScreenKit.secondary)
@@ -133,7 +133,7 @@ enum ScreenKit {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
+                        Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(.voltaTextPrimary)
                         if let subtitle {
                             Text(subtitle).font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
                         }
@@ -232,7 +232,7 @@ enum ScreenKit {
         var body: some View {
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule().fill(Color.voltaInk.opacity(0.08))
                     Capsule().fill(tint)
                         .frame(width: max(height, proxy.size.width * min(1, max(0, fraction))))
                         .shadow(color: tint.opacity(0.5), radius: 6)

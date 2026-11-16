@@ -65,20 +65,23 @@ struct GradientGauge: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let temperature: [Color] = [.voltaBlue, .voltaBlue, .voltaGreen, .voltaGreen, .voltaRed, .voltaRed]
-    static let daylight: [Color] = [Color(hex: 0x334155), .voltaAmber, .voltaAmber, Color(hex: 0xA855F7), Color(hex: 0x334155)]
+    /// Night, day, dusk, night. Night is slate (lighter on light cards, so
+    /// the track still reads), dusk is violet.
+    static let daylight: [Color] = [night, .voltaAmber, .voltaAmber, Color(light: 0x9333EA, dark: 0xA855F7), night]
+    private static let night = Color(light: 0x94A3B8, dark: 0x334155)
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(value == nil ? AnyShapeStyle(Color.white.opacity(0.10))
+                    .fill(value == nil ? AnyShapeStyle(Color.voltaTrack)
                                        : AnyShapeStyle(LinearGradient(colors: colors.map { $0.opacity(0.85) },
                                                                       startPoint: .leading, endPoint: .trailing)))
                     .frame(height: height)
                 if let secondaryValue {
                     Circle()
-                        .strokeBorder(Color.white.opacity(0.8), lineWidth: 2)
+                        .strokeBorder(Color.voltaInk.opacity(0.8), lineWidth: 2)
                         .background(Circle().fill(Color.voltaCard))
                         .frame(width: 12, height: 12)
                         .offset(x: clamp(secondaryValue) * (w - 12))
@@ -108,9 +111,11 @@ struct GradientGauge: View {
                 .overlay(Circle().strokeBorder(Color.voltaCard, lineWidth: 3))
                 .shadow(color: color.opacity(0.7), radius: 6)
         case .ring:
-            Circle().fill(Color.white)
+            // A white thumb, as on an iOS slider; light mode lifts it off the white card.
+            Circle().fill(Color.white)  // appearance: fixed (slider thumb)
                 .frame(width: 20, height: 20)
                 .overlay(Circle().strokeBorder(Color.voltaCard, lineWidth: 3))
+                .shadow(color: .voltaThumbShadow, radius: 2, y: 1)
         case .none:
             EmptyView()
         }
@@ -188,7 +193,7 @@ struct MetricCard<Accessory: View>: View {
                     .font(.voltaCardTitle)
                     .tracking(1.5)
                     .textCase(.uppercase)
-                    .foregroundStyle(Color.white.opacity(0.85))
+                    .foregroundStyle(Color.voltaTextPrimary.opacity(0.85))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Spacer(minLength: 4)
@@ -281,7 +286,7 @@ struct StatColumn: View {
                 }
                 MetricCard(systemImage: "cloud.sun", title: "Weather", value: "43", unit: "°F",
                            gauge: GradientGauge(value: 0.05, colors: GradientGauge.daylight, knob: .ring), tint: .voltaBlue) {
-                    Image(systemName: "cloud.fill").font(.title).foregroundStyle(.white.opacity(0.9))
+                    Image(systemName: "cloud.fill").font(.title).foregroundStyle(Color.voltaInk.opacity(0.9))
                 }
             }
             HStack { StatColumn(value: "0", caption: "MI"); StatColumn(value: "0", caption: "CHARGES"); StatColumn(value: "—", caption: "Wh/mi") }
@@ -289,5 +294,4 @@ struct StatColumn: View {
         .padding(VoltaSpacing.screen)
     }
     .voltaScreenBackground()
-    .preferredColorScheme(.dark)
 }

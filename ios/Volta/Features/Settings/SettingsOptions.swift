@@ -20,6 +20,5 @@ extension View {
             .environment(\.dataSource, source)
             .environment(\.vehicleID, model.selectedVehicleID)
             .environment(\.units, model.units)
-            .preferredColorScheme(.dark)
     }
 }

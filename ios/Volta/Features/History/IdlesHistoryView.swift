@@ -72,11 +72,14 @@ struct IdleStateSlice: Identifiable, Hashable {
     /// colour. The legend names each state; the order is fixed.
     var color: Color {
         switch kind {
-        case .sentry: Color(hex: 0xD6D6D6)
-        case .climate: Color(hex: 0xB0B0B0)
-        case .awake: Color(hex: 0x8A8A8A)
-        case .asleep: Color(hex: 0x6E6E6E)
-        case .unclassified: Color(hex: 0x4A4A4A)
+        // Greys from loudest (Sentry, the biggest drain) to quietest. On the
+        // dark page the loud end is the lightest; on the light page, the darkest.
+        // Light: each at least 3:1 on a white card (17, 11.4, 7.5, 5.1, 3.3:1).
+        case .sentry: Color(light: 0x1C1C1E, dark: 0xD6D6D6)
+        case .climate: Color(light: 0x3A3A3C, dark: 0xB0B0B0)
+        case .awake: Color(light: 0x545458, dark: 0x8A8A8A)
+        case .asleep: Color(light: 0x6E6E73, dark: 0x6E6E6E)
+        case .unclassified: Color(light: 0x8E8E93, dark: 0x4A4A4A)
         }
     }
 
@@ -829,17 +832,14 @@ extension ParkedText {
 #Preview("Parked") {
     IdlesHistoryView()
         .environment(\.dataSource, MockDataSource())
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Parked · empty") {
     IdlesHistoryView()
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Parked · error") {
     IdlesHistoryView()
         .environment(\.dataSource, HistoryPreviewFailingSource())
-        .preferredColorScheme(.dark)
 }

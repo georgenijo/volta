@@ -2,7 +2,8 @@ import SwiftUI
 
 // MARK: - Card
 
-/// Rounded card surface: `#202020` fill, 1px hairline border, 20pt radius.
+/// Rounded card surface: `voltaCard` fill, 1px hairline border, 20pt radius,
+/// and in light mode a soft shadow that lifts it off the grey page.
 ///
 ///     Card { Text("Hello") }
 ///     Card(padding: 0) { ... }   // edge-to-edge content
@@ -26,6 +27,7 @@ extension View {
         background {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(Color.voltaCard)
+                .shadow(color: .voltaCardShadow, radius: 6, y: 2)
                 .overlay {
                     if let tint {
                         RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -199,8 +201,8 @@ struct InlineBanner: View {
         VStack(alignment: .leading, spacing: 24) {
             SectionLabel("Last 48h")
             SectionLabel("Access", trailing: "5 controls", rule: true)
-            Card { Text("Card content").foregroundStyle(.white) }
-            Card(tint: .voltaAmber) { Text("Warm card").foregroundStyle(.white) }
+            Card { Text("Card content").foregroundStyle(.voltaTextPrimary) }
+            Card(tint: .voltaAmber) { Text("Warm card").foregroundStyle(.voltaTextPrimary) }
             InlineBanner(systemImage: "lock.slash", message: "Vehicle commands aren't connected yet.", onDismiss: {})
             HStack { StatusDot(color: .voltaGreen); Text("Online").foregroundStyle(Color.voltaTextSecondary) }
             EmptyState(systemImage: "bolt.slash", title: "No charges in 30 days",
@@ -209,5 +211,4 @@ struct InlineBanner: View {
         .padding(VoltaSpacing.screen)
     }
     .voltaScreenBackground()
-    .preferredColorScheme(.dark)
 }

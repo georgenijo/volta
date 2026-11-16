@@ -369,6 +369,76 @@ final class ScreenScreenshotTests: XCTestCase {
         capture("heatmap-day")
     }
 
+    // MARK: Further screens (appearance coverage, docs/APPEARANCE.md)
+
+    func testMoreDestinations() throws {
+        defer { app.terminate() }
+        for (slug, screen) in [("charging-insights", "charging-insights"), ("tires", "tires"),
+                               ("maintenance", "maintenance"), ("lease", "lease"), ("charger-map", "charger-map")] {
+            try launchDemo()
+            try openMoreRow(slug, screen: screen)
+            // The charger map's tiles render asynchronously.
+            if slug == "charger-map" { _ = element("charger-map.never").waitForExistence(timeout: 3) }
+            capture(slug)
+            app.terminate()
+        }
+    }
+
+    func testSettingsDestinations() throws {
+        defer { app.terminate() }
+        for (row, screen) in [("vehicle", "vehicle-settings"), ("general", "general-settings"), ("places", "places"),
+                              ("security", "security"), ("data-management", "data-management"), ("support", "support")] {
+            try launchDemo()
+            try openMore()
+            try tap("button.settings")
+            try waitForScreen("settings")
+            let target = element("row.settings.\(row)")
+            for _ in 0..<4 where !(target.exists && target.isHittable) { element("scroll.settings").swipeUp() }
+            try tap("row.settings.\(row)")
+            try waitForScreen(screen)
+            if row == "places" { _ = element("places.never").waitForExistence(timeout: 3) }
+            capture("settings-\(row)")
+            app.terminate()
+        }
+    }
+
+    /// The Dashboard while the car charges, and its live charging sheet.
+    func testLiveCharging() throws {
+        defer { app.terminate() }
+        continueAfterFailure = false
+        app.launchArguments = ["-demo-mode", "YES", "-demoCharging", "YES", "-VoltaDisableMotion"]
+        app.launch()
+        try waitForScreen("dashboard")
+        _ = element("dashboard.never").waitForExistence(timeout: 2)
+        capture("dashboard-charging")
+        app.terminate()
+        app.launchArguments = ["-demo-mode", "YES", "-demoCharging", "YES", "-dashboardOpenLiveCharge", "YES", "-VoltaDisableMotion"]
+        app.launch()
+        try waitForScreen("liveCharge")
+        _ = element("liveCharge.never").waitForExistence(timeout: 2)
+        capture("live-charging")
+    }
+
+    func testParkedSummary() throws {
+        defer { app.terminate() }
+        try launchDemo()
+        try navigate("tab.idles", to: "idles")
+        try tap("button.parked.summary")
+        try waitForScreen("parked-summary")
+        capture("parked-summary")
+        try scroll("parked-summary", screenshot: "parked-summary-scrolled")
+    }
+
+    /// Not paired: the sign-in and pairing screen.
+    func testPairing() throws {
+        defer { app.terminate() }
+        continueAfterFailure = false
+        app.launchArguments = ["-demo-mode", "NO", "-VoltaDisableMotion"]
+        app.launch()
+        try waitForElement("button.signInWithApple")
+        capture("pairing")
+    }
+
     private func tapFirstHittable(in screen: String, where predicate: NSPredicate) throws {
         let candidates = element("scroll.\(screen)").buttons.matching(predicate)
         guard candidates.firstMatch.waitForExistence(timeout: 10),
@@ -419,7 +489,9 @@ final class ScreenScreenshotTests: XCTestCase {
             let name = String(identifier.dropFirst(4))
             // The idles tab is titled "Parked"; its identifier keeps the API's name.
             let title = name == "idles" ? "Parked" : name.capitalized
-            return app.tabBars.buttons[title].firstMatch
+            // iPhone Duo's outer display puts the tabs in a side toolbar instead of a tab bar.
+            let side = app.toolbars.buttons[title].firstMatch
+            return side.exists ? side : app.tabBars.buttons[title].firstMatch
         }
         return app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }

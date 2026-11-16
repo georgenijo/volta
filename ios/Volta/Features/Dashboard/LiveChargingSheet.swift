@@ -45,7 +45,6 @@ struct LiveChargingSheet: View {
         }
         .scrollIndicators(.hidden)
         .background(Color.voltaBackground.ignoresSafeArea())
-        .preferredColorScheme(.dark)
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("screen.liveCharge")
         .sheet(isPresented: $showControls, onDismiss: { Task { await refresh() } }) {
@@ -93,14 +92,12 @@ struct LiveChargingSheet: View {
                 Map(initialPosition: .camera(camera), interactionModes: [])
                     .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
                     .mapControlVisibility(.hidden)
-                    .environment(\.colorScheme, .dark)
-                    .saturation(0)
-                    .brightness(-0.04)
+                    .voltaBackdropMapTone()
                     .overlay { if charging { ChargingMarker() } }
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             } else {
-                LinearGradient(colors: [Color(hex: 0x1B1E23), .voltaBackground], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.voltaMapBackdrop, .voltaBackground], startPoint: .top, endPoint: .bottom)
             }
             LinearGradient(colors: [.clear, .voltaBackground], startPoint: .center, endPoint: .bottom)
                 .allowsHitTesting(false)
@@ -109,7 +106,7 @@ struct LiveChargingSheet: View {
                     .font(.system(.footnote, weight: .semibold))
                     .foregroundStyle(Color.voltaAmber)
                     .padding(.horizontal, 12).padding(.vertical, 7)
-                    .background(Color.black.opacity(0.7), in: .capsule)
+                    .background(Color(light: .white.opacity(0.85), dark: .black.opacity(0.7)), in: .capsule)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                     .padding(.bottom, VoltaSpacing.md)
                     .accessibilityIdentifier("liveCharge.provenance")
@@ -123,7 +120,7 @@ struct LiveChargingSheet: View {
                         .foregroundStyle(stateColor)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Color.black.opacity(0.6), in: .capsule)
+                .background(Color(light: .white.opacity(0.85), dark: .black.opacity(0.6)), in: .capsule)
                 Spacer()
                 GlassCircleButton(systemImage: "xmark", size: 44, accessibilityLabel: "Close") { dismiss() }
                     .accessibilityIdentifier("button.liveCharge.close")
@@ -214,16 +211,17 @@ struct LiveChargingSheet: View {
                 let w = geo.size.width
                 let fill = w * CGFloat(min(max(status.batteryLevel, 0), 100)) / 100
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.1)).frame(height: 10)
+                    Capsule().fill(Color.voltaTrack).frame(height: 10)
                     Capsule()
-                        .fill(LinearGradient(colors: [Color(hex: 0x15803D), .voltaGreen, Color(hex: 0xA7F3D0)],
+                        .fill(LinearGradient(colors: VoltaGradient.charge,
                                              startPoint: .leading, endPoint: .trailing))
                         .frame(width: fill, height: 10)
                         .shadow(color: .voltaGreen.opacity(charging ? 0.6 : 0), radius: 6)
                     if let target {
                         Circle()
-                            .fill(Color.white)
+                            .fill(Color.white)  // appearance: fixed (slider thumb)
                             .overlay(Circle().strokeBorder(Color.voltaBackground, lineWidth: 3))
+                            .shadow(color: .voltaThumbShadow, radius: 2, y: 1)
                             .frame(width: 20, height: 20)
                             .offset(x: w * CGFloat(min(max(target, 0), 100)) / 100 - 10)
                     }
@@ -456,7 +454,7 @@ struct LiveSessionChart: View {
         }
         .chartYAxis {
             AxisMarks(position: .leading, values: [0, top / 2, top]) { value in
-                AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine().foregroundStyle(Color.voltaInk.opacity(0.06))
                 AxisValueLabel {
                     if let v = value.as(Double.self) { Text(VoltaFormat.number(v, digits: v.rounded() == v ? 0 : 1)) }
                 }
@@ -476,7 +474,7 @@ struct LiveSessionChart: View {
 }
 
 #Preview("Live charging") {
-    Color.black.sheet(isPresented: .constant(true)) {
+    Color.voltaBackground.sheet(isPresented: .constant(true)) {
         LiveChargingSheet(initialStatus: VehicleStatus(
             vehicleId: 1, state: .charging, updatedAt: .now, batteryLevel: 72, usableBatteryLevel: 71, ratedRangeKm: 354,
             estRangeKm: 328, chargeLimit: 80, chargingState: .charging, chargerPowerKw: 7.7, minutesToFull: 48,

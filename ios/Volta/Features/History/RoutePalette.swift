@@ -17,7 +17,7 @@ enum RoutePalette {
             self.init(r: Double((hex >> 16) & 0xFF) / 255, g: Double((hex >> 8) & 0xFF) / 255, b: Double(hex & 0xFF) / 255)
         }
 
-        var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: 1) }
+        var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: 1) }  // appearance: one variant's value (see `Variant`)
 
         /// OKLab lightness, 0...1.
         var lightness: Double { OKLab(self).l }
@@ -73,7 +73,27 @@ enum RoutePalette {
 
     // MARK: Ramps
 
-    /// km/h, fixed domain 0...130.
+    // Each ramp, and each single colour, has a dark-map and a light-map
+    // variant with the same meaning, order and legend. The light variant keeps
+    // every hue and inverts lightness: on the dark map a higher value is
+    // brighter, on the light map it is deeper, so in both it stands out more
+    // from the tiles. Every light colour is at least 3:1 against light tiles
+    // (docs/APPEARANCE.md). Within one appearance a colour still means one value.
+
+    /// Which map a colour is for: the system appearance.
+    enum Appearance: Sendable, Equatable {
+        case dark, light
+
+        init(_ scheme: ColorScheme) { self = scheme == .dark ? .dark : .light }
+    }
+
+    /// One appearance's ramps and colours.
+    struct Variant: Sendable {
+        var speed, efficiency, elevation, density: Ramp
+        var regen, missing, plain, casing, marker: RGB
+    }
+
+    /// km/h, fixed domain 0...130. (Dark map; `light.speed` for the light one.)
     static let speed = Ramp([(0, 0x7C8CFF), (32.5, 0x4BA8FF), (65, 0x39D8EE), (97.5, 0x9AEAC8), (130, 0xF3F5B0)])
     /// Consumption over the reference consumption (1 = as rated).
     static let efficiency = Ramp([(0.5, 0x5EEBC4), (0.75, 0x46B79C), (1.0, 0xA8B0BB), (1.375, 0xE9A34B), (1.75, 0xFF7A45)])
@@ -92,6 +112,41 @@ enum RoutePalette {
     /// Dark edge under every route line and marker.
     static let casing = RGB(hex: 0x101318)
 
+    /// The dark map's palette: the values above.
+    static let dark = Variant(speed: speed, efficiency: efficiency, elevation: elevation, density: density,
+                              regen: regen, missing: missing, plain: plain, casing: casing, marker: RGB(hex: 0xFFFFFF))
+
+    /// The light map's palette. Casing is a white halo under each line, and
+    /// endpoint markers are near-black rings on it.
+    static let light = Variant(
+        speed: Ramp([(0, 0x616BFC), (32.5, 0x0B7CD1), (65, 0x06808F), (97.5, 0x027E5B), (130, 0x7E5D02)]),
+        efficiency: Ramp([(0.5, 0x097B62), (0.75, 0x088B73), (1.0, 0x778190), (1.375, 0xB0700E), (1.75, 0xBD4506)]),
+        elevation: Ramp([(0, 0x5B62F8), (0.5, 0x5E4FB8), (1, 0x6B2B83)]),
+        density: Ramp([(0, 0x3E7ACB), (log10(3), 0x0571A0), (1, 0x015D6A), (log10(30), 0x003760)]),
+        regen: RGB(hex: 0x7449C5), missing: RGB(hex: 0x939AA3), plain: RGB(hex: 0x0C74C4),
+        casing: RGB(hex: 0xFFFFFF), marker: RGB(hex: 0x1C1C1E))
+
+    static func variant(_ appearance: Appearance) -> Variant { appearance == .dark ? dark : light }
+
+    /// A colour that follows the system appearance, from the same lookup in
+    /// each appearance: `RoutePalette.adaptive { variant($0).regen }`.
+    static func adaptive(_ lookup: (Appearance) -> RGB) -> Color {
+        Color(light: lookup(.light).color, dark: lookup(.dark).color)
+    }
+
+    /// Gradient stops for a legend or gauge that follow the system appearance.
+    static func adaptiveStops(_ ramp: (Variant) -> Ramp, samples: Int = 12) -> [Gradient.Stop] {
+        zip(ramp(dark).gradientStops(samples: samples), ramp(light).gradientStops(samples: samples)).map { d, l in
+            Gradient.Stop(color: Color(light: l.color, dark: d.color), location: d.location)
+        }
+    }
+
+    static let regenColor = adaptive { variant($0).regen }
+    static let missingColor = adaptive { variant($0).missing }
+    static let plainColor = adaptive { variant($0).plain }
+    static let casingColor = adaptive { variant($0).casing }
+    static let markerColor = adaptive { variant($0).marker }
+
     static let lineWidth: CGFloat = 5
     static let casingWidth: CGFloat = 8
     static let missingWidth: CGFloat = 3
@@ -103,23 +158,28 @@ enum RoutePalette {
 
     // MARK: Lookups
 
-    static func speed(kph: Double) -> RGB { speed.rgb(kph) }
+    static func speed(kph: Double, in appearance: Appearance = .dark) -> RGB { variant(appearance).speed.rgb(kph) }
 
     /// Colour for a consumption against a reference. Negative is regen.
-    static func efficiency(whPerKm: Double, reference: EfficiencyReference) -> RGB {
-        efficiency(ratio: whPerKm / reference.whPerKm)
+    static func efficiency(whPerKm: Double, reference: EfficiencyReference, in appearance: Appearance = .dark) -> RGB {
+        efficiency(ratio: whPerKm / reference.whPerKm, in: appearance)
     }
 
     /// Colour for consumption over the reference; a negative ratio (net
     /// regeneration) is regen on every map, trip or heatmap.
-    static func efficiency(ratio: Double) -> RGB {
-        ratio < 0 ? regen : efficiency.rgb(ratio)
+    static func efficiency(ratio: Double, in appearance: Appearance = .dark) -> RGB {
+        let v = variant(appearance)
+        return ratio < 0 ? v.regen : v.efficiency.rgb(ratio)
     }
 
-    static func elevation(fraction: Double) -> RGB { elevation.rgb(fraction) }
+    static func elevation(fraction: Double, in appearance: Appearance = .dark) -> RGB {
+        variant(appearance).elevation.rgb(fraction)
+    }
 
     /// Distinct drives on a stretch: 1 at the bottom, 30 and above at the top.
-    static func density(count: Int) -> RGB { density.rgb(log10(Double(max(1, count)))) }
+    static func density(count: Int, in appearance: Appearance = .dark) -> RGB {
+        variant(appearance).density.rgb(log10(Double(max(1, count))))
+    }
 
     // MARK: OKLab
 
@@ -247,7 +307,7 @@ struct RouteLegendModel: Equatable {
         let top = units.distanceValue(km: RoutePalette.speedDomainKph.upperBound).rounded(.down)
         let mid = units.distanceValue(km: RoutePalette.speedDomainKph.upperBound / 2)
         let topText = "\(VoltaFormat.number(top, digits: 0))+ \(unit)"
-        return RouteLegendModel(stops: RoutePalette.speed.gradientStops(), low: "0", mid: "\(VoltaFormat.number(mid, digits: 0)) \(unit)",
+        return RouteLegendModel(stops: RoutePalette.adaptiveStops { $0.speed }, low: "0", mid: "\(VoltaFormat.number(mid, digits: 0)) \(unit)",
                                 high: topText, tick: 0.5, extra: nil,
                                 sentence: "Route colour shows speed, from 0 to \(VoltaFormat.number(top, digits: 0)) \(unit) and above.")
     }
@@ -269,9 +329,9 @@ struct RouteLegendModel: Equatable {
         let window = averagedOverKm.map { windowText($0, units: units) }
         let what = reference.isRated ? "the car's rated \(ref) \(units.efficiencyUnit)"
             : "an estimated reference of \(ref) \(units.efficiencyUnit), because the car's rating isn't recorded"
-        return RouteLegendModel(stops: ramp.gradientStops(), low: "Efficient", mid: referenceLabel(reference, units: units),
+        return RouteLegendModel(stops: RoutePalette.adaptiveStops { $0.efficiency }, low: "Efficient", mid: referenceLabel(reference, units: units),
                                 high: "Thirsty", tick: (1 - ramp.domain.lowerBound) / span,
-                                extra: showsRegen ? ("Regen", RoutePalette.regen.color) : nil,
+                                extra: showsRegen ? ("Regen", RoutePalette.regenColor) : nil,
                                 sentence: "Route colour shows efficiency against \(what): green is more efficient, orange is thirstier"
                                     + (showsRegen ? ", violet is regenerating." : ".")
                                     + (window.map { " Colour is averaged over \($0.long) of driving, not a reading at each point." } ?? ""),
@@ -281,14 +341,14 @@ struct RouteLegendModel: Equatable {
     static func elevation(minM: Double, maxM: Double, units: UnitPreferences) -> RouteLegendModel {
         let feet = units.distance == .miles
         func h(_ m: Double) -> String { "\(VoltaFormat.number(feet ? m * 3.28084 : m, digits: 0)) \(feet ? "ft" : "m")" }
-        return RouteLegendModel(stops: RoutePalette.elevation.gradientStops(), low: h(minM), mid: nil, high: h(maxM),
+        return RouteLegendModel(stops: RoutePalette.adaptiveStops { $0.elevation }, low: h(minM), mid: nil, high: h(maxM),
                                 tick: nil, extra: nil,
                                 sentence: "Route colour shows elevation on this trip, from \(h(minM)) to \(h(maxM)).")
     }
 
     static var density: RouteLegendModel {
         let top = log10(Double(RoutePalette.densityCap))
-        return RouteLegendModel(stops: RoutePalette.density.gradientStops(), low: "1", mid: nil, high: "30+",
+        return RouteLegendModel(stops: RoutePalette.adaptiveStops { $0.density }, low: "1", mid: nil, high: "30+",
                                 tick: nil, extra: nil,
                                 sentence: "Route colour shows how many drives used each road, from 1 drive to 30 or more.",
                                 marks: [Mark(label: "1", position: 0), Mark(label: "3", position: log10(3) / top),
@@ -339,7 +399,7 @@ struct RouteLegendStrip: View {
                     .overlay {
                         GeometryReader { g in
                             if let tick = model.tick {
-                                Capsule().fill(.white).frame(width: 2, height: 10)
+                                Capsule().fill(Color.voltaTextPrimary).frame(width: 2, height: 10)
                                     .position(x: g.size.width * tick, y: g.size.height / 2)
                             }
                         }
@@ -354,7 +414,7 @@ struct RouteLegendStrip: View {
                     .padding(.leading, 6)
                 }
             }
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(Color.voltaTextPrimary.opacity(0.85))
             if let marks = model.marks {
                 // Over a flexible line, so the marks (placed by the bar's
                 // measured width) never widen the strip themselves: a stale
@@ -419,21 +479,23 @@ struct RouteEndpointMarker: View {
     }
 
     /// Draws the marker centred on `c`. At `size` 14 (the map): a 14 pt ring
-    /// with a 3 pt white stroke and a dark centre; a 12 pt white dot with a
-    /// 2 pt dark edge. Smaller sizes scale both.
+    /// with a 3 pt stroke in the marker colour and a centre in the casing
+    /// colour; a 12 pt dot in the marker colour with a 2 pt casing edge.
+    /// Dark map: white on near-black. Light map: near-black on white. Smaller
+    /// sizes scale both.
     static func draw(_ kind: RouteEndpoint, in ctx: inout GraphicsContext, at c: CGPoint, size: CGFloat) {
         func circle(_ r: CGFloat) -> Path { Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)) }
-        let casing = RoutePalette.casing.color
+        let casing = RoutePalette.casingColor, mark = RoutePalette.markerColor
         let k = size / 14
         switch kind {
         case .start, .both:
             ctx.fill(circle(8 * k), with: .color(casing))
-            ctx.fill(circle(7 * k), with: .color(.white))
+            ctx.fill(circle(7 * k), with: .color(mark))
             ctx.fill(circle(4 * k), with: .color(casing))
-            if kind == .both { ctx.fill(circle(2 * k), with: .color(.white)) }
+            if kind == .both { ctx.fill(circle(2 * k), with: .color(mark)) }
         case .end:
             ctx.fill(circle(8 * k), with: .color(casing))
-            ctx.fill(circle(6 * k), with: .color(.white))
+            ctx.fill(circle(6 * k), with: .color(mark))
         }
     }
 }
@@ -442,9 +504,10 @@ struct RouteEndpointMarker: View {
 
 /// The drive score band, for every score ring (header, cards, detail).
 enum DriveScoreTint {
-    static let good = Color.voltaGreen               // #5ECB93
-    static let fair = Color(hex: 0xF5BE62)
-    static let poor = Color(hex: 0xFF8178)
+    static let good = Color.voltaGreen
+    /// Light: 5.1:1 and 5.4:1 on a card.
+    static let fair = Color(light: 0x9A6200, dark: 0xF5BE62)
+    static let poor = Color(light: 0xC4372A, dark: 0xFF8178)
 
     static func color(_ score: Int?) -> Color {
         guard let score else { return HistoryTheme.secondary }

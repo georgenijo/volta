@@ -346,7 +346,7 @@ struct TelemetryMetricChart: View {
         Chart {
             ForEach(Array(allGaps.enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Gap start", gap.start), xEnd: .value("Gap end", gap.end))
-                    .foregroundStyle(Color.white.opacity(0.045))
+                    .foregroundStyle(Color.voltaInk.opacity(0.045))
             }
             ForEach(Array(traces.enumerated()), id: \.offset) { _, trace in
                 ForEach(trace.series.points) { point in
@@ -362,17 +362,17 @@ struct TelemetryMetricChart: View {
                 }
             }
             if showsZero, domain.lowerBound < 0 {
-                RuleMark(y: .value("Zero", 0)).foregroundStyle(Color.white.opacity(0.18))
+                RuleMark(y: .value("Zero", 0)).foregroundStyle(Color.voltaInk.opacity(0.18))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
             if let nearest {
-                RuleMark(x: .value("Selected", nearest.1.t)).foregroundStyle(Color.white.opacity(0.3))
+                RuleMark(x: .value("Selected", nearest.1.t)).foregroundStyle(Color.voltaInk.opacity(0.3))
                 PointMark(x: .value("Selected", nearest.1.t), y: .value(unit, nearest.1.value))
                     .foregroundStyle(nearest.0.color).symbolSize(60)
                     .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         VStack(spacing: 1) {
                             Text("\(nearest.0.label) · \(VoltaFormat.number(nearest.1.value, digits: digits)) \(unit)")
-                                .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                                .font(.system(size: 12, weight: .bold)).foregroundStyle(.voltaTextPrimary)
                             Text(nearest.1.t.historyTime).font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(HistoryTheme.secondary)
                         }

@@ -11,8 +11,7 @@ struct ChargingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: ChargingActivityAttributes.self) { context in
             ChargingLockScreenView(attributes: context.attributes, state: context.state, isStale: context.isStale)
-                .activityBackgroundTint(WTheme.background.opacity(0.92))
-                .activitySystemActionForegroundColor(.white)
+                .modifier(WActivityChrome())
                 .widgetURL(URL(string: "volta://charging"))
         } dynamicIsland: { context in
             let a = context.attributes, s = context.state
@@ -109,7 +108,7 @@ struct ChargeVehicleLabel: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: look.symbol).foregroundStyle(look.tint)
-            Text(look.attributes.vehicleName.uppercased()).foregroundStyle(.white).tracking(1.6)
+            Text(look.attributes.vehicleName.uppercased()).foregroundStyle(WTheme.text).tracking(1.6)
             if let current = look.current {
                 Text("· " + current).foregroundStyle(WTheme.label).tracking(1.2)
             }
@@ -174,13 +173,13 @@ struct ChargeFooter: View {
             if let fullAt = s.fullAt, fullAt > now {
                 // Bounded: stops at zero instead of counting up past the estimate.
                 Text("\(Text(.currentDate, format: .timer(countingDownIn: now..<fullAt, maxFieldCount: 2, maxPrecision: .seconds(60))))\(limit)")
-                    .foregroundStyle(.white).monospacedDigit()
+                    .foregroundStyle(WTheme.text).monospacedDigit()
             } else {
-                Text("Charging\(limit)").foregroundStyle(.white)
+                Text("Charging\(limit)").foregroundStyle(WTheme.text)
             }
         } else if let endedAt = s.endedAt {
             Text("\(s.phase == .completed ? "Finished" : "Ended") \(Text(endedAt, style: .time))")
-                .foregroundStyle(.white)
+                .foregroundStyle(WTheme.text)
         }
     }
 }
@@ -201,9 +200,9 @@ struct ChargeTrailingValue: View {
             } else if compact {
                 Text(look.phase == .completed ? "Done" : "Stopped").foregroundStyle(look.tint)
             } else if let endedAt = look.state.endedAt {
-                Text(endedAt, style: .time).foregroundStyle(.white)
+                Text(endedAt, style: .time).foregroundStyle(WTheme.text)
             } else {
-                Text("—").foregroundStyle(.white)
+                Text("—").foregroundStyle(WTheme.text)
             }
         }
         .font(.system(size: size, weight: compact ? .semibold : .bold))
@@ -228,7 +227,7 @@ struct ChargeETA: View {
             }
         }
         .font(.system(size: size, weight: .bold))
-        .foregroundStyle(.white)
+        .foregroundStyle(WTheme.text)
         .lineLimit(1)
         .minimumScaleFactor(compact ? 0.7 : 0.8)
     }

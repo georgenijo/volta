@@ -7,14 +7,19 @@ Owned by Screens A. Other screens read and use it; ask Screens A for changes
 
 | Token | Value / use |
 |---|---|
-| `Color.voltaBackground` | `#171717` app background. Use `.voltaScreenBackground()` on screens. |
-| `Color.voltaCard` | `#202020` card surface |
-| `Color.voltaRaised` | `#2C2C2C` pill buttons, steppers, selected segment |
-| `Color.voltaHairline` | white @ 8%, borders and dividers |
-| `Color.voltaTextPrimary / Secondary / Tertiary` | white / `#9E9E9E` / `#888888`. All three meet 4.5:1 on the background and on cards |
-| `Color.voltaBlue / Green / Amber / Red` | `#3B82F6` selection, range / `#5ECB93` online, on / `#F59E0B` warm, warnings / `#EF4444` alerts |
-| `Color.voltaBlueFill` | `#2563EB` fill behind white button labels (5.2:1; `voltaBlue` gives 3.7:1) |
-| `Color(hex: 0xRRGGBB)` | literal helper |
+| `Color(light:dark:)` | the one way to make a colour that follows the system appearance; every token below uses it |
+| `Color.voltaBackground` | page: `#171717` dark, `#F2F2F7` light. Use `.voltaScreenBackground()` on screens. |
+| `Color.voltaCard` | card surface: `#202020` dark, white light (with `voltaCardShadow`) |
+| `Color.voltaRaised` | pill buttons, steppers, selected segment: `#2C2C2C` / `#E5E5EA` |
+| `Color.voltaHairline`, `.voltaControlFill`, `.voltaTrack` | borders and dividers; borderless button fill; gauge and bar tracks |
+| `Color.voltaInk` / `.voltaInkInverse` | white / near-black ink for washes at an opacity; its opposite for glyphs on an ink plate |
+| `Color.voltaMapWash`, `.voltaMapBackdrop` | map dim and text halos; map placeholder |
+| `Color.voltaTextPrimary / Secondary / Tertiary` | all meet 4.5:1 on the background and on cards in both modes |
+| `Color.voltaOnAccent`, `.voltaOnState` | white text on saturated fills; a glyph on a state-coloured pin |
+| `Color.voltaBlue / Green / Amber / Red / Purple / Teal` | selection and range / online, on / warm, warnings / alerts / regen / climate |
+| `Color.voltaBlueFill` | fill behind white button labels (5.2:1 dark, 6.7:1 light) |
+| `VoltaGradient.charge / .range` | range bar fills |
+| `Color(hex: 0xRRGGBB)` | literal helper, for use inside `Color(light:dark:)` |
 | `VoltaSpacing.xxs…xxl` | 2, 4, 8, 12, 16, 24, 32 |
 | `VoltaSpacing.screen` | 20, horizontal screen inset |
 | `VoltaSpacing.tabBarClearance` | 24, breathing room below the last item of a scrolling screen (the system tab bar already insets scroll content) |
@@ -50,8 +55,9 @@ All tokens also work as `ShapeStyle` shorthands: `.foregroundStyle(.voltaTextSec
 
 ## Conventions
 
-- Screens use `.voltaScreenBackground()` and `.preferredColorScheme(.dark)` is
-  set app-wide by `MainShell`.
+- Screens use `.voltaScreenBackground()`. Volta follows the system light and
+  dark appearance; never force a scheme. Colours come from tokens, or from
+  `Color(light:dark:)` for a colour no token covers (see docs/APPEARANCE.md).
 - `MainShell` is a system `TabView`; screens own their `NavigationStack`. The
   system places the tab bar and toolbars: at the bottom and top on most
   iPhones, and in a strip on the side on iPhone Duo's outer display and its

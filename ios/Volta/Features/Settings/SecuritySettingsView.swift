@@ -25,7 +25,7 @@ struct SecuritySettingsView: View {
                 privacyRow("network.badge.shield.half.filled", "Private network only", "Volta talks to your server over Tailscale. No analytics, no trackers.", last: true)
             }
         }
-        .screenKitPage("Security")
+        .screenKitPage("Security", screen: "security")
         .onAppear {
             let context = LAContext()
             _ = context.canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
@@ -59,7 +59,7 @@ struct SecuritySettingsView: View {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: symbol).font(.system(size: 18)).foregroundStyle(ScreenKit.green).frame(width: 26)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                    Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
                     Text(detail).font(.system(size: 13)).foregroundStyle(ScreenKit.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)

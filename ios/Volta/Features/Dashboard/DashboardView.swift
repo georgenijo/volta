@@ -142,7 +142,6 @@ struct DashboardView: View {
             if path.isEmpty { controlsHost = nil; showControls = false }
             else if path == [.controls] { controls.climateOpen = false }
         }
-        .preferredColorScheme(.dark)
         .task(id: vehicleID) {
             await initialLoad()
             await coordinator.refreshCapabilities(dataSource: dataSource, vehicleID: vehicleID)
@@ -650,7 +649,8 @@ struct DashboardView: View {
             .scaledToFit()
             .frame(height: height)
             .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
-            .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
+            // A halo that lifts it off the map: dark on the dark map, light on the light one.
+            .shadow(color: Color.voltaMapWash.opacity(0.4), radius: 8, y: 2)
             .accessibilityLabel("Volta")
             .accessibilityAddTraits(.isHeader)
     }
@@ -836,7 +836,7 @@ struct DashboardView: View {
             HStack(alignment: .bottom) {
                 BigNumber("\(status.batteryLevel)", unit: "%", size: 66,
                           color: status.isCharging ? .voltaGreen : .voltaTextPrimary)
-                    .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
+                    .shadow(color: Color.voltaMapWash.opacity(0.5), radius: 10, y: 4)
                 Spacer()
                 VStack(alignment: .trailing, spacing: VoltaSpacing.xs) {
                     Text(range.label).voltaLabelStyle()
@@ -930,7 +930,7 @@ struct DashboardView: View {
                         .foregroundStyle(Color.voltaTextSecondary)
                     Text("\(VoltaFormat.number(units.temperatureValue(celsius: outside), digits: 0))°")
                         .font(.system(.title3, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
+                        .foregroundStyle(Color.voltaTextPrimary.opacity(0.85))
                 }
                 .fixedSize()
             }
@@ -949,7 +949,7 @@ struct DashboardView: View {
         }()
         let dayFraction = (Double(hour) + Double(Calendar.current.component(.minute, from: .now)) / 60) / 24
         return MetricCard(systemImage: night ? "moon.fill" : "sun.max.fill",
-                          iconColor: night ? Color(hex: 0xA5B4FC) : .voltaAmber,
+                          iconColor: night ? Self.moon : .voltaAmber,
                           title: "Weather",
                           value: temperatureNumber(t), unit: units.temperatureUnit,
                           headerAccessory: extreme
@@ -964,11 +964,16 @@ struct DashboardView: View {
                 // Moon and stars take two colours; the other symbols bring their own.
                 .symbolRenderingMode(symbol == "moon.stars.fill" ? .palette : .multicolor)
                 .font(.system(size: 30))
-                .foregroundStyle(Color(hex: 0xC7D2FE), Color.voltaAmber)
+                .foregroundStyle(Self.stars, Color.voltaAmber)
                 .symbolEffect(.breathe, options: .repeat(.continuous), isActive: !reduceMotion)
                 .accessibilityHidden(true)
         }
     }
+
+    /// Night's moon (header icon) and the moon-and-stars symbol: pale indigo
+    /// on dark cards, deep indigo on light ones (6.3:1 and 4.5:1 on white).
+    private static let moon = Color(light: 0x4F46E5, dark: 0xA5B4FC)
+    private static let stars = Color(light: 0x6366F1, dark: 0xC7D2FE)
 
     private func temperatureNumber(_ celsius: Double?) -> String {
         celsius.map { VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0) } ?? "—"
@@ -984,10 +989,6 @@ struct DashboardView: View {
 
     /// Maps -5 °C … 45 °C onto a gauge.
     static func tempFraction(_ celsius: Double) -> Double { (celsius + 5) / 50 }
-}
-
-extension Color {
-    fileprivate static let voltaTeal = Color(hex: 0x14B8A6)
 }
 
 extension ControlsModel {
@@ -1018,11 +1019,10 @@ struct RangeBar: View {
         GeometryReader { geo in
             let w = geo.size.width
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.1))
+                Capsule().fill(Color.voltaTrack)
                 let fill = w * CGFloat(min(max(level, 0), 100)) / 100
                 Capsule()
-                    .fill(LinearGradient(colors: charging ? [Color(hex: 0x15803D), .voltaGreen, Color(hex: 0xA7F3D0)]
-                                                          : [Color(hex: 0x2563EB), .voltaBlue, Color(hex: 0x60A5FA)],
+                    .fill(LinearGradient(colors: charging ? VoltaGradient.charge : VoltaGradient.range,
                                          startPoint: .leading, endPoint: .trailing))
                     .frame(width: fill)
                     .shadow(color: (charging ? Color.voltaGreen : .voltaBlue).opacity(0.7), radius: 6)
@@ -1031,14 +1031,14 @@ struct RangeBar: View {
                     } animation: { _ in .easeInOut(duration: 1.2) }
                 if let limit, limit < 100 {
                     Rectangle()
-                        .fill(Color.white.opacity(0.6))  // 3:1 or better on the background
+                        .fill(Color.voltaInk.opacity(0.6))  // 3:1 or better on the background
                         .frame(width: 2, height: 10)
                         .offset(x: w * CGFloat(limit) / 100 - 1)
                 }
                 if charging, fill > 0 {
                     // Bright leading edge where energy is going in.
                     Circle()
-                        .fill(Color.white)
+                        .fill(Color.white)  // appearance: fixed (a bright point on the green fill)
                         .frame(width: 8, height: 8)
                         .shadow(color: .voltaGreen, radius: 6)
                         .offset(x: fill - 4)
@@ -1144,7 +1144,6 @@ struct VehicleInfoSheet: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .presentationBackground(Color.voltaBackground)
-        .preferredColorScheme(.dark)
     }
 
     private func vehicleList(_ onSelect: @escaping (Int) -> Void) -> some View {

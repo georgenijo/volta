@@ -4,7 +4,7 @@ import AppIntents
 /// allows ten; the remaining actions (charging, Sentry, honk, frunk, trunk) are
 /// in the Shortcuts app.
 struct VoltaShortcuts: AppShortcutsProvider {
-    static var shortcutTileColor: ShortcutTileColor { .blue }
+    static var shortcutTileColor: ShortcutTileColor { .blue }  // appearance: a Shortcuts tile style, not a Color
 
     static var appShortcuts: [AppShortcut] {
         AppShortcut(

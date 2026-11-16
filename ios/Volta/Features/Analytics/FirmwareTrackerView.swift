@@ -84,7 +84,7 @@ struct FirmwareTrackerView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(update.version).font(.system(size: 18, weight: .bold)).foregroundStyle(.white).monospacedDigit()
+                    Text(update.version).font(.system(size: 18, weight: .bold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                     if isCurrent {
                         Text("CURRENT").font(.system(size: 10, weight: .bold)).tracking(1.2)
                             .foregroundStyle(ScreenKit.mint)
@@ -118,11 +118,10 @@ struct FirmwareTrackerView: View {
 }
 
 #Preview("Populated") {
-    NavigationStack { FirmwareTrackerView() }.preferredColorScheme(.dark)
+    NavigationStack { FirmwareTrackerView() }
 }
 
 #Preview("Empty") {
     NavigationStack { FirmwareTrackerView() }
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
 }

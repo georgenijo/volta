@@ -125,5 +125,4 @@ struct ToggleRow: View {
     .padding(VoltaSpacing.screen)
     .frame(maxHeight: .infinity, alignment: .top)
     .voltaScreenBackground()
-    .preferredColorScheme(.dark)
 }

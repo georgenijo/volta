@@ -166,7 +166,7 @@ struct StatsView: View {
                 ForEach(Array(totals.costs.enumerated()), id: \.element) { index, entry in
                     ScreenKit.ValueRow(title: entry.currency, showsDivider: index < totals.costs.count - 1) {
                         Text(VoltaFormat.money(entry.amount, currency: entry.currency))
-                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).monospacedDigit()
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                     }
                 }
             }
@@ -177,7 +177,7 @@ struct StatsView: View {
 
     private func inline(_ value: String, _ label: String) -> some View {
         HStack(spacing: 5) {
-            Text(value).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+            Text(value).font(.system(size: 14, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
             Text(label).font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
         }
     }
@@ -271,11 +271,10 @@ extension View {
 }
 
 #Preview("Populated") {
-    NavigationStack { StatsView() }.preferredColorScheme(.dark)
+    NavigationStack { StatsView() }
 }
 
 #Preview("Empty") {
     NavigationStack { StatsView() }
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
 }

@@ -30,11 +30,11 @@ struct TripSection<Trailing: View, Content: View>: View {
             HStack(alignment: .center, spacing: 0) {
                 Image(systemName: icon)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(Color.voltaInk.opacity(0.75))
                     .frame(width: 34, alignment: .leading)
                 Text(title)
                     .font(.system(size: 12.5, weight: .semibold)).tracking(2.2).textCase(.uppercase)
-                    .foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.8)
+                    .foregroundStyle(.voltaTextPrimary).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 10)
                 trailing
             }
@@ -57,7 +57,7 @@ extension TripSection where Trailing == EmptyView {
 /// Top-right value of a section header, in the series colour.
 struct TripHeaderValue: View {
     var text: String
-    var color: Color = .white
+    var color: Color = .voltaTextPrimary
     var body: some View {
         Text(text).font(.system(size: 12, weight: .medium)).monospacedDigit().foregroundStyle(color)
             .lineLimit(1).minimumScaleFactor(0.75)
@@ -78,7 +78,7 @@ struct TripHero: View {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(VoltaFormat.number(units.distanceValue(km: summary.distanceKm)))
                         .font(.system(size: 60, weight: .bold)).tracking(-1)
-                        .foregroundStyle(.white).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                        .foregroundStyle(.voltaTextPrimary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
                     Text(units.distanceUnit).font(.system(size: 22, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 .accessibilityElement(children: .combine)
@@ -104,7 +104,7 @@ struct TripHero: View {
         return VStack(alignment: .trailing, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(wh.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—")
-                    .font(.system(size: 30, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                    .font(.system(size: 30, weight: .bold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                 Text(units.efficiencyUnit).font(.system(size: 13, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
             }
             TripEfficiencySlider(whPerKm: wh, reference: EfficiencyReference(ratedWhPerKm: summary.ratedWhPerKm)).frame(width: 118)
@@ -118,14 +118,14 @@ struct TripHero: View {
             RouteEndpointMarker(kind: marker, size: 10).frame(width: 21, alignment: .leading)
             Text(place.primary)
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(address == nil ? HistoryTheme.secondary : .white)
+                .foregroundStyle(address == nil ? HistoryTheme.secondary : Color.voltaTextPrimary)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Spacer(minLength: 8)
             HStack(spacing: 8) {
                 if let level {
                     Image(systemName: TripPlace.batterySymbol(level)).font(.system(size: 15, weight: .regular))
                         .foregroundStyle(HistoryTheme.secondary)
-                    Text("\(level)%").font(.system(size: 20, weight: .medium)).monospacedDigit().foregroundStyle(.white)
+                    Text("\(level)%").font(.system(size: 20, weight: .medium)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                 } else {
                     Text("—").font(.system(size: 20, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                 }
@@ -163,15 +163,15 @@ struct TripEfficiencySlider: View {
         VStack(alignment: .trailing, spacing: 4) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(LinearGradient(stops: RoutePalette.efficiency.gradientStops(), startPoint: .leading, endPoint: .trailing))
+                    Capsule().fill(LinearGradient(stops: RoutePalette.adaptiveStops { $0.efficiency }, startPoint: .leading, endPoint: .trailing))
                         .frame(height: 4)
-                    Capsule().fill(.white.opacity(0.7)).frame(width: 1.5, height: 9)
+                    Capsule().fill(Color.voltaInk.opacity(0.7)).frame(width: 1.5, height: 9)
                         .offset(x: geo.size.width * tick - 0.75)
                     if let whPerKm {
                         let f = Self.fraction(whPerKm, reference: reference)
-                        Circle().fill(RoutePalette.efficiency(whPerKm: whPerKm, reference: reference).color)
+                        Circle().fill(RoutePalette.adaptive { RoutePalette.efficiency(whPerKm: whPerKm, reference: reference, in: $0) })
                             .frame(width: 10, height: 10)
-                            .overlay(Circle().strokeBorder(RoutePalette.casing.color, lineWidth: 2))
+                            .overlay(Circle().strokeBorder(RoutePalette.casingColor, lineWidth: 2))
                             .offset(x: f * (geo.size.width - 10))
                     }
                 }
@@ -235,7 +235,7 @@ struct TripStatsRow: View {
         let speedUnit = units.distance == .miles ? "mph" : "km/h"
         let regenKwh = TripStatsRow.regenKwh(server: summary.regenKwh, estimate: regen)
         HStack(alignment: .top, spacing: 0) {
-            column("clock", "Duration", VoltaFormat.duration(TripStatsRow.durationMinutes(summary)), color: .white) { EmptyView() }
+            column("clock", "Duration", VoltaFormat.duration(TripStatsRow.durationMinutes(summary)), color: Color.voltaTextPrimary) { EmptyView() }
             divider
             column("bolt.fill", "Energy", summary.energyUsedKwh.map { "\(VoltaFormat.number($0)) kWh" } ?? "—",
                    color: summary.energyUsedKwh == nil ? HistoryTheme.secondary : HistoryTheme.green) {
@@ -251,10 +251,10 @@ struct TripStatsRow: View {
             divider
             column("gauge.with.dots.needle.33percent", "Avg speed",
                    TripStatsRow.avgSpeedKph(summary).map { "\(VoltaFormat.number(units.distanceValue(km: $0), digits: 0)) \(speedUnit)" } ?? "—",
-                   color: .white) {
+                   color: Color.voltaTextPrimary) {
                 HStack(spacing: 7) {
                     Text("Max").tripLabel(size: 8)
-                    Text(maxText).scaledFont(11, weight: .semibold).monospacedDigit().foregroundStyle(.white.opacity(0.85))
+                    Text(maxText).scaledFont(11, weight: .semibold).monospacedDigit().foregroundStyle(Color.voltaInk.opacity(0.85))
                 }
             }
         }
@@ -345,7 +345,7 @@ struct TripCostCard: View {
 
     var body: some View {
         TripSection(icon: "creditcard.fill", title: "Trip cost") {
-            if let estimate { TripHeaderValue(text: TripCostCard.rateText(estimate), color: .white.opacity(0.8)) }
+            if let estimate { TripHeaderValue(text: TripCostCard.rateText(estimate), color: Color.voltaInk.opacity(0.8)) }
         } content: {
             if let estimate {
                 bars(estimate)
@@ -365,6 +365,8 @@ struct TripCostCard: View {
     private static let valueWidth: CGFloat = 70
     private static let rowHeight: CGFloat = 16
     private static let rowGap: CGFloat = 10
+    /// Fuel's bar: a muted olive that sits behind electric's green.
+    private static let fuelFill = Color(light: 0xB8A26A, dark: 0x6B5A2E)
 
     private func bars(_ e: TripCostEstimate) -> some View {
         let top = max(e.electric, e.fuel ?? 0, 0.000_001)
@@ -381,8 +383,8 @@ struct TripCostCard: View {
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("trip.cost")
                     if let fuel = e.fuel, let fuelWidth {
-                        row("Fuel eq.", width: fuelWidth, fill: AnyShapeStyle(Color(hex: 0x6B5A2E)),
-                            value: VoltaFormat.money(fuel, currency: e.currency), valueColor: .white.opacity(0.75))
+                        row("Fuel eq.", width: fuelWidth, fill: AnyShapeStyle(Self.fuelFill),
+                            value: VoltaFormat.money(fuel, currency: e.currency), valueColor: Color.voltaTextPrimary.opacity(0.75))
                             .padding(.top, Self.rowGap)
                         if let savings = e.savings, savings > 0 {
                             let from = Self.labelWidth + electricWidth, to = Self.labelWidth + fuelWidth
@@ -533,7 +535,7 @@ struct TripScoreRing: View {
         let value = score.flatMap { (0...100).contains($0) ? $0 : nil }
         ZStack {
             Circle().trim(from: 0, to: Self.sweep)
-                .stroke(.white.opacity(0.12), style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                .stroke(Color.voltaInk.opacity(0.12), style: StrokeStyle(lineWidth: 5, lineCap: .round))
                 .rotationEffect(.degrees(90 + (360 - 280) / 2))
             if let value {
                 Circle().trim(from: 0, to: Self.sweep * Double(value) / 100)
@@ -541,7 +543,7 @@ struct TripScoreRing: View {
                     .rotationEffect(.degrees(90 + (360 - 280) / 2))
             }
             Text(value.map(String.init) ?? "—")
-                .font(.system(size: 40, weight: .bold)).monospacedDigit().foregroundStyle(.white)
+                .font(.system(size: 40, weight: .bold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
         }
         .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
@@ -561,11 +563,11 @@ struct ScoreBreakdownRow: View {
                 Spacer(minLength: 6)
                 Text(value.map(String.init) ?? "—")
                     .scaledFont(11, weight: .medium).monospacedDigit()
-                    .foregroundStyle(value == nil ? HistoryTheme.tertiary : .white)
+                    .foregroundStyle(value == nil ? HistoryTheme.tertiary : Color.voltaTextPrimary)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.08))
+                    Capsule().fill(Color.voltaInk.opacity(0.08))
                     if let value, value > 0 {
                         Capsule().fill(TripScoreStyle.tint(value))
                             .frame(width: max(3, geo.size.width * Double(value) / 100))
@@ -625,7 +627,7 @@ struct TripScoreCard: View {
             .accessibilityLabel("How smoothness is calculated")
             .popover(isPresented: $showsFormula) {
                 Text(TripScoreCard.formula(result))
-                    .font(.system(size: 13, weight: .regular)).foregroundStyle(.white.opacity(0.85))
+                    .font(.system(size: 13, weight: .regular)).foregroundStyle(Color.voltaInk.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(18)
                     .frame(width: 320)
@@ -639,7 +641,7 @@ struct TripScoreCard: View {
     private func event(_ icon: String, _ value: String, _ label: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
-            Text(value).font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+            Text(value).font(.system(size: 15, weight: .semibold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
             Text(label).tripLabel(size: 8)
         }
         .accessibilityElement(children: .combine)
@@ -672,7 +674,7 @@ struct TripDetailsList: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(row.0).tripLabel(HistoryTheme.secondary, size: 8.5)
                     Spacer(minLength: 12)
-                    Text(row.1).font(.system(size: 16, weight: .regular)).foregroundStyle(.white)
+                    Text(row.1).font(.system(size: 16, weight: .regular)).foregroundStyle(.voltaTextPrimary)
                         .multilineTextAlignment(.trailing)
                         .monospacedDigit()
                 }

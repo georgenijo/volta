@@ -360,7 +360,7 @@ struct DriveRow: View {
                     DriveRouteThumbnail(points: drive.drawableRoute).frame(width: 64, height: 64)
                     VStack(alignment: .leading, spacing: 8) {
                         Text(drive.startPlace + " → " + drive.endPlace)
-                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                         Text(drive.start.historyTime + " → " + (drive.end?.historyTime ?? "In progress"))
                             .font(.system(size: 12)).foregroundStyle(HistoryTheme.secondary).monospacedDigit()
                     }
@@ -391,17 +391,14 @@ struct DriveRow: View {
 #Preview("Drives") {
     DrivesHistoryView()
         .environment(\.dataSource, MockDataSource())
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Drives · empty") {
     DrivesHistoryView()
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
 }
 
 #Preview("Drives · error") {
     DrivesHistoryView()
         .environment(\.dataSource, HistoryPreviewFailingSource())
-        .preferredColorScheme(.dark)
 }

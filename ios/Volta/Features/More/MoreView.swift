@@ -257,7 +257,8 @@ struct MoreView: View {
     private var footer: some View {
         Text("Volta · v\(AppInfo.version) · private")
             .font(.system(size: 12, weight: .medium)).tracking(1)
-            .foregroundStyle(ScreenKit.secondary.opacity(0.5))
+            // Light: tertiary text (4.7:1 on the page). Dark keeps main's half-strength secondary.
+            .foregroundStyle(Color(light: Color(hex: 0x6C6C70), dark: Color(hex: 0x9E9E9E).opacity(0.5)))
             .frame(maxWidth: .infinity)
     }
 

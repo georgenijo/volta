@@ -144,7 +144,7 @@ struct TripChart: View {
         Chart {
             ForEach(Array(series.gaps.enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Gap start", gap.lowerBound), xEnd: .value("Gap end", gap.upperBound))
-                    .foregroundStyle(Color.white.opacity(0.045))
+                    .foregroundStyle(Color.voltaInk.opacity(0.045))
             }
             ForEach(series.points) { p in
                 AreaMark(x: .value("Minute", p.minute), yStart: .value("Base", base), yEnd: .value(unit, p.value),
@@ -164,13 +164,13 @@ struct TripChart: View {
             }
             if showsZero, yDomain.lowerBound < 0 {
                 RuleMark(y: .value("Zero", 0))
-                    .foregroundStyle(Color.white.opacity(0.18))
+                    .foregroundStyle(Color.voltaInk.opacity(0.18))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
             if let selection {
                 let minute = series.sampleMinute(at: selection) ?? selection.minute
                 RuleMark(x: .value("Selected", minute))
-                    .foregroundStyle(Color.white.opacity(0.3))
+                    .foregroundStyle(Color.voltaInk.opacity(0.3))
                     .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         tooltip(value, selection: selection)
                     }
@@ -225,7 +225,7 @@ struct TripChart: View {
         VStack(spacing: 1) {
             Text(TripChart.tooltipText(value, selection: selection, unit: unit, digits: digits))
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(value == nil ? HistoryTheme.secondary : .white)
+                .foregroundStyle(value == nil ? HistoryTheme.secondary : Color.voltaTextPrimary)
             Text(TripChart.minuteLabel(selection.sampleMinute ?? selection.minute))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(HistoryTheme.secondary)

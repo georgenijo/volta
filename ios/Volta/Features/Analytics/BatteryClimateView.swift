@@ -78,7 +78,7 @@ struct BatteryClimateView: View {
                             Image(systemName: worst.mid < best.mid ? "snowflake" : "sun.max")
                                 .foregroundStyle(worst.mid < best.mid ? ScreenKit.blue : ScreenKit.amber)
                             Text("Uses \(VoltaFormat.number(penalty, digits: 0))% more energy at \(bandLabel(worst, withUnit: true)).")
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.voltaTextPrimary)
                         }
                         .font(.system(size: 14, weight: .medium))
                     }
@@ -138,7 +138,7 @@ struct BatteryClimateView: View {
                         ScreenKit.ValueRow(title: bandLabel(band, withUnit: true), subtitle: "\(band.drives) drive\(band.drives == 1 ? "" : "s")",
                                            showsDivider: index < bands.count - 1) {
                             Text(units.formatDistance(band.whPerKm > 0 ? capacity * 1000 / band.whPerKm : nil, fractionDigits: 0))
-                                .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).monospacedDigit()
+                                .font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                         }
                     }
                 }
@@ -198,11 +198,10 @@ struct BatteryClimateView: View {
 }
 
 #Preview("Populated") {
-    NavigationStack { BatteryClimateView() }.preferredColorScheme(.dark)
+    NavigationStack { BatteryClimateView() }
 }
 
 #Preview("Empty") {
     NavigationStack { BatteryClimateView() }
         .environment(\.dataSource, MockDataSource(empty: true))
-        .preferredColorScheme(.dark)
 }

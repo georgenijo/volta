@@ -127,7 +127,7 @@ private struct DockTileButton: View {
                         .font(.system(wideGlyph ? .body : .title3, weight: .medium))
                         .foregroundStyle(iconColor)
                         .opacity(isSending ? 0 : 1)
-                    if isSending { ProgressView().controlSize(.small).tint(tile.isOn ? .black : .white) }
+                    if isSending { ProgressView().controlSize(.small).tint(tile.isOn ? Color.voltaInkInverse : Color.voltaTextPrimary) }
                 }
                 .frame(width: plate, height: plate)
                 VStack(spacing: 1) {
@@ -160,13 +160,13 @@ private struct DockTileButton: View {
         switch tile.tone {
         case .attention: return .voltaAmber.opacity(0.2)
         case .armed: return .voltaRed.opacity(0.2)
-        case .unknown: return .white.opacity(0.05)
-        case .neutral: return .white.opacity(0.08)
+        case .unknown: return Color.voltaInk.opacity(0.05)
+        case .neutral: return Color.voltaInk.opacity(0.08)
         }
     }
 
     private var iconColor: Color {
-        if tile.isOn { return .black }
+        if tile.isOn { return .voltaInkInverse }
         switch tile.tone {
         case .attention: return .voltaAmber
         case .armed: return .voltaRed

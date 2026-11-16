@@ -40,7 +40,7 @@ struct WidgetEmptyView: View {
             Image(systemName: "bolt.car")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(WTheme.label)
-            Text("Open Volta").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+            Text("Open Volta").font(.system(size: 15, weight: .bold)).foregroundStyle(WTheme.text)
             Text("Pair this iPhone to see your car here.")
                 .font(.system(size: 11)).foregroundStyle(WTheme.label)
                 .multilineTextAlignment(.center)
@@ -55,7 +55,7 @@ struct WidgetHeader: View {
     var showStateText = true
     var body: some View {
         HStack(spacing: 6) {
-            WLabel(s.vehicleName, color: .white.opacity(0.85))
+            WLabel(s.vehicleName, color: WTheme.ink.opacity(0.85))
             Spacer(minLength: 4)
             HStack(spacing: 4) {
                 Image(systemName: WidgetFormat.stateSymbol(s))
@@ -98,7 +98,7 @@ struct UpdatedLabel: View {
             Text("Updated " + WidgetFormat.relative(s.updatedAt, to: now))
         }
         .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(stale ? WTheme.amber : WTheme.label.opacity(0.8))
+        .foregroundStyle(stale ? WTheme.amber : WTheme.labelDim)
         .lineLimit(1)
     }
 }
@@ -116,14 +116,14 @@ struct StatusTile: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
                 WLabel(label)
-                Text(value).font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                Text(value).font(.system(size: 14, weight: .bold)).foregroundStyle(WTheme.text)
                     .lineLimit(1).minimumScaleFactor(0.7)
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 9)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WTheme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .modifier(WCardBackground(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(WTheme.hairline))
     }
 }
@@ -169,7 +169,7 @@ struct StatusList: View {
         }
         .padding(.horizontal, 10)
         .frame(maxHeight: .infinity)
-        .background(WTheme.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .modifier(WCardBackground(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(WTheme.hairline))
     }
     private func row(_ symbol: String, _ tint: Color, _ label: String, _ value: String) -> some View {
@@ -180,7 +180,7 @@ struct StatusList: View {
                 .frame(width: 16)
             WLabel(label)
             Spacer(minLength: 4)
-            Text(value).font(.system(size: 13, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+            Text(value).font(.system(size: 13, weight: .bold)).foregroundStyle(WTheme.text).lineLimit(1)
         }
         .frame(maxHeight: .infinity)
     }
@@ -218,7 +218,7 @@ struct SmallWidgetView: View {
             BatteryBlock(s: s, size: 46)
             Spacer(minLength: 8)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(u.distance(s.rangeKm)).font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                Text(u.distance(s.rangeKm)).font(.system(size: 17, weight: .bold)).foregroundStyle(WTheme.text)
                 Text(u.distanceUnit).font(.system(size: 11, weight: .medium)).foregroundStyle(WTheme.label)
                 Spacer(minLength: 4)
             }
@@ -248,7 +248,7 @@ struct MediumWidgetView: View {
                 if s.isCharging { ChargingLine(s: s) } else {
                     let u = WidgetUnits(s)
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text(u.distance(s.rangeKm)).font(.system(size: 20, weight: .bold)).foregroundStyle(.white)
+                        Text(u.distance(s.rangeKm)).font(.system(size: 20, weight: .bold)).foregroundStyle(WTheme.text)
                         Text("\(u.distanceUnit) range").font(.system(size: 11, weight: .medium)).foregroundStyle(WTheme.label)
                     }
                 }
@@ -275,7 +275,7 @@ struct LargeWidgetView: View {
                     WLabel("Est. range")
                     let u = WidgetUnits(s)
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text(u.distance(s.rangeKm)).font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
+                        Text(u.distance(s.rangeKm)).font(.system(size: 24, weight: .bold)).foregroundStyle(WTheme.text)
                         Text(u.distanceUnit).font(.system(size: 12, weight: .medium)).foregroundStyle(WTheme.label)
                     }
                 }
@@ -312,7 +312,7 @@ struct TodayRow: View {
     }
     private func stat(_ value: String, _ label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(value).font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+            Text(value).font(.system(size: 14, weight: .bold)).foregroundStyle(WTheme.text)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(WTheme.label)
         }
@@ -339,7 +339,7 @@ struct TimelineStrip: View {
                 let start = now.addingTimeInterval(-hours * 3600)
                 let total = hours * 3600
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.05))
+                    RoundedRectangle(cornerRadius: 5).fill(WTheme.ink.opacity(0.05))
                     ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
                         let x0 = max(0, seg.start.timeIntervalSince(start) / total)
                         let x1 = min(1, seg.end.timeIntervalSince(start) / total)
@@ -357,7 +357,7 @@ struct TimelineStrip: View {
                 Text("48h ago"); Spacer(); Text("24h"); Spacer(); Text("Now")
             }
             .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(WTheme.label.opacity(0.8))
+            .foregroundStyle(WTheme.labelDim)
         }
     }
 

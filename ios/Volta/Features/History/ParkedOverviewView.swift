@@ -5,8 +5,8 @@ import SwiftUI
 /// (#202020) and the background (#171717), as non-text marks must.
 enum ParkedPalette {
     /// Share bars and ordinary daily bars (about 5:1 on the background).
-    static let bar = Color(hex: 0x8A8A8A)
-    static let track = Color.white.opacity(0.08)
+    static let bar = Color(light: 0x86868B, dark: 0x8A8A8A)
+    static let track = Color.voltaInk.opacity(0.08)
 }
 
 /// The Parked summary: where the car sat, one measured finding when the
@@ -230,7 +230,7 @@ struct ParkedFindingCard: View {
 
     var body: some View {
         let words = ParkedText(units: units).finding(finding)
-        let tint = finding.higher.isNotable ? HistoryTheme.amber : Color.white
+        let tint = finding.higher.isNotable ? HistoryTheme.amber : Color.voltaTextPrimary
         (Text(words.headline).fontWeight(.semibold).foregroundStyle(Color.voltaTextPrimary)
          + Text(" " + words.detail).foregroundStyle(HistoryTheme.secondary))
             .font(.footnote)

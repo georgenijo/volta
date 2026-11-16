@@ -11,12 +11,28 @@ extension MapStyle {
 
 extension View {
     /// The one basemap every Volta map uses, so none can drift: the muted
-    /// style, dark, drained to grey. Routes and pins are drawn over the map,
-    /// not in it, so they keep their colour (see `PinnedMap`).
+    /// style, drained to grey, dark or light with the system appearance.
+    /// Routes and pins are drawn over the map, not in it, so they keep their
+    /// colour (see `PinnedMap`).
     func voltaBasemap() -> some View {
         mapStyle(.voltaMuted)
-            .environment(\.colorScheme, .dark)
             .saturation(0)
+    }
+
+    /// The tone of a 3D backdrop map (the Dashboard, live charging): drained
+    /// to grey, and on the dark map pressed a touch darker, toward Wattly's
+    /// near-monochrome charcoal. The light map keeps its own brightness.
+    func voltaBackdropMapTone() -> some View {
+        modifier(BackdropMapTone())
+    }
+}
+
+private struct BackdropMapTone: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content
+            .saturation(0)
+            .brightness(scheme == .dark ? -0.04 : 0)
     }
 }
 
@@ -46,7 +62,8 @@ extension EdgeInsets {
 }
 
 extension View {
-    /// Darkens the tiles so labels recede, but never MapKit's logo and Legal
+    /// Washes the tiles so labels recede (darker on the dark map, paler on
+    /// the light one, with `Color.voltaMapWash`), but never MapKit's logo and Legal
     /// link: the dim eases off to nothing across the 32 pt above the
     /// attribution row, which (with the fade below it) stays at full strength.
     /// `bottom` is the map's bottom padding (where the attribution sits).
@@ -59,13 +76,13 @@ extension View {
                 let clear = max(0, min(1, (h - bottom - VoltaMapChrome.attribution) / h))
                 let full = max(0, clear - 32 / h)
                 if attribution {
-                    LinearGradient(stops: [.init(color: .black.opacity(opacity), location: 0),
-                                           .init(color: .black.opacity(opacity), location: full),
-                                           .init(color: .black.opacity(0), location: clear),
-                                           .init(color: .black.opacity(0), location: 1)],
+                    LinearGradient(stops: [.init(color: .voltaMapWash.opacity(opacity), location: 0),
+                                           .init(color: .voltaMapWash.opacity(opacity), location: full),
+                                           .init(color: .voltaMapWash.opacity(0), location: clear),
+                                           .init(color: .voltaMapWash.opacity(0), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                 } else {
-                    Color.black.opacity(opacity)
+                    Color.voltaMapWash.opacity(opacity)
                 }
             }
             .ignoresSafeArea(edges: edges)
@@ -151,7 +168,7 @@ struct PinnedMap<Item: Identifiable, Pin: View, Callout: View>: View {
     var safe = EdgeInsets()
     /// Least distance from the map's edges to the outer edge of any pin.
     var clearance = EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24)
-    /// Darkens the tiles under the pins (not the attribution).
+    /// Washes the tiles under the pins (not the attribution).
     var dim: Double = 0.2
     /// False for a backdrop: no padding, so MapKit's logo and Legal link
     /// stay at the bottom edge, and an even dim (see `backdrop()`).

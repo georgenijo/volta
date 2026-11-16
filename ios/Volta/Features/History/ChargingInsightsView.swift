@@ -30,10 +30,11 @@ struct ChargingInsightsView: View {
     }
 
     /// Series colours: green stays for energy going in, not a generic series.
-    static let homeColor = Color(hex: 0x3B82F6)
-    static let awayColor = Color(hex: 0xC9CED6)
-    static let acColor = Color(hex: 0x5ECB93)
-    static let dcColor = Color(hex: 0xF59E0B)
+    static let homeColor = Color.voltaBlue
+    /// Pale grey on the dark card, mid grey on the light one (3.8:1).
+    static let awayColor = Color(light: 0x7D838C, dark: 0xC9CED6)
+    static let acColor = Color.voltaGreen
+    static let dcColor = Color.voltaAmber
 
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
@@ -156,7 +157,7 @@ struct ChargingInsightsView: View {
                                        subtitle: "\(VoltaFormat.money(point.cost, currency: currency)) · \(units.formatDistance(point.distanceKm, fractionDigits: 0))",
                                        showsDivider: index < rows.count - 1) {
                         Text(VoltaFormat.money(per100(point.costPerKm), currency: currency))
-                            .font(.callout.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+                            .font(.callout.weight(.semibold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                     }
                     .accessibilityElement(children: .combine)
                 }
@@ -333,10 +334,10 @@ private struct ShareCard: View {
         VStack(alignment: trailing ? .trailing : .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Circle().fill(color).frame(width: 7, height: 7).accessibilityHidden(true)
-                Text(label).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
+                Text(label).font(.subheadline.weight(.semibold)).foregroundStyle(.voltaTextPrimary)
                 if let share { Text(share).font(.subheadline).monospacedDigit().foregroundStyle(ScreenKit.secondary) }
             }
-            Text(value).font(.title3.weight(.bold)).monospacedDigit().foregroundStyle(.white)
+            Text(value).font(.title3.weight(.bold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Text(detail).font(.caption).foregroundStyle(ScreenKit.secondary)
                 .multilineTextAlignment(trailing ? .trailing : .leading)
@@ -359,7 +360,7 @@ private struct ShareBar: View {
                     if f > 0 { Capsule().fill(colors.0).frame(width: max(6, (proxy.size.width - 3) * f)) }
                     if f < 1 { Capsule().fill(colors.1) }
                 } else {
-                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule().fill(Color.voltaInk.opacity(0.08))
                 }
             }
         }

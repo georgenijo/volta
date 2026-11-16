@@ -27,7 +27,7 @@ struct DashboardMap: View {
     }
 
     private var backdrop: some View {
-        LinearGradient(colors: [Color(hex: 0x1B1E23), .voltaBackground], startPoint: .top, endPoint: .bottom)
+        LinearGradient(colors: [.voltaMapBackdrop, .voltaBackground], startPoint: .top, endPoint: .bottom)
     }
 
     private func map(for location: Location) -> some View {
@@ -39,10 +39,8 @@ struct DashboardMap: View {
             .mapStyle(.standard(elevation: .realistic, emphasis: .muted,
                                 pointsOfInterest: .excludingAll, showsTraffic: false))
             .mapControlVisibility(.hidden)
-            .environment(\.colorScheme, .dark)
-            // Wattly's map is near-monochrome charcoal.
-            .saturation(0)
-            .brightness(-0.04)
+            // Wattly's map is near-monochrome charcoal; the light map is its pale twin.
+            .voltaBackdropMapTone()
             .overlay {
                 ZStack {
                     if charging {
@@ -102,15 +100,16 @@ struct CarMarker: View {
                 .frame(width: 34, height: 34)
                 .blur(radius: 4)
             Circle()
-                .fill(Color.white)
+                .fill(Color.white)  // appearance: fixed (the marker's rim reads on light and dark maps)
                 .frame(width: 24, height: 24)
-                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                .shadow(color: Color.voltaShadow.opacity(0.5), radius: 4, y: 2)
             Circle()
                 .fill(tint)
                 .frame(width: 13, height: 13)
             Image(systemName: "shield.fill")
                 .font(.system(size: 7, weight: .bold))
-                .foregroundStyle(.black.opacity(0.6))
+                // White on the light map's deeper red; main's black at 60% on the dark map's red.
+                .foregroundStyle(Color(light: .white, dark: .black.opacity(0.6)))
                 .opacity(tint == .voltaRed ? 1 : 0)
         }
         .frame(width: 92, height: 92)
@@ -125,7 +124,9 @@ struct ChargingMarker: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var onScreen = false
-    private static let green = Color(hex: 0x5ECB93)
+    /// The marker's disc: the same green on both maps by design, so the pin
+    /// is one recognisable sign; its edge follows the route casing.
+    private static let green = Color(hex: 0x5ECB93)  // appearance: fixed (map marker)
 
     var body: some View {
         ZStack {
@@ -144,11 +145,11 @@ struct ChargingMarker: View {
             Circle()
                 .fill(Self.green)
                 .frame(width: 30, height: 30)
-                .overlay { Circle().strokeBorder(Color(hex: 0x101318), lineWidth: 2) }
+                .overlay { Circle().strokeBorder(RoutePalette.casingColor, lineWidth: 2) }
             // The charge-state vocabulary's glyph.
             Image(systemName: StateDisplay.charging(.charging).symbol)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color(hex: 0x06140D))
+                .foregroundStyle(Color(hex: 0x06140D))  // appearance: fixed (a glyph on the green disc)
         }
         .frame(width: 92, height: 92)
         .onAppear { onScreen = true }
@@ -180,6 +181,10 @@ struct AddressPill: View {
         return parts.dropFirst().first
     }
 
+    /// Frosted plate over the map: dark glass on the dark map, light glass on
+    /// the light one.
+    static let plate = Color(light: .white.opacity(0.85), dark: .black.opacity(0.72))
+
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 4) {
@@ -200,14 +205,14 @@ struct AddressPill: View {
             .padding(.vertical, VoltaSpacing.md)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.black.opacity(0.72))
+                    .fill(Self.plate)
                     .overlay {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            .strokeBorder(Color.voltaInk.opacity(0.1), lineWidth: 1)
                     }
             }
             Rectangle()
-                .fill(Color.white.opacity(0.35))
+                .fill(Color.voltaInk.opacity(0.35))
                 .frame(width: 1, height: 26)
         }
         .fixedSize()

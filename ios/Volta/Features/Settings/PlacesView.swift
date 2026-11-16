@@ -32,7 +32,7 @@ struct PlacesView: View {
                 }
             }
         }
-        .screenKitPage("Places")
+        .screenKitPage("Places", screen: "places")
         .task(id: vehicleID) { await load() }
     }
 
@@ -50,12 +50,11 @@ struct PlacesView: View {
                     .stroke(ScreenKit.blue, lineWidth: 1.5)
                 Annotation(place.name, coordinate: coordinate) {
                     Circle().fill(ScreenKit.blue).frame(width: 10, height: 10)
-                        .overlay(Circle().stroke(.white, lineWidth: 2))
+                        .overlay(Circle().stroke(Color.voltaOnAccent, lineWidth: 2))  // a pin's white rim, on both maps
                 }
             }
         }
         .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
-        .environment(\.colorScheme, .dark)
         .modifier(ScreenKit.MapHeight())
         .clipShape(.rect(cornerRadius: VoltaRadius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: VoltaRadius.card, style: .continuous).strokeBorder(Color.voltaHairline, lineWidth: 1))

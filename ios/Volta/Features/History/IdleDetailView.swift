@@ -240,7 +240,6 @@ struct IdleDetailView: View {
                                          sentryMinutes: nil, climateMinutes: 15, asleepMinutes: 340))
     }
     .environment(\.dataSource, MockDataSource())
-    .preferredColorScheme(.dark)
 }
 
 #Preview("Stop · unrecorded") {
@@ -251,5 +250,4 @@ struct IdleDetailView: View {
                                          sentryMinutes: nil, climateMinutes: nil, asleepMinutes: nil))
     }
     .environment(\.dataSource, MockDataSource())
-    .preferredColorScheme(.dark)
 }

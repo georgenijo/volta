@@ -290,7 +290,7 @@ struct DriveDetailView: View {
         return Button { mode = m } label: {
             Image(systemName: m.systemImage)
                 .frame(width: 34, height: 34)
-                .background { if selected { Circle().fill(Color.white.opacity(0.16)) } }
+                .background { if selected { Circle().fill(Color.voltaInk.opacity(0.16)) } }
                 .frame(width: Self.slot, height: Self.slot)
                 .contentShape(.rect)
         }
@@ -369,7 +369,7 @@ struct DriveDetailView: View {
             if let snapshot, case .route = state, let text = mapCaption(snapshot) {
                 Text(text)
                     .scaledFont(11, weight: .medium)
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.voltaInk.opacity(0.6))
                     .padding(.bottom, 8)
                     .accessibilityIdentifier("trip.map.caption")
             }
@@ -521,9 +521,9 @@ struct DriveDetailView: View {
                     TripHeaderValue(text: current.map { "\(number($0)) \(speedUnit)" } ?? "—")
                 }
             } content: {
-                chart([TripTrace(label: "Speed", color: Color(hex: 0x4FD1C5), points: points,
-                                 gradient: [Color(hex: 0x4FD1C5), HistoryTheme.blue, Color(hex: 0xF5A35B), Color(hex: 0xC084FC)],
-                                 fill: true, endDot: .white)],
+                chart([TripTrace(label: "Speed", color: Self.speedTeal, points: points,
+                                 gradient: [Self.speedTeal, HistoryTheme.blue, Self.speedOrange, Self.speedViolet],
+                                 fill: true, endDot: Color.voltaTextPrimary)],
                       start: start, end: end, domain: TripSignalDomain.zeroBased(points.map(\.v)),
                       axis: { number($0) }, id: "trip.chart.coverage.speed") { m in at(points, start, m).map { "\(number($0)) \(speedUnit)" } }
             }
@@ -575,14 +575,14 @@ struct DriveDetailView: View {
                 TripHeaderValue(text: headline, color: HistoryTheme.blue)
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
-                    chart([TripTrace(label: "Max", color: Color(hex: 0xE5695F), points: maxPoints),
+                    chart([TripTrace(label: "Max", color: Self.cellMax, points: maxPoints),
                            TripTrace(label: "Min", color: HistoryTheme.blue, points: minPoints)].filter { !$0.points.isEmpty },
                           start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 2),
                           axis: { degrees($0) }, id: "trip.telemetry.battery-temperature") { m in
                         let hi = at(maxPoints, start, m), lo = at(minPoints, start, m)
                         return [hi.map { "max \(degrees($0))" }, lo.map { "min \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
                     }
-                    TripChartLegend(items: [.init(label: "Max", color: Color(hex: 0xE5695F)), .init(label: "Min", color: HistoryTheme.blue)])
+                    TripChartLegend(items: [.init(label: "Max", color: Self.cellMax), .init(label: "Min", color: HistoryTheme.blue)])
                 }
             }
         }
@@ -598,13 +598,13 @@ struct DriveDetailView: View {
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
                     chart([TripTrace(label: "Inside", color: HistoryTheme.amber, points: inside),
-                           TripTrace(label: "Outside", color: Color(hex: 0x8E8E8E), points: outside)].filter { !$0.points.isEmpty },
+                           TripTrace(label: "Outside", color: Self.outside, points: outside)].filter { !$0.points.isEmpty },
                           start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 4),
                           axis: { degrees($0) }, id: "trip.telemetry.cabin-&-outside") { m in
                         let a = at(inside, start, m), b = at(outside, start, m)
                         return [a.map { "in \(degrees($0))" }, b.map { "out \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
                     }
-                    TripChartLegend(items: [.init(label: "Inside", color: HistoryTheme.amber), .init(label: "Outside", color: Color(hex: 0x8E8E8E))])
+                    TripChartLegend(items: [.init(label: "Inside", color: HistoryTheme.amber), .init(label: "Outside", color: Self.outside)])
                 }
             }
         }
@@ -620,7 +620,7 @@ struct DriveDetailView: View {
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
                     chart([TripTrace(label: "Actual", color: HistoryTheme.green, points: actual),
-                           TripTrace(label: "Ideal", color: .white, points: ideal, dashed: true, interpolation: .linear)],
+                           TripTrace(label: "Ideal", color: .voltaTextPrimary, points: ideal, dashed: true, interpolation: .linear)],
                           start: start, end: end, domain: TripSignalDomain.padded((actual + ideal).map(\.v), minSpan: 4),
                           axis: { number($0) }, fillBetween: true) { m in
                         at(actual, start, m).map { "\(number($0)) \(units.distanceUnit) rated" }
@@ -663,6 +663,16 @@ struct DriveDetailView: View {
 }
 
 /// What the drive detail's map area shows.
+extension DriveDetailView {
+    // Chart series. Light values keep each hue, deepened to read on a white
+    // card (each at least 3:1; see docs/APPEARANCE.md).
+    static let speedTeal = Color(light: 0x0D7F77, dark: 0x4FD1C5)
+    static let speedOrange = Color(light: 0xC2610C, dark: 0xF5A35B)
+    static let speedViolet = Color(light: 0x9333EA, dark: 0xC084FC)
+    static let cellMax = Color(light: 0xC4372A, dark: 0xE5695F)
+    static let outside = Color(light: 0x6E6E73, dark: 0x8E8E8E)
+}
+
 enum RouteMapState: Equatable {
     case loading
     case failed(String)
@@ -694,7 +704,6 @@ extension DrivePoint {
         if let drive { DriveDetailView(drive: drive) } else { Color.clear }
     }
     .environment(\.dataSource, MockDataSource())
-    .preferredColorScheme(.dark)
     .task { drive = try? await MockDataSource().drive(id: TripFixtures.denseDriveID).summary }
 }
 
@@ -704,7 +713,6 @@ extension DrivePoint {
         if let drive { DriveDetailView(drive: drive) } else { Color.clear }
     }
     .environment(\.dataSource, MockDataSource())
-    .preferredColorScheme(.dark)
     .task { drive = try? await MockDataSource().drive(id: TripFixtures.sparseDriveID).summary }
 }
 
@@ -714,6 +722,5 @@ extension DrivePoint {
         if let drive { DriveDetailView(drive: drive) } else { Color.clear }
     }
     .environment(\.dataSource, HistoryPreviewFailingSource())
-    .preferredColorScheme(.dark)
     .task { drive = try? await MockDataSource().drives(vehicleID: 1, range: .init(), cursor: nil).items.first }
 }

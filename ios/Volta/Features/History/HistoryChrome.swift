@@ -112,7 +112,8 @@ struct HistoryInlineTitle: View {
             Spacer(minLength: 0)
         }
         .lineLimit(1).minimumScaleFactor(0.8)
-        .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+        // A halo in the page's own colour: black on the dark map, white on the light one.
+        .shadow(color: Color.voltaMapWash.opacity(0.5), radius: 6, y: 1)
     }
 }
 
@@ -351,7 +352,7 @@ struct HistorySelectionPlaceholder: View {
                 .foregroundStyle(HistoryTheme.tertiary)
             Text(title)
                 .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.voltaTextPrimary)
             Text(message)
                 .font(.system(size: 14))
                 .foregroundStyle(HistoryTheme.secondary)
@@ -396,13 +397,14 @@ private struct CustomRangeSheet: View {
             } label: {
                 Text("Apply")
                     .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.voltaOnAccent)
                     .frame(maxWidth: .infinity)
                     .frame(height: 50)
             }
             .buttonStyle(.glassProminent)
             .tint(HistoryTheme.blue)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(.voltaTextPrimary)
         .padding(24)
         .onAppear {
             if case .custom(let f, let t) = range { from = f; to = t }
@@ -427,7 +429,7 @@ struct HistorySearchField: View {
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .focused($focused)
-                .foregroundStyle(.white)
+                .foregroundStyle(.voltaTextPrimary)
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(HistoryTheme.tertiary)

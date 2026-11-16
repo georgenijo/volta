@@ -133,7 +133,7 @@ struct SpecsWarrantyView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
                     Image(systemName: c.symbol).foregroundStyle(ScreenKit.mint)
-                    Text(c.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    Text(c.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
                     Spacer()
                     Text(status == .expired ? "EXPIRED" : status == .active ? "ACTIVE" : "UNKNOWN")
                         .font(.system(size: 11, weight: .bold)).tracking(1.2)
@@ -154,7 +154,7 @@ struct SpecsWarrantyView: View {
             HStack {
                 Text(label.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(ScreenKit.secondary)
                 Spacer()
-                Text(detail).font(.system(size: 13)).foregroundStyle(fraction == nil ? ScreenKit.tertiary : .white).monospacedDigit()
+                Text(detail).font(.system(size: 13)).foregroundStyle(fraction == nil ? ScreenKit.tertiary : Color.voltaTextPrimary).monospacedDigit()
             }
             ScreenKit.ProgressBar(fraction: fraction ?? 0,
                                   tint: (fraction ?? 0) >= 0.9 ? ScreenKit.amber : ScreenKit.blue)
@@ -189,7 +189,6 @@ struct SpecsWarrantyView: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .preferredColorScheme(.dark)
     }
 
     private func load() async {

@@ -90,7 +90,7 @@ struct TripSignalChart: View {
             }
             if let focusMinute {
                 RuleMark(x: .value("Selected", focusMinute))
-                    .foregroundStyle(Color.white.opacity(0.35))
+                    .foregroundStyle(Color.voltaInk.opacity(0.35))
                     .annotation(position: .top, spacing: 2, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         if let text = tooltip?(focusMinute) { TripChartTooltip(text: text, minute: focusMinute) }
                     }
@@ -110,7 +110,7 @@ struct TripSignalChart: View {
         }
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.white.opacity(0.06))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.voltaInk.opacity(0.06))
                 AxisValueLabel(horizontalSpacing: 6) {
                     if let v = value.as(Double.self) { Text(axisLabel(v)) }
                 }
@@ -119,7 +119,7 @@ struct TripSignalChart: View {
             }
         }
         .chartPlotStyle { plot in
-            plot.overlay(alignment: .bottom) { Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1) }
+            plot.overlay(alignment: .bottom) { Rectangle().fill(Color.voltaInk.opacity(0.12)).frame(height: 1) }
         }
         .frame(height: height)
     }
@@ -184,7 +184,7 @@ private struct TripChartTooltip: View {
     var minute: Double
     var body: some View {
         VStack(spacing: 1) {
-            Text(text).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(.white)
+            Text(text).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
             Text(TripChart.minuteLabel(minute)).font(.system(size: 10, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
         }
         .padding(.horizontal, 8).padding(.vertical, 4)

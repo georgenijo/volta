@@ -61,7 +61,7 @@ struct AccountSettingsView: View {
             .disabled(isUnpairing)
             .accessibilityIdentifier("button.unpair")
         }
-        .screenKitPage("Account")
+        .screenKitPage("Account", screen: "account")
         .task(id: model.pairingState) {
             // `/v1/me` exists only on the real API; demo mode has no device record.
             guard let api = dataSource as? APIDataSource else { device = nil; appleStatus = nil; return }
@@ -172,7 +172,7 @@ struct VehicleSettingsView: View {
             }
         }
         }
-        .screenKitPage("Vehicle")
+        .screenKitPage("Vehicle", screen: "vehicle-settings")
         .task(id: vehicleID) { await load() }
     }
 
@@ -247,7 +247,7 @@ struct ChargingSettingsView: View {
 
     private func rateValue(_ text: String, set: Bool) -> some View {
         HStack(spacing: 10) {
-            Text(text).font(.system(size: 15)).monospacedDigit().foregroundStyle(set ? .white : ScreenKit.secondary)
+            Text(text).font(.system(size: 15)).monospacedDigit().foregroundStyle(set ? Color.voltaTextPrimary : ScreenKit.secondary)
             ScreenKit.Chevron()
         }
     }
@@ -315,14 +315,14 @@ struct GeneralSettingsView: View {
                 } label: {
                     ScreenKit.ValueRow(title: "App language", showsDivider: false) {
                         Text(Locale.current.localizedString(forLanguageCode: Locale.current.language.languageCode?.identifier ?? "en")?.uppercased() ?? "ENGLISH")
-                            .font(.system(size: 14, weight: .semibold)).tracking(1.2).foregroundStyle(.white)
+                            .font(.system(size: 14, weight: .semibold)).tracking(1.2).foregroundStyle(.voltaTextPrimary)
                         ScreenKit.Chevron()
                     }
                 }
                 .buttonStyle(.plain)
             }
         }
-        .screenKitPage("General")
+        .screenKitPage("General", screen: "general-settings")
     }
 
     /// Keeps a currency saved from elsewhere selectable even if it isn't in the short list.

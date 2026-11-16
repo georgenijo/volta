@@ -35,13 +35,15 @@ struct TripShareCard: View {
         .padding(24)
         .frame(width: 360)
         .background(HistoryTheme.background)
-        .environment(\.colorScheme, .dark)
+        // The shared image keeps Volta's dark card whatever the sender's
+        // appearance, so every card a person receives looks the same.
+        .environment(\.colorScheme, .dark)  // appearance: fixed (share card)
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(HistoryTheme.secondary)
-            Text(value).font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
+            Text(value).font(.system(size: 18, weight: .bold)).foregroundStyle(.voltaTextPrimary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

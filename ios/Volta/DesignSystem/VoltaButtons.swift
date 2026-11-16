@@ -33,14 +33,14 @@ struct PillButton: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if isBusy {
-                    ProgressView().controlSize(.small).tint(.white)
+                    ProgressView().controlSize(.small).tint(style == .accent ? Color.voltaOnAccent : Color.voltaTextPrimary)
                 } else if let systemImage {
                     Image(systemName: systemImage)
                 }
                 Text(title)
             }
             .font(.system(.callout, weight: .medium))
-            .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
+            .foregroundStyle(style == .accent ? Color.voltaOnAccent : Color.voltaTextPrimary)
             .frame(minWidth: size == .compact ? 84 : nil, maxWidth: size == .wide ? .infinity : nil)
             .padding(.horizontal, VoltaSpacing.lg)
             .padding(.vertical, size == .wide ? 15 : 10)
@@ -255,5 +255,4 @@ extension VoltaHeader where Leading == EmptyView {
     .padding(VoltaSpacing.screen)
     .frame(maxHeight: .infinity, alignment: .top)
     .voltaScreenBackground()
-    .preferredColorScheme(.dark)
 }

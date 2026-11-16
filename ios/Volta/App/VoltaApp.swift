@@ -20,7 +20,6 @@ struct VoltaApp: App {
                 .environment(\.units, model.units)
                 .environment(\.vehicleSurfaces, model.refreshSurfaces)
                 .environment(\.vehicleCommandCoordinator, model.commandCoordinator)
-                .preferredColorScheme(.dark)
                 // Most layouts are tuned to absolute sizes; larger text sizes wrap labels.
                 // Screens built on text styles opt out with `followsSystemTextSize()`.
                 .dynamicTypeSize(...DynamicTypeSize.large)

@@ -30,7 +30,6 @@ struct SettingsView: View {
                     trailing: vehicle == nil ? nil : "Active", trailingTint: ScreenKit.green, to: .vehicleSettings)
                 row("bolt.fill", "Charging", "Electricity rate & costs",
                     trailing: model.settings.electricityRate.map { VoltaFormat.money($0, currency: model.units.currency) }, to: .chargingSettings)
-                    .accessibilityIdentifier("row.settings.charging")
                 row("slider.horizontal.3", "General", "Units, currency & language",
                     trailing: model.units.distance == .miles ? "Miles" : "Km", to: .generalSettings)
                 row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places", to: .places)
@@ -66,11 +65,11 @@ struct SettingsView: View {
             ZStack {
                 Circle().fill(Color.voltaCard)
                 Circle().strokeBorder(Color.voltaHairline, lineWidth: 1)
-                Image(systemName: "iphone").font(.system(size: 22, weight: .medium)).foregroundStyle(.white.opacity(0.85))
+                Image(systemName: "iphone").font(.system(size: 22, weight: .medium)).foregroundStyle(Color.voltaInk.opacity(0.85))
             }
             .frame(width: 58, height: 58)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Account").font(.system(size: 22, weight: .bold)).foregroundStyle(.white)
+                Text("Account").font(.system(size: 22, weight: .bold)).foregroundStyle(.voltaTextPrimary)
                 Text(serverHost).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)
@@ -80,7 +79,7 @@ struct SettingsView: View {
                 Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
             }
             .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(pillTint)
+            .foregroundStyle(model.isDemoMode ? Color.voltaBlueText : pillTint)
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(pillTint.opacity(0.12), in: .rect(cornerRadius: 12))
         }
@@ -92,11 +91,13 @@ struct SettingsView: View {
     private var pillTint: Color { model.isDemoMode ? ScreenKit.blue : ScreenKit.green }
 
     private func row(_ symbol: String, _ title: String, _ subtitle: String,
-                     trailing: String? = nil, trailingTint: Color = .white, to route: MoreRoute) -> some View {
+                     trailing: String? = nil, trailingTint: Color = .voltaTextPrimary, to route: MoreRoute) -> some View {
         NavigationLink(value: route) {
             ScreenKit.CapsRow(symbol: symbol, title: title, subtitle: subtitle, trailing: trailing, trailingTint: trailingTint)
         }
         .buttonStyle(.plain)
+        // `row.settings.<title>` for UI tests, as in `row.settings.data-management`.
+        .accessibilityIdentifier("row.settings." + title.lowercased().replacingOccurrences(of: " ", with: "-"))
     }
 
     private var footer: some View {

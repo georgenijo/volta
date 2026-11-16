@@ -115,6 +115,7 @@ struct DrivesRouteMap: View {
     @Environment(\.units) private var units
     /// Side bars this map runs under (iPhone Duo's tab strip).
     @Environment(\.historySideBars) private var sideBars
+    @Environment(\.colorScheme) private var scheme
     @State private var visible: MKMapRect?
     @State private var layer: RouteDensity.Layer?
     @State private var position: MapCameraPosition = .automatic
@@ -178,10 +179,10 @@ struct DrivesRouteMap: View {
     private var fadeMask: some View {
         VStack(spacing: 0) {
             if !fullBleed {
-                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 24)
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 24)  // appearance: mask (alpha only)
             }
-            Color.black
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
+            Color.black  // appearance: mask (alpha only)
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)  // appearance: mask (alpha only)
         }
     }
 
@@ -294,15 +295,17 @@ struct DrivesRouteMap: View {
 
     /// A stroke's colour: density by count, or efficiency by ratio, where a
     /// negative ratio (net regeneration) takes the shared regen colour.
-    static func strokeColor(_ stroke: RouteDensity.Stroke, coloring: Coloring) -> RoutePalette.RGB? {
+    static func strokeColor(_ stroke: RouteDensity.Stroke, coloring: Coloring,
+                            in appearance: RoutePalette.Appearance = .dark) -> RoutePalette.RGB? {
         switch coloring {
-        case .efficiency: return stroke.ratio.map { RoutePalette.efficiency(ratio: $0) }
-        default: return RoutePalette.density(count: stroke.count)
+        case .efficiency: return stroke.ratio.map { RoutePalette.efficiency(ratio: $0, in: appearance) }
+        default: return RoutePalette.density(count: stroke.count, in: appearance)
         }
     }
 
     private func routes(_ runs: [[CLLocationCoordinate2D]]) -> some View {
-        Canvas { context, size in
+        let appearance = RoutePalette.Appearance(scheme)
+        return Canvas { context, size in
             // `visible` changes with the camera and redraws the routes.
             guard let visible else { return }
             let safe = self.safe
@@ -313,18 +316,18 @@ struct DrivesRouteMap: View {
             case .plain:
                 var path = Path()
                 for run in runs { path.addLines(run.map { transform(MKMapPoint($0)) }) }
-                context.stroke(path, with: .color(RoutePalette.casing.color), style: casing)
-                context.stroke(path, with: .color(RoutePalette.plain.color), style: line)
+                context.stroke(path, with: .color(RoutePalette.casingColor), style: casing)
+                context.stroke(path, with: .color(RoutePalette.plainColor), style: line)
             case .density, .efficiency:
                 guard let layer else { return }
                 var all = Path()
                 for stroke in layer.strokes { all.addLines(stroke.points.map(transform)) }
-                context.stroke(all, with: .color(RoutePalette.casing.color), style: casing)
+                context.stroke(all, with: .color(RoutePalette.casingColor), style: casing)
                 // Strokes come lowest count first; one path per colour, in that order.
                 var order: [Int] = []
                 var groups: [Int: (color: RoutePalette.RGB?, path: Path)] = [:]
                 for stroke in layer.strokes {
-                    let color: RoutePalette.RGB? = Self.strokeColor(stroke, coloring: coloring)
+                    let color: RoutePalette.RGB? = Self.strokeColor(stroke, coloring: coloring, in: appearance)
                     let key: Int = color?.bucketKey ?? -1
                     if groups[key] == nil { groups[key] = (color, Path()); order.append(key) }
                     groups[key]!.path.addLines(stroke.points.map(transform))
@@ -334,7 +337,7 @@ struct DrivesRouteMap: View {
                     if let color = group.color {
                         context.stroke(group.path, with: .color(color.color), style: line)
                     } else {
-                        context.stroke(group.path, with: .color(RoutePalette.missing.color),
+                        context.stroke(group.path, with: .color(RoutePalette.missingColor),
                                        style: StrokeStyle(lineWidth: max(1.5, lineWidth - 1.5), lineCap: .round, lineJoin: .round))
                     }
                 }
@@ -395,7 +398,7 @@ struct DriveRouteThumbnail: View {
                                 if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
                             }
                         }
-                    }.stroke(RoutePalette.plain.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    }.stroke(RoutePalette.plainColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
                     if let end = valid.last, valid.count > 1 {
                         RouteEndpointMarker(kind: .end, size: 8).position(end)
                     }
@@ -516,7 +519,7 @@ private struct RoadtripCard: View {
                             .font(.system(size: 30, weight: .bold)).monospacedDigit()
                         Text(units.distanceUnit.uppercased()).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
                     }
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.voltaTextPrimary)
                     // One line, as a Drives card's times: "Nov 11 · 21:14".
                     (Text(RoadtripCardDay.text(first.start)).foregroundStyle(HistoryTheme.secondary)
                         + Text(" · \(first.start.historyTime)").foregroundStyle(HistoryTheme.tertiary))
@@ -559,7 +562,7 @@ private struct RoadtripCard: View {
                     .fixedSize()
                 CardPlaceName(name: end, oneLine: oneLine)
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(.voltaTextPrimary)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -720,7 +723,7 @@ private struct OverviewHero: View {
             Text(eyebrow).voltaLabelStyle().lineLimit(1)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(value).font(.system(size: size, weight: .bold)).fontWidth(.expanded).tracking(-size / 42)
-                    .foregroundStyle(.white).monospacedDigit().lineLimit(1).minimumScaleFactor(0.4)
+                    .foregroundStyle(.voltaTextPrimary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.4)
                 if let unit {
                     Text(unit).font(.system(size: max(15, size * 0.24))).foregroundStyle(HistoryTheme.secondary).fixedSize()
                 }
@@ -741,7 +744,7 @@ private struct OverviewSectionHeader: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(title).font(.system(size: 22, weight: .medium)).foregroundStyle(.white)
+                Text(title).font(.system(size: 22, weight: .medium)).foregroundStyle(.voltaTextPrimary)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
                 if let trailing {
@@ -846,7 +849,7 @@ struct DrivesHeatmapView: View {
         let monthDistance = monthDays.reduce(0) { $0 + $1.distanceKm }
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Text(month.formatted(.dateTime.month(.wide).year())).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                Text(month.formatted(.dateTime.month(.wide).year())).font(.system(size: 17, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Text("\(monthDays.count) \(monthDays.count == 1 ? "day" : "days") · \(units.formatDistance(monthDistance, fractionDigits: 0))")
@@ -876,9 +879,9 @@ struct DrivesHeatmapView: View {
     /// Driven days fill green in proportion to distance.
     private func cell(number: Int, ratio: Double?) -> some View {
         let weight: Font.Weight = ratio == nil ? .medium : .semibold
-        let text: Color = ratio == nil ? HistoryTheme.tertiary : .white
+        let text: Color = ratio == nil ? HistoryTheme.tertiary : .voltaTextPrimary
         let fill: Color
-        if let ratio { fill = HistoryTheme.green.opacity(0.15 + 0.6 * ratio) } else { fill = Color.white.opacity(0.03) }
+        if let ratio { fill = HistoryTheme.green.opacity(0.15 + 0.6 * ratio) } else { fill = Color.voltaInk.opacity(0.03) }
         return Text("\(number)")
             .font(.system(size: 13, weight: weight)).monospacedDigit()
             .foregroundStyle(text)
