@@ -322,6 +322,9 @@ private struct LegendMarks: View {
 /// (density's 1 · 3 · 10 · 30+, placed under the bar instead of end labels).
 struct RouteLegendStrip: View {
     var model: RouteLegendModel
+    /// Height kept for the legend's lines whatever the mode shows, so the
+    /// content below doesn't move when a mode has no caption line.
+    var reservedHeight: CGFloat? = nil
     @State private var bar: CGRect = .zero
     @State private var strip: CGFloat = 0
 
@@ -383,6 +386,7 @@ struct RouteLegendStrip: View {
         .scaledFont(11, weight: .semibold)
         .monospacedDigit()
         .lineLimit(1)
+        .frame(minHeight: reservedHeight, alignment: .top)
         .coordinateSpace(.named("legend.strip"))
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { strip = $0 }
         .padding(.horizontal, 16).padding(.vertical, 12)

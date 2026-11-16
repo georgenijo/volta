@@ -108,6 +108,8 @@ struct DrivesRouteMap: View {
     static let fade: CGFloat = VoltaMapChrome.fade
 
     @Environment(\.units) private var units
+    /// Side bars this map runs under (iPhone Duo's tab strip).
+    @Environment(\.historySideBars) private var sideBars
     @State private var visible: MKMapRect?
     @State private var layer: RouteDensity.Layer?
     @State private var position: MapCameraPosition = .automatic
@@ -119,7 +121,7 @@ struct DrivesRouteMap: View {
     @State private var mapInsets: EdgeInsets?
     @State private var digests = RouteDigests()
 
-    private struct FrameKey: Equatable { var size: CGSize; var insets: EdgeInsets? }
+    private struct FrameKey: Equatable { var size: CGSize; var insets: EdgeInsets?; var bars: EdgeInsets }
 
     /// The map's real safe area, once measured.
     private var safe: EdgeInsets { mapInsets ?? Self.mapSafe() }
@@ -143,10 +145,14 @@ struct DrivesRouteMap: View {
     /// floating toolbar, so the hero adds 16), 32 pt from the sides, and
     /// 24 pt above the fade. The short hero's routes are centred, clear of the
     /// logo in the leading corner; a taller map also keeps 24 pt above the
-    /// attribution itself.
-    static func clearance(topInset: CGFloat, fullBleed: Bool) -> EdgeInsets {
-        EdgeInsets(top: topInset + (fullBleed ? 16 : 24), leading: 32,
-                   bottom: fade + (fullBleed ? 0 : VoltaMapChrome.attribution) + 24, trailing: 32)
+    /// attribution itself. A side bar the map runs under (iPhone Duo's tab
+    /// strip, `bars`) is an obstruction: routes stay 32 pt inside its edge.
+    /// `stroke` (half the casing) keeps the whole drawn line inside, not just
+    /// its centre.
+    static func clearance(topInset: CGFloat, fullBleed: Bool, bars: EdgeInsets = EdgeInsets(), stroke: CGFloat = 0) -> EdgeInsets {
+        let e = EdgeInsets(top: topInset + (fullBleed ? 16 : 24), leading: 32,
+                           bottom: fade + (fullBleed ? 0 : VoltaMapChrome.attribution) + 24, trailing: 32).clearing(bars: bars)
+        return EdgeInsets(top: e.top + stroke, leading: e.leading + stroke, bottom: e.bottom + stroke, trailing: e.trailing + stroke)
     }
 
     /// The camera rect framing `runs` in a map of `size`. The margins never
@@ -155,9 +161,10 @@ struct DrivesRouteMap: View {
     /// `safe` is the safe area MapKit fits into (measured; by default only
     /// our padding).
     static func camera(_ runs: [[CLLocationCoordinate2D]], size: CGSize, topInset: CGFloat, fullBleed: Bool,
-                       safe: EdgeInsets = mapSafe()) -> MKMapRect? {
+                       safe: EdgeInsets = mapSafe(), bars: EdgeInsets = EdgeInsets(), stroke: CGFloat = 0) -> MKMapRect? {
         guard let content = voltaBounds(runs.joined().map(MKMapPoint.init)) else { return nil }
-        return TripRoute.fitted(content, size: size, safe: safe, insets: clearance(topInset: topInset, fullBleed: fullBleed), strict: true)
+        let insets = clearance(topInset: topInset, fullBleed: fullBleed, bars: bars, stroke: stroke)
+        return TripRoute.fitted(content, size: size, safe: safe, insets: insets, strict: true)
     }
 
     private var fadeMask: some View {
@@ -215,7 +222,7 @@ struct DrivesRouteMap: View {
                         .voltaMapDim(fullBleed ? 0.55 : 0.45, bottom: Self.fade)
                         .overlay { routes(runs).allowsHitTesting(false) }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { mapSize = $0 }
-                        .onChange(of: FrameKey(size: mapSize, insets: mapInsets), initial: true) { frame(runs: runs) }
+                        .onChange(of: FrameKey(size: mapSize, insets: mapInsets, bars: sideBars), initial: true) { frame(runs: runs) }
                         // Once the map has settled, measure again: the first
                         // camera reports can come before MapKit has placed it.
                         .task(id: mapSize) {
@@ -252,7 +259,8 @@ struct DrivesRouteMap: View {
     private func frame(runs: [[CLLocationCoordinate2D]]) {
         let size = mapSize
         guard size.width > 0, size.height > 0,
-              let rect = Self.camera(runs, size: size, topInset: topInset, fullBleed: fullBleed, safe: safe) else { return }
+              let rect = Self.camera(runs, size: size, topInset: topInset, fullBleed: fullBleed, safe: safe,
+                                     bars: sideBars, stroke: casingWidth / 2) else { return }
         // Re-applied even when equal to the last fit: MapKit refits on resize.
         position = .fitting(rect, replacing: position)
     }
@@ -471,6 +479,15 @@ struct RoadtripsView: View {
 }
 
 /// DriveCard's voice for a chain of drives: itinerary, distance, route watermark.
+/// A roadtrip card's day: "Nov 11", with the year only when it isn't this year.
+enum RoadtripCardDay {
+    static func text(_ date: Date, now: Date = .now, calendar: Calendar = .current) -> String {
+        calendar.isDate(date, equalTo: now, toGranularity: .year)
+            ? date.formatted(.dateTime.month(.abbreviated).day())
+            : date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+}
+
 private struct RoadtripCard: View {
     var trip: Roadtrip
     @Environment(\.units) private var units
@@ -492,10 +509,10 @@ private struct RoadtripCard: View {
                         Text(units.distanceUnit.uppercased()).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.white)
-                    Text(first.start.formatted(.dateTime.month(.abbreviated).day().year()))
-                        .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
-                    Text(first.start.historyTime)
-                        .font(.system(size: 13)).monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
+                    // One line, as a Drives card's times: "Nov 11 · 21:14".
+                    (Text(RoadtripCardDay.text(first.start)).foregroundStyle(HistoryTheme.secondary)
+                        + Text(" · \(first.start.historyTime)").foregroundStyle(HistoryTheme.tertiary))
+                        .font(.system(size: 13)).monospacedDigit().lineLimit(1).fixedSize()
                 }
             }
             .padding(.leading, 18).padding(.trailing, 16)

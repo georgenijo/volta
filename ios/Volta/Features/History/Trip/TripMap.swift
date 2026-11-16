@@ -121,18 +121,27 @@ struct TripRoute: Equatable {
     /// Splits every position segment into runs of consecutive intervals that
     /// are all supported or all unsupported for `mode` *before* reducing
     /// anything for drawing, so a colored piece only ever spans intervals whose
-    /// metric was recorded at both ends; unsupported runs are neutral. Long
-    /// runs are cut into pieces of at most `stride` intervals and their
-    /// coordinates thinned, which changes how finely a run is drawn but never
-    /// which time it covers. Nothing is interpolated across a gap.
+    /// metric was recorded at both ends; unsupported runs are neutral. In
+    /// efficiency mode a supported run is further split into regen and
+    /// consumption stretches (see `sides`). Runs are then cut into pieces and
+    /// their coordinates thinned, which changes how finely a run is drawn but
+    /// never which time it covers. Nothing is interpolated across a gap.
+    ///
+    /// There are never more than `maxPieces` pieces while the trip has at most
+    /// that many recorded and unrecorded runs: regen and consumption
+    /// stretches beyond the budget merge, shortest first. Runs themselves
+    /// never merge (colour covers exactly the recorded time), so a route
+    /// fragmented past the budget draws one piece per run.
     /// `tripKm` is the drive's own distance; without one the window uses the
-    /// recorded positions' length.
-    init(_ timeline: TripTimeline, mode: TripMapMode, tripKm: Double? = nil, maxPieces: Int = 160, maxCoordinatesPerPiece: Int = 16) {
+    /// recorded positions' length. `referenceWhPerKm` (the car's rating, or the
+    /// fallback) sets the efficiency dead band.
+    init(_ timeline: TripTimeline, mode: TripMapMode, tripKm: Double? = nil,
+         referenceWhPerKm: Double = RoutePalette.fallbackReferenceWhPerKm,
+         maxPieces: Int = 160, maxCoordinatesPerPiece: Int = 16) {
         let points = timeline.points
-        let sampledCount = timeline.segments.reduce(0) { $0 + max(0, $1.count - 1) }
-        let stride = max(1, Int((Double(sampledCount) / Double(maxPieces)).rounded(.up)))
         let km: Double = tripKm.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? Self.recordedKm(timeline)
         let window: Double = EfficiencyWindow.windowKm(forTripKm: km)
+        let band = Self.deadBand(referenceWhPerKm: referenceWhPerKm)
 
         func value(_ chunk: ArraySlice<DrivePoint>) -> Double? {
             switch mode {
@@ -147,7 +156,11 @@ struct TripRoute: Equatable {
             }
         }
 
-        var raw: [(indices: ClosedRange<Int>, value: Double?)] = []
+        // Interval k runs from sample k to k + 1. Efficiency's windowed value
+        // and distance per interval, filled inside supported runs.
+        var windowedAt = [Double?](repeating: nil, count: points.count)
+        var distanceAt = [Double](repeating: 0, count: points.count)
+        var units: [Unit] = []
         var isolated: [Int] = []
         var gaps: [Gap] = []
         for (n, seg) in timeline.segments.enumerated() {
@@ -160,32 +173,48 @@ struct TripRoute: Equatable {
                 let supported = Self.supports(mode, points[runStart], points[runStart + 1])
                 var runEnd = runStart + 1
                 while runEnd < seg.upperBound - 1, Self.supports(mode, points[runEnd], points[runEnd + 1]) == supported { runEnd += 1 }
-                // Efficiency colours by consumption over a rolling distance
-                // window inside this run, never per sample.
-                let intervals: [EfficiencyWindow.Interval]? = supported && mode == .efficiency
-                    ? (runStart..<runEnd).map { EfficiencyWindow.interval(points[$0], points[$0 + 1]) ?? .init(distanceKm: 0, energyKwh: 0) }
-                    : nil
-                let windowed: [Double?]? = intervals.map { EfficiencyWindow.smoothed($0, windowKm: window) }
-                var i = runStart
-                while i < runEnd {
-                    var end = min(i + stride, runEnd)
-                    if let windowed {
-                        // A piece never mixes regen with consumption: averaging a
-                        // short descent into a long piece would hide it.
-                        end = Self.signBreak(windowed, from: i - runStart, to: end - runStart) + runStart
+                if supported && mode == .efficiency {
+                    // Efficiency colours by consumption over a rolling distance
+                    // window inside this run, never per sample.
+                    let intervals = (runStart..<runEnd).map { EfficiencyWindow.interval(points[$0], points[$0 + 1]) ?? .init(distanceKm: 0, energyKwh: 0) }
+                    let windowed = EfficiencyWindow.smoothed(intervals, windowKm: window)
+                    for (k, v) in windowed.enumerated() {
+                        windowedAt[runStart + k] = v
+                        distanceAt[runStart + k] = intervals[k].distanceKm
                     }
-                    let pieceValue: Double?
-                    if !supported {
-                        pieceValue = nil
-                    } else if let windowed, let intervals {
-                        pieceValue = Self.distanceWeighted(windowed, intervals, range: (i - runStart)..<(end - runStart))
-                    } else {
-                        pieceValue = value(points[i...end])
+                    // A piece never mixes regen with consumption: averaging a
+                    // descent into a long piece would hide it.
+                    for side in Self.sides(windowed, distances: intervals.map(\.distanceKm), band: band, minRunKm: window / 2) {
+                        units.append(Unit(segment: n, intervals: (runStart + side.range.lowerBound)..<(runStart + side.range.upperBound),
+                                          supported: true, regen: side.regen))
                     }
-                    raw.append((i...end, pieceValue))
-                    i = end
+                } else {
+                    units.append(Unit(segment: n, intervals: runStart..<runEnd, supported: supported, regen: nil))
                 }
                 runStart = runEnd
+            }
+        }
+        units = Self.merged(units, toAtMost: maxPieces)
+
+        var raw: [(indices: ClosedRange<Int>, value: Double?)] = []
+        for (unit, count) in zip(units, Self.pieceCounts(units.map(\.intervals.count), budget: maxPieces)) {
+            let length = Int((Double(unit.intervals.count) / Double(count)).rounded(.up))
+            var i = unit.intervals.lowerBound
+            while i < unit.intervals.upperBound {
+                let end = min(i + length, unit.intervals.upperBound)
+                let pieceValue: Double?
+                if !unit.supported {
+                    pieceValue = nil
+                } else if mode == .efficiency {
+                    // Inside the dead band a value keeps its stretch's side.
+                    pieceValue = Self.distanceWeighted(windowedAt, distanceAt, range: i..<end).map { v in
+                        unit.regen == true ? (v < 0 ? v : -Double.leastNormalMagnitude) : max(v, 0)
+                    }
+                } else {
+                    pieceValue = value(points[i...end])
+                }
+                raw.append((i...end, pieceValue))
+                i = end
             }
         }
 
@@ -207,30 +236,103 @@ struct TripRoute: Equatable {
         self.isolated = isolated
     }
 
-    /// The end of a piece starting at interval `from`: `to`, or earlier, at
-    /// the first interval whose windowed value is on the other side of zero
-    /// (regen versus consumption). Always at least one interval.
-    static func signBreak(_ windowed: [Double?], from: Int, to: Int) -> Int {
-        func regen(_ k: Int) -> Bool? { windowed[k].map { $0 < 0 } }
-        var side = regen(from)
-        var k = from + 1
-        while k < to {
-            if let r = regen(k) {
-                if let s = side, r != s { return k }
-                side = r
+    /// Intervals that never share a piece with their neighbours: a position
+    /// segment's run of recorded (or unrecorded) intervals, and in efficiency
+    /// mode its regen or consumption stretch.
+    struct Unit: Equatable {
+        var segment: Int
+        /// Interval indices (interval k runs from sample k to k + 1).
+        var intervals: Range<Int>
+        var supported: Bool
+        /// Efficiency only: which side of zero the stretch is drawn on.
+        var regen: Bool?
+    }
+
+    /// Windowed consumption this close to zero is noise, not a change between
+    /// regen and consumption: 5% of the reference (about 8 Wh/km at 160).
+    static func deadBand(referenceWhPerKm: Double) -> Double {
+        0.05 * (referenceWhPerKm.isFinite && referenceWhPerKm > 0 ? referenceWhPerKm : RoutePalette.fallbackReferenceWhPerKm)
+    }
+
+    /// A run's regen and consumption stretches. The windowed value changes
+    /// side only where, on the other side of zero, it stays beyond `band` for
+    /// at least `minRunKm`; anything smaller or shorter (noise around zero, a
+    /// run's shrinking end window) keeps the side of the stretch it is in. The
+    /// run starts on the side of its first value beyond the band. Unknown
+    /// values continue the stretch they are in. The ranges cover the run in order.
+    static func sides(_ windowed: [Double?], distances: [Double], band: Double, minRunKm: Double) -> [(range: Range<Int>, regen: Bool)] {
+        guard !windowed.isEmpty else { return [] }
+        // Maximal stretches of one strict sign; `held` is the distance spent
+        // beyond the band.
+        var stretches: [(start: Int, regen: Bool, peak: Double, held: Double)] = []
+        for (k, v) in windowed.enumerated() {
+            let d = k < distances.count ? distances[k] : 0
+            let regen = v.map { $0 < 0 } ?? stretches.last?.regen ?? false
+            let beyond = abs(v ?? 0) >= band
+            if let last = stretches.last, last.regen == regen {
+                stretches[stretches.count - 1].peak = max(last.peak, abs(v ?? 0))
+                if beyond { stretches[stretches.count - 1].held += d }
+            } else {
+                stretches.append((k, regen, abs(v ?? 0), beyond ? d : 0))
             }
-            k += 1
         }
-        return to
+        var side = stretches.first { $0.peak >= band }?.regen ?? false
+        var result: [(range: Range<Int>, regen: Bool)] = []
+        var start = 0
+        for s in stretches where s.regen != side && s.peak >= band && s.held >= minRunKm {
+            if s.start > start { result.append((start..<s.start, side)) }
+            start = s.start
+            side = s.regen
+        }
+        result.append((start..<windowed.count, side))
+        return result
+    }
+
+    /// Merges units until there are at most `limit`. Only a run's regen and
+    /// consumption stretches merge (the shortest first, into its longer
+    /// neighbour, whose side it takes): recorded and unrecorded runs never
+    /// do, so colour covers exactly the recorded time, and a piece never
+    /// spans a gap.
+    static func merged(_ input: [Unit], toAtMost limit: Int) -> [Unit] {
+        var units = input
+        while units.count > max(1, limit) {
+            var best: (index: Int, into: Int, length: Int)?
+            for (i, u) in units.enumerated() where u.regen != nil {
+                let neighbours = [i - 1, i + 1].filter { j in
+                    j >= 0 && j < units.count && units[j].segment == u.segment && units[j].regen != nil
+                        && (j < i ? units[j].intervals.upperBound == u.intervals.lowerBound : u.intervals.upperBound == units[j].intervals.lowerBound)
+                }
+                guard let into = neighbours.max(by: { units[$0].intervals.count < units[$1].intervals.count }) else { continue }
+                if let b = best, b.length <= u.intervals.count { continue }
+                best = (i, into, u.intervals.count)
+            }
+            guard let best else { break }
+            let a = units[best.index], b = units[best.into]
+            units[best.into].intervals = min(a.intervals.lowerBound, b.intervals.lowerBound)..<max(a.intervals.upperBound, b.intervals.upperBound)
+            units.remove(at: best.index)
+        }
+        return units
+    }
+
+    /// How many pieces each unit of `lengths` intervals is cut into: one each,
+    /// and the rest of `budget` shared in proportion to length. The total never
+    /// exceeds `budget` when there are at most `budget` units.
+    static func pieceCounts(_ lengths: [Int], budget: Int) -> [Int] {
+        let spare = max(0, budget - lengths.count)
+        let extra = lengths.reduce(0) { $0 + max(0, $1 - 1) }
+        return lengths.map { n in
+            let share = extra > 0 ? (max(0, n - 1) * spare) / extra : 0
+            return max(1, min(n, 1 + share))
+        }
     }
 
     /// Distance-weighted mean of a run's windowed values over `range` (a
     /// piece covers several intervals when the route is long).
-    private static func distanceWeighted(_ windowed: [Double?], _ intervals: [EfficiencyWindow.Interval], range: Range<Int>) -> Double? {
+    private static func distanceWeighted(_ windowed: [Double?], _ distances: [Double], range: Range<Int>) -> Double? {
         var sum = 0.0, weight = 0.0, plain = 0.0, n = 0.0
         for k in range where k < windowed.count {
             guard let v = windowed[k] else { continue }
-            let d: Double = intervals[k].distanceKm
+            let d: Double = distances[k]
             sum += v * d; weight += d; plain += v; n += 1
         }
         if weight > 0 { return sum / weight }

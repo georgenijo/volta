@@ -204,6 +204,93 @@ final class RoutePaletteTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testASideBarIsAnObstructionForTheRouteFit() {
+        // iPhone Duo's tab strip runs over the heatmap's trailing edge.
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let runs = DemoRoutes.all.indices.map { id in
+            DemoRoutes.points(for: id, start: start, durationMin: 30).map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        }
+        let content = try! XCTUnwrap(voltaBounds(runs.joined().map(MKMapPoint.init)))
+        let safe = DrivesRouteMap.mapSafe()
+        let size = CGSize(width: 475, height: 330), bars = EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 64)
+        let stroke: CGFloat = 3.5   // half the heatmap's 7 pt casing
+        func span(_ bars: EdgeInsets) -> (CGPoint, CGPoint) {
+            let rect = try! XCTUnwrap(DrivesRouteMap.camera(runs, size: size, topInset: 0, fullBleed: false, safe: safe, bars: bars, stroke: stroke))
+            let a = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: rect, size: size, safe: safe))
+            let b = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: rect, size: size, safe: safe))
+            return (a, b)
+        }
+        let (a0, b0) = span(EdgeInsets())
+        let (a, b) = span(bars)
+        // The whole stroke ends at least 32 pt inside the bar's leading edge.
+        XCTAssertLessThanOrEqual(b.x + stroke, size.width - bars.trailing - 32 + 0.01)
+        XCTAssertGreaterThanOrEqual(a.x - stroke, 32 - 0.01)
+        // The bar shrinks the area the routes fit into.
+        XCTAssertLessThan(b.x - a.x, b0.x - a0.x + 0.01)
+        XCTAssertLessThan(b.x, b0.x)
+        let clear = DrivesRouteMap.clearance(topInset: 0, fullBleed: false, bars: bars, stroke: stroke)
+        XCTAssertEqual(clear.trailing, 64 + 32 + 3.5, accuracy: 1e-9)
+        XCTAssertEqual(clear.leading, 32 + 3.5, accuracy: 1e-9)
+        // No bar, no change; a bar narrower than the margin still gets 32 pt past it.
+        XCTAssertEqual(EdgeInsets(top: 1, leading: 24, bottom: 2, trailing: 24).clearing(bars: EdgeInsets()),
+                       EdgeInsets(top: 1, leading: 24, bottom: 2, trailing: 24))
+        XCTAssertEqual(EdgeInsets(top: 0, leading: 24, bottom: 0, trailing: 24).clearing(bars: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8)).trailing, 40)
+    }
+
+    func testAPinMapRefitsWhenAPlaceMovesUnderTheSameID() {
+        // A search swaps one AC place for another; both are pin 0.
+        let size = CGSize(width: 375, height: 280), reach = EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14)
+        let before = PinnedMapFrame(size: size, ids: [AnyHashable(0)], coordinates: [CLLocationCoordinate2D(latitude: 37.40, longitude: -122.10)],
+                                    reach: reach, area: nil)
+        var after = before
+        after.coordinates = [CLLocationCoordinate2D(latitude: 37.80, longitude: -122.40)]
+        XCTAssertNotEqual(before, after, "the fit key changes, so the camera is fitted again")
+        XCTAssertEqual(before, before)
+        let clearance = EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24)
+        let old = try! XCTUnwrap(before.camera(safe: EdgeInsets(), clearance: clearance))
+        let new = try! XCTUnwrap(after.camera(safe: EdgeInsets(), clearance: clearance))
+        XCTAssertTrue(new.contains(MKMapPoint(after.coordinates[0])))
+        XCTAssertFalse(new.contains(MKMapPoint(before.coordinates[0])))
+        XCTAssertFalse(old.contains(MKMapPoint(after.coordinates[0])), "the old camera would have lost the pin")
+    }
+
+    func testCalloutsGiveWayInAStableOrder() {
+        typealias E = CalloutLayout.Entry<String>
+        let callout = CGSize(width: 120, height: 36)
+        func badge(_ x: CGFloat, _ y: CGFloat) -> CGRect { CGRect(x: x - 15, y: y - 30, width: 30, height: 30) }
+        // Far apart: every callout above its pin.
+        let apart = [E(id: "home", rank: 15, badge: badge(60, 200), callout: callout),
+                     E(id: "work", rank: 13, badge: badge(300, 80), callout: callout)]
+        XCTAssertEqual(CalloutLayout.place(apart), ["home": .above, "work": .above])
+        // The busier place keeps the top; the other's callout would overlap it
+        // and flips below its pin.
+        let close = [E(id: "super", rank: 2, badge: badge(110, 240), callout: callout),
+                     E(id: "home", rank: 15, badge: badge(80, 220), callout: callout)]
+        XCTAssertEqual(CalloutLayout.place(close), ["home": .above, "super": .below])
+        // Hemmed in above and below: badge only.
+        let hemmed = close + [E(id: "work", rank: 13, badge: badge(110, 330), callout: callout)]
+        let placed = CalloutLayout.place(hemmed)
+        XCTAssertEqual(placed["home"], .above)
+        XCTAssertEqual(placed["super"], .hidden)
+        // The same result whatever order the pins arrive in, and ties by ID.
+        XCTAssertEqual(CalloutLayout.place(hemmed.reversed()), placed)
+        XCTAssertEqual(CalloutLayout.place(Array(hemmed.shuffled())), placed)
+        // Equal rank: "a" is placed first and keeps the top.
+        let tie = [E(id: "b", rank: 1, badge: badge(130, 205), callout: callout), E(id: "a", rank: 1, badge: badge(100, 200), callout: callout)]
+        XCTAssertEqual(CalloutLayout.place(tie), ["a": .above, "b": .below])
+        XCTAssertEqual(CalloutLayout.place(tie.reversed()), CalloutLayout.place(tie))
+    }
+
+    func testARoadtripDayShowsItsYearOnlyWhenNotThisYear() {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 16))!
+        let thisYear = calendar.date(from: DateComponents(year: 2026, month: 11, day: 11, hour: 21))!
+        let lastYear = calendar.date(from: DateComponents(year: 2025, month: 11, day: 11, hour: 21))!
+        XCTAssertFalse(RoadtripCardDay.text(thisYear, now: now, calendar: calendar).contains("2026"))
+        XCTAssertTrue(RoadtripCardDay.text(lastYear, now: now, calendar: calendar).contains("2025"))
+    }
+
     func testAnEqualFitIsStillReapplied() {
         let rect = MKMapRect(x: 43_000_000, y: 104_000_000, width: 400_000, height: 100_000)
         let again = MapCameraPosition.fitting(rect, replacing: .rect(rect))
@@ -575,10 +662,55 @@ final class EfficiencyWindowTests: XCTestCase {
         XCTAssertEqual(style.rgb(regen[0].value!), RoutePalette.regen)
         // Pieces still cover the run without a gap.
         for (a, b) in zip(route.pieces, route.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
-        // The split rule on its own: a piece ends where the windowed sign flips.
-        XCTAssertEqual(TripRoute.signBreak([5, 4, -1, -2, 3], from: 0, to: 5), 2)
-        XCTAssertEqual(TripRoute.signBreak([nil, -1, -2, 3], from: 0, to: 4), 3)
-        XCTAssertEqual(TripRoute.signBreak([5, 4, 3], from: 0, to: 3), 3)
+        XCTAssertLessThanOrEqual(route.pieces.count, 8)
+        // The split rule on its own: a side changes only where the other side
+        // reaches the dead band and lasts half a window.
+        func sides(_ w: [Double?], band: Double = 8, minRunKm: Double = 1) -> [String] {
+            TripRoute.sides(w, distances: Array(repeating: 0.2, count: w.count), band: band, minRunKm: minRunKm)
+                .map { "\($0.range.lowerBound)..<\($0.range.upperBound) \($0.regen ? "regen" : "use")" }
+        }
+        XCTAssertEqual(sides([50, 40, -1, -2, 30]), ["0..<5 use"], "a small dip below zero is noise")
+        XCTAssertEqual(sides([50, 40, -20, -20, -20, -20, -20, 30]), ["0..<2 use", "2..<8 regen"],
+                       "a consumption tail shorter than half a window stays in the descent")
+        XCTAssertEqual(sides([50, 40, -20, -20, -20, -20, -20, 30, 30, 30, 30, 30]), ["0..<2 use", "2..<7 regen", "7..<12 use"])
+        XCTAssertEqual(sides([50, -5, -5, -5, -5, -5, -5, -20]), ["0..<8 use"], "regen inside the dead band doesn't hold")
+        XCTAssertEqual(sides([50, -20, -20, -20, 30]), ["0..<5 use"], "regen shorter than half a window is absorbed")
+        XCTAssertEqual(sides([nil, -20, -20, -20, -20, -20]), ["0..<6 regen"], "unknown values join their stretch")
+        XCTAssertEqual(TripRoute.deadBand(referenceWhPerKm: 160), 8, accuracy: 1e-9)
+    }
+
+    @MainActor
+    func testNoiseAroundZeroStaysWithinTheDrawingBudget() {
+        // Sol's case: 6,001 samples a second apart at 75.6 km/h (21 m/s),
+        // power repeating 0, 10, 0, -10 kW; 126 km. The windowed value hovers
+        // within ±0.53 Wh/km of zero and must not split pieces.
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let pattern: [Double] = [0, 10, 0, -10]
+        let rows = (0...6000).map { n in
+            DrivePoint(t: t0.addingTimeInterval(Double(n)), latitude: 37.0 + Double(n) * 21 / 111_195, longitude: -122.1,
+                       speedKph: 75.6, powerKw: pattern[n % 4], elevationM: nil, batteryLevel: 60)
+        }
+        let route = TripRoute(TripTimeline(path: rows), mode: .efficiency, tripKm: 126, maxPieces: 160)
+        XCTAssertLessThanOrEqual(route.pieces.count, 160)
+        XCTAssertFalse(route.pieces.contains { ($0.value ?? 0) < 0 }, "no regen piece from noise")
+        for (a, b) in zip(route.pieces, route.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
+
+        // Real descents among the noise, more of them than the budget: the
+        // shortest merge, the count holds, and every piece stays recorded.
+        let hilly = (0...6000).map { n -> DrivePoint in
+            let descending: Bool = (n / 60) % 2 == 1
+            let power: Double = descending ? -12 : pattern[n % 4]
+            let latitude: Double = 37.0 + Double(n) * 21 / 111_195
+            return DrivePoint(t: t0.addingTimeInterval(Double(n)), latitude: latitude, longitude: -122.1,
+                              speedKph: 75.6, powerKw: power, elevationM: nil, batteryLevel: 60)
+        }
+        let hillyRoute = TripRoute(TripTimeline(path: hilly), mode: .efficiency, tripKm: 126, maxPieces: 40)
+        XCTAssertLessThanOrEqual(hillyRoute.pieces.count, 40)
+        XCTAssertTrue(hillyRoute.pieces.allSatisfy { $0.value != nil })
+        for (a, b) in zip(hillyRoute.pieces, hillyRoute.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
+        // The share rule on its own.
+        XCTAssertEqual(TripRoute.pieceCounts([10, 10], budget: 4), [2, 2])
+        XCTAssertLessThanOrEqual(TripRoute.pieceCounts([1, 1, 1, 500, 3], budget: 6).reduce(0, +), 6)
     }
 
     func testRunShorterThanTheWindowUsesTheWholeRun() {

@@ -102,6 +102,8 @@ struct HistoryMapPin: Identifiable {
     var charger: ChargerKind? = nil
     /// A session here is charging now: the live charging marker.
     var active = false
+    /// Sessions at this place: the busiest places keep their callouts first.
+    var sessions = 1
 }
 
 /// Session locations on the shared grey basemap, pins in colour.
@@ -116,42 +118,49 @@ struct HistorySessionsMap: View {
         // Every pin whole, callout included, 24 pt from the edges and 24 pt
         // above the attribution.
         PinnedMap(items: pins, coordinate: \.coordinate, safe: .init(top: 0, leading: 0, bottom: 24, trailing: 0),
-                  clearance: .init(top: 24, leading: 24, bottom: 24 + VoltaMapChrome.attribution + 24, trailing: 24)) { pin in
+                  clearance: .init(top: 24, leading: 24, bottom: 24 + VoltaMapChrome.attribution + 24, trailing: 24),
+                  rank: \.sessions) { pin in
+            // The badge carries the place: tappable, and read with the callout's
+            // text, which can be crowded out.
+            Button { onSelect(pin.id) } label: { badge(pin) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(pin.title), \(pin.subtitle)")
+        } callout: { pin in
             Button { onSelect(pin.id) } label: {
-                VStack(spacing: 4) {
-                    VStack(spacing: 1) {
-                        Text(pin.title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
-                        Text(pin.subtitle.uppercased())
-                            .scaledFont(11, weight: .semibold)
-                            .tracking(0.8)
-                            .foregroundStyle(HistoryTheme.secondary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(HistoryTheme.card.opacity(0.92), in: .rect(cornerRadius: 10))
-                    .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(HistoryTheme.hairline) }
-                    if pin.active {
-                        // The same marker as the dashboard while charging.
-                        ChargingMarker().frame(width: 30, height: 30)
-                    } else if let charger = pin.charger {
-                        ChargerBadge(kind: charger)
-                    } else {
-                        ZStack {
-                            Circle().fill(pin.tint.opacity(0.25)).frame(width: 30, height: 30)
-                            Circle().fill(pin.tint).frame(width: 18, height: 18)
-                            Image(systemName: pin.systemImage)
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.black.opacity(0.75))
-                        }
-                    }
+                VStack(spacing: 1) {
+                    Text(pin.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text(pin.subtitle.uppercased())
+                        .scaledFont(11, weight: .semibold)
+                        .tracking(0.8)
+                        .foregroundStyle(HistoryTheme.secondary)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(HistoryTheme.card.opacity(0.92), in: .rect(cornerRadius: 10))
+                .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(HistoryTheme.hairline) }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(pin.title), \(pin.subtitle)")
         }
         .overlay(alignment: .bottom) { status.padding(.bottom, HistoryTheme.bottomInset + 20) }
+    }
+
+    @ViewBuilder private func badge(_ pin: HistoryMapPin) -> some View {
+        if pin.active {
+            // The same marker as the dashboard while charging.
+            ChargingMarker().frame(width: 30, height: 30)
+        } else if let charger = pin.charger {
+            ChargerBadge(kind: charger)
+        } else {
+            ZStack {
+                Circle().fill(pin.tint.opacity(0.25)).frame(width: 30, height: 30)
+                Circle().fill(pin.tint).frame(width: 18, height: 18)
+                Image(systemName: pin.systemImage)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.black.opacity(0.75))
+            }
+        }
     }
 
     @ViewBuilder private var status: some View {

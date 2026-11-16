@@ -348,7 +348,7 @@ struct ChargingHistoryView: View {
             return HistoryMapPin(id: cluster.id, coordinate: cluster.coordinate, title: cluster.title(\.title),
                                  subtitle: "\(cluster.items.count)× · \(kwh)",
                                  systemImage: first.kindIcon, tint: first.kindTint, charger: ChargerKind(agreeing: cluster.items),
-                                 active: cluster.items.contains { $0.end == nil })
+                                 active: cluster.items.contains { $0.end == nil }, sessions: cluster.items.count)
         }
         let needsPlaces = visible.contains { $0.needsPlaces }
         return HistorySessionsMap(pins: pins, summary: grouping.summary, retryPlaces: {
@@ -400,9 +400,13 @@ struct SessionsMapHero: View {
     var topInset: CGFloat = 110
     var pin: Color = HistoryTheme.pin
     var expand: () -> Void
+    /// Side bars the map runs under: pins stay clear of them.
+    @Environment(\.historySideBars) private var sideBars
 
     private struct Spot: Identifiable {
-        var id: Int
+        /// The place, to roughly 100 m: the same place keeps its pin whatever
+        /// else the list holds.
+        var id: String
         var coordinate: CLLocationCoordinate2D
         var kind: ChargerKind?
     }
@@ -411,8 +415,9 @@ struct SessionsMapHero: View {
     private var spots: [Spot] {
         var seen = Set<String>()
         return coordinates.enumerated().compactMap { index, c in
-            guard seen.insert(String(format: "%.3f,%.3f", c.latitude, c.longitude)).inserted else { return nil }
-            return Spot(id: index, coordinate: c, kind: kinds.flatMap { index < $0.count ? $0[index] : nil })
+            let place = String(format: "%.3f,%.3f", c.latitude, c.longitude)
+            guard seen.insert(place).inserted else { return nil }
+            return Spot(id: place, coordinate: c, kind: kinds.flatMap { index < $0.count ? $0[index] : nil })
         }
     }
 
@@ -426,7 +431,7 @@ struct SessionsMapHero: View {
                 // fade; the logo and Legal link sit just above the fade.
                 PinnedMap(items: spots, coordinate: \.coordinate,
                           safe: EdgeInsets(top: 0, leading: 0, bottom: fade, trailing: 0),
-                          clearance: EdgeInsets(top: topInset + 16, leading: 24, bottom: fade + 24, trailing: 24),
+                          clearance: EdgeInsets(top: topInset + 16, leading: 24, bottom: fade + 24, trailing: 24).clearing(bars: sideBars),
                           dim: 0.65, interactive: false, pinAnchor: .center) { spot in
                     if let kind = spot.kind {
                         ChargerBadge(kind: kind)

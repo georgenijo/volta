@@ -56,7 +56,7 @@ struct ChargerMapView: View {
                                 Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary)
                                 if let energy = location.energyAddedKwh {
                                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                        Text(VoltaFormat.number(energy)).font(.system(size: 22, weight: .semibold, design: .rounded)).monospacedDigit()
+                                        Text(VoltaFormat.number(energy)).font(.system(size: 22, weight: .semibold, design: .rounded))
                                         Text("kWh added").foregroundStyle(ScreenKit.secondary)
                                     }
                                     .accessibilityElement(children: .combine)
@@ -64,7 +64,10 @@ struct ChargerMapView: View {
                                     Text("Total energy unknown — some sessions lack readings")
                                 }
                                 Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                Text(ChargerPresentation.cost(location.cost, currency: location.currency)).font(.caption)
+                                // A real figure reads as one; an unknown cost stays quiet.
+                                Text(ChargerPresentation.cost(location.cost, currency: location.currency))
+                                    .font(location.cost != nil ? .subheadline : .caption)
+                                    .foregroundStyle(location.cost != nil ? Color.voltaTextPrimary : ScreenKit.secondary)
                                 if !location.hasCoordinate { Text("Coordinates not recorded").font(.caption).foregroundStyle(ScreenKit.secondary) }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }

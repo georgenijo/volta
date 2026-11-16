@@ -313,7 +313,8 @@ struct DriveDetailView: View {
     private var routeClearance: EdgeInsets {
         // The page's top safe area already includes the floating toolbar.
         let top: CGFloat = sideBars.barEdges.isEmpty ? page.safeArea.top + 24 : 24
-        return EdgeInsets(top: top, leading: 24, bottom: Self.mapFade + Self.attribution + 24, trailing: 24)
+        // The map runs under the side bars: they are obstructions.
+        return EdgeInsets(top: top, leading: 24, bottom: Self.mapFade + Self.attribution + 24, trailing: 24).clearing(bars: sideBars)
     }
 
     /// MapKit's logo and Legal link above the fade.
@@ -323,7 +324,9 @@ struct DriveDetailView: View {
     @ViewBuilder private var legendStrip: some View {
         if let snapshot, let route = snapshot.routes[mode], snapshot.timeline.points.count > 1,
            let legend = routeStyle(route).legend(units: units) {
-            RouteLegendStrip(model: legend)
+            // Two lines in every mode (elevation has one): the headline
+            // below stays put when the mode changes.
+            RouteLegendStrip(model: legend, reservedHeight: 44)
         }
     }
 

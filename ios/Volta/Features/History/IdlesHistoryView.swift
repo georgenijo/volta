@@ -383,7 +383,7 @@ struct IdlesHistoryView: View {
             let minutes = cluster.items.reduce(0) { $0 + $1.durationMin }
             return HistoryMapPin(id: cluster.id, coordinate: cluster.coordinate, title: cluster.title(\.placeLabel),
                                  subtitle: "\(cluster.items.count)× · \(ParkedText.span(minutes))",
-                                 systemImage: "parkingsign", tint: HistoryTheme.blue)
+                                 systemImage: "parkingsign", tint: HistoryTheme.blue, sessions: cluster.items.count)
         }
         let needsPlaces = visible.contains { $0.needsPlaces }
         return HistorySessionsMap(pins: pins, summary: grouping.summary, retryPlaces: {

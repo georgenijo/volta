@@ -27,6 +27,22 @@ enum VoltaMapChrome {
     /// MapKit's logo and Legal link: about 8 pt above the fade's start, about
     /// 20 pt tall. Content kept clear of them adds this to the fade.
     static let attribution: CGFloat = 28
+    /// Least distance from a side bar's edge (iPhone Duo's tab strip) to
+    /// anything fitted in a map that runs under it.
+    static let barClearance: CGFloat = 32
+}
+
+extension EdgeInsets {
+    /// These margins, with each side that has a bar (`bars`, from the
+    /// window's safe area, as the system reports the strip) kept
+    /// `VoltaMapChrome.barClearance` inside the bar's edge. For maps that run
+    /// under the bars; a map inside the safe area already fits clear of them.
+    func clearing(bars: EdgeInsets) -> EdgeInsets {
+        var e = self
+        if bars.leading > 0 { e.leading = max(e.leading, bars.leading + VoltaMapChrome.barClearance) }
+        if bars.trailing > 0 { e.trailing = max(e.trailing, bars.trailing + VoltaMapChrome.barClearance) }
+        return e
+    }
 }
 
 extension View {
@@ -117,8 +133,12 @@ func voltaBounds(_ points: [MKMapPoint], minMeters: Double = 2_000) -> MKMapRect
 /// annotations would be drained to grey with the tiles, so each pin is placed
 /// by MapKit's own projection and follows the camera. The camera frames every
 /// pin whole (badge and callout, as measured) at least `clearance` from the
-/// map's edges, whenever the pins, their sizes or the map's size change.
-struct PinnedMap<Item: Identifiable, Pin: View>: View {
+/// map's edges, whenever the pins, their places, their sizes or the map's
+/// size change.
+///
+/// A pin can carry a callout, drawn above its badge, or below it, or not at
+/// all when it would crowd another (see `CalloutLayout`); the badge stays.
+struct PinnedMap<Item: Identifiable, Pin: View, Callout: View>: View {
     var items: [Item]
     var coordinate: (Item) -> CLLocationCoordinate2D
     /// MapKit's padding: where the logo and Legal link sit.
@@ -130,28 +150,38 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
     var interactive = true
     /// Which point of the pin sits on the coordinate.
     var pinAnchor: UnitPoint = .bottom
-    @ViewBuilder var pin: (Item) -> Pin
+    /// Callouts are placed in this order, highest first (ties by ID).
+    var rank: (Item) -> Int = { _ in 0 }
+    var pin: (Item) -> Pin
+    var callout: ((Item) -> Callout)?
 
     @State private var position: MapCameraPosition = .automatic
     /// Changes with the camera, so the pins follow it.
     @State private var camera: MKMapRect?
     @State private var size: CGSize = .zero
     @State private var pinSizes: [Item.ID: CGSize] = [:]
+    @State private var calloutSizes: [Item.ID: CGSize] = [:]
     /// The area MapKit really fits into (see `MapFitArea`); `safe` until measured.
     @State private var fitArea: EdgeInsets?
     private static var space: String { "volta.pinned.map" }
 
-    private struct FrameKey: Equatable { var size: CGSize; var ids: [Item.ID]; var reach: EdgeInsets; var area: EdgeInsets? }
+    private var frameKey: PinnedMapFrame {
+        PinnedMapFrame(size: size, ids: items.map { AnyHashable($0.id) }, coordinates: items.map(coordinate),
+                       reach: reach, area: fitArea)
+    }
 
-    /// How far the largest pin reaches past its coordinate on each side.
+    /// How far the largest pin reaches past its coordinate on each side. A
+    /// callout may sit above or below its badge, so both sides keep room for it.
     private var reach: EdgeInsets {
         var r = EdgeInsets()
         for item in items {
             guard let s = pinSizes[item.id] else { continue }
-            r.leading = max(r.leading, s.width * pinAnchor.x)
-            r.trailing = max(r.trailing, s.width * (1 - pinAnchor.x))
-            r.top = max(r.top, s.height * pinAnchor.y)
-            r.bottom = max(r.bottom, s.height * (1 - pinAnchor.y))
+            let c = callout == nil ? .zero : calloutSizes[item.id] ?? .zero
+            let extra: CGFloat = c.height > 0 ? CalloutLayout.gap + c.height : 0
+            r.leading = max(r.leading, s.width * pinAnchor.x, c.width / 2)
+            r.trailing = max(r.trailing, s.width * (1 - pinAnchor.x), c.width / 2)
+            r.top = max(r.top, s.height * pinAnchor.y + extra)
+            r.bottom = max(r.bottom, s.height * (1 - pinAnchor.y) + extra)
         }
         return EdgeInsets(top: r.top.rounded(.up), leading: r.leading.rounded(.up),
                           bottom: r.bottom.rounded(.up), trailing: r.trailing.rounded(.up))
@@ -174,17 +204,7 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
                     // layer each see.
                     GeometryReader { geo in
                         if camera != nil {
-                            let origin = geo.frame(in: .global).origin
-                            ForEach(items) { item in
-                                if let p = proxy.convert(coordinate(item), to: .global) {
-                                    let id = item.id
-                                    pin(item)
-                                        .fixedSize()
-                                        .onGeometryChange(for: CGSize.self) { $0.size } action: { pinSizes[id] = $0 }
-                                        .position(x: p.x - origin.x, y: p.y - origin.y)
-                                        .modifier(AnchorShift(anchor: pinAnchor, size: pinSizes[id] ?? .zero))
-                                }
-                            }
+                            pins(proxy, origin: geo.frame(in: .global).origin)
                         }
                     }
                 }
@@ -198,7 +218,49 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
                 }
         }
         .coordinateSpace(.named(Self.space))
-        .onChange(of: FrameKey(size: size, ids: items.map(\.id), reach: reach, area: fitArea), initial: true) { frame() }
+        .onChange(of: frameKey, initial: true) { frame() }
+    }
+
+    @ViewBuilder private func pins(_ proxy: MapProxy, origin: CGPoint) -> some View {
+        let placed: [Projected] = items.compactMap { item in
+            proxy.convert(coordinate(item), to: .global).map { Projected(item: item, point: CGPoint(x: $0.x - origin.x, y: $0.y - origin.y)) }
+        }
+        let badges: [Item.ID: CGRect] = Dictionary(placed.map { pin in
+            let s = pinSizes[pin.id] ?? .zero
+            return (pin.id, CGRect(x: pin.point.x - s.width * pinAnchor.x, y: pin.point.y - s.height * pinAnchor.y,
+                                   width: s.width, height: s.height))
+        }, uniquingKeysWith: { a, _ in a })
+        let placements: [Item.ID: CalloutPlacement] = callout == nil ? [:] : CalloutLayout.place(placed.map { pin in
+            CalloutLayout.Entry(id: pin.id, rank: rank(pin.item), badge: badges[pin.id] ?? .zero, callout: calloutSizes[pin.id] ?? .zero)
+        })
+        ForEach(placed) { projected in
+            let item = projected.item, p = projected.point
+            let id = item.id
+            if let callout, let badge = badges[id] {
+                let c = calloutSizes[id] ?? .zero
+                let where_ = placements[id] ?? .above
+                callout(item)
+                    .fixedSize()
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { calloutSizes[id] = $0 }
+                    .position(x: badge.midX, y: where_ == .below ? badge.maxY + CalloutLayout.gap + c.height / 2
+                                                                  : badge.minY - CalloutLayout.gap - c.height / 2)
+                    // Crowded out: not shown, still measured.
+                    .opacity(where_ == .hidden ? 0 : 1)
+                    .allowsHitTesting(where_ != .hidden)
+                    .accessibilityHidden(true)
+            }
+            pin(item)
+                .fixedSize()
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { pinSizes[id] = $0 }
+                .position(x: p.x, y: p.y)
+                .modifier(AnchorShift(anchor: pinAnchor, size: pinSizes[id] ?? .zero))
+        }
+    }
+
+    private struct Projected: Identifiable {
+        var item: Item
+        var point: CGPoint
+        var id: Item.ID { item.id }
     }
 
     private func measure(_ proxy: MapProxy) {
@@ -208,14 +270,110 @@ struct PinnedMap<Item: Identifiable, Pin: View>: View {
     }
 
     private func frame() {
-        guard let content = voltaBounds(items.map { MKMapPoint(coordinate($0)) }) else { position = .automatic; return }
-        guard size.width > 0, size.height > 0 else { return }
-        let r = reach
-        let insets = EdgeInsets(top: clearance.top + r.top, leading: clearance.leading + r.leading,
-                                bottom: clearance.bottom + r.bottom, trailing: clearance.trailing + r.trailing)
-        // The margins hold as given: pins never trade them for size.
-        let rect = TripRoute.fitted(content, size: size, safe: fitArea ?? safe, insets: insets, strict: true)
+        guard !items.isEmpty else { position = .automatic; return }
+        guard let rect = frameKey.camera(safe: fitArea ?? safe, clearance: clearance) else { return }
         position = .fitting(rect, replacing: position)
+    }
+}
+
+extension PinnedMap {
+    /// Pins with callouts (see `CalloutLayout`). The pin should carry the
+    /// callout's text in its accessibility label: a callout can be hidden.
+    init(items: [Item], coordinate: @escaping (Item) -> CLLocationCoordinate2D, safe: EdgeInsets = EdgeInsets(),
+         clearance: EdgeInsets = EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24), dim: Double = 0.2,
+         interactive: Bool = true, pinAnchor: UnitPoint = .bottom, rank: @escaping (Item) -> Int,
+         @ViewBuilder pin: @escaping (Item) -> Pin, @ViewBuilder callout: @escaping (Item) -> Callout) {
+        self.items = items; self.coordinate = coordinate; self.safe = safe; self.clearance = clearance
+        self.dim = dim; self.interactive = interactive; self.pinAnchor = pinAnchor; self.rank = rank
+        self.pin = pin; self.callout = callout
+    }
+}
+
+extension PinnedMap where Callout == EmptyView {
+    /// Pins only.
+    init(items: [Item], coordinate: @escaping (Item) -> CLLocationCoordinate2D, safe: EdgeInsets = EdgeInsets(),
+         clearance: EdgeInsets = EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24), dim: Double = 0.2,
+         interactive: Bool = true, pinAnchor: UnitPoint = .bottom, @ViewBuilder pin: @escaping (Item) -> Pin) {
+        self.items = items; self.coordinate = coordinate; self.safe = safe; self.clearance = clearance
+        self.dim = dim; self.interactive = interactive; self.pinAnchor = pinAnchor
+        self.pin = pin; self.callout = nil
+    }
+}
+
+enum CalloutPlacement: Equatable { case above, below, hidden }
+
+/// Where each pin's callout goes, from the projected bounds alone. Callouts
+/// are placed one by one, highest `rank` first (ties by ID, so the result
+/// never depends on input order). A callout goes above its badge unless it
+/// would come within `margin` of a callout already placed or of any other
+/// badge; then below, on the same test; else it is not shown and the badge
+/// stands alone.
+enum CalloutLayout {
+    /// Space between a badge and its callout.
+    static let gap: CGFloat = 4
+    static let margin: CGFloat = 8
+
+    struct Entry<ID: Hashable> {
+        var id: ID
+        var rank: Int
+        var badge: CGRect
+        var callout: CGSize
+    }
+
+    static func place<ID: Hashable>(_ entries: [Entry<ID>], margin: CGFloat = margin) -> [ID: CalloutPlacement] {
+        let order = entries.sorted { a, b in
+            a.rank != b.rank ? a.rank > b.rank : String(describing: a.id) < String(describing: b.id)
+        }
+        var placed: [CGRect] = []
+        var result: [ID: CalloutPlacement] = [:]
+        for e in order {
+            func rect(_ placement: CalloutPlacement) -> CGRect {
+                let y = placement == .below ? e.badge.maxY + gap : e.badge.minY - gap - e.callout.height
+                return CGRect(x: e.badge.midX - e.callout.width / 2, y: y, width: e.callout.width, height: e.callout.height)
+            }
+            func clear(_ r: CGRect) -> Bool {
+                let zone = r.insetBy(dx: -margin, dy: -margin)
+                return !placed.contains { $0.intersects(zone) }
+                    && !entries.contains { $0.id != e.id && $0.badge.intersects(zone) }
+            }
+            if clear(rect(.above)) {
+                result[e.id] = .above; placed.append(rect(.above))
+            } else if clear(rect(.below)) {
+                result[e.id] = .below; placed.append(rect(.below))
+            } else {
+                result[e.id] = .hidden
+            }
+        }
+        return result
+    }
+}
+
+/// Everything a pin map's camera depends on: when any of it changes the fit
+/// is redone. Coordinates count as well as identities, so a pin that moves
+/// under the same ID (a search swapping one place for another) is refitted.
+struct PinnedMapFrame: Equatable {
+    var size: CGSize
+    var ids: [AnyHashable]
+    var coordinates: [CLLocationCoordinate2D]
+    /// How far the largest pin reaches past its coordinate on each side.
+    var reach: EdgeInsets
+    var area: EdgeInsets?
+
+    static func == (a: PinnedMapFrame, b: PinnedMapFrame) -> Bool {
+        a.size == b.size && a.ids == b.ids && a.reach == b.reach && a.area == b.area
+            && a.coordinates.count == b.coordinates.count
+            && zip(a.coordinates, b.coordinates).allSatisfy { $0.latitude == $1.latitude && $0.longitude == $1.longitude }
+    }
+
+    /// The camera rect keeping every pin whole at least `clearance` inside
+    /// the area MapKit fits into (`safe`). The margins hold as given: pins
+    /// never trade them for size. Nil without pins or before layout.
+    func camera(safe: EdgeInsets, clearance: EdgeInsets) -> MKMapRect? {
+        guard size.width > 0, size.height > 0,
+              let content = voltaBounds(coordinates.map(MKMapPoint.init)) else { return nil }
+        let insets = EdgeInsets(top: clearance.top + reach.top, leading: clearance.leading + reach.leading,
+                                bottom: clearance.bottom + reach.bottom, trailing: clearance.trailing + reach.trailing)
+        return TripRoute.fitted(content, size: size, safe: safe, insets: insets, strict: true)
     }
 }
 
