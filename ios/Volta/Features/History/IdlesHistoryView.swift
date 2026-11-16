@@ -419,31 +419,6 @@ struct IdlesHistoryView: View {
     }
 }
 
-// MARK: - Text size
-
-extension View {
-    /// The app caps Dynamic Type at Large for screens tuned to fixed sizes
-    /// (`VoltaApp`). Parked is built on text styles and lays out for every
-    /// size, so it follows the system setting, accessibility sizes included.
-    func followsSystemTextSize() -> some View { modifier(SystemTextSize()) }
-}
-
-private struct SystemTextSize: ViewModifier {
-    @State private var size = Self.current
-
-    static var current: DynamicTypeSize {
-        DynamicTypeSize(UIApplication.shared.preferredContentSizeCategory) ?? .large
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .dynamicTypeSize(size)
-            .onReceive(NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)) { _ in
-                size = Self.current
-            }
-    }
-}
-
 // MARK: - Range menu
 
 /// The range menu as a capsule in the content, beside the title, while the

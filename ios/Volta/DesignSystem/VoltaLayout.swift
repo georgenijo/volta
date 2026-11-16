@@ -229,3 +229,29 @@ struct VoltaPanes<Primary: View, Secondary: View>: View {
         }
     }
 }
+
+// MARK: - Text size
+
+extension View {
+    /// The app caps Dynamic Type at Large for screens tuned to fixed sizes
+    /// (`VoltaApp`). Dashboard, Controls and Parked are built on text styles
+    /// and lay out for every size, so they follow the system setting,
+    /// accessibility sizes included.
+    func followsSystemTextSize() -> some View { modifier(SystemTextSize()) }
+}
+
+private struct SystemTextSize: ViewModifier {
+    @State private var size = Self.current
+
+    static var current: DynamicTypeSize {
+        DynamicTypeSize(UIApplication.shared.preferredContentSizeCategory) ?? .large
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .dynamicTypeSize(size)
+            .onReceive(NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)) { _ in
+                size = Self.current
+            }
+    }
+}

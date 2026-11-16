@@ -65,7 +65,7 @@ struct MainShell: View {
     @ViewBuilder
     private func screen(for tab: Tab) -> some View {
         switch tab {
-        case .dashboard: DashboardView()
+        case .dashboard: DashboardView().followsSystemTextSize()
         case .charging: ChargingHistoryView()
         case .drives: DrivesHistoryView()
         case .idles: IdlesHistoryView()

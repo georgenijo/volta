@@ -154,13 +154,16 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showLiveCharge, onDismiss: { Task { await load() } }) {
             if let status = model.status {
+                // Not rebuilt on text styles: keeps the app's cap.
                 LiveChargingSheet(initialStatus: status)
+                    .dynamicTypeSize(...DynamicTypeSize.large)
             }
         }
         .sheet(isPresented: $showVehicle) {
             VehicleInfoSheet(vehicle: model.vehicle, status: model.status, vehicles: model.vehicles,
                              selectedID: vehicleID, onSelect: selectVehicle)
                 .presentationDetents(selectVehicle == nil ? [.medium] : [.medium, .large])
+                .dynamicTypeSize(...DynamicTypeSize.large)
         }
         .alert(item: $confirmation) { item in
             Alert(title: Text(item.title), message: Text(item.message),
@@ -1076,8 +1079,8 @@ struct FailingDataSource: VoltaDataSource {
 }
 
 /// Layout aid: `-dashboardTypeSize accessibility5` renders the Dashboard and
-/// Controls at that text size. The app caps text at Large (`VoltaApp`), so
-/// accessibility sizes can't be reached from Settings. DEBUG builds only.
+/// Controls at that text size without changing the simulator's setting.
+/// DEBUG builds only.
 private struct DebugTypeSizeOverride: ViewModifier {
     static var size: DynamicTypeSize? {
         #if DEBUG

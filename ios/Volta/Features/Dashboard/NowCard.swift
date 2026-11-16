@@ -297,10 +297,14 @@ struct NowCard: View {
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 header("Parked", trailing: parkedSince.map { "for \(Self.elapsed(from: $0, to: context.date))" }, green: false)
             }
-            HStack(spacing: VoltaSpacing.xl) {
-                temperature("Cabin", status.insideTempC)
-                temperature("Outside", status.outsideTempC)
-                Spacer(minLength: 0)
+            // In one column the metric tiles are a screen below; beside or
+            // above them the card would repeat the same two numbers.
+            if style == .compact {
+                HStack(spacing: VoltaSpacing.xl) {
+                    temperature("Cabin", status.insideTempC)
+                    temperature("Outside", status.outsideTempC)
+                    Spacer(minLength: 0)
+                }
             }
             switch status.climateOn {
             case true?: commandButton("Stop Climate", .climateOff)
