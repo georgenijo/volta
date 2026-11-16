@@ -691,26 +691,26 @@ final class EfficiencyWindowTests: XCTestCase {
         for (a, b) in zip(route.pieces, route.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
         XCTAssertLessThanOrEqual(route.pieces.count, 8)
         // The split rule on its own, 200 m intervals and a 0.8 km window: a
-        // sign counts once it holds for 0.4 km where the window is whole
-        // (every interval but the first two and last two).
+        // sign counts once its stretch is longer than 0.4 km, every interval
+        // counted, the run's ends too.
         func sides(_ w: [Double?]) -> [String] {
             TripRoute.sides(w, distances: Array(repeating: 0.2, count: w.count), windowKm: 0.8)
                 .map { "\($0.range.lowerBound)..<\($0.range.upperBound) \($0.regen ? "regen" : "use")" }
         }
         XCTAssertEqual(sides([50, 50, 50, 50, -90, 50, 50, 50, 50, 50]), ["0..<10 use"],
                        "a flip that doesn't persist never splits, however large")
-        XCTAssertEqual(sides([50, 50, 50, 50, -3, -3, -3, -3, 50, 50, 50, 50]), ["0..<4 use", "4..<8 regen", "8..<12 use"],
-                       "small but lasting regen changes the side")
-        XCTAssertEqual(sides([50, 50, 50, -3, -3, -3, -3, 50, 50, 50]), ["0..<10 regen"],
-                       "a sign lasts only where its window is whole: the ends' 0.2 km don't")
+        XCTAssertEqual(sides([50, 50, 50, -3, -3, -3, -3, 50, 50, 50]), ["0..<3 use", "3..<7 regen", "7..<10 use"],
+                       "small but lasting regen changes the side, and so do the ends")
         XCTAssertEqual(sides([-90, -90, 50, 50, 50, 50, 50, 50, 50, 50]), ["0..<10 use"],
-                       "the shrunken window at a run's end decides nothing")
+                       "exactly half a window doesn't persist")
+        XCTAssertEqual(sides([-90, -90, -90, 50, 50, 50, 50, 50, 50, 50]), ["0..<3 regen", "3..<10 use"],
+                       "one interval more does")
         XCTAssertEqual(sides([50, 50, 50, 50, -20, 50, -20, -20, -20, -20, -20, -20]), ["0..<6 use", "6..<12 regen"],
                        "a flip inside a stretch joins its neighbours")
         XCTAssertEqual(sides([nil, nil, -20, -20, -20, -20, -20, -20, -20, -20]), ["0..<10 regen"], "unknown values join their stretch")
         // No sign lasts: the run's net mean decides, consumption at zero.
-        XCTAssertEqual(sides([-20, -20, 30, -20, -20]), ["0..<5 regen"])
-        XCTAssertEqual(sides([-5, -5, 30, -5, -5]), ["0..<5 use"])
+        XCTAssertEqual(sides([-20, 30, -20]), ["0..<3 regen"])
+        XCTAssertEqual(sides([-5, 30, -5]), ["0..<3 use"])
         XCTAssertEqual(sides([-1, -1, -1, -1, -1]), ["0..<5 regen"], "however small")
         XCTAssertEqual(sides([1, -1, 1, -1]), ["0..<4 use"])
     }
@@ -750,6 +750,106 @@ final class EfficiencyWindowTests: XCTestCase {
         XCTAssertLessThanOrEqual(descent.pieces.count, 160)
     }
 
+    /// 301 samples 10 s apart at 72 km/h (200 m intervals), 60 km: Sol's inputs.
+    private func solRoute(maxPieces: Int = 160, _ power: (Int) -> Double) -> (route: TripRoute, windowed: [Double]) {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let rows = (0...300).map { n in
+            DrivePoint(t: t0.addingTimeInterval(Double(n) * 10), latitude: 37.0 + Double(n) * 0.0018, longitude: -122.1,
+                       speedKph: 72, powerKw: power(n), elevationM: nil, batteryLevel: 60)
+        }
+        let route = TripRoute(TripTimeline(path: rows), mode: .efficiency, tripKm: 60, maxPieces: maxPieces)
+        let intervals = zip(rows, rows.dropFirst()).compactMap { EfficiencyWindow.interval($0, $1) }
+        let windowed = EfficiencyWindow.smoothed(intervals, windowKm: route.windowKm).map { $0! }
+        return (route, windowed)
+    }
+
+    /// Longest run of negative windowed values inside `intervals`, in km.
+    private func longestRegenKm(_ windowed: [Double], _ intervals: Range<Int>) -> Double {
+        var best = 0.0, run = 0.0
+        for k in intervals { run = windowed[k] < 0 ? run + 0.2 : 0; best = max(best, run) }
+        return best
+    }
+
+    @MainActor
+    func testSustainedRegenShowsAtARunsEndsToo() {
+        let half = 1.0
+        // A: consumption for the first and last 0.4 km, gentle regen between.
+        let a = solRoute { ($0 <= 2 || $0 >= 298) ? 21.6 : -0.36 }
+        let aSides = TripRoute.sides(a.windowed, distances: Array(repeating: 0.2, count: 300), windowKm: a.route.windowKm)
+        XCTAssertEqual(aSides.map(\.regen), [false, true, false], "consumption at each end, regen between")
+        let middle = aSides[1].range
+        for piece in a.route.pieces {
+            let intervals = piece.indices.lowerBound..<piece.indices.upperBound
+            if intervals.overlaps(middle.dropFirst().dropLast()) && middle.contains(intervals.lowerBound) && middle.contains(intervals.upperBound - 1) {
+                XCTAssertLessThan(piece.value!, 0, "the middle is regen")
+            }
+            if piece.value! >= 0 {
+                XCTAssertLessThanOrEqual(longestRegenKm(a.windowed, intervals), half + 1e-6, "no lasting regen hidden in \(intervals)")
+            }
+        }
+
+        // B: consumption, then the final 1.4 km in regen.
+        let b = solRoute { $0 <= 292 ? 21.6 : -21.6 }
+        let tail = b.windowed.indices.reversed().prefix { b.windowed[$0] < 0 }
+        XCTAssertGreaterThan(Double(tail.count) * 0.2, half, "the final regen outlasts half a window")
+        let last = try! XCTUnwrap(b.route.pieces.last)
+        XCTAssertLessThan(last.value!, 0)
+        let regenStart = b.route.pieces.last { ($0.value ?? 0) >= 0 }!.indices.upperBound
+        XCTAssertLessThanOrEqual(regenStart, tail.last!, "the regen pieces cover the final negative stretch")
+
+        // B's mirror: the first 1.4 km in regen, then consumption.
+        let m = solRoute { $0 <= 7 ? -21.6 : 21.6 }
+        let head = m.windowed.indices.prefix { m.windowed[$0] < 0 }
+        XCTAssertGreaterThan(Double(head.count) * 0.2, half)
+        XCTAssertLessThan(m.route.pieces[0].value!, 0)
+        let regenEnd = m.route.pieces.first { ($0.value ?? 0) >= 0 }!.indices.lowerBound
+        XCTAssertGreaterThanOrEqual(regenEnd, head.last! + 1, "the regen pieces cover the first negative stretch")
+    }
+
+    @MainActor
+    func testARegenStartOfExactlyHalfAWindowIsNotRegenButOneIntervalMoreIs() {
+        // -10 kW first sample, then +0.36 kW: exactly 1.0 km (5 intervals)
+        // of negative windowed values in a 2 km window. Not more than half.
+        let tie = solRoute { $0 == 0 ? -10 : 0.36 }
+        XCTAssertEqual(tie.windowed.prefix { $0 < 0 }.count, 5)
+        XCTAssertFalse(tie.route.pieces.contains { ($0.value ?? 0) < 0 }, "exactly half a window: no regen piece")
+        // -20 kW: 1.2 km (6 intervals). Regen at the start.
+        let more = solRoute { $0 == 0 ? -20 : 0.36 }
+        XCTAssertEqual(more.windowed.prefix { $0 < 0 }.count, 6)
+        XCTAssertLessThan(more.route.pieces[0].value!, 0, "one interval more: a regen piece at the start")
+        XCTAssertTrue(more.route.pieces.dropFirst().contains { ($0.value ?? 0) > 0 })
+    }
+
+    @MainActor
+    func testPiecesAreRegenExactlyWhenTheirMeanIsNegative() {
+        // Seeded pseudo-random drives: stretches of 1 to 40 samples at a
+        // random power between -25 and +25 kW.
+        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func next() -> Double {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Double(state >> 11) / Double(1 << 53)
+        }
+        for _ in 0..<6 {
+            var powers: [Double] = []
+            while powers.count < 301 {
+                let p = next() * 50 - 25
+                powers += Array(repeating: p, count: 1 + Int(next() * 40))
+            }
+            for budget in [160, 12] {
+                let (route, _) = solRoute(maxPieces: budget) { powers[$0] }
+                let style = TripRouteStyle(mode: .efficiency, valueRange: route.valueRange, reference: reference, windowKm: route.windowKm)
+                XCTAssertLessThanOrEqual(route.pieces.count, budget)
+                for (a, b) in zip(route.pieces, route.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
+                for piece in route.pieces {
+                    let v = try! XCTUnwrap(piece.value)
+                    if style.rgb(v) == RoutePalette.regen { XCTAssertLessThan(v, 0) }
+                    if v >= 0 { XCTAssertNotEqual(style.rgb(v), RoutePalette.regen) }
+                    if v < 0 { XCTAssertEqual(style.rgb(v), RoutePalette.regen) }
+                }
+            }
+        }
+    }
+
     @MainActor
     func testNoiseAroundZeroStaysWithinTheDrawingBudget() {
         // Sol's case: 6,001 samples a second apart at 75.6 km/h (21 m/s),
@@ -763,7 +863,19 @@ final class EfficiencyWindowTests: XCTestCase {
         }
         let route = TripRoute(TripTimeline(path: rows), mode: .efficiency, tripKm: 126, maxPieces: 160)
         XCTAssertLessThanOrEqual(route.pieces.count, 160)
-        XCTAssertFalse(route.pieces.contains { ($0.value ?? 0) < 0 }, "no regen piece from noise")
+        // The noise splits nothing and draws no regen. The run's last 1.008 km
+        // is another matter: its shrunken windows end on the -10 kW phase
+        // and read negative throughout, more than half a window, so by the
+        // one persistence rule it is sustained and drawn as regen.
+        let rows6000 = zip(rows, rows.dropFirst()).compactMap { EfficiencyWindow.interval($0, $1) }
+        let windowed = EfficiencyWindow.smoothed(rows6000, windowKm: route.windowKm)
+        let tail = windowed.indices.reversed().prefix { (windowed[$0] ?? 0) < 0 }
+        XCTAssertEqual(Double(tail.count) * 0.021, 1.008, accuracy: 1e-9)
+        let regen = route.pieces.filter { ($0.value ?? 0) < 0 }
+        XCTAssertFalse(regen.isEmpty)
+        for piece in regen {
+            XCTAssertGreaterThanOrEqual(piece.indices.lowerBound, tail.last!, "no regen piece from the noise itself, only in the final stretch")
+        }
         for (a, b) in zip(route.pieces, route.pieces.dropFirst()) { XCTAssertEqual(a.indices.upperBound, b.indices.lowerBound) }
 
         // Real descents among the noise, more of them than the budget: the

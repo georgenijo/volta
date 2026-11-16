@@ -249,39 +249,43 @@ struct TripRoute: Equatable {
     /// A mean with rounding taken off: zero within `rounding`, else itself.
     static func net(_ v: Double?) -> Double? { v.map { abs($0) < rounding ? 0 : $0 } }
 
-    /// A run's lasting regen and consumption stretches. A sign belongs to a
-    /// stretch only when it persists for half the window (by distance); a flip
-    /// that doesn't persist never splits, whatever its size, and is absorbed
-    /// into its neighbours, shortest first. Persistence counts only intervals
-    /// whose window is whole: near a run's ends the window shrinks, so one
-    /// sample there can swing the windowed value without being evidence of
-    /// anything. When no sign persists, the run is one stretch on the side of
-    /// its net mean (consumption at zero). Unknown values
-    /// continue the stretch they are in. The ranges cover the run in order.
+    /// Slack in comparing a stretch with half a window (km), so summed
+    /// interval lengths, not rounding, decide a tie.
+    static let persistenceToleranceKm: Double = 1e-6
+
+    /// Whether a stretch of `km` persists in a window of `windowKm`: strictly
+    /// longer than half the window. Exactly half a window does not persist.
+    static func persists(_ km: Double, windowKm: Double) -> Bool {
+        km > windowKm / 2 + persistenceToleranceKm
+    }
+
+    /// A run's lasting regen and consumption stretches. A change of sign
+    /// starts a stretch only when the new sign persists: its stretch covers
+    /// strictly more than half the window, by distance, every interval
+    /// counted (`persists`). A flip that doesn't persist never splits,
+    /// whatever its size, and is absorbed into its neighbours, shortest
+    /// first. When no sign persists, the run is one stretch on the side of
+    /// its net mean (consumption at zero). Unknown values continue the
+    /// stretch they are in. The ranges cover the run in order.
     static func sides(_ windowed: [Double?], distances: [Double], windowKm: Double) -> [(range: Range<Int>, regen: Bool)] {
         let n = windowed.count
         guard n > 0 else { return [] }
-        let half = windowKm / 2
         func d(_ k: Int) -> Double { k < distances.count ? distances[k] : 0 }
-        let length = (0..<n).reduce(0.0) { $0 + d($1) }
+        func lasts(_ km: Double) -> Bool { persists(km, windowKm: windowKm) }
         var stretches: [(start: Int, regen: Bool, held: Double)] = []
-        var travelled = 0.0
         for k in 0..<n {
-            let centre = travelled + d(k) / 2
-            travelled += d(k)
-            let whole = centre >= half - 1e-9 && length - centre >= half - 1e-9
             let regen = windowed[k].map { $0 < 0 } ?? stretches.last?.regen ?? false
             if let last = stretches.last, last.regen == regen {
-                if whole { stretches[stretches.count - 1].held += d(k) }
+                stretches[stretches.count - 1].held += d(k)
             } else {
-                stretches.append((k, regen, whole ? d(k) : 0))
+                stretches.append((k, regen, d(k)))
             }
         }
         // Absorb flips that don't persist, shortest first; a stretch between
         // two others joins them into one.
         while stretches.count > 1 {
             var shortest: Int?
-            for (i, s) in stretches.enumerated() where s.held < half - 1e-9 {
+            for (i, s) in stretches.enumerated() where !lasts(s.held) {
                 if let j = shortest, stretches[j].held <= s.held { continue }
                 shortest = i
             }
@@ -296,7 +300,7 @@ struct TripRoute: Equatable {
                 stretches.removeSubrange(i...(i + 1))
             }
         }
-        if stretches.count == 1, stretches[0].held < half - 1e-9 {
+        if stretches.count == 1, !lasts(stretches[0].held) {
             stretches[0].regen = (net(distanceWeighted(windowed, (0..<n).map(d), range: 0..<n)) ?? 0) < 0
         }
         return stretches.enumerated().map { i, s in
