@@ -26,7 +26,7 @@ enum ChargeFilter: String, CaseIterable, Identifiable {
     func matches(_ charge: ChargeSummary) -> Bool {
         switch self {
         case .all: true
-        case .home: charge.kind == .home
+        case .home: charge.isAtHome
         case .supercharger: charge.kind == .fast
         case .other: charge.kind == .other
         }

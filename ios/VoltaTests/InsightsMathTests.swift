@@ -300,17 +300,36 @@ final class InsightsMathTests: XCTestCase {
                                                       drives: [drive(km: 50, kwh: 8, speedKph: 40, start: t0)],
                                                       bucket: .month, calendar: utc)
         XCTAssertEqual(ChargingInsights.costPerDistanceUnavailable(series, bucketNoun: "month"),
-                       "Recorded costs in this period have no currency, so cost per distance is unknown.")
+                       "Unknown: 1 session with a cost but no recorded currency, so cost per distance can't be worked out.")
+        // One month holding both kinds: the bucket counts as unpriced, but both reasons are stated.
+        let mixedMonth = ChargingInsights.costPerDistance(charges: [charge(added: 10, cost: 10, currency: nil, start: t0),
+                                                                    charge(added: 5, cost: nil, currency: nil, start: t0)],
+                                                          drives: [drive(km: 50, kwh: 8, speedKph: 40, start: t0)],
+                                                          bucket: .month, calendar: utc)
+        XCTAssertEqual(mixedMonth.unknownCostBuckets, 1)
+        XCTAssertEqual(mixedMonth.unknownCurrencyBuckets, 0)
+        XCTAssertEqual(mixedMonth.sessionsWithoutCost, 1)
+        XCTAssertEqual(mixedMonth.sessionsWithoutCurrency, 1)
+        XCTAssertEqual(ChargingInsights.costPerDistanceUnavailable(mixedMonth, bucketNoun: "month"),
+                       "Unknown: 1 session without a recorded cost and 1 session with a cost but no recorded currency, so cost per distance can't be worked out.")
+        let noCost = ChargingInsights.costPerDistance(charges: [charge(added: 5, cost: nil, start: t0)],
+                                                      drives: [drive(km: 50, kwh: 8, speedKph: 40, start: t0)],
+                                                      bucket: .month, calendar: utc)
+        XCTAssertEqual(ChargingInsights.costPerDistanceUnavailable(noCost, bucketNoun: "month"),
+                       "No session in this period has a recorded cost, so cost per distance is unknown.")
     }
 
     func testHistoryHomeFilterAndInsightsAgreeOnHome() {
         let charges = [charge(added: 10, cost: nil, place: "Home"), charge(added: 20, cost: nil, place: " home "),
-                       charge(added: 30, cost: nil, place: "Home Depot"), charge(added: 40, cost: nil, place: nil)]
+                       charge(added: 30, cost: nil, place: "Home Depot"), charge(added: 40, cost: nil, place: nil),
+                       charge(added: 10, cost: nil, fast: true, place: "Home")]
         let history = charges.filter(ChargeFilter.home.matches).compactMap(\.energyAddedKwh).reduce(0, +)
         let insights = ChargingInsights.homeAway(charges).first.energyKwh
-        XCTAssertEqual(history, 30)
+        XCTAssertEqual(history, 40, "a fast session at Home is still Home")
         XCTAssertEqual(insights, history)
-        XCTAssertEqual(charges.map(\.isAtHome), [true, true, false, false])
+        XCTAssertEqual(charges.map(\.isAtHome), [true, true, false, false, true])
+        // The fast session at Home also matches the Supercharger / DC fast filter.
+        XCTAssertTrue(ChargeFilter.supercharger.matches(charges[4]))
     }
 
     func testHomeIsAnExactPlaceNameRegardlessOfChargerType() {
@@ -516,6 +535,33 @@ final class ChargingInsightsGenerationTests: XCTestCase {
         source.finish(3, failing: false)
         await fourth.value
         guard case .failed = model.state else { return XCTFail("an older success must not replace the newer failure") }
+    }
+
+    func testCancelledLatestLoadNeverLands() async throws {
+        let source = ScriptedSource()
+        let model = ChargingInsightsModel()
+        let loaded = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(1, source)
+        source.finish(0, failing: false)
+        await loaded.value
+        XCTAssertEqual(model.state.value?.charges.map(\.id), [1])
+
+        // The latest load is cancelled while its last page is out; the source ignores
+        // cancellation and still answers. Neither a reply nor an error may land.
+        let cancelledSuccess = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(2, source)
+        cancelledSuccess.cancel()
+        source.finish(1, failing: false)
+        await cancelledSuccess.value
+        XCTAssertEqual(model.generation, 2, "still the current generation")
+        XCTAssertEqual(model.state.value?.charges.map(\.id), [1])
+
+        let cancelledFailure = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(3, source)
+        cancelledFailure.cancel()
+        source.finish(2, failing: true)
+        await cancelledFailure.value
+        XCTAssertEqual(model.state.value?.charges.map(\.id), [1], "the cancelled load's error does not replace the shown data")
     }
 }
 

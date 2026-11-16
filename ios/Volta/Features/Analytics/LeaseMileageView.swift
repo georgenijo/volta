@@ -453,11 +453,11 @@ struct LeaseMileageView: View {
         if case .failed = state { state = .loading }
         do {
             let snapshot = try await Self.fetch(source: dataSource, vehicleID: vehicleID, terms: terms)
-            guard mine == loadGeneration else { return }
+            guard !Task.isCancelled, mine == loadGeneration else { return }
             withAnimation(.smooth) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
-            guard mine == loadGeneration else { return }
+            guard !Task.isCancelled, mine == loadGeneration else { return }
             state = .failed(error.localizedDescription)
         }
     }

@@ -399,6 +399,10 @@ enum ChargingInsights {
         var noChargeBuckets = 0
         /// Buckets with charging but no recorded driving.
         var noDistanceBuckets = 0
+        /// Sessions in the period with no usable recorded cost.
+        var sessionsWithoutCost = 0
+        /// Sessions in the period with a cost but no recorded currency.
+        var sessionsWithoutCurrency = 0
 
         var excludedBuckets: Int {
             unknownCostBuckets + unknownCurrencyBuckets + otherCurrencyBuckets + noChargeBuckets + noDistanceBuckets
@@ -413,9 +417,14 @@ enum ChargingInsights {
     /// Why no cost per distance can be shown, when no bucket was plotted.
     static func costPerDistanceUnavailable(_ series: CostSeries, bucketNoun noun: String) -> String {
         if series.currency == nil {
-            return series.unknownCurrencyBuckets > 0
-                ? "Recorded costs in this period have no currency, so cost per distance is unknown."
-                : "No session in this period has a recorded cost, so cost per distance is unknown."
+            // Session counts, not bucket counts: one month can hold both kinds.
+            guard series.sessionsWithoutCurrency > 0 else {
+                return "No session in this period has a recorded cost, so cost per distance is unknown."
+            }
+            var parts: [String] = []
+            if series.sessionsWithoutCost > 0 { parts.append("\(sessions(series.sessionsWithoutCost)) without a recorded cost") }
+            parts.append("\(sessions(series.sessionsWithoutCurrency)) with a cost but no recorded currency")
+            return "Unknown: \(list(parts)), so cost per distance can't be worked out."
         }
         return "No \(noun) in this period had driving and a recorded cost for every session."
     }
@@ -430,6 +439,8 @@ enum ChargingInsights {
         }
         let sessions = Dictionary(grouping: charges) { key($0.start) }
         var series = CostSeries(currency: primary, points: [])
+        series.sessionsWithoutCost = charges.filter { cost($0) == nil }.count
+        series.sessionsWithoutCurrency = charges.filter { cost($0) != nil && currency($0) == nil }.count
         for start in Set(km.keys).union(sessions.keys).sorted() {
             let driven = km[start] ?? 0
             let inBucket = sessions[start] ?? []

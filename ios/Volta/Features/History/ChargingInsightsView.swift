@@ -239,11 +239,13 @@ final class ChargingInsightsModel {
         do {
             let snapshot = try await ChargingInsightsView.fetch(source: source, vehicleID: vehicleID, period: period,
                                                                 now: now, calendar: calendar)
-            guard mine == generation else { return }
+            // Cancelled or superseded: a source that ignores cancellation still must not land here.
+            guard !Task.isCancelled, mine == generation else { return }
             withAnimation(.smooth) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
-            guard mine == generation else { return }
+            // Cancelled or superseded: a source that ignores cancellation still must not land here.
+            guard !Task.isCancelled, mine == generation else { return }
             state = .failed(error.localizedDescription)
         }
     }
