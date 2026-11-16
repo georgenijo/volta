@@ -89,8 +89,9 @@ struct ChargeLook {
         if staleCharging { return "clock.badge.exclamationmark" }
         switch phase {
         case .charging: return "bolt.fill"
-        case .completed: return "checkmark.circle.fill"
-        case .stopped: return "bolt.slash.fill"
+        // Same vocabulary as the app's charge state (StateDisplay.charging).
+        case .completed: return "bolt.badge.checkmark.fill"
+        case .stopped: return "powerplug.fill"
         }
     }
     var tint: Color {

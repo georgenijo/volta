@@ -151,9 +151,12 @@ struct ChargingMarker: View {
                 .fill(Color.white)
                 .frame(width: 26, height: 26)
                 .shadow(color: .voltaGreen.opacity(0.8), radius: 6)
-            Image(systemName: "bolt.fill")
+            // The charge-state vocabulary's glyph; it breathes only while
+            // power flows (this marker is shown only then), never with Reduce Motion.
+            Image(systemName: StateDisplay.charging(.charging).symbol)
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Color.voltaGreen)
+                .symbolEffect(.breathe, isActive: !reduceMotion)
         }
         .frame(width: 92, height: 92)
     }

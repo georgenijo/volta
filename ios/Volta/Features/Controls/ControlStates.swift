@@ -39,10 +39,11 @@ struct StateDisplay: Equatable, Sendable {
     static func charging(_ state: ChargingState?) -> StateDisplay {
         switch state {
         case .charging?: .init(text: "Charging", symbol: "bolt.fill", tone: .active)
-        case .complete?: .init(text: "Complete", symbol: "bolt", tone: .inactive)
-        case .stopped?: .init(text: "Stopped", symbol: "bolt", tone: .inactive)
-        case .disconnected?: .init(text: "Unplugged", symbol: "bolt", tone: .inactive)
-        case nil: .init(text: "Unknown", symbol: "bolt", tone: .unknown)
+        case .complete?: .init(text: "Complete", symbol: "bolt.badge.checkmark.fill", tone: .inactive)
+        // Plugged in, not drawing power.
+        case .stopped?: .init(text: "Stopped", symbol: "powerplug.fill", tone: .inactive)
+        case .disconnected?: .init(text: "Unplugged", symbol: "powerplug", tone: .inactive)
+        case nil: .init(text: "Unknown", symbol: "questionmark.circle", tone: .unknown)
         }
     }
 
