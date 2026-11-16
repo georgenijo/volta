@@ -24,7 +24,7 @@ final class RoutePaletteTests: XCTestCase {
 
     func testEfficiencyKnotsAreExactAgainstTheReference() {
         let rated = EfficiencyReference(ratedWhPerKm: 200)
-        for (ratio, hex) in [(0.5, 0x5EEBC4), (0.75, 0x46B79C), (1.0, 0x868C96), (1.375, 0xE9A34B), (1.75, 0xFF7A45)] as [(Double, UInt32)] {
+        for (ratio, hex) in [(0.5, 0x5EEBC4), (0.75, 0x46B79C), (1.0, 0xA8B0BB), (1.375, 0xE9A34B), (1.75, 0xFF7A45)] as [(Double, UInt32)] {
             assertColor(RoutePalette.efficiency(whPerKm: 200 * ratio, reference: rated), hex)
         }
         assertColor(RoutePalette.efficiency(whPerKm: -40, reference: rated), 0xB79CFF)
@@ -96,7 +96,7 @@ final class RoutePaletteTests: XCTestCase {
         XCTAssertTrue(rated.isRated)
         XCTAssertEqual(rated.whPerKm, 164)
         // The fallback's midpoint is 160 Wh/km.
-        assertColor(RoutePalette.efficiency(whPerKm: 160, reference: EfficiencyReference(ratedWhPerKm: nil)), 0x868C96)
+        assertColor(RoutePalette.efficiency(whPerKm: 160, reference: EfficiencyReference(ratedWhPerKm: nil)), 0xA8B0BB)
     }
 
     func testSharedReferenceIsTheCommonRating() {
@@ -115,58 +115,70 @@ final class RoutePaletteTests: XCTestCase {
         let miles = UnitPreferences(distance: .miles)
         let speed = RouteLegendModel.speed(units: miles)
         XCTAssertEqual(speed.high, "80+ mph")
+        XCTAssertEqual(speed.mid, "40 mph")
         let estimated = RouteLegendModel.efficiency(reference: EfficiencyReference(ratedWhPerKm: nil), units: miles)
-        XCTAssertTrue(estimated.mid?.hasPrefix("~") == true, "an estimated reference is marked")
+        XCTAssertEqual(estimated.mid, "Est. 257 Wh/mi", "an estimated reference is labelled as one")
         XCTAssertTrue(estimated.sentence.contains("estimated"))
         XCTAssertEqual(estimated.low, "Efficient")
         XCTAssertEqual(estimated.high, "Thirsty")
-        XCTAssertEqual(RouteLegendModel.density.low, "1 drive")
-        XCTAssertEqual(RouteLegendModel.density.high, "30+ drives")
+        let rated = RouteLegendModel.efficiency(reference: EfficiencyReference(ratedWhPerKm: 164), units: miles)
+        XCTAssertEqual(rated.mid, "Rated 264 Wh/mi")
+        XCTAssertEqual(RouteLegendModel.efficiency(reference: EfficiencyReference(ratedWhPerKm: 164),
+                                                   units: UnitPreferences(distance: .kilometers)).mid, "Rated 164 Wh/km")
+        let density = RouteLegendModel.density
+        XCTAssertEqual(density.marks?.map(\.label), ["1", "3", "10", "30+"])
+        XCTAssertNil(density.tick, "fixed labels, no floating tick")
+        XCTAssertEqual(density.marks?[2].position ?? 0, 1 / log10(30), accuracy: 1e-12)
+        XCTAssertTrue(density.sentence.contains("1 drive to 30 or more"))
     }
 
     // MARK: Framing
 
     func testFittedRectPutsTheRouteInsideTheInsets() {
         let content = MKMapRect(x: 43_112_000, y: 104_057_000, width: 79_000, height: 56_000)
-        let safe = EdgeInsets(top: 0, leading: 254, bottom: 64, trailing: 0)
-        // Bottom: fade 64 + chip row 82 + clearance 12 + marker reach 8.
-        // Top: the iPhone toolbar (140) or the Duo's clear top edge (32), plus marker reach.
-        let phone = EdgeInsets(top: 148, leading: 48, bottom: 166, trailing: 48)
-        let duo = EdgeInsets(top: 40, leading: 48, bottom: 166, trailing: 48)
-        // iPhone tall and 13 mini trip maps; the Duo's usual and shortest (200 pt + its top inset).
+        let safe = EdgeInsets(top: 0, leading: 0, bottom: 64, trailing: 0)
+        // The trip map's clearances plus marker reach: iPhone (the page safe area, toolbar and
+        // status bar) and iPhone Duo (bar in the side strip); bottom is fade +
+        // attribution + 24.
+        let phone = EdgeInsets(top: 104 + 24 + 8, leading: 32, bottom: 64 + 24 + 24 + 8, trailing: 32)
+        let duo = EdgeInsets(top: 32, leading: 32, bottom: 64 + 24 + 24 + 8, trailing: 32)
         let cases: [(CGSize, EdgeInsets)] = [(CGSize(width: 402, height: 900), phone), (CGSize(width: 375, height: 600), phone),
-                                             (CGSize(width: 375, height: 341), phone),
+                                             (CGSize(width: 375, height: 350), phone),
                                              (CGSize(width: 466, height: 265), duo), (CGSize(width: 466, height: 224), duo)]
         for (size, insets) in cases {
             let rect = TripRoute.fitted(content, size: size, safe: safe, insets: insets)
             let a = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: rect, size: size, safe: safe))
             let b = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: rect, size: size, safe: safe))
-            XCTAssertGreaterThanOrEqual(a.x, 48 - 0.01, "\(size)")
-            XCTAssertLessThanOrEqual(b.x, size.width - 48 + 0.01, "\(size)")
+            XCTAssertGreaterThanOrEqual(a.x, 32 - 0.01, "\(size)")
+            XCTAssertLessThanOrEqual(b.x, size.width - 32 + 0.01, "\(size)")
             XCTAssertGreaterThan(b.y - a.y, 0)
-            // The bottom margin (the chip row) holds on every supported height.
-            XCTAssertLessThanOrEqual(b.y, size.height - 166 + 0.01, "\(size)")
-            XCTAssertGreaterThanOrEqual(a.y, 24 - 0.01, "\(size)")
+            // Clear of the attribution and fade, and of the top controls.
+            XCTAssertLessThanOrEqual(b.y, size.height - insets.bottom + 0.01, "\(size)")
+            XCTAssertGreaterThanOrEqual(a.y, min(insets.top, 24) - 0.01, "\(size)")
+            // The route fills the map: it reaches the wanted area's edge in one direction.
+            let filled = abs(a.x - insets.leading) < 0.5 || abs(b.y - (size.height - insets.bottom)) < 0.5
+            XCTAssertTrue(filled, "\(size)")
         }
-        // 13 mini: the top gives way only as far as the toolbar (about 86 pt) plus marker reach.
-        let mini = CGSize(width: 375, height: 341)
+        // 13 mini: the toolbar's clearance holds.
+        let mini = CGSize(width: 375, height: 350)
         let miniRect = TripRoute.fitted(content, size: mini, safe: safe, insets: phone)
         let miniTop = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: miniRect, size: mini, safe: safe))
-        XCTAssertGreaterThanOrEqual(miniTop.y, 86 + 8 + 4)
-        // Tall map: the full top margin is kept.
-        let tall = CGSize(width: 402, height: 900)
-        let rect = TripRoute.fitted(content, size: tall, safe: safe, insets: phone)
-        let top = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: rect, size: tall, safe: safe))
-        XCTAssertGreaterThanOrEqual(top.y, 148 - 0.01)
-        // Shorter than any supported map: the top is already at its 24 pt floor
-        // before the bottom gives way, and then never past the fade.
-        let tiny = CGSize(width: 375, height: 200)
-        let squeezed = TripRoute.fitted(content, size: tiny, safe: safe, insets: phone)
-        let s0 = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: squeezed, size: tiny, safe: safe))
-        let s1 = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: squeezed, size: tiny, safe: safe))
-        XCTAssertGreaterThanOrEqual(s0.y, 24 - 0.01)
-        XCTAssertLessThan(s0.y, 24 + 0.01 + (s1.y - s0.y), "top at its floor")
-        XCTAssertLessThanOrEqual(s1.y, tiny.height - 64 + 0.01)
+        XCTAssertGreaterThanOrEqual(miniTop.y, phone.top - 0.01)
+    }
+
+    func testTinyFramesFallBackInsteadOfANegativeRect() {
+        let content = MKMapRect(x: 43_112_000, y: 104_057_000, width: 79_000, height: 56_000)
+        let insets = EdgeInsets(top: 126, leading: 32, bottom: 120, trailing: 32)
+        // 100 pt tall with a 64 pt fade: margins can't fit.
+        let small = TripRoute.fitted(content, size: CGSize(width: 300, height: 100), safe: EdgeInsets(top: 0, leading: 0, bottom: 64, trailing: 0), insets: insets)
+        XCTAssertTrue(small.width > 0 && small.height > 0 && small.width.isFinite && small.height.isFinite)
+        let a = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.minX, y: content.minY), visible: small,
+                                                 size: CGSize(width: 300, height: 100), safe: EdgeInsets(top: 0, leading: 0, bottom: 64, trailing: 0)))
+        XCTAssertGreaterThanOrEqual(a.y, -0.01)
+        // The fade alone is taller than the map: hand MapKit the bare content.
+        let none = TripRoute.fitted(content, size: CGSize(width: 300, height: 50), safe: EdgeInsets(top: 0, leading: 0, bottom: 64, trailing: 0), insets: insets)
+        XCTAssertTrue(MKMapRectEqualToRect(none, content))
+        XCTAssertTrue(MKMapRectEqualToRect(TripRoute.fitted(content, size: .zero, safe: EdgeInsets(), insets: insets), content))
     }
 
     func testBucketKeyQuantisesChannels() {
@@ -176,14 +188,17 @@ final class RoutePaletteTests: XCTestCase {
     }
 
     func testEfficiencyLegendSaysTheColourIsAveraged() {
-        let miles = UnitPreferences(distance: .miles)
+        let miles = UnitPreferences(distance: .miles), km = UnitPreferences(distance: .kilometers)
         let legend = RouteLegendModel.efficiency(reference: EfficiencyReference(ratedWhPerKm: 160), units: miles,
-                                                 averagedOverKm: EfficiencyWindow.windowKm)
+                                                 averagedOverKm: EfficiencyWindow.minimumKm)
         XCTAssertEqual(legend.note, "Averaged over 0.25 mi")
         XCTAssertTrue(legend.sentence.contains("averaged over 0.25 miles"), legend.sentence)
         XCTAssertNil(RouteLegendModel.efficiency(reference: EfficiencyReference(ratedWhPerKm: 160), units: miles).note)
-        let style = TripRouteStyle(mode: .efficiency, reference: EfficiencyReference(ratedWhPerKm: 160))
-        XCTAssertEqual(style.legend(units: miles)?.note, "Averaged over 0.25 mi")
+        // The trip's own window, in the user's units.
+        let style = TripRouteStyle(mode: .efficiency, reference: EfficiencyReference(ratedWhPerKm: 160), windowKm: 16.9 / 12)
+        XCTAssertEqual(style.legend(units: miles)?.note, "Averaged over 0.9 mi")
+        XCTAssertEqual(style.legend(units: km)?.note, "Averaged over 1.4 km")
+        XCTAssertEqual(RouteLegendModel.windowText(0.4, units: km).short, "400 m")
     }
 
     // MARK: Score
@@ -210,6 +225,25 @@ final class RoutePaletteTests: XCTestCase {
             XCTAssertNotNil(UIImage(systemName: kind.systemImage), "\(kind)")
         }
     }
+
+    func testAPlaceIsTheKindItsSessionsAgreeOn() {
+        func session(_ id: Int, fast: Bool, brand: String?) -> ChargeSummary {
+            var c = ChargeSummary(id: id, start: .init(timeIntervalSince1970: 0), end: nil, address: nil, placeName: "Mountain View Supercharger",
+                                  energyAddedKwh: 30, energyUsedKwh: nil, startBatteryLevel: nil, endBatteryLevel: nil,
+                                  durationMin: 25, maxPowerKw: nil, fastCharger: fast, cost: nil, currency: nil, outsideTempAvgC: nil)
+            c.fastChargerBrand = brand
+            return c
+        }
+        XCTAssertEqual(ChargerKind(agreeing: [session(1, fast: true, brand: "Tesla"), session(2, fast: true, brand: "Tesla")]), .supercharger)
+        XCTAssertEqual(ChargerKind(agreeing: [session(1, fast: true, brand: "Tesla"), session(2, fast: false, brand: nil)]), .unknown,
+                       "conflicting evidence is neutral")
+        XCTAssertEqual(ChargerKind(agreeing: [ChargeSummary]()), .unknown, "no sessions: no guessing from the name")
+        XCTAssertEqual(ChargerKind(agreeing: [session(1, fast: true, brand: "Tesla"), session(2, fast: true, brand: nil)]), .supercharger,
+                       "an unrecorded network is missing evidence, not a conflict")
+        XCTAssertEqual(ChargerKind(agreeing: [session(1, fast: true, brand: nil)]), .dcFast)
+        XCTAssertEqual(ChargerKind(agreeing: [session(1, fast: true, brand: "Tesla"), session(2, fast: true, brand: "Electrify America")]), .unknown)
+        XCTAssertEqual(ChargerKind(agreeing: [session(1, fast: false, brand: nil), session(2, fast: true, brand: nil)]), .unknown)
+    }
 }
 
 final class RouteDensityTests: XCTestCase {
@@ -224,8 +258,57 @@ final class RouteDensityTests: XCTestCase {
 
     private let west = (37.4012, -122.1103), east = (37.3958, -122.0791)
 
+    private func layerOf(_ drives: [RouteDensity.Drive]) -> RouteDensity.Layer {
+        RouteDensity.build(drives, isCancelled: { false })!
+    }
+
+    func testASegmentAcrossTheAntimeridianTakesTheShortWay() {
+        let hop = RouteDensity.Drive(id: 1, runs: [[CLLocationCoordinate2D(latitude: 0, longitude: 179.999),
+                                                    CLLocationCoordinate2D(latitude: 0, longitude: -179.999)]], ratio: nil)
+        var visits = 0
+        RouteDensity.traverse(MKMapPoint(hop.runs[0][0]), MKMapPoint(hop.runs[0][1])) { _, _, _, _ in visits += 1 }
+        XCTAssertLessThan(visits, 10, "about 220 m of road, not the whole world")
+        let layer = layerOf([hop])
+        XCTAssertLessThan(layer.counts.count, 10)
+        // Cell x wraps: both sides of the line are cells inside the world.
+        XCTAssertTrue(layer.counts.keys.allSatisfy { (0..<RouteDensity.cellsAcross).contains($0.x) })
+        XCTAssertTrue(layer.counts.keys.contains { $0.x == 0 } && layer.counts.keys.contains { $0.x == RouteDensity.cellsAcross - 1 })
+        // A drive crossing it the other way counts on the same cells.
+        let back = RouteDensity.Drive(id: 2, runs: [hop.runs[0].reversed()], ratio: nil)
+        XCTAssertEqual(layerOf([hop, back]).maxCount, 2)
+        XCTAssertTrue(layer.strokes.allSatisfy { stroke in
+            zip(stroke.points, stroke.points.dropFirst()).allSatisfy { abs($0.x - $1.x) < RouteDensity.worldWidth / 2 }
+        }, "no stroke draws back across the world")
+    }
+
+    func testCellsDoNotDependOnTheLoadedSelection() {
+        let nearby = drive(1, from: west, to: east)
+        let far = drive(0, from: (61.2, -149.9), to: (61.21, -149.8))   // a lower id, far north
+        let alone = layerOf([nearby]).counts.keys
+        let withFar = Set(layerOf([nearby, far]).counts.keys)
+        XCTAssertTrue(alone.allSatisfy { withFar.contains($0) }, "an older page elsewhere doesn't redefine the cells")
+        XCTAssertEqual(RouteDensity.cellMeters(latitude: 0), 38.0, accuracy: 0.1)
+        XCTAssertEqual(RouteDensity.cellMeters(latitude: 37.4), 30.4, accuracy: 0.2)
+    }
+
+    func testACancelledBuildStopsEarly() {
+        let many = (1...50).map { drive($0, from: west, to: east) }
+        var checks = 0
+        let result = RouteDensity.build(many) { checks += 1; return checks > 2 }
+        XCTAssertNil(result)
+        XCTAssertEqual(checks, 3, "stops at the first check after cancelling, not after every drive")
+    }
+
+    func testNetRegenerationIsRegenOnTheHeatmap() {
+        let layer = layerOf([drive(1, from: west, to: east, ratio: -0.3)])
+        let ratio = try! XCTUnwrap(layer.strokes.first?.ratio)
+        XCTAssertLessThan(ratio, 0)
+        XCTAssertEqual(RoutePalette.efficiency(ratio: ratio), RoutePalette.regen)
+        XCTAssertEqual(RoutePalette.efficiency(ratio: 1), RoutePalette.RGB(hex: 0xA8B0BB))
+    }
+
     func testTwoDrivesOverOneRoadCountTwo() {
-        let layer = RouteDensity.build([drive(1, from: west, to: east), drive(2, from: east, to: west)])
+        let layer = layerOf([drive(1, from: west, to: east), drive(2, from: east, to: west)])
         XCTAssertFalse(layer.counts.isEmpty)
         XCTAssertEqual(layer.maxCount, 2)
         XCTAssertTrue(layer.counts.values.allSatisfy { $0 == 2 }, "the same road is covered by both drives everywhere")
@@ -236,31 +319,31 @@ final class RouteDensityTests: XCTestCase {
         var there = drive(1, from: west, to: east)
         let back = drive(1, from: east, to: west)
         there.runs = [there.runs[0] + back.runs[0].dropFirst()]
-        let layer = RouteDensity.build([there])
+        let layer = layerOf([there])
         XCTAssertEqual(layer.maxCount, 1)
         XCTAssertTrue(layer.counts.values.allSatisfy { $0 == 1 })
         // Also when the second pass is its own run (after a recording gap).
         there.runs = [drive(1, from: west, to: east).runs[0], back.runs[0]]
-        XCTAssertEqual(RouteDensity.build([there]).maxCount, 1)
+        XCTAssertEqual(layerOf([there]).maxCount, 1)
     }
 
     func testResamplingADriveDoesNotChangeCounts() {
         let other = drive(2, from: (37.3990, -122.1000), to: (37.4100, -122.0900))
-        let coarse = RouteDensity.build([drive(1, from: west, to: east, samples: 12), other])
-        let fine = RouteDensity.build([drive(1, from: west, to: east, samples: 97), other])
+        let coarse = layerOf([drive(1, from: west, to: east, samples: 12), other])
+        let fine = layerOf([drive(1, from: west, to: east, samples: 97), other])
         XCTAssertEqual(coarse.counts, fine.counts)
     }
 
     func testCountsAreDeterministicWhateverTheInputOrder() {
         let drives = [drive(3, from: west, to: east), drive(1, from: east, to: (37.41, -122.07)), drive(2, from: west, to: (37.39, -122.12))]
-        let a = RouteDensity.build(drives), b = RouteDensity.build(drives.reversed())
+        let a = layerOf(drives), b = layerOf(drives.reversed())
         XCTAssertEqual(a.counts, b.counts)
         XCTAssertEqual(a.strokes, b.strokes)
         XCTAssertEqual(a.strokes.map(\.count), a.strokes.map(\.count).sorted(), "busiest strokes are drawn last")
     }
 
     func testEfficiencyIsDistanceWeightedPerCell() {
-        let layer = RouteDensity.build([drive(1, from: west, to: east, ratio: 0.8), drive(2, from: west, to: east, ratio: 1.2),
+        let layer = layerOf([drive(1, from: west, to: east, ratio: 0.8), drive(2, from: west, to: east, ratio: 1.2),
                                         drive(3, from: west, to: east)])
         for stroke in layer.strokes {
             XCTAssertEqual(try XCTUnwrap(stroke.ratio), 1.0, accuracy: 1e-9, "a drive without efficiency doesn't weigh in")
@@ -279,6 +362,45 @@ final class RouteDensityTests: XCTestCase {
 final class EfficiencyWindowTests: XCTestCase {
     private typealias Interval = EfficiencyWindow.Interval
     private let reference = EfficiencyReference(ratedWhPerKm: 160)
+
+    func testWindowScalesWithTheTrip() {
+        XCTAssertEqual(EfficiencyWindow.windowKm(forTripKm: 2), 0.4, "a short trip gets 400 m")
+        XCTAssertEqual(EfficiencyWindow.windowKm(forTripKm: 16.9), 16.9 / 12, accuracy: 1e-12, "about 1.4 km")
+        XCTAssertEqual(EfficiencyWindow.windowKm(forTripKm: 300), 2, "a very long trip caps at 2 km")
+        XCTAssertEqual(EfficiencyWindow.windowKm(forTripKm: .nan), 0.4)
+    }
+
+    @MainActor
+    func testATripRouteUsesItsOwnWindow() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        // About 12 km along a meridian: 25 m every 2 s.
+        let rows = stride(from: 0.0, through: 960, by: 2).map { t in
+            DrivePoint(t: t0.addingTimeInterval(t), latitude: 37.0 + t / 2 * 0.000225, longitude: -122.1, speedKph: 45,
+                       powerKw: 8, elevationM: 30, batteryLevel: 60)
+        }
+        let route = TripRoute(TripTimeline(path: rows), mode: .efficiency)
+        let km = TripRoute.recordedKm(TripTimeline(path: rows))
+        XCTAssertEqual(km, 12, accuracy: 0.3)
+        XCTAssertEqual(route.windowKm, km / 12, accuracy: 1e-9)
+    }
+
+    @MainActor
+    func testElevationRangeComesFromTheRecordedSamples() {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let rows = [0.0, 100].enumerated().map { n, e in
+            DrivePoint(t: t0.addingTimeInterval(Double(n) * 2), latitude: 37.4 + Double(n) * 0.0002, longitude: -122.1,
+                       speedKph: 40, powerKw: 8, elevationM: e, batteryLevel: 60)
+        }
+        let route = TripRoute(TripTimeline(path: rows), mode: .elevation)
+        XCTAssertEqual(route.valueRange, 0...100, "not the one piece's average, 50...50")
+        let legend = TripRouteStyle(mode: .elevation, valueRange: route.valueRange, reference: reference)
+            .legend(units: UnitPreferences(distance: .kilometers))
+        XCTAssertEqual(legend?.low, "0 m")
+        XCTAssertEqual(legend?.high, "100 m")
+        // Flat: the guard keeps one colour.
+        let flat = TripRouteStyle(mode: .elevation, valueRange: 30...30, reference: reference)
+        XCTAssertEqual(flat.rgb(30), RoutePalette.elevation(fraction: 0))
+    }
 
     /// `count` intervals of `metres` each at `whPerKm`.
     private func steady(_ count: Int, metres: Double = 14, whPerKm: Double = 160) -> [Interval] {

@@ -92,7 +92,12 @@ struct RouteWatermark: View {
 /// with a 4 pt inset, a ring at the start and a dot at the end.
 struct RouteSketch: View {
     var points: [DriveRoutePoint]
+    var size = RouteSketch.size
     static let size = CGSize(width: 72, height: 48)
+    /// On cards narrower than 390 pt, so the place names keep their room.
+    static let compact = CGSize(width: 56, height: 40)
+
+    static func size(forCardWidth width: CGFloat) -> CGSize { width > 0 && width < 390 ? compact : size }
 
     var body: some View {
         Canvas { ctx, size in
@@ -110,7 +115,7 @@ struct RouteSketch: View {
                 RouteEndpointMarker.draw(.start, in: &ctx, at: start, size: 7)
             }
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .frame(width: size.width, height: size.height)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -272,6 +277,7 @@ struct DriveCard: View {
     @Environment(\.units) private var units
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(AppModel.self) private var model: AppModel?
+    @State private var width: CGFloat = 0
 
     private var cost: String? {
         let rate = DrivePricing.rate(drive, home: model?.settings.rates.homeTripRate)
@@ -281,10 +287,11 @@ struct DriveCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
-                // Names take what's left and truncate; the sketch keeps its box.
+                // Names take what's left and wrap to a second line rather
+                // than shrink or truncate; the sketch keeps its box.
                 itinerary.frame(maxWidth: .infinity, alignment: .leading)
                 if !typeSize.isAccessibilitySize, drive.drawableRoute.count > 1 {
-                    RouteSketch(points: drive.drawableRoute)
+                    RouteSketch(points: drive.drawableRoute, size: RouteSketch.size(forCardWidth: width))
                 }
                 VStack(alignment: .trailing, spacing: 9) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -322,6 +329,7 @@ struct DriveCard: View {
         }
         .padding(.top, 14).padding(.bottom, 13)
         .driveSurface(radius: 18)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .combine)
     }
 
@@ -334,13 +342,17 @@ struct DriveCard: View {
         }
     }
 
+    /// Both names at one size (17 pt semibold, scaling with Dynamic Type);
+    /// a long name wraps to a second line, never shrinks or truncates.
     private func place(_ name: String, marker: RouteEndpoint) -> some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             RouteEndpointMarker(kind: marker, size: 9)
-            Text(name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                .lineLimit(1).minimumScaleFactor(0.75)
+                .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 5 }
+            Text(name).scaledFont(17, weight: .semibold, relativeTo: .body).foregroundStyle(.white)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(height: 22)
+        .frame(minHeight: 22)
     }
 
     private func metrics(compact: Bool) -> some View {

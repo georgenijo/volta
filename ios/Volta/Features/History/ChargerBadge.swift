@@ -8,7 +8,7 @@ enum ChargerKind: Hashable, Sendable {
     case publicAC
     case supercharger
     case dcFast
-    /// A place whose kind the record doesn't say (Charger Map summaries).
+    /// A place whose sessions don't agree on a kind, or have none.
     case unknown
 
     init(_ charge: ChargeSummary) {
@@ -19,10 +19,27 @@ enum ChargerKind: Hashable, Sendable {
         }
     }
 
-    /// Charger Map places carry only a name: the same "home" rule as a
-    /// session, otherwise unknown.
-    init(placeName: String) {
-        self = placeName.localizedCaseInsensitiveContains("home") ? .home : .unknown
+    /// A place's kind from its recorded sessions: their kind when every one
+    /// agrees, otherwise (conflicting, or no sessions) unknown. A DC session
+    /// whose network wasn't recorded is missing evidence, not a conflict: it
+    /// agrees with any DC kind, and alone makes the place generic DC. Every
+    /// map shows a place the same way.
+    init<S: Sequence>(agreeing sessions: S) where S.Element == ChargeSummary {
+        var kinds = Set<ChargerKind>()
+        var unbrandedDC = false
+        for session in sessions {
+            if session.fastCharger, (session.fastChargerBrand ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+                unbrandedDC = true
+            } else {
+                kinds.insert(ChargerKind(session))
+            }
+        }
+        guard kinds.count <= 1 else { self = .unknown; return }
+        switch kinds.first {
+        case nil: self = unbrandedDC ? .dcFast : .unknown
+        case .supercharger?, .dcFast?: self = kinds.first!
+        case let kind?: self = unbrandedDC ? .unknown : kind
+        }
     }
 
     var systemImage: String {

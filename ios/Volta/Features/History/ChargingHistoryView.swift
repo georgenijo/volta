@@ -344,7 +344,8 @@ struct ChargingHistoryView: View {
             let kwh = VoltaFormat.energy(PartialSum(cluster.items.map(\.energyAddedKwh)).value, fractionDigits: 0)
             return HistoryMapPin(id: cluster.id, coordinate: cluster.coordinate, title: cluster.title(\.title),
                                  subtitle: "\(cluster.items.count)× · \(kwh)",
-                                 systemImage: first.kindIcon, tint: first.kindTint, charger: ChargerKind(first))
+                                 systemImage: first.kindIcon, tint: first.kindTint, charger: ChargerKind(agreeing: cluster.items),
+                                 active: cluster.items.contains { $0.end == nil })
         }
         let needsPlaces = visible.contains { $0.needsPlaces }
         return HistorySessionsMap(pins: pins, summary: grouping.summary, retryPlaces: {
@@ -479,10 +480,8 @@ struct GreyTileMap<Pin: View>: View {
 
     var body: some View {
         map
-            .mapStyle(.standard(emphasis: .muted, pointsOfInterest: .excludingAll))
-            .environment(\.colorScheme, .dark)
+            .voltaBasemap()
             .safeAreaPadding(insets)
-            .saturation(0)
             .overlay { Color.black.opacity(dim).allowsHitTesting(false) }
             .overlay {
                 GeometryReader { geo in

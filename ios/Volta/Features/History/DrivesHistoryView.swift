@@ -259,7 +259,8 @@ struct DrivesHistoryView: View {
                 let mapped = visible.contains { drive in DriveRouteSegments.runs(drive.drawableRoute).contains { $0.count > 1 } }
                 if mapped {
                     let reveal = page.reveal(0.23, 150...180)
-                    DrivesRouteMap(drives: visible, height: reveal + topInset, fullBleed: true,
+                    // Coloured by road density, like the heatmap, so both all-drives maps agree.
+                    DrivesRouteMap(drives: visible, height: reveal + topInset, coloring: .density, fullBleed: true,
                                    topInset: topInset + (barsOnSide ? 40 : 0))
                         .padding(.top, -topInset)
                         .allowsHitTesting(false)

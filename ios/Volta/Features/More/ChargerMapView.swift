@@ -8,6 +8,8 @@ struct ChargerMapView: View {
     @State private var generation = UUID()
     @Environment(\.pushMoreRoute) private var push
     @State private var loadedVehicle: Int?
+    /// Each place's kind, from all of its recorded sessions.
+    @State private var kinds: [String: ChargerKind] = [:]
     var body: some View {
         // Wide: the map fills one pane beside the list of places.
         ScreenKit.Page(splits: !(state.value ?? []).isEmpty) {
@@ -18,18 +20,18 @@ struct ChargerMapView: View {
                 } else {
                     let mapped = locations.filter(\.hasCoordinate)
                     if !mapped.isEmpty {
-                        Map {
-                            ForEach(mapped) { location in
-                                Annotation(location.name, coordinate: CLLocationCoordinate2D(latitude: location.latitude!, longitude: location.longitude!)) {
-                                    Button { push?(.chargerPlace(location)) } label: {
-                                        ChargerBadge(kind: ChargerKind(placeName: location.name))
-                                    }.accessibilityLabel("\(location.name), \(location.sessionCount) sessions")
-                                }
+                        // The shared grey basemap; badges drawn over it in colour.
+                        PinnedMap(items: mapped, coordinate: { CLLocationCoordinate2D(latitude: $0.latitude!, longitude: $0.longitude!) },
+                                  safe: .init(top: 40, leading: 32, bottom: 16, trailing: 32)) { location in
+                            Button { push?(.chargerPlace(location)) } label: {
+                                ChargerBadge(kind: kinds[location.id] ?? .unknown)
                             }
-                        }.mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
-                            .environment(\.colorScheme, .dark)
-                            .modifier(ScreenKit.MapHeight())
-                            .clipShape(.rect(cornerRadius: 22))
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(location.name), \((kinds[location.id] ?? .unknown).title), \(location.sessionCount) sessions")
+                        }
+                        .modifier(ScreenKit.MapHeight())
+                        .clipShape(.rect(cornerRadius: 22))
+                        .task(id: mapped.map(\.id)) { await loadKinds(mapped) }
                     } else {
                         Text("TeslaMate has not recorded coordinates for these places. Their sessions are available below.").foregroundStyle(ScreenKit.secondary)
                     }
@@ -59,11 +61,39 @@ struct ChargerMapView: View {
         .task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load() } }
         .refreshable { await load() }
     }
+    /// A place's kind comes from every one of its recorded sessions
+    /// (`ChargerKind(agreeing:)`): a place whose sessions disagree, have none,
+    /// or can't all be loaded stays the neutral unknown badge.
+    @MainActor private func loadKinds(_ places: [ChargerLocation]) async {
+        let id = vehicleID
+        for place in places where kinds[place.id] == nil {
+            let kind = await Self.kind(of: place, vehicleID: id, dataSource: dataSource)
+            guard !Task.isCancelled, vehicleID == id else { return }
+            kinds[place.id] = kind
+        }
+    }
+
+    static func kind(of place: ChargerLocation, vehicleID: Int, dataSource: any VoltaDataSource) async -> ChargerKind {
+        var sessions: [ChargeSummary] = []
+        var cursor: String?
+        for _ in 0..<200 {
+            guard !Task.isCancelled,
+                  let page = try? await dataSource.chargerSessions(vehicleID: vehicleID, locationID: place.id, cursor: cursor)
+            else { return .unknown }
+            sessions += page.items
+            cursor = page.nextCursor
+            if cursor == nil { return ChargerKind(agreeing: sessions) }
+        }
+        return .unknown
+    }
+
     @MainActor private func load() async {
         let id = vehicleID, token = UUID(); generation = token; state = .loading
         do {
             let locations = try await dataSource.chargerLocations(vehicleID: id)
             guard !Task.isCancelled, generation == token, vehicleID == id else { return }
+            // A refresh re-derives every place's kind from its sessions.
+            kinds = [:]
             loadedVehicle = id
             state = .loaded(locations)
         } catch {

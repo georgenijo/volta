@@ -48,7 +48,10 @@ struct DriveDetailView: View {
             if usesPanes {
                 // Scrub a chart on one side, watch the route on the other.
                 VoltaPanes {
-                    routeMap.ignoresSafeArea()
+                    VStack(spacing: 0) {
+                        routeMap.ignoresSafeArea(edges: [.top, .horizontal])
+                        legendStrip
+                    }
                 } secondary: {
                     scroll(showsMap: false)
                 }
@@ -76,6 +79,11 @@ struct DriveDetailView: View {
                     // Under the status bar and system bar, then about two fifths of the page.
                     routeMap
                         .frame(height: page.safeArea.top + page.reveal(0.4, 200...300))
+                    // The legend sits under the map, never over the route.
+                    legendStrip
+                        .padding(.horizontal, Self.margin - 16)
+                        .voltaReadableWidth()
+                        .historySides(sideBars)
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     TripHero(summary: summary, units: units)
@@ -224,7 +232,7 @@ struct DriveDetailView: View {
                 .tint(Color.voltaTextPrimary)
                 .accessibilityIdentifier("trip.mode")
             } else {
-                // The selected mode is a neutral pill: green is not a selection colour.
+                // The selected mode is a neutral circle: green is not a selection colour.
                 ForEach(TripMapMode.allCases) { m in modeButton(m) }
             }
         }
@@ -251,23 +259,48 @@ struct DriveDetailView: View {
         .historyPriority()
     }
 
-    @ViewBuilder private func modeButton(_ m: TripMapMode) -> some View {
-        let button = Button { mode = m } label: {
-            Label("Color route by \(m.title.lowercased())", systemImage: m.systemImage)
+    /// A mode inside the one toolbar capsule; the selected one sits on a
+    /// 34 pt circle of white at 16%, so the capsule never splits.
+    private func modeButton(_ m: TripMapMode) -> some View {
+        let selected = mode == m
+        return Button { mode = m } label: {
+            Image(systemName: m.systemImage)
+                .frame(width: 34, height: 34)
+                .background { if selected { Circle().fill(Color.white.opacity(0.16)) } }
         }
-        Group {
-            if mode == m {
-                button.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-                    .tint(Color.white.opacity(0.18)).foregroundStyle(Color.voltaTextPrimary)
-            } else {
-                button.tint(Color.voltaTextPrimary)
-            }
-        }
-        .accessibilityAddTraits(mode == m ? .isSelected : [])
+        .tint(Color.voltaTextPrimary)
+        .accessibilityLabel("Color route by \(m.title.lowercased())")
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("trip.mode.\(m.rawValue)")
     }
 
     // MARK: Map
+
+    private func routeStyle(_ route: TripRoute) -> TripRouteStyle {
+        TripRouteStyle(mode: mode, valueRange: route.valueRange,
+                       reference: EfficiencyReference(ratedWhPerKm: summary.ratedWhPerKm), windowKm: route.windowKm)
+    }
+
+    /// The route keeps 24 pt from the top controls (iPhone: the toolbar under
+    /// the status bar; iPhone Duo keeps its bar in the side strip), from the
+    /// Maps attribution just above the fade, and from the sides. The map
+    /// view adds the markers' reach.
+    private var routeClearance: EdgeInsets {
+        // The page's top safe area already includes the floating toolbar.
+        let top: CGFloat = sideBars.barEdges.isEmpty ? page.safeArea.top + 24 : 24
+        return EdgeInsets(top: top, leading: 24, bottom: Self.mapFade + Self.attribution + 24, trailing: 24)
+    }
+
+    /// MapKit's logo and Legal link above the fade.
+    static let attribution: CGFloat = 24
+
+    /// The legend for the current mode, under the map.
+    @ViewBuilder private var legendStrip: some View {
+        if let snapshot, let route = snapshot.routes[mode], snapshot.timeline.points.count > 1,
+           let legend = routeStyle(route).legend(units: units) {
+            RouteLegendStrip(model: legend)
+        }
+    }
 
     private var routeMap: some View {
         let state = RouteMapState(detail: loader.detail, error: loader.error,
@@ -277,15 +310,8 @@ struct DriveDetailView: View {
                 switch state {
                 case .route, .single:
                     if let snapshot, let route = snapshot.routes[mode] {
-                        let style = TripRouteStyle(mode: mode, valueRange: route.valueRange,
-                                                   reference: EfficiencyReference(ratedWhPerKm: summary.ratedWhPerKm))
-                        TripMapView(timeline: snapshot.timeline, route: route, style: style, highlight: highlight,
-                                    bottomInset: Self.mapFade,
-                                    // iPhone Duo keeps its bar in the side strip: nothing to clear at the top.
-                                    frameInsets: EdgeInsets(top: sideBars.barEdges.isEmpty ? 140 : 32, leading: 48, bottom: 96, trailing: 48),
-                                    legend: style.legend(units: units),
-                                    reservedLegend: TripRouteStyle(mode: .efficiency, reference: style.reference).legend(units: units),
-                                    legendLeading: Self.margin - 12 + sideBars.leading,
+                        TripMapView(timeline: snapshot.timeline, route: route, style: routeStyle(route), highlight: highlight,
+                                    bottomInset: Self.mapFade, frameInsets: routeClearance,
                                     underEdges: sideBars.barEdges.union(.vertical))
                     } else {
                         mapPlaceholder(nil)

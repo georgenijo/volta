@@ -77,8 +77,9 @@ enum DriveRouteSegments {
 }
 
 /// Coordinate-only overview; no geocoding or directions, no joins across recording gaps.
-/// Routes draw over a dark, desaturated map: plain blue by default, or by
-/// road density or efficiency on the shared `RoutePalette` ramps. No glow.
+/// Routes draw over a dark, desaturated map: plain blue (a roadtrip's few
+/// drives), or by road density or efficiency on the shared `RoutePalette`
+/// ramps (every all-drives map). No glow.
 /// Single positions (sparse polling) are not drawn: a lone dot reads as a
 /// place, not a route. The bottom edge fades into the page over at most 64 pt,
 /// and MapKit's logo and Legal link sit just above that fade.
@@ -103,6 +104,8 @@ struct DrivesRouteMap: View {
     var legend: RouteLegendModel? = nil
     /// Route width; maps of many drives at region scale draw thinner than a trip.
     var lineWidth: CGFloat = 3
+    /// The dark casing under the routes.
+    var casingWidth: CGFloat = 5
 
     static let fade: CGFloat = 64
 
@@ -149,7 +152,28 @@ struct DrivesRouteMap: View {
         }
     }
 
-    private var densityKey: [Int] { drives.map(\.id) }
+    /// What the layer depends on: each drive's route length, last sample and
+    /// consumption, and the reference. A drive in progress gaining points, a
+    /// corrected consumption or a new reference all rebuild it.
+    private struct LayerKey: Hashable {
+        struct Revision: Hashable { var id: Int; var points: Int; var last: Date?; var whPerKm: Double? }
+        var coloring: Coloring
+        var reference: EfficiencyReference
+        var drives: [Revision]
+    }
+
+    private var reference: EfficiencyReference {
+        if case .efficiency(let reference) = coloring { return reference }
+        return EfficiencyReference(drives: drives)
+    }
+
+    private var layerKey: LayerKey? {
+        guard coloring != .plain else { return nil }
+        return LayerKey(coloring: coloring, reference: reference, drives: drives.map {
+            LayerKey.Revision(id: $0.id, points: $0.drawableRoute.count, last: $0.drawableRoute.last?.t,
+                              whPerKm: $0.displayEfficiencyWhPerKm)
+        })
+    }
 
     var body: some View {
         let runs = runs
@@ -159,12 +183,10 @@ struct DrivesRouteMap: View {
                     .padding(.top, topInset)
             } else {
                 Map(position: $position, interactionModes: [])
-                        .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
-                        .environment(\.colorScheme, .dark)
+                        .voltaBasemap()
                         .safeAreaPadding(mapSafe)
                         .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
-                        // Dark and grey: roads read as texture, labels stay dim.
-                        .saturation(0)
+                        // Dark: roads read as texture, labels stay dim.
                         .opacity(fullBleed ? 0.45 : 0.55)
                         .overlay { routes(runs).allowsHitTesting(false) }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { frame($0, runs: runs) }
@@ -181,14 +203,20 @@ struct DrivesRouteMap: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
-        .task(id: coloring == .plain ? nil : densityKey) { await buildLayer() }
+        .task(id: layerKey) { await buildLayer() }
     }
 
+    /// The map and its legend read as one element: what is drawn, then the
+    /// legend's own sentence (density bounds, or the efficiency reference and
+    /// whether it is estimated).
     private var accessibilityText: String {
+        let base = "Recorded routes for loaded drives."
+        if let legend { return base + " " + legend.sentence }
         switch coloring {
-        case .plain: "Recorded routes for loaded drives"
-        case .density: "Recorded routes for loaded drives, coloured by how many drives used each road"
-        case .efficiency: "Recorded routes for loaded drives, coloured by efficiency"
+        case .plain: return base
+        case .density: return base + " " + RouteLegendModel.density.sentence
+        case .efficiency(let reference):
+            return base + " " + RouteLegendModel.efficiency(reference: reference, units: .default).sentence
         }
     }
 
@@ -198,13 +226,15 @@ struct DrivesRouteMap: View {
         position = .rect(TripRoute.fitted(Self.content(runs), size: size, safe: mapSafe, insets: frameInsets))
     }
 
-    /// Counts off the main thread; plain maps need no layer.
+    /// Counts off the main thread; plain maps need no layer. Leaving the
+    /// screen or changing the selection cancels this task, and the
+    /// cancellation is forwarded to the worker, which stops between drives.
     private func buildLayer() async {
         guard coloring != .plain else { layer = nil; return }
-        let reference = EfficiencyReference(drives: drives)
         let input = drives.map { RouteDensity.Drive($0, reference: reference) }
-        let built = await Task.detached(priority: .userInitiated) { RouteDensity.build(input) }.value
-        if !Task.isCancelled { layer = built }
+        let worker = Task.detached(priority: .userInitiated) { RouteDensity.build(input) }
+        let built = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+        if !Task.isCancelled, let built { layer = built }
     }
 
     private func routes(_ runs: [[CLLocationCoordinate2D]]) -> some View {
@@ -213,7 +243,7 @@ struct DrivesRouteMap: View {
             guard let visible else { return }
             let safe = mapSafe
             let transform = { (m: MKMapPoint) in TripRoute.project(m, visible: visible, size: size, safe: safe) ?? .zero }
-            let casing = StrokeStyle(lineWidth: lineWidth + 2, lineCap: .round, lineJoin: .round)
+            let casing = StrokeStyle(lineWidth: casingWidth, lineCap: .round, lineJoin: .round)
             let line = StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
             switch coloring {
             case .plain:
@@ -232,7 +262,8 @@ struct DrivesRouteMap: View {
                 for stroke in layer.strokes {
                     let color: RoutePalette.RGB?
                     switch coloring {
-                    case .efficiency: color = stroke.ratio.map { RoutePalette.efficiency.rgb($0) }
+                    // Net regeneration takes the shared regen colour, as on a trip map.
+                    case .efficiency: color = stroke.ratio.map { RoutePalette.efficiency(ratio: $0) }
                     default: color = RoutePalette.density(count: stroke.count)
                     }
                     let key: Int = color?.bucketKey ?? -1
@@ -365,6 +396,7 @@ private struct RoadtripCard: View {
     var trip: Roadtrip
     @Environment(\.units) private var units
     @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var width: CGFloat = 0
 
     var body: some View {
         let first = trip.drives[0], last = trip.drives[trip.drives.count - 1]
@@ -373,7 +405,7 @@ private struct RoadtripCard: View {
                 itinerary(from: first.startPlace, to: last.endPlace)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if !typeSize.isAccessibilitySize {
-                    RouteSketch(points: trip.routePoints).padding(.top, 6)
+                    RouteSketch(points: trip.routePoints, size: RouteSketch.size(forCardWidth: width)).padding(.top, 6)
                 }
                 VStack(alignment: .trailing, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -403,6 +435,7 @@ private struct RoadtripCard: View {
         }
         .padding(.horizontal, 22).padding(.top, 22).padding(.bottom, 6)
         .driveSurface()
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .accessibilityElement(children: .combine)
     }
 
@@ -414,14 +447,16 @@ private struct RoadtripCard: View {
                     .frame(width: 1).frame(maxHeight: .infinity).padding(.vertical, 6)
                 RouteEndpointMarker(kind: .end, size: 9).padding(.bottom, 8)
             }
+            // Both names at one size; a long name wraps, never shrinks or truncates.
             VStack(alignment: .leading, spacing: 6) {
-                Text(start).font(.system(size: 22, weight: .medium))
+                Text(start).scaledFont(17, weight: .semibold, relativeTo: .body)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Text(trip.stops == 0 ? "NONSTOP" : trip.stops == 1 ? "1 STOP" : "\(trip.stops) STOPS")
                     .scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.tertiary)
-                Text(end).font(.system(size: 22, weight: .medium))
+                Text(end).scaledFont(17, weight: .semibold, relativeTo: .body)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             .foregroundStyle(.white)
-            .lineLimit(1).minimumScaleFactor(0.7)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -658,7 +693,8 @@ struct DrivesHeatmapView: View {
                 let reference = EfficiencyReference(drives: drives)
                 DrivesRouteMap(drives: drives, height: wide ? 380 : 320,
                                coloring: mode == .density ? .density : .efficiency(reference),
-                               legend: mode == .density ? .density : .efficiency(reference: reference, units: units, showsRegen: false))
+                               legend: mode == .density ? .density : .efficiency(reference: reference, units: units),
+                               lineWidth: 4, casingWidth: 7)
                     .overviewBleed()
                     .padding(.top, 4)
             }

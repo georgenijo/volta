@@ -149,6 +149,7 @@ struct TripHero: View {
 struct TripEfficiencySlider: View {
     var whPerKm: Double?
     var reference = EfficiencyReference(ratedWhPerKm: nil)
+    @Environment(\.units) private var units
 
     /// Position along the bar, 0...1.
     static func fraction(_ whPerKm: Double, reference: EfficiencyReference) -> Double {
@@ -159,24 +160,43 @@ struct TripEfficiencySlider: View {
     var body: some View {
         let domain = RoutePalette.efficiency.domain
         let tick = (1 - domain.lowerBound) / (domain.upperBound - domain.lowerBound)
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(LinearGradient(stops: RoutePalette.efficiency.gradientStops(), startPoint: .leading, endPoint: .trailing))
-                    .frame(height: 4)
-                Capsule().fill(.white.opacity(0.7)).frame(width: 1.5, height: 9)
-                    .offset(x: geo.size.width * tick - 0.75)
-                if let whPerKm {
-                    let f = Self.fraction(whPerKm, reference: reference)
-                    Circle().fill(RoutePalette.efficiency(whPerKm: whPerKm, reference: reference).color)
-                        .frame(width: 10, height: 10)
-                        .overlay(Circle().strokeBorder(RoutePalette.casing.color, lineWidth: 2))
-                        .offset(x: f * (geo.size.width - 10))
+        VStack(alignment: .trailing, spacing: 4) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(LinearGradient(stops: RoutePalette.efficiency.gradientStops(), startPoint: .leading, endPoint: .trailing))
+                        .frame(height: 4)
+                    Capsule().fill(.white.opacity(0.7)).frame(width: 1.5, height: 9)
+                        .offset(x: geo.size.width * tick - 0.75)
+                    if let whPerKm {
+                        let f = Self.fraction(whPerKm, reference: reference)
+                        Circle().fill(RoutePalette.efficiency(whPerKm: whPerKm, reference: reference).color)
+                            .frame(width: 10, height: 10)
+                            .overlay(Circle().strokeBorder(RoutePalette.casing.color, lineWidth: 2))
+                            .offset(x: f * (geo.size.width - 10))
+                    }
                 }
+                .frame(maxHeight: .infinity)
             }
-            .frame(maxHeight: .infinity)
+            .frame(height: 12)
+            // Without the car's rating the tick is an estimate: say so.
+            if whPerKm != nil, !reference.isRated {
+                Text(RouteLegendModel.referenceLabel(reference, units: units))
+                    .scaledFont(11, weight: .medium)
+                    .foregroundStyle(HistoryTheme.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
-        .frame(height: 12)
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+        .accessibilityHidden(whPerKm == nil)
+    }
+
+    private var accessibilityText: String {
+        let value = VoltaFormat.number(units.efficiencyValue(whPerKm: reference.whPerKm), digits: 0)
+        return reference.isRated
+            ? "Compared with the car's rated \(value) \(units.efficiencyUnit)"
+            : "Compared with an estimated \(value) \(units.efficiencyUnit), because the car's rating isn't recorded"
     }
 }
 

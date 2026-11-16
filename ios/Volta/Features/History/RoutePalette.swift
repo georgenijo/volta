@@ -76,7 +76,7 @@ enum RoutePalette {
     /// km/h, fixed domain 0...130.
     static let speed = Ramp([(0, 0x7C8CFF), (32.5, 0x4BA8FF), (65, 0x39D8EE), (97.5, 0x9AEAC8), (130, 0xF3F5B0)])
     /// Consumption over the reference consumption (1 = as rated).
-    static let efficiency = Ramp([(0.5, 0x5EEBC4), (0.75, 0x46B79C), (1.0, 0x868C96), (1.375, 0xE9A34B), (1.75, 0xFF7A45)])
+    static let efficiency = Ramp([(0.5, 0x5EEBC4), (0.75, 0x46B79C), (1.0, 0xA8B0BB), (1.375, 0xE9A34B), (1.75, 0xFF7A45)])
     /// Fraction of the trip's own elevation range.
     static let elevation = Ramp([(0, 0x7C8CFF), (0.5, 0xB2AEFF), (1, 0xF3D9FF)])
     /// log10 of the number of distinct drives on a stretch of road (1, 3, 10, 30+).
@@ -107,7 +107,13 @@ enum RoutePalette {
 
     /// Colour for a consumption against a reference. Negative is regen.
     static func efficiency(whPerKm: Double, reference: EfficiencyReference) -> RGB {
-        whPerKm < 0 ? regen : efficiency.rgb(whPerKm / reference.whPerKm)
+        efficiency(ratio: whPerKm / reference.whPerKm)
+    }
+
+    /// Colour for consumption over the reference; a negative ratio (net
+    /// regeneration) is regen on every map, trip or heatmap.
+    static func efficiency(ratio: Double) -> RGB {
+        ratio < 0 ? regen : efficiency.rgb(ratio)
     }
 
     static func elevation(fraction: Double) -> RGB { elevation.rgb(fraction) }
@@ -190,35 +196,49 @@ struct EfficiencyReference: Hashable, Sendable {
 
 // MARK: - Legend
 
-/// What a route legend shows: a gradient and three labels in the user's units.
+/// What a route legend shows: a gradient, its end labels and a reference tick
+/// in the user's units.
 struct RouteLegendModel: Equatable {
     var stops: [Gradient.Stop]
     var low: String
+    /// Label for the tick (nil: no label).
     var mid: String?
     var high: String
-    /// Mid label sits under a tick at this fraction of the bar (nil: no tick).
+    /// A tick at this fraction of the bar (nil: no tick).
     var tick: Double?
     /// Extra swatch after the bar, e.g. regen.
     var extra: (label: String, color: Color)?
     /// Read by VoiceOver as one sentence.
     var sentence: String
-    /// A small line under the labels, e.g. how the colour is averaged.
+    /// A small line under the bar, e.g. how the colour is averaged.
     var note: String? = nil
+    /// Fixed labels along the bar at fractions of its length, in place of the
+    /// end labels (density: 1 · 3 · 10 · 30+).
+    var marks: [Mark]? = nil
+
+    struct Mark: Equatable {
+        var label: String
+        var position: Double
+    }
 
     static func == (a: RouteLegendModel, b: RouteLegendModel) -> Bool {
         a.low == b.low && a.mid == b.mid && a.high == b.high && a.tick == b.tick && a.sentence == b.sentence
-            && a.extra?.label == b.extra?.label && a.note == b.note
+            && a.extra?.label == b.extra?.label && a.note == b.note && a.marks == b.marks
     }
 
-    /// "0.25 mi" or "400 m".
+    /// A distance for captions: "0.25 mi", "0.9 mi", "400 m", "1.4 km".
     static func windowText(_ km: Double, units: UnitPreferences) -> (short: String, long: String) {
         if units.distance == .miles {
             let miles: Double = km / 1.609344
-            let text = VoltaFormat.number(miles, digits: 2)
+            let text = VoltaFormat.number(miles, digits: miles < 0.5 ? 2 : 1)
             return ("\(text) mi", "\(text) miles")
         }
-        let metres = VoltaFormat.number(km * 1000, digits: 0)
-        return ("\(metres) m", "\(metres) metres")
+        if km < 1 {
+            let metres = VoltaFormat.number((km * 100).rounded() * 10, digits: 0)
+            return ("\(metres) m", "\(metres) metres")
+        }
+        let text = VoltaFormat.number(km, digits: 1)
+        return ("\(text) km", "\(text) kilometres")
     }
 
     static func speed(units: UnitPreferences) -> RouteLegendModel {
@@ -227,9 +247,16 @@ struct RouteLegendModel: Equatable {
         let top = units.distanceValue(km: RoutePalette.speedDomainKph.upperBound).rounded(.down)
         let mid = units.distanceValue(km: RoutePalette.speedDomainKph.upperBound / 2)
         let topText = "\(VoltaFormat.number(top, digits: 0))+ \(unit)"
-        return RouteLegendModel(stops: RoutePalette.speed.gradientStops(), low: "0", mid: VoltaFormat.number(mid, digits: 0),
+        return RouteLegendModel(stops: RoutePalette.speed.gradientStops(), low: "0", mid: "\(VoltaFormat.number(mid, digits: 0)) \(unit)",
                                 high: topText, tick: 0.5, extra: nil,
                                 sentence: "Route colour shows speed, from 0 to \(VoltaFormat.number(top, digits: 0)) \(unit) and above.")
+    }
+
+    /// The tick's label: "Rated 264 Wh/mi" when the rating is recorded,
+    /// "Est. 264 Wh/mi" for the fallback reference.
+    static func referenceLabel(_ reference: EfficiencyReference, units: UnitPreferences) -> String {
+        let value = VoltaFormat.number(units.efficiencyValue(whPerKm: reference.whPerKm), digits: 0)
+        return "\(reference.isRated ? "Rated" : "Est.") \(value) \(units.efficiencyUnit)"
     }
 
     /// `averagedOverKm`: the colour is a rolling average over this much
@@ -239,12 +266,11 @@ struct RouteLegendModel: Equatable {
         let ramp = RoutePalette.efficiency
         let span = ramp.domain.upperBound - ramp.domain.lowerBound
         let ref = VoltaFormat.number(units.efficiencyValue(whPerKm: reference.whPerKm), digits: 0)
-        let label = reference.isRated ? ref : "~\(ref)"
         let window = averagedOverKm.map { windowText($0, units: units) }
         let what = reference.isRated ? "the car's rated \(ref) \(units.efficiencyUnit)"
-            : "an estimated reference of \(ref) \(units.efficiencyUnit)"
-        return RouteLegendModel(stops: ramp.gradientStops(), low: "Efficient", mid: label, high: "Thirsty",
-                                tick: (1 - ramp.domain.lowerBound) / span,
+            : "an estimated reference of \(ref) \(units.efficiencyUnit), because the car's rating isn't recorded"
+        return RouteLegendModel(stops: ramp.gradientStops(), low: "Efficient", mid: referenceLabel(reference, units: units),
+                                high: "Thirsty", tick: (1 - ramp.domain.lowerBound) / span,
                                 extra: showsRegen ? ("Regen", RoutePalette.regen.color) : nil,
                                 sentence: "Route colour shows efficiency against \(what): green is more efficient, orange is thirstier"
                                     + (showsRegen ? ", violet is regenerating." : ".")
@@ -261,9 +287,31 @@ struct RouteLegendModel: Equatable {
     }
 
     static var density: RouteLegendModel {
-        RouteLegendModel(stops: RoutePalette.density.gradientStops(), low: "1 drive", mid: "10", high: "30+ drives",
-                         tick: 1 / log10(30), extra: nil,
-                         sentence: "Route colour shows how many drives used each road, from 1 drive to 30 or more.")
+        let top = log10(Double(RoutePalette.densityCap))
+        return RouteLegendModel(stops: RoutePalette.density.gradientStops(), low: "1", mid: nil, high: "30+",
+                                tick: nil, extra: nil,
+                                sentence: "Route colour shows how many drives used each road, from 1 drive to 30 or more.",
+                                marks: [Mark(label: "1", position: 0), Mark(label: "3", position: log10(3) / top),
+                                        Mark(label: "10", position: 1 / top), Mark(label: "30+", position: 1)])
+    }
+}
+
+/// Labels placed along a bar of `width` at fractions of it, each centred on
+/// its position but kept inside the bar's ends.
+private struct LegendMarks: View {
+    var marks: [RouteLegendModel.Mark]
+    var width: CGFloat
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Color.clear.frame(width: width, height: 1)
+            ForEach(marks, id: \.label) { mark in
+                Text(mark.label).fixedSize().alignmentGuide(.leading) { d in
+                    let centred: CGFloat = d.width / 2 - width * mark.position
+                    return min(0, max(d.width - width, centred))
+                }
+            }
+        }
     }
 }
 
@@ -279,11 +327,8 @@ struct RouteLegendChip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let mid = model.mid {
-                // The reference number sits over its tick.
-                ZStack(alignment: .leading) {
-                    Color.clear.frame(width: width, height: 1)
-                    Text(mid).alignmentGuide(.leading) { d in d.width / 2 - width * (model.tick ?? 0.5) }
-                }
+                // The reference sits over its tick, kept inside the bar.
+                LegendMarks(marks: [.init(label: mid, position: model.tick ?? 0.5)], width: width)
             }
             HStack(spacing: 10) {
                 Capsule()
@@ -301,12 +346,16 @@ struct RouteLegendChip: View {
                     }
                 }
             }
-            HStack(spacing: 0) {
-                Text(model.low)
-                Spacer(minLength: 6)
-                Text(model.high)
+            if let marks = model.marks {
+                LegendMarks(marks: marks, width: width)
+            } else {
+                HStack(spacing: 0) {
+                    Text(model.low)
+                    Spacer(minLength: 6)
+                    Text(model.high)
+                }
+                .frame(width: width)
             }
-            .frame(width: width)
             if let note = model.note {
                 Text(note).foregroundStyle(.white.opacity(0.6)).scaledFont(11, weight: .medium)
             }
@@ -317,6 +366,72 @@ struct RouteLegendChip: View {
         .lineLimit(1)
         .padding(.horizontal, 12).padding(.vertical, 9)
         .glassEffect(.regular, in: .rect(cornerRadius: 14))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.sentence)
+        .accessibilityIdentifier("route.legend")
+    }
+}
+
+/// The trip legend as a footer strip under the map, on the page background:
+/// one row (end labels around the bar and its tick; the regen swatch at the
+/// trailing end), and a caption line under it only when there is a tick
+/// label or a note.
+struct RouteLegendStrip: View {
+    var model: RouteLegendModel
+    @State private var bar: CGRect = .zero
+    @State private var strip: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(model.low)
+                Capsule()
+                    .fill(LinearGradient(stops: model.stops, startPoint: .leading, endPoint: .trailing))
+                    .frame(height: 4)
+                    .frame(maxWidth: .infinity)
+                    .overlay {
+                        GeometryReader { g in
+                            if let tick = model.tick {
+                                Capsule().fill(.white).frame(width: 2, height: 10)
+                                    .position(x: g.size.width * tick, y: g.size.height / 2)
+                            }
+                        }
+                    }
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("legend.strip")) } action: { bar = $0 }
+                Text(model.high)
+                if let extra = model.extra {
+                    HStack(spacing: 5) {
+                        Capsule().fill(extra.color).frame(width: 12, height: 4)
+                        Text(extra.label)
+                    }
+                    .padding(.leading, 6)
+                }
+            }
+            .foregroundStyle(.white.opacity(0.85))
+            if model.mid != nil || model.note != nil {
+                ZStack(alignment: .leading) {
+                    Color.clear.frame(maxWidth: .infinity).frame(height: 1)
+                    if let note = model.note {
+                        Text(note).frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    if let mid = model.mid {
+                        // Centred under the tick, kept inside the strip.
+                        Text(mid).fixedSize().alignmentGuide(.leading) { d in
+                            let x: CGFloat = bar.minX + bar.width * (model.tick ?? 0.5)
+                            return min(0, max(d.width - strip, d.width / 2 - x))
+                        }
+                    }
+                }
+                .foregroundStyle(HistoryTheme.secondary)
+            }
+        }
+        .scaledFont(11, weight: .semibold)
+        .monospacedDigit()
+        .lineLimit(1)
+        .coordinateSpace(.named("legend.strip"))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { strip = $0 }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(model.sentence)
         .accessibilityIdentifier("route.legend")

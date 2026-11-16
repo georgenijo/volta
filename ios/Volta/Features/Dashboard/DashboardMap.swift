@@ -117,46 +117,34 @@ struct CarMarker: View {
     }
 }
 
-/// Charging pin: a white disc with a green bolt, a breathing green glow and
-/// sparks drifting up off it.
+/// Charging pin: a green disc with a dark ring and bolt, and one ring
+/// expanding from it every 2.4 s while charging (static under Reduce Motion).
 struct ChargingMarker: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let green = Color(hex: 0x5ECB93)
 
     var body: some View {
         ZStack {
-            TimelineView(.animation(paused: reduceMotion)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                Canvas { ctx, size in
-                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                    for i in 0..<9 {
-                        let seed = Double(i) * 1.618
-                        let phase = (t / (2.4 + seed.truncatingRemainder(dividingBy: 1.1)) + seed).truncatingRemainder(dividingBy: 1)
-                        let angle = seed * 2.4
-                        let x = center.x + cos(angle) * (10 + 18 * phase)
-                        let y = center.y - 8 - 34 * phase + sin(angle) * 6
-                        let r = 1.6 * (1 - phase) + 0.6
-                        ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)),
-                                 with: .color(Color.voltaGreen.opacity(0.85 * (1 - phase))))
-                    }
+            // One ring expanding from the disc while power flows (this marker
+            // is shown only then); none of it under Reduce Motion.
+            if !reduceMotion {
+                TimelineView(.animation) { context in
+                    let phase: Double = (context.date.timeIntervalSinceReferenceDate / 2.4).truncatingRemainder(dividingBy: 1)
+                    let side: CGFloat = 30 * (1 + 0.9 * phase)
+                    Circle()
+                        .stroke(Self.green, lineWidth: 1.5)
+                        .frame(width: side, height: side)
+                        .opacity(0.5 * (1 - phase))
                 }
             }
             Circle()
-                .fill(Color.voltaGreen.opacity(0.35))
-                .frame(width: 46, height: 46)
-                .blur(radius: 8)
-                .phaseAnimator(reduceMotion ? [1] : [0.7, 1.15]) { view, scale in
-                    view.scaleEffect(scale)
-                } animation: { _ in .easeInOut(duration: 1.4) }
-            Circle()
-                .fill(Color.white)
-                .frame(width: 26, height: 26)
-                .shadow(color: .voltaGreen.opacity(0.8), radius: 6)
-            // The charge-state vocabulary's glyph; it breathes only while
-            // power flows (this marker is shown only then), never with Reduce Motion.
+                .fill(Self.green)
+                .frame(width: 30, height: 30)
+                .overlay { Circle().strokeBorder(Color(hex: 0x101318), lineWidth: 2) }
+            // The charge-state vocabulary's glyph.
             Image(systemName: StateDisplay.charging(.charging).symbol)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color.voltaGreen)
-                .symbolEffect(.breathe, isActive: !reduceMotion)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color(hex: 0x06140D))
         }
         .frame(width: 92, height: 92)
     }

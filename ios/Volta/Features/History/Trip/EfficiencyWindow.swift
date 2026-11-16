@@ -1,7 +1,7 @@
 import Foundation
 
 /// Consumption for colouring a single drive's route, averaged over a rolling
-/// distance window so the line reads as stretches of road rather than
+/// distance window (`windowKm(forTripKm:)`) so the line reads as stretches of road rather than
 /// per-sample noise. Only the line colour uses it: every number shown stays
 /// the raw recorded value.
 ///
@@ -10,8 +10,16 @@ import Foundation
 /// spans a position gap or a stretch where the metric wasn't recorded, so
 /// callers window each run on its own.
 enum EfficiencyWindow {
-    /// About 400 m of driving, centred on the segment being coloured.
-    static let windowKm = 0.4
+    /// The window scales with the trip: a twelfth of its recorded length,
+    /// at least 400 m and at most 2 km, so the line reads as stretches of road
+    /// at the scale the whole trip is shown. Chosen once per trip, not per zoom.
+    static let minimumKm = 0.4
+    static let maximumKm = 2.0
+
+    static func windowKm(forTripKm km: Double) -> Double {
+        guard km.isFinite, km > 0 else { return minimumKm }
+        return min(maximumKm, max(minimumKm, km / 12))
+    }
 
     /// One recorded interval between two samples.
     struct Interval: Equatable, Sendable {
@@ -36,7 +44,7 @@ enum EfficiencyWindow {
     /// window shrinks symmetrically so it stays centred; a run shorter than
     /// the window uses the whole run. Negative values are regeneration.
     /// Nil only where the run covers no distance.
-    static func smoothed(_ run: [Interval], windowKm: Double = windowKm) -> [Double?] {
+    static func smoothed(_ run: [Interval], windowKm: Double = minimumKm) -> [Double?] {
         guard !run.isEmpty else { return [] }
         // Cumulative distance and energy at each interval boundary.
         var distance: [Double] = [0]

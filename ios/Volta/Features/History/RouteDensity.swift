@@ -2,17 +2,20 @@ import MapKit
 
 /// Real road density for the heatmap. MapKit can't add stacked translucent
 /// lines up into brighter colours, so this counts instead: recorded positions
-/// are laid on a fixed ground grid (cells of about 35 m), each cell counts the
-/// distinct drives that pass through it (a drive counts once per cell however
-/// often it was sampled there or passed it), and the routes are cut into
-/// strokes coloured by those counts. Pure and deterministic: the same drives
-/// give the same strokes in the same order. Run it off the main thread.
+/// are laid on a fixed Web Mercator grid (zoom 20: cells of 256 map points,
+/// about 38 m × cos(latitude) on the ground), each cell counts the distinct
+/// drives that pass through it (a drive counts once per cell however often it
+/// was sampled there or passed it), and the routes are cut into strokes
+/// coloured by those counts. The grid is the same for every selection, so
+/// loading more drives never moves a cell. Pure and deterministic: the same
+/// drives give the same strokes in the same order. Run it off the main thread.
 enum RouteDensity {
     struct Drive: Sendable {
         var id: Int
         /// Recorded runs; never joined across a recording gap.
         var runs: [[CLLocationCoordinate2D]]
         /// Consumption over the efficiency reference, if the drive measured it.
+        /// Negative when the drive recovered more than it used.
         var ratio: Double?
     }
 
@@ -43,24 +46,24 @@ enum RouteDensity {
         static let empty = Layer(strokes: [], counts: [:], maxCount: 0)
     }
 
-    /// Ground size of a cell.
-    static let cellMeters = 35.0
+    /// Cell edge in map points: a Web Mercator grid at zoom 20.
+    static let cellSize: Double = 256
+    /// Map points around the world, and cells across it (x wraps at the antimeridian).
+    static let worldWidth: Double = MKMapSize.world.width
+    static let cellsAcross = Int((MKMapSize.world.width / 256).rounded())
     /// Each drive is thinned to at most this many positions before counting,
     /// which keeps a few hundred loaded drives to well under a second.
     static let maxPointsPerDrive = 400
 
-    /// Cell edge in map points. Map points stretch with latitude, so the edge
-    /// is set for the 10° band the drives sit in; inside a band the grid is
-    /// fixed and does not move as drives are loaded.
-    static func cellSize(latitude: Double) -> Double {
-        let band = max(-80, min(80, (latitude / 10).rounded() * 10))
-        return cellMeters * MKMapPointsPerMeterAtLatitude(band)
+    /// Ground size of a cell at `latitude`, in metres.
+    static func cellMeters(latitude: Double) -> Double {
+        cellSize / MKMapPointsPerMeterAtLatitude(latitude)
     }
 
-    static func build(_ drives: [Drive]) -> Layer {
+    /// The layer for `drives`, or nil when `isCancelled` reports true partway
+    /// (checked between drives and between strokes).
+    static func build(_ drives: [Drive], isCancelled: () -> Bool = { Task.isCancelled }) -> Layer? {
         let ordered = drives.sorted { $0.id < $1.id }
-        guard let anchor = ordered.lazy.flatMap({ $0.runs.joined() }).first else { return .empty }
-        let cell = cellSize(latitude: anchor.latitude)
 
         // Pass 1: every drive's visits, cell by cell, in travel order.
         struct Visit { var cell: Cell; var from: MKMapPoint; var to: MKMapPoint; var length: Double }
@@ -68,13 +71,14 @@ enum RouteDensity {
         var counts: [Cell: Int] = [:]
         var ratioSum: [Cell: Double] = [:], ratioWeight: [Cell: Double] = [:]
         for drive in ordered {
+            if isCancelled() { return nil }
             var seen = Set<Cell>()
             var runs: [[Visit]] = []
             for run in thin(drive.runs, to: maxPointsPerDrive) where run.count > 1 {
                 var visits: [Visit] = []
                 let points = run.map(MKMapPoint.init)
                 for (a, b) in zip(points, points.dropFirst()) {
-                    traverse(a, b, cell: cell) { c, from, to, length in
+                    traverse(a, b) { c, from, to, length in
                         visits.append(Visit(cell: c, from: from, to: to, length: length))
                     }
                 }
@@ -95,22 +99,37 @@ enum RouteDensity {
             return s / w
         }
 
-        // Pass 2: join consecutive visits that look the same into strokes.
+        // Pass 2: join consecutive visits that look the same into strokes. The
+        // points accumulate in one buffer owned here and move into a stroke
+        // when it ends, so a long stroke is never copied as it grows.
         var strokes: [Stroke] = []
+        var buffer: [MKMapPoint] = []
+        var bufferCount = 0
+        var bufferRatio: Double?
+        func flush() {
+            if buffer.count > 1 { strokes.append(Stroke(points: buffer, count: bufferCount, ratio: bufferRatio)) }
+            buffer = []
+        }
         for runs in visitsByDrive {
+            if isCancelled() { return nil }
             for visits in runs {
-                var current: Stroke?
                 for v in visits {
                     let count = counts[v.cell] ?? 1, r = ratio(v.cell)
-                    if var s = current, s.count == count, s.ratio == r {
-                        s.points.append(v.to)
-                        current = s
+                    // A visit continues the stroke only where the last one ended
+                    // (a segment unwrapped across the antimeridian does not).
+                    if let last = buffer.last, bufferCount == count, bufferRatio == r,
+                       abs(last.x - v.from.x) < 1e-3, abs(last.y - v.from.y) < 1e-3 {
+                        buffer.append(v.to)
                     } else {
-                        if let s = current { strokes.append(s) }
-                        current = Stroke(points: [v.from, v.to], count: count, ratio: r)
+                        flush()
+                        buffer.reserveCapacity(16)
+                        buffer.append(v.from)
+                        buffer.append(v.to)
+                        bufferCount = count
+                        bufferRatio = r
                     }
                 }
-                if let s = current { strokes.append(s) }
+                flush()
             }
         }
         // Stable: equal counts keep drive and travel order.
@@ -120,15 +139,23 @@ enum RouteDensity {
 
     /// Visits every grid cell the segment passes through (Amanatides–Woo),
     /// with the part of the segment inside it. A touch shorter than a
-    /// millionth of a cell (a corner graze) is not a visit.
-    static func traverse(_ a: MKMapPoint, _ b: MKMapPoint, cell: Double,
+    /// millionth of a cell (a corner graze) is not a visit. The segment takes
+    /// the shorter way around the world: one crossing the antimeridian is
+    /// unwrapped (its end may lie outside the world's x range) and cell x
+    /// wraps, so the same place is always the same cell.
+    static func traverse(_ a: MKMapPoint, _ b: MKMapPoint, cell: Double = cellSize,
                          visit: (Cell, MKMapPoint, MKMapPoint, Double) -> Void) {
+        var b = b
+        if b.x - a.x > worldWidth / 2 { b.x -= worldWidth } else if a.x - b.x > worldWidth / 2 { b.x += worldWidth }
+        let across = Int((worldWidth / cell).rounded())
+        func wrapped(_ x: Int, _ y: Int) -> Cell { Cell(x: ((x % across) + across) % across, y: y) }
         let ax = a.x / cell, ay = a.y / cell, bx = b.x / cell, by = b.y / cell
         let dx = bx - ax, dy = by - ay
         let length = hypot(dx, dy)
+        guard ax.isFinite, ay.isFinite, bx.isFinite, by.isFinite else { return }
         var x = Int(floor(ax)), y = Int(floor(ay))
-        guard length > 1e-9, ax.isFinite, ay.isFinite, bx.isFinite, by.isFinite else {
-            visit(Cell(x: x, y: y), a, b, 0)
+        guard length > 1e-9 else {
+            visit(wrapped(x, y), a, b, 0)
             return
         }
         let stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1
@@ -139,7 +166,7 @@ enum RouteDensity {
         var t = 0.0
         for _ in 0..<100_000 {
             let next = min(tMaxX, tMaxY, 1)
-            if (next - t) * length > 1e-6 { visit(Cell(x: x, y: y), point(t), point(next), (next - t) * length * cell) }
+            if (next - t) * length > 1e-6 { visit(wrapped(x, y), point(t), point(next), (next - t) * length * cell) }
             if next >= 1 { return }
             t = next
             if tMaxX < tMaxY { x += stepX; tMaxX += tDeltaX } else { y += stepY; tMaxY += tDeltaY }

@@ -24,6 +24,8 @@ struct TripRouteStyle: Equatable {
     /// The trip's elevation range (elevation mode only).
     var valueRange: ClosedRange<Double>?
     var reference: EfficiencyReference
+    /// The rolling window efficiency is averaged over (efficiency mode only).
+    var windowKm: Double? = nil
 
     func rgb(_ value: Double) -> RoutePalette.RGB {
         switch mode {
@@ -40,7 +42,7 @@ struct TripRouteStyle: Equatable {
     func legend(units: UnitPreferences) -> RouteLegendModel? {
         switch mode {
         case .speed: return .speed(units: units)
-        case .efficiency: return .efficiency(reference: reference, units: units, averagedOverKm: EfficiencyWindow.windowKm)
+        case .efficiency: return .efficiency(reference: reference, units: units, averagedOverKm: windowKm ?? EfficiencyWindow.minimumKm)
         case .elevation: return valueRange.map { .elevation(minM: $0.lowerBound, maxM: $0.upperBound, units: units) }
         }
     }
@@ -82,8 +84,24 @@ struct TripRoute: Equatable {
     var gaps: [Gap]
     /// Samples that form a segment on their own (no neighbours within the gap threshold).
     var isolated: [Int]
-    /// Lowest to highest piece value; the elevation ramp spans it.
+    /// Lowest to highest value; the elevation ramp spans it (elevation: the
+    /// recorded samples' range, not the pieces' averages).
     var valueRange: ClosedRange<Double>?
+    /// The efficiency colour's rolling window for this trip.
+    var windowKm: Double = EfficiencyWindow.minimumKm
+
+    /// Length of the recorded track, km: consecutive positions inside each
+    /// position segment (never across a gap).
+    static func recordedKm(_ timeline: TripTimeline) -> Double {
+        let points = timeline.points
+        var metres = 0.0
+        for seg in timeline.segments where seg.count > 1 {
+            for i in seg.lowerBound..<(seg.upperBound - 1) {
+                metres += MKMapPoint(points[i].coordinate).distance(to: MKMapPoint(points[i + 1].coordinate))
+            }
+        }
+        return metres / 1000
+    }
 
     /// Whether the mode's metric is supported on the interval from timeline
     /// sample `i` to `i + 1` (same position segment): the metric is recorded
@@ -107,10 +125,14 @@ struct TripRoute: Equatable {
     /// runs are cut into pieces of at most `stride` intervals and their
     /// coordinates thinned, which changes how finely a run is drawn but never
     /// which time it covers. Nothing is interpolated across a gap.
-    init(_ timeline: TripTimeline, mode: TripMapMode, maxPieces: Int = 160, maxCoordinatesPerPiece: Int = 16) {
+    /// `tripKm` is the drive's own distance; without one the window uses the
+    /// recorded positions' length.
+    init(_ timeline: TripTimeline, mode: TripMapMode, tripKm: Double? = nil, maxPieces: Int = 160, maxCoordinatesPerPiece: Int = 16) {
         let points = timeline.points
         let sampledCount = timeline.segments.reduce(0) { $0 + max(0, $1.count - 1) }
         let stride = max(1, Int((Double(sampledCount) / Double(maxPieces)).rounded(.up)))
+        let km: Double = tripKm.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? Self.recordedKm(timeline)
+        let window: Double = EfficiencyWindow.windowKm(forTripKm: km)
 
         func value(_ chunk: ArraySlice<DrivePoint>) -> Double? {
             switch mode {
@@ -143,7 +165,7 @@ struct TripRoute: Equatable {
                 let intervals: [EfficiencyWindow.Interval]? = supported && mode == .efficiency
                     ? (runStart..<runEnd).map { EfficiencyWindow.interval(points[$0], points[$0 + 1]) ?? .init(distanceKm: 0, energyKwh: 0) }
                     : nil
-                let windowed: [Double?]? = intervals.map { EfficiencyWindow.smoothed($0) }
+                let windowed: [Double?]? = intervals.map { EfficiencyWindow.smoothed($0, windowKm: window) }
                 var i = runStart
                 while i < runEnd {
                     let end = min(i + stride, runEnd)
@@ -162,8 +184,16 @@ struct TripRoute: Equatable {
             }
         }
 
-        let values = raw.compactMap(\.value)
-        valueRange = values.min().flatMap { lo in values.max().map { lo...max($0, lo) } }
+        if mode == .elevation {
+            // The trip's real range, from every finite recorded elevation
+            // before pieces average it (two samples at 0 and 100 m span 0–100).
+            let recorded = points.compactMap(\.elevationM).filter(\.isFinite)
+            valueRange = recorded.min().flatMap { lo in recorded.max().map { lo...max($0, lo) } }
+        } else {
+            let values = raw.compactMap(\.value)
+            valueRange = values.min().flatMap { lo in values.max().map { lo...max($0, lo) } }
+        }
+        windowKm = window
         pieces = raw.enumerated().map { n, r in
             let coords = Self.thin(points[r.indices].map(\.coordinate), to: maxCoordinatesPerPiece)
             return Piece(id: n, indices: r.indices, coordinates: coords, mapPoints: coords.map(MKMapPoint.init), value: r.value)
@@ -245,7 +275,7 @@ struct TripRoute: Equatable {
                        minContentHeight: CGFloat? = nil) -> MKMapRect {
         guard size.width > 0, size.height > 0, content.width > 0, content.height > 0 else { return content }
         var insets = insets
-        // A short map keeps its bottom margin (it clears the legend, logo and
+        // A short map keeps its bottom margin (it clears the attribution, logo and
         // Legal link) and gives up its top margin first, down to 24 pt, to give
         // the route `preferred` height. The bottom margin gives way only when
         // the route would otherwise get under 32 pt, and never past the fade.
@@ -262,10 +292,18 @@ struct TripRoute: Equatable {
             let k: CGFloat = size.width * 0.6 / horizontal
             insets.leading *= k; insets.trailing *= k
         }
-        let wantW: CGFloat = max(1, size.width - insets.leading - insets.trailing)
-        let wantH: CGFloat = max(1, size.height - insets.top - insets.bottom)
-        let scale = min(wantW / content.width, wantH / content.height)   // points per map point
-        let areaW = max(1, size.width - safe.leading - safe.trailing), areaH = max(1, size.height - safe.top - safe.bottom)
+        // Too small a frame for the margins: frame the route in MapKit's own
+        // area instead, and when even that is empty, hand MapKit the bare
+        // content (the unpadded fit).
+        let areaW: CGFloat = size.width - safe.leading - safe.trailing
+        let areaH: CGFloat = size.height - safe.top - safe.bottom
+        guard areaW >= 1, areaH >= 1 else { return content }
+        if size.width - insets.leading - insets.trailing < 1 { insets.leading = safe.leading; insets.trailing = safe.trailing }
+        if size.height - insets.top - insets.bottom < 1 { insets.top = safe.top; insets.bottom = safe.bottom }
+        let wantW: CGFloat = size.width - insets.leading - insets.trailing
+        let wantH: CGFloat = size.height - insets.top - insets.bottom
+        let scale: Double = min(wantW / content.width, wantH / content.height)   // points per map point
+        guard scale.isFinite, scale > 0 else { return content }
         // Map point that must sit at the safe area's top-left corner so the
         // content's centre lands at the centre of the wanted area.
         let wantMidX = insets.leading + wantW / 2, wantMidY = insets.top + wantH / 2
@@ -308,14 +346,8 @@ struct TripMapView: View {
     /// The page fade at the bottom: MapKit's logo and Legal link sit just above it.
     var bottomInset: CGFloat = 0
     /// Where the route is framed, in points from each edge: clear of the top
-    /// controls, the fade and the legend.
+    /// controls, the attribution and the fade (marker reach is added here).
     var frameInsets = EdgeInsets(top: 140, leading: 48, bottom: 96, trailing: 48)
-    var legend: RouteLegendModel?
-    /// The tallest legend any mode shows. Its measured height sets the
-    /// bottom fit margin, so switching modes never re-zooms the map.
-    var reservedLegend: RouteLegendModel?
-    /// Leading room for the legend chip (side bars on iPhone Duo).
-    var legendLeading: CGFloat = 16
     /// Safe-area edges the map runs under. In a split view's detail column,
     /// leave out the edge under the list column, or the camera frames the
     /// route partly behind it.
@@ -324,47 +356,31 @@ struct TripMapView: View {
     @State private var position: MapCameraPosition = .automatic
     /// The map's visible rect, from the latest camera change; nil until MapKit reports one.
     @State private var visible: MKMapRect?
-    @State private var framed: FrameKey?
-    @State private var mapSize: CGSize?
-    /// Measured height of the tallest legend chip at the current text size.
-    @State private var legendHeight: CGFloat = 0
+    @State private var framedSize: CGSize?
 
-    private struct FrameKey: Equatable { var size: CGSize; var bottom: CGFloat }
-
-    /// MapKit's logo and Legal link, with the margin MapKit keeps around them.
-    static let logoRow: CGFloat = 30
-    /// Clear space between the chip row and the nearest route marker or line.
-    static let chipClearance: CGFloat = 12
     /// Endpoint markers reach this far past the route's own extent.
     static let markerReach: CGFloat = 8
 
-    /// The bottom row over the fade: the legend chip (4 pt above the fade)
-    /// beside the logo and Legal link, whichever is taller.
-    private var chipRow: CGFloat { max(legendHeight > 0 ? legendHeight + 4 : 0, Self.logoRow) }
-
-    /// Where the route is fitted: the bottom margin clears the whole chip row
-    /// plus `chipClearance`, so no marker or line lands under or against the
-    /// chip, the logo or the Legal link.
+    /// Where the route's extent is fitted: the caller's clearances plus the
+    /// markers' reach, so no ring or dot touches the controls or the attribution.
     private var fitInsets: EdgeInsets {
         var insets = frameInsets
         insets.top += Self.markerReach
-        insets.bottom = max(insets.bottom, bottomInset + chipRow + Self.chipClearance + Self.markerReach)
+        insets.bottom += Self.markerReach
+        insets.leading += Self.markerReach
+        insets.trailing += Self.markerReach
         return insets
     }
 
-    /// MapKit's own padding: the logo and Legal link sit above the fade and
-    /// beside the legend chip, never under either.
-    private var mapSafe: EdgeInsets {
-        EdgeInsets(top: 0, leading: legend == nil ? 0 : legendLeading + RouteLegendChip.reservedWidth, bottom: bottomInset, trailing: 0)
-    }
+    /// MapKit's own padding: the logo and Legal link sit in their native
+    /// bottom-leading place, just above the fade.
+    private var mapSafe: EdgeInsets { EdgeInsets(top: 0, leading: 0, bottom: bottomInset, trailing: 0) }
 
     var body: some View {
         // Both layers ignore the safe area so the canvas covers exactly the map's bounds.
         Map(position: $position, interactionModes: [.pan, .zoom])
-            .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll, showsTraffic: false))
             .mapControls { }
-            .environment(\.colorScheme, .dark)
-            .saturation(0)
+            .voltaBasemap()
             .brightness(-0.06)
             .onMapCameraChange(frequency: .continuous) { visible = $0.rect }
             .safeAreaPadding(mapSafe)
@@ -380,40 +396,21 @@ struct TripMapView: View {
                             TripRouteCanvas(projection: projection(visible: visible, size: geo.size), style: style)
                         }
                     }
-                    .onChange(of: geo.size, initial: true) { _, size in mapSize = size; frame(size) }
+                    .onChange(of: geo.size, initial: true) { _, size in frame(size) }
                 }
                 .ignoresSafeArea(edges: underEdges)
                 .allowsHitTesting(false)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Trip route map")
-            .overlay(alignment: .bottomLeading) {
-                ZStack(alignment: .bottomLeading) {
-                    if let reserve = reservedLegend ?? legend {
-                        // Never shown: measures the tallest chip for the fit.
-                        RouteLegendChip(model: reserve)
-                            .hidden()
-                            .accessibilityHidden(true)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { legendHeight = $0 }
-                    }
-                    if let legend {
-                        RouteLegendChip(model: legend)
-                    }
-                }
-                .padding(.leading, legendLeading)
-                .padding(.bottom, bottomInset + 4)
-            }
-            .onChange(of: legendHeight) { if let mapSize { frame(mapSize) } }
     }
 
     /// Frames the whole trip once the map's size is known (again if it changes).
     private func frame(_ size: CGSize) {
-        let insets = fitInsets
-        let key = FrameKey(size: size, bottom: insets.bottom)
-        guard size.width > 0, size.height > 0, framed != key,
+        guard size.width > 0, size.height > 0, framedSize != size,
               let content = TripRoute.contentRect(timeline.points) else { return }
-        framed = key
-        position = .rect(TripRoute.fitted(content, size: size, safe: mapSafe, insets: insets))
+        framedSize = size
+        position = .rect(TripRoute.fitted(content, size: size, safe: mapSafe, insets: fitInsets))
     }
 
     private func projection(visible: MKMapRect, size: CGSize) -> TripRouteProjection {

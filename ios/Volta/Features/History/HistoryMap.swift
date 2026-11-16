@@ -100,60 +100,55 @@ struct HistoryMapPin: Identifiable {
     var tint: Color
     /// Charging places draw their kind's badge instead of the tinted dot.
     var charger: ChargerKind? = nil
+    /// A session here is charging now: the live charging marker.
+    var active = false
 }
 
-/// Dark, flat map showing session locations.
+/// Session locations on the shared grey basemap, pins in colour.
 struct HistorySessionsMap: View {
     var pins: [HistoryMapPin]
     /// Groups that are still resolving or can't be pinned.
     var summary = HistoryMapSummary()
     var retryPlaces: () -> Void = {}
     var onSelect: (String) -> Void = { _ in }
-    @State private var position: MapCameraPosition = .automatic
 
     var body: some View {
-        Map(position: $position) {
-            ForEach(pins) { pin in
-                Annotation(pin.title, coordinate: pin.coordinate, anchor: .bottom) {
-                    Button { onSelect(pin.id) } label: {
-                        VStack(spacing: 4) {
-                            VStack(spacing: 1) {
-                                Text(pin.title)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                Text(pin.subtitle.uppercased())
-                                    .scaledFont(11, weight: .semibold)
-                                    .tracking(0.8)
-                                    .foregroundStyle(HistoryTheme.secondary)
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(HistoryTheme.card.opacity(0.92), in: .rect(cornerRadius: 10))
-                            .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(HistoryTheme.hairline) }
-                            if let charger = pin.charger {
-                                ChargerBadge(kind: charger)
-                            } else {
-                                ZStack {
-                                    Circle().fill(pin.tint.opacity(0.25)).frame(width: 30, height: 30)
-                                    Circle().fill(pin.tint).frame(width: 18, height: 18)
-                                    Image(systemName: pin.systemImage)
-                                        .font(.system(size: 9, weight: .bold))
-                                        .foregroundStyle(.black.opacity(0.75))
-                                }
-                            }
+        // Room for the callouts drawn above each pin when framing.
+        PinnedMap(items: pins, coordinate: \.coordinate, safe: .init(top: 64, leading: 56, bottom: 24, trailing: 56)) { pin in
+            Button { onSelect(pin.id) } label: {
+                VStack(spacing: 4) {
+                    VStack(spacing: 1) {
+                        Text(pin.title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text(pin.subtitle.uppercased())
+                            .scaledFont(11, weight: .semibold)
+                            .tracking(0.8)
+                            .foregroundStyle(HistoryTheme.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(HistoryTheme.card.opacity(0.92), in: .rect(cornerRadius: 10))
+                    .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(HistoryTheme.hairline) }
+                    if pin.active {
+                        // The same marker as the dashboard while charging.
+                        ChargingMarker().frame(width: 30, height: 30)
+                    } else if let charger = pin.charger {
+                        ChargerBadge(kind: charger)
+                    } else {
+                        ZStack {
+                            Circle().fill(pin.tint.opacity(0.25)).frame(width: 30, height: 30)
+                            Circle().fill(pin.tint).frame(width: 18, height: 18)
+                            Image(systemName: pin.systemImage)
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.black.opacity(0.75))
                         }
                     }
-                    .buttonStyle(.plain)
                 }
-                .annotationTitles(.hidden)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(pin.title), \(pin.subtitle)")
         }
-        .mapStyle(.standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
-        .mapControls { }
-        // Leave room for the callouts drawn above each pin when auto-framing.
-        .safeAreaPadding(.init(top: 64, leading: 56, bottom: 24, trailing: 56))
-        .environment(\.colorScheme, .dark)
-        .onChange(of: pins.map(\.id)) { position = .automatic }
         .overlay(alignment: .bottom) { status.padding(.bottom, HistoryTheme.bottomInset + 20) }
     }
 
