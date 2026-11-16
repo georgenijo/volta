@@ -4,6 +4,7 @@ import SwiftUI
 /// on a compact window and the sidebar selection on a regular-width one.
 enum MoreRoute: Hashable, Sendable {
     case tires, stats, batteryHealth, batteryClimate, mileage, firmware, specs
+    case leaseMileage, chargingInsights
     case switchVehicle, settings, maintenance, chargerMap
     /// Pages Settings pushes. They are routes so they stay in the More
     /// path and close with Settings when another area is picked.
@@ -21,6 +22,8 @@ enum MoreRoute: Hashable, Sendable {
         case .batteryHealth: BatteryHealthView()
         case .batteryClimate: BatteryClimateView()
         case .mileage: MileageTrackerView()
+        case .leaseMileage: LeaseMileageView()
+        case .chargingInsights: ChargingInsightsView()
         case .firmware: FirmwareTrackerView()
         case .specs: SpecsWarrantyView()
         case .switchVehicle: SwitchVehicleView()

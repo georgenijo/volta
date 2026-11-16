@@ -529,7 +529,7 @@ struct GreyTileMap<Pin: View>: View {
 // MARK: - Hero
 
 /// Period and session count, total energy added, then shortcuts to the
-/// cost map and energy statistics.
+/// cost map and the charging insights (energy mix and cost per distance).
 struct ChargingHero: View {
     var scope: String
     var charges: [ChargeSummary]
@@ -566,7 +566,7 @@ struct ChargingHero: View {
                 .accessibilityIdentifier("button.charging.costs")
                 ChargingShortcut(title: "Energy Mix") {
                     EnergyMixGlyph()
-                } action: { open(.stats) }
+                } action: { open(.chargingInsights) }
                 .accessibilityIdentifier("button.charging.energy-mix")
             }
             .padding(.top, 33)

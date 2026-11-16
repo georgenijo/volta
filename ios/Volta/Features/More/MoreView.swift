@@ -99,6 +99,7 @@ struct MoreView: View {
     private let sections: [Section] = [
         Section(title: "Areas", dot: ScreenKit.blue, identifier: "screen.more", items: [
             Item(symbol: "chart.xyaxis.line", tint: ScreenKit.blue, title: "Stats", slug: "stats", route: .stats),
+            Item(symbol: "bolt.batteryblock", tint: ScreenKit.blue, title: "Charging Insights", slug: "charging-insights", route: .chargingInsights),
         ]),
         Section(title: "Vehicle", dot: ScreenKit.mint, items: [
             Item(symbol: "battery.100percent.bolt", tint: ScreenKit.mint, title: "Battery Health", slug: "battery-health", route: .batteryHealth),
@@ -107,6 +108,7 @@ struct MoreView: View {
             Item(symbol: "wrench.and.screwdriver", tint: ScreenKit.mint, title: "Maintenance", slug: "maintenance", route: .maintenance),
             Item(symbol: "cpu", tint: ScreenKit.mint, title: "Firmware Tracker", slug: "firmware", route: .firmware),
             Item(symbol: "gauge.with.needle", tint: ScreenKit.mint, title: "Mileage Tracker", slug: "mileage", route: .mileage),
+            Item(symbol: "doc.text.magnifyingglass", tint: ScreenKit.mint, title: "Lease Mileage", slug: "lease", route: .leaseMileage),
             Item(symbol: "checkmark.shield", tint: ScreenKit.mint, title: "Specs & Warranty", slug: "specs", route: .specs),
         ]),
         Section(title: "Explore", dot: ScreenKit.blue, items: [
