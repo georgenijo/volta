@@ -2,19 +2,20 @@
 """Keeps the router's port forward to the Fleet Telemetry receiver in place.
 
 The vehicle reaches the receiver through one router forward: external TCP 443
-to the receiver's LAN address on port 8448. Routers drop UPnP mappings when
-they restart, and a lost forward silently stops all telemetry. A systemd timer
-runs this script every few minutes; it finds the router with SSDP, checks the
-mapping and adds it when it is missing.
+to the receiver's LAN address on port 8448. That is the only authorized public
+exposure, so both ports are fixed here, not configurable. Routers drop UPnP
+mappings when they restart and may serve their UPnP description at a path that
+changes, and a lost forward silently stops all telemetry. A systemd timer runs
+this script every few minutes. It discovers the router with SSDP, checks the
+mapping, and adds or renews it when it is missing, disabled or about to expire.
 
-It never replaces a mapping that points somewhere else: that is reported and
-the script exits non-zero, so the timer's failure shows in `systemctl`.
+It never replaces a mapping that points at another host or port, and it adds
+nothing unless the router answered that no mapping exists (UPnP error 714).
+Every other outcome exits non-zero, so the unit shows as failed.
 
 Settings come from the environment (the telemetry env file in production):
-  TELEMETRY_RECEIVER_BIND  LAN address the receiver listens on (required)
-  TELEMETRY_PUBLIC_PORT    external port, default 443
-  TELEMETRY_RECEIVER_PORT  receiver port, default 8448
-Exit status: 0 mapping present or added, 1 conflict or router refused, 2 setup.
+  TELEMETRY_RECEIVER_BIND  the receiver's LAN IPv4 address on this node (required)
+Exit status: 0 mapping in place, 1 conflict, router refusal or no router, 2 setup.
 Uses only the standard library.
 """
 import ipaddress
@@ -22,69 +23,113 @@ import os
 import re
 import socket
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ElementTree
 from xml.sax.saxutils import escape
 
+PUBLIC_PORT, RECEIVER_PORT = 443, 8448
 DESCRIPTION = "volta-telemetry"
-SERVICE_TYPES = ("urn:schemas-upnp-org:service:WANIPConnection:1",
-                 "urn:schemas-upnp-org:service:WANIPConnection:2",
+SERVICE_TYPES = ("urn:schemas-upnp-org:service:WANIPConnection:2",
+                 "urn:schemas-upnp-org:service:WANIPConnection:1",
                  "urn:schemas-upnp-org:service:WANPPPConnection:1")
-TIMEOUT = 5
+TIMEOUT = 5            # seconds per network operation
+DISCOVERY_WINDOW = 3   # seconds to collect SSDP answers
+MAX_BODY = 64 * 1024   # bytes read from any router response
+MAX_ANSWERS = 16
+TIMED_LEASE = 3600     # used only when the router refuses a permanent mapping
+RENEW_BELOW = 1200     # renew a timed mapping with less than this many seconds left
 
 
 def log(message):
     print(f"port-keeper: {message}", flush=True)
 
 
+class Refused(Exception):
+    """The router answered, but not in a way that allows a safe change."""
+
+
 def settings(env):
+    """Returns the receiver's LAN address; it must be private and concrete."""
     try:
-        bind = str(ipaddress.IPv4Address(env.get("TELEMETRY_RECEIVER_BIND", "").strip()))
+        bind = ipaddress.IPv4Address(env.get("TELEMETRY_RECEIVER_BIND", "").strip())
     except ValueError:
-        raise SystemExit(log("TELEMETRY_RECEIVER_BIND must be the receiver's LAN IPv4 address") or 2)
-    if ipaddress.IPv4Address(bind).is_loopback or not ipaddress.IPv4Address(bind).is_private:
-        raise SystemExit(log("TELEMETRY_RECEIVER_BIND must be a private LAN address") or 2)
-    ports = []
-    for key, default in (("TELEMETRY_PUBLIC_PORT", "443"), ("TELEMETRY_RECEIVER_PORT", "8448")):
-        value = env.get(key, default).strip()
-        if not value.isdigit() or not 0 < int(value) < 65536:
-            raise SystemExit(log(f"{key} must be a port number") or 2)
-        ports.append(int(value))
-    return bind, ports[0], ports[1]
+        bind = None
+    if bind is None or not bind.is_private or bind.is_loopback or bind.is_unspecified \
+            or bind.is_link_local or bind.is_multicast:
+        log("TELEMETRY_RECEIVER_BIND must be this node's private LAN IPv4 address")
+        raise SystemExit(2)
+    return str(bind)
 
 
 def discover(bind, ssdp=("239.255.255.250", 1900)):
-    """Returns the router's description URL, asking only from the receiver's interface."""
+    """Collects distinct router description URLs answering from the receiver's LAN."""
     message = "\r\n".join(["M-SEARCH * HTTP/1.1", f"HOST: {ssdp[0]}:{ssdp[1]}", 'MAN: "ssdp:discover"', "MX: 2",
                            "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1", "", ""]).encode()
+    found = []
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(TIMEOUT)
-        sock.bind((bind, 0))
-        sock.sendto(message, ssdp)
         try:
-            while True:
-                data, _ = sock.recvfrom(4096)
-                found = re.search(rb"(?im)^location:\s*(\S+)", data)
-                if found:
-                    return found.group(1).decode()
-        except socket.timeout:
-            return None
+            sock.bind((bind, 0))  # fails unless the address belongs to this node
+        except OSError:
+            log("TELEMETRY_RECEIVER_BIND is not an address on this node")
+            raise SystemExit(2)
+        sock.sendto(message, ssdp)
+        deadline = time.monotonic() + DISCOVERY_WINDOW
+        while len(found) < MAX_ANSWERS:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            sock.settimeout(left)
+            try:
+                data, _ = sock.recvfrom(2048)
+            except socket.timeout:
+                break
+            location = re.search(rb"(?im)^location:[ \t]*(\S+)", data)
+            if location:
+                url = location.group(1).decode("ascii", "replace")
+                if urllib.parse.urlsplit(url).scheme == "http" and url not in found:
+                    found.append(url)
+    return found
+
+
+def local(element):
+    """An element's name without its XML namespace."""
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def child_text(element, name):
+    for child in element:
+        if local(child) == name:
+            return (child.text or "").strip()
+    return ""
+
+
+def fetch(request):
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        return response.status, response.read(MAX_BODY)
 
 
 def control(location):
-    """Finds the WAN connection service's type and control URL in the description."""
-    with urllib.request.urlopen(location, timeout=TIMEOUT) as response:
-        description = response.read().decode(errors="replace")
-    for block in re.findall(r"<service>(.*?)</service>", description, re.S):
-        kind = re.search(r"<serviceType>\s*(.*?)\s*</serviceType>", block)
-        url = re.search(r"<controlURL>\s*(.*?)\s*</controlURL>", block)
-        if kind and url and kind.group(1) in SERVICE_TYPES:
-            return kind.group(1), urllib.parse.urljoin(location, url.group(1))
+    """Returns (service type, absolute control URL) of the router's WAN connection, or None."""
+    _, body = fetch(location)
+    root = ElementTree.fromstring(body)
+    base = child_text(root, "URLBase") or location
+    services = {}
+    for element in root.iter():
+        if local(element) == "service":
+            kind, url = child_text(element, "serviceType"), child_text(element, "controlURL")
+            if kind in SERVICE_TYPES and url:
+                services.setdefault(kind, urllib.parse.urljoin(base, url))
+    for kind in SERVICE_TYPES:
+        if kind in services:
+            return kind, services[kind]
     return None
 
 
 def soap(service, action, arguments):
+    """Returns (HTTP status, {field: text}) with the UPnP errorCode as "errorCode"."""
     kind, url = service
     fields = "".join(f"<{k}>{escape(str(v))}</{k}>" for k, v in arguments)
     body = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
@@ -93,64 +138,78 @@ def soap(service, action, arguments):
     request = urllib.request.Request(url, data=body, headers={"Content-Type": 'text/xml; charset="utf-8"',
                                                               "SOAPAction": f'"{kind}#{action}"'})
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-            return 200, response.read().decode(errors="replace")
+        status, reply = fetch(request)
     except urllib.error.HTTPError as error:
-        return error.code, error.read().decode(errors="replace")
+        with error:
+            status, reply = error.code, error.read(MAX_BODY)
+    values = {}
+    try:
+        for element in ElementTree.fromstring(reply).iter():
+            name = local(element)
+            if element.text and element.text.strip() and name not in values:
+                values[name] = element.text.strip()
+    except ElementTree.ParseError:
+        pass
+    return status, values
 
 
-def value(text, name):
-    found = re.search(rf"<{name}>\s*(.*?)\s*</{name}>", text, re.S)
-    return found.group(1) if found else None
+def add(service, bind, entry, lease):
+    return soap(service, "AddPortMapping", entry + [
+        ("NewInternalPort", RECEIVER_PORT), ("NewInternalClient", bind), ("NewEnabled", 1),
+        ("NewPortMappingDescription", DESCRIPTION), ("NewLeaseDuration", lease)])
 
 
-def keep(service, bind, public, internal):
-    entry = [("NewRemoteHost", ""), ("NewExternalPort", public), ("NewProtocol", "TCP")]
-    status, reply = soap(service, "GetSpecificPortMappingEntry", entry)
+def keep(service, bind):
+    entry = [("NewRemoteHost", ""), ("NewExternalPort", PUBLIC_PORT), ("NewProtocol", "TCP")]
+    status, found = soap(service, "GetSpecificPortMappingEntry", entry)
     if status == 200:
-        client, port = value(reply, "NewInternalClient"), value(reply, "NewInternalPort")
-        if client == bind and port == str(internal):
-            log(f"ok: TCP {public} -> receiver port {internal}")
+        if found.get("NewInternalClient") != bind or found.get("NewInternalPort") != str(RECEIVER_PORT):
+            log(f"conflict: TCP {PUBLIC_PORT} is mapped to another host or port; not replacing it")
+            return 1
+        lease = found.get("NewLeaseDuration", "0")
+        lease = int(lease) if lease.isdigit() else 0
+        if found.get("NewEnabled", "1") == "1" and (lease == 0 or lease > RENEW_BELOW):
+            log(f"ok: TCP {PUBLIC_PORT} -> receiver port {RECEIVER_PORT}" + (f" ({lease}s left)" if lease else ""))
             return 0
-        log(f"conflict: TCP {public} is already mapped to another host or port; not replacing it")
-        return 1
-    if value(reply, "errorCode") not in ("714", None):
-        log(f"router refused the lookup (error {value(reply, 'errorCode')})")
-        return 1
-    # Permanent first; some routers accept only timed leases. The timer renews
-    # well inside an hour either way. 718 is a conflicting mapping: never retried.
-    for lease in (0, 3600):
-        status, reply = soap(service, "AddPortMapping", entry + [
-            ("NewInternalPort", internal), ("NewInternalClient", bind), ("NewEnabled", 1),
-            ("NewPortMappingDescription", DESCRIPTION), ("NewLeaseDuration", lease)])
+        # Same host and port: re-adding updates this mapping in place (enable or renew).
+        status, reply = add(service, bind, entry, lease and TIMED_LEASE)
         if status == 200:
-            log(f"added: TCP {public} -> receiver port {internal} (lease {lease or 'permanent'})")
+            log(f"renewed: TCP {PUBLIC_PORT} -> receiver port {RECEIVER_PORT}")
             return 0
-        if value(reply, "errorCode") == "718":
+        log(f"router refused the renewal (error {reply.get('errorCode', status)})")
+        return 1
+    if found.get("errorCode") != "714":  # only "no such entry" allows an add
+        raise Refused(f"lookup failed (error {found.get('errorCode', status)})")
+    # Permanent first; some routers accept only timed leases, renewed above.
+    for lease in (0, TIMED_LEASE):
+        status, reply = add(service, bind, entry, lease)
+        if status == 200:
+            log(f"added: TCP {PUBLIC_PORT} -> receiver port {RECEIVER_PORT} (lease {lease or 'permanent'})")
+            return 0
+        if reply.get("errorCode") == "718":  # conflicting mapping: never retried
             break
-    log(f"router refused the mapping (error {value(reply, 'errorCode')})")
+    log(f"router refused the mapping (error {reply.get('errorCode', status)})")
     return 1
 
 
 def main(env=os.environ):
-    bind, public, internal = settings(env)
-    location = discover(bind)
-    if not location:
+    bind = settings(env)
+    locations = discover(bind)
+    if not locations:
         log("no UPnP router answered; is UPnP enabled on the router?")
         return 1
-    try:
-        service = control(location)
-    except (OSError, ValueError) as error:
-        log(f"cannot read the router's description: {type(error).__name__}")
-        return 1
-    if not service:
-        log("the router offers no WAN connection service")
-        return 1
-    try:
-        return keep(service, bind, public, internal)
-    except OSError as error:
-        log(f"router request failed: {type(error).__name__}")
-        return 1
+    # Mesh satellites may answer too; use the first that offers a working WAN service.
+    for location in locations:
+        try:
+            service = control(location)
+            if service:
+                return keep(service, bind)
+        except Refused as error:
+            log(f"{error} at one responder; trying the next")
+        except (OSError, ValueError, ElementTree.ParseError) as error:
+            log(f"skipping a responder: {type(error).__name__}")
+    log("no responder offered a usable WAN connection service")
+    return 1
 
 
 if __name__ == "__main__":

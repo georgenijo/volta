@@ -241,6 +241,12 @@ fleet exec --timeout 30 ubuntu -- 'sudo curl --fail --silent --config /etc/volta
 fleet exec --timeout 60 ubuntu -- 'sudo docker compose --env-file /opt/volta-telemetry/telemetry.env -f /opt/volta/deploy/telemetry/compose.yaml stop receiver consumer redpanda; sudo systemctl disable --now volta-telemetry-cert.timer'
 ```
 
+Stop the forward keeper first, or it re-adds the forward within five minutes:
+
+```sh
+fleet exec --timeout 30 ubuntu -- 'sudo systemctl disable --now volta-telemetry-upnp.timer volta-telemetry-upnp.service'
+```
+
 Then remove the router port-forward and DNS record. A node still carrying the
 older Funnel :10000 route removes it with `funnel/rollback-funnel.sh --apply`.
 Pending DELETE requires the guard/meter/OAuth to stay available. Remove API opt-in

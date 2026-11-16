@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Discovery and four SOAP calls each time out in 5 s; never let a hung router stall the timer.
+TimeoutStartSec=60
 DynamicUser=yes
 # systemd reads this root-only file before dropping privileges.
 EnvironmentFile=/opt/volta-telemetry/telemetry.env

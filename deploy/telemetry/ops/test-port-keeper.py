@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests port-keeper.py against a fake UPnP router served on loopback."""
+"""Tests port-keeper.py against fake UPnP routers served on loopback."""
 import http.server
 import importlib.util
 import pathlib
@@ -10,21 +10,30 @@ import unittest
 spec = importlib.util.spec_from_file_location("keeper", pathlib.Path(__file__).with_name("port-keeper.py"))
 keeper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(keeper)
-keeper.log = lambda message: Router.logs.append(message)
+LOGS = []
+keeper.log = LOGS.append
 
-KIND = "urn:schemas-upnp-org:service:WANIPConnection:1"
-DESCRIPTION = f"""<root><device><serviceList>
-<service><serviceType>urn:schemas-upnp-org:service:Layer3Forwarding:1</serviceType><controlURL>/l3f</controlURL></service>
-<service><serviceType>{KIND}</serviceType><controlURL>/random-path/ctl/IPConn</controlURL></service>
-</serviceList></device></root>"""
+V1 = "urn:schemas-upnp-org:service:WANIPConnection:1"
+BIND, OTHER = "192.168.1.20", "192.168.1.30"
+
+
+def description(control="/random-path/ctl/IPConn", base=""):
+    # Namespaced like real routers, with an unrelated service listed first.
+    return (f'<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0">{base}<device><serviceList>'
+            '<service><serviceType>urn:schemas-upnp-org:service:Layer3Forwarding:1</serviceType>'
+            '<controlURL>/l3f</controlURL></service>'
+            f'<service><serviceType>{V1}</serviceType><controlURL>{control}</controlURL></service>'
+            '</serviceList></device></root>')
 
 
 def fault(code):
-    return 500, f"<s:Envelope><s:Body><s:Fault><detail><UPnPError><errorCode>{code}</errorCode></UPnPError></detail></s:Fault></s:Body></s:Envelope>"
+    return 500, ('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><detail>'
+                 f'<UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>{code}</errorCode>'
+                 '</UPnPError></detail></s:Fault></s:Body></s:Envelope>')
 
 
 class Router(http.server.BaseHTTPRequestHandler):
-    mappings, calls, logs, refuse_add, timed_only = {}, [], [], None, False
+    """One fake router; state lives on the class and is reset per test."""
 
     def log_message(self, *args):
         pass
@@ -37,87 +46,151 @@ class Router(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        self.reply(*((200, DESCRIPTION) if self.path == "/random-path/rootDesc.xml" else (404, "")))
+        state = self.server.state
+        self.reply(*((200, state["description"]) if self.path == state["description_path"] else (404, "")))
 
     def do_POST(self):
+        state = self.server.state
         body = self.rfile.read(int(self.headers["Content-Length"])).decode()
         action = self.headers["SOAPAction"].strip('"').split("#")[1]
         get = lambda k: re.search(rf"<{k}>(.*?)</{k}>", body).group(1)
-        Router.calls.append((action, body))
+        state["calls"].append((self.path, action, body))
+        if self.path != state["control_path"]:
+            return self.reply(404, "")
         key = (get("NewExternalPort"), get("NewProtocol"))
         if action == "GetSpecificPortMappingEntry":
-            if key not in Router.mappings:
+            if state["lookup_fault"]:
+                return self.reply(*state["lookup_fault"])
+            if key not in state["mappings"]:
                 return self.reply(*fault(714))
-            client, port = Router.mappings[key]
-            return self.reply(200, f"<r><NewInternalPort>{port}</NewInternalPort><NewInternalClient>{client}</NewInternalClient></r>")
+            m = state["mappings"][key]
+            return self.reply(200, '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
+                                   f'<u:R xmlns:u="{V1}"><NewInternalPort>{m["port"]}</NewInternalPort>'
+                                   f'<NewInternalClient>{m["client"]}</NewInternalClient><NewEnabled>{m["enabled"]}</NewEnabled>'
+                                   f'<NewLeaseDuration>{m["lease"]}</NewLeaseDuration></u:R></s:Body></s:Envelope>')
         if action == "AddPortMapping":
-            if Router.refuse_add:
-                return self.reply(*fault(Router.refuse_add))
-            if Router.timed_only and get("NewLeaseDuration") == "0":
+            if state["refuse_add"]:
+                return self.reply(*fault(state["refuse_add"]))
+            if state["timed_only"] and get("NewLeaseDuration") == "0":
                 return self.reply(*fault(402))
-            Router.mappings[key] = (get("NewInternalClient"), get("NewInternalPort"))
+            state["mappings"][key] = {"client": get("NewInternalClient"), "port": get("NewInternalPort"),
+                                      "enabled": get("NewEnabled"), "lease": get("NewLeaseDuration")}
             return self.reply(200, "<r/>")
         self.reply(*fault(401))
 
 
+def start(state):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Router)
+    server.state = state
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def fresh(**changes):
+    state = {"mappings": {}, "calls": [], "lookup_fault": None, "refuse_add": None, "timed_only": False,
+             "description_path": "/random-path/rootDesc.xml", "control_path": "/random-path/ctl/IPConn",
+             "description": description()}
+    state.update(changes)
+    return state
+
+
 class PortKeeperTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Router)
-        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
-        cls.location = f"http://127.0.0.1:{cls.server.server_port}/random-path/rootDesc.xml"
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-
     def setUp(self):
-        Router.mappings, Router.calls, Router.logs, Router.refuse_add, Router.timed_only = {}, [], [], None, False
-        self.service = keeper.control(self.location)
+        LOGS.clear()
+        self.state = fresh()
+        self.server = start(self.state)
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        self.location = self.base + "/random-path/rootDesc.xml"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def service(self):
+        return keeper.control(self.location)
+
+    def adds(self):
+        return [call for call in self.state["calls"] if call[1] == "AddPortMapping"]
 
     def test_finds_the_wan_service_at_whatever_path_the_router_uses(self):
-        self.assertEqual(self.service, (KIND, f"http://127.0.0.1:{self.server.server_port}/random-path/ctl/IPConn"))
+        self.assertEqual(self.service(), (V1, self.base + "/random-path/ctl/IPConn"))
+
+    def test_resolves_a_relative_control_url_against_url_base(self):
+        self.state["description"] = description("ctl/IPConn", f"<URLBase>{self.base}/other/</URLBase>")
+        self.assertEqual(self.service(), (V1, self.base + "/other/ctl/IPConn"))
 
     def test_adds_a_missing_mapping_as_permanent(self):
-        self.assertEqual(keeper.keep(self.service, "192.168.1.20", 443, 8448), 0)
-        self.assertEqual(Router.mappings, {("443", "TCP"): ("192.168.1.20", "8448")})
-        self.assertIn("<NewLeaseDuration>0</NewLeaseDuration>", Router.calls[-1][1])
+        self.assertEqual(keeper.keep(self.service(), BIND), 0)
+        self.assertEqual(self.state["mappings"][("443", "TCP")]["client"], BIND)
+        self.assertEqual(self.state["mappings"][("443", "TCP")]["port"], "8448")
+        self.assertIn("<NewLeaseDuration>0</NewLeaseDuration>", self.adds()[-1][2])
 
-    def test_leaves_a_correct_mapping_alone(self):
-        Router.mappings[("443", "TCP")] = ("192.168.1.20", "8448")
-        self.assertEqual(keeper.keep(self.service, "192.168.1.20", 443, 8448), 0)
-        self.assertEqual([action for action, _ in Router.calls], ["GetSpecificPortMappingEntry"])
+    def test_leaves_a_healthy_mapping_alone(self):
+        self.state["mappings"][("443", "TCP")] = {"client": BIND, "port": "8448", "enabled": "1", "lease": "0"}
+        self.assertEqual(keeper.keep(self.service(), BIND), 0)
+        self.assertEqual(self.adds(), [])
 
-    def test_never_replaces_another_hosts_mapping(self):
-        Router.mappings[("443", "TCP")] = ("192.168.1.30", "443")
-        self.assertEqual(keeper.keep(self.service, "192.168.1.20", 443, 8448), 1)
-        self.assertEqual(Router.mappings[("443", "TCP")], ("192.168.1.30", "443"))
-        self.assertTrue(any("conflict" in line for line in Router.logs))
+    def test_never_replaces_another_hosts_or_ports_mapping(self):
+        for client, port in ((OTHER, "8448"), (BIND, "22")):
+            self.state["mappings"][("443", "TCP")] = {"client": client, "port": port, "enabled": "1", "lease": "0"}
+            self.assertEqual(keeper.keep(self.service(), BIND), 1)
+            self.assertEqual(self.state["mappings"][("443", "TCP")]["client"], client)
+        self.assertEqual(self.adds(), [])
+
+    def test_an_unclear_lookup_failure_adds_nothing(self):
+        for failure in ((500, "<html>busy</html>"), fault(501)):
+            self.state["lookup_fault"] = failure
+            with self.assertRaises(keeper.Refused):
+                keeper.keep(self.service(), BIND)
+        self.assertEqual(self.adds(), [])
+
+    def test_enables_a_disabled_mapping(self):
+        self.state["mappings"][("443", "TCP")] = {"client": BIND, "port": "8448", "enabled": "0", "lease": "0"}
+        self.assertEqual(keeper.keep(self.service(), BIND), 0)
+        self.assertEqual(self.state["mappings"][("443", "TCP")]["enabled"], "1")
+
+    def test_renews_a_timed_mapping_before_it_expires(self):
+        self.state["mappings"][("443", "TCP")] = {"client": BIND, "port": "8448", "enabled": "1", "lease": "3000"}
+        self.assertEqual(keeper.keep(self.service(), BIND), 0)
+        self.assertEqual(self.adds(), [])
+        self.state["mappings"][("443", "TCP")]["lease"] = "600"
+        self.assertEqual(keeper.keep(self.service(), BIND), 0)
+        self.assertEqual(self.state["mappings"][("443", "TCP")]["lease"], "3600")
 
     def test_falls_back_to_a_timed_lease_when_permanent_is_refused(self):
-        Router.timed_only = True
-        self.assertEqual(keeper.keep(self.service, "192.168.1.20", 443, 8448), 0)
-        self.assertEqual(Router.mappings, {("443", "TCP"): ("192.168.1.20", "8448")})
-        self.assertIn("<NewLeaseDuration>3600</NewLeaseDuration>", Router.calls[-1][1])
+        self.state["timed_only"] = True
+        self.assertEqual(keeper.keep(self.service(), BIND), 0)
+        self.assertIn("<NewLeaseDuration>3600</NewLeaseDuration>", self.adds()[-1][2])
 
     def test_a_conflict_is_reported_and_not_retried(self):
-        Router.refuse_add = 718
-        self.assertEqual(keeper.keep(self.service, "192.168.1.20", 443, 8448), 1)
-        self.assertEqual([action for action, _ in Router.calls].count("AddPortMapping"), 1)
-        self.assertTrue(any("error 718" in line for line in Router.logs))
+        self.state["refuse_add"] = 718
+        self.assertEqual(keeper.keep(self.service(), BIND), 1)
+        self.assertEqual(len(self.adds()), 1)
+        self.assertTrue(any("error 718" in line for line in LOGS))
 
-    def test_a_router_without_the_description_fails_cleanly(self):
-        with self.assertRaises(OSError):
-            keeper.control(self.location.replace("random-path", "old-path"))
+    def test_main_skips_a_stale_responder_and_uses_the_working_router(self):
+        stale = start(fresh(description_path="/old/rootDesc.xml"))
+        try:
+            keeper.discover = lambda bind: [f"http://127.0.0.1:{stale.server_port}/gone/rootDesc.xml", self.location]
+            self.assertEqual(keeper.main({"TELEMETRY_RECEIVER_BIND": BIND}), 0)
+            self.assertIn(("443", "TCP"), self.state["mappings"])
+        finally:
+            stale.shutdown()
+            stale.server_close()
 
-    def test_settings_require_a_private_lan_address(self):
-        for bad in ("", "127.0.0.1", "8.8.8.8", "not-an-ip"):
+    def test_main_reports_when_no_router_answers(self):
+        keeper.discover = lambda bind: []
+        self.assertEqual(keeper.main({"TELEMETRY_RECEIVER_BIND": BIND}), 1)
+
+    def test_settings_require_a_concrete_private_lan_address(self):
+        for bad in ("", "0.0.0.0", "127.0.0.1", "169.254.1.1", "8.8.8.8", "not-an-ip"):
             with self.assertRaises(SystemExit) as stop:
                 keeper.settings({"TELEMETRY_RECEIVER_BIND": bad})
             self.assertEqual(stop.exception.code, 2)
-        self.assertEqual(keeper.settings({"TELEMETRY_RECEIVER_BIND": "192.168.1.20"}), ("192.168.1.20", 443, 8448))
-        with self.assertRaises(SystemExit):
-            keeper.settings({"TELEMETRY_RECEIVER_BIND": "192.168.1.20", "TELEMETRY_PUBLIC_PORT": "70000"})
+        self.assertEqual(keeper.settings({"TELEMETRY_RECEIVER_BIND": BIND}), BIND)
+
+    def test_ports_are_fixed_to_the_authorized_forward(self):
+        self.assertEqual((keeper.PUBLIC_PORT, keeper.RECEIVER_PORT), (443, 8448))
 
 
 if __name__ == "__main__":
