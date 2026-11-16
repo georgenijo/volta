@@ -112,6 +112,7 @@ final class AppModel {
     }
 
     init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil) {
+        StartupTrace.mark(.appModel)
         let demoIndex = launchArguments.firstIndex(of: "-demo-mode")
         let launchDemo = demoIndex.flatMap { index -> Bool? in
             guard launchArguments.indices.contains(index + 1) else { return nil }
@@ -299,6 +300,7 @@ final class AppModel {
             guard generation == currentGeneration else { return }
             dashboardCanUseInitialVehicles = !hasLoadedVehicles
             self.vehicles = vehicles
+            StartupTrace.mark(.vehicles)
             if !isLaunchDemo { resolveSelection() }
             updateSurfaces()
             errorMessage = nil

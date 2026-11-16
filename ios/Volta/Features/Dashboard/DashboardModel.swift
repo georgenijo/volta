@@ -148,6 +148,7 @@ final class DashboardModel {
                 lastLoadedAt = .now
                 phase = .loaded
             }
+            StartupTrace.mark(.status)
 
             let vehiclesResult = await vehiclesReq
             guard token == generation, !Task.isCancelled else { group.cancelAll(); return }
@@ -200,6 +201,7 @@ final class DashboardModel {
                     }
                 }
             }
+            if failedSections.isEmpty { StartupTrace.mark(.sections) }
             // One ordered publication per status request, preserving the
             // existing widget / Live Activity ordering and reporting-day rules.
             guard token == generation, !Task.isCancelled, !cancelledSection else { return }

@@ -43,7 +43,7 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 9443
 MAX_PATH_LENGTH = 2_048
 MAX_BODY_BYTES = 4_096
-VEHICLE_ID = 1
+VEHICLE_ID = 2
 SYNTHETIC_TOKEN = "synthetic-benchmark-token"
 
 # Controlled simulated latency in milliseconds.  These are deliberately not
@@ -67,6 +67,20 @@ PROFILE_LATENCIES: dict[str, dict[str, int]] = {
     "observed-server": {
         "vehicles": 20, "status": 29, "timeline": 15,
         "today": 4_189, "week": 4_189, "month": 4_189, "tesla": 15,
+    },
+    # Live volta-api route timings after the November 2026 server work
+    # (summary today 0.27 s, 7d 0.32 s, 30d 1.16 s; status about 10 ms), still
+    # server-only. "-rtt150" adds a simulated 150 ms round trip, the order of
+    # Tailscale or cellular from a phone: two round trips before each new
+    # connection's first request (TCP plus TLS 1.3) and one per request. The
+    # fixture speaks HTTP/1.1, so parallel requests open parallel connections.
+    "server-2026-11": {
+        "vehicles": 20, "status": 10, "timeline": 15,
+        "today": 270, "week": 320, "month": 1_160, "tesla": 15,
+    },
+    "server-2026-11-rtt150": {
+        "vehicles": 20, "status": 10, "timeline": 15,
+        "today": 270, "week": 320, "month": 1_160, "tesla": 15, "rtt": 150,
     },
     # A deterministic partial-load scenario: primary vehicle data succeeds,
     # while timeline and summaries answer 503 after representative delays.
@@ -266,6 +280,12 @@ class BenchmarkState:
         with self._lock:
             self._profile = profile
 
+    def round_trip(self, count: int = 1) -> None:
+        """Sleep ``count`` simulated round trips of the current profile's link."""
+        rtt_ms = PROFILE_LATENCIES[self.profile()].get("rtt", 0)
+        if rtt_ms:
+            time.sleep(count * rtt_ms / 1_000)
+
     def log(self, event: dict[str, Any]) -> None:
         """Append one compact event; request headers and bodies are never logged."""
         if self._log_path is None:
@@ -292,6 +312,8 @@ class FixtureServer(ThreadingHTTPServer):
         # worker, never on the accept loop where it could block every request.
         try:
             request.settimeout(30)
+            # Simulated link: TCP and TLS 1.3 each cost one round trip.
+            self.state.round_trip(2)
             with self.context.wrap_socket(request, server_side=True) as secure:
                 self.RequestHandlerClass(secure, client_address, self)
         except (OSError, ssl.SSLError):
@@ -340,6 +362,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 status = HTTPStatus.METHOD_NOT_ALLOWED
                 self._send_json(status, error_payload("method_not_allowed", "POST is required."))
                 return
+            self.state.round_trip()
             status = self._api(path, parse_qs(parsed.query, keep_blank_values=True))
         except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
             # Benchmark clients may cancel deliberately; do not turn that into a traceback.
@@ -518,7 +541,9 @@ def self_validate() -> None:
         assert json.loads(json.dumps(payload)) is not None
     today = summary_for("today", now, "America/Los_Angeles")
     assert today["range"] == "today" and today["timeZone"] == "America/Los_Angeles"
-    assert set(PROFILE_LATENCIES) == {"instant", "representative", "slow-history", "observed-server", "history-failure"}
+    assert set(PROFILE_LATENCIES) == {"instant", "representative", "slow-history", "observed-server",
+                                      "server-2026-11", "server-2026-11-rtt150", "history-failure"}
+    assert PROFILE_LATENCIES["server-2026-11-rtt150"]["rtt"] == 150
     assert PROFILE_LATENCIES["representative"]["month"] == 2_500
     assert PROFILE_LATENCIES["observed-server"] == {
         "vehicles": 20, "status": 29, "timeline": 15,

@@ -71,6 +71,7 @@ private struct VoltaRootView: View {
                 }
             } else {
                 MainShell().id("\(model.pairingState)-\(model.selectedVehicleID)")
+                    .onAppear { StartupTrace.mark(.shell) }
             }
         }
         // Keep the main screen's navigation and scroll state mounted while locked.
@@ -116,6 +117,10 @@ private struct VoltaRootView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Volta forgets this device's token. You'll need a new pairing code from your server to connect again.")
+        }
+        .onAppear {
+            // Runs after the transaction that first displays the root view commits.
+            DispatchQueue.main.async { StartupTrace.mark(.firstFrame) }
         }
         .task(id: model.pairingState) {
             if model.needsCredentialRetry { model.restorePairing() }
