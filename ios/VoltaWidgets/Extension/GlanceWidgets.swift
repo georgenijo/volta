@@ -145,6 +145,7 @@ struct GlanceContent: Equatable, Sendable {
 }
 
 /// Shared configuration for every glance kind.
+@MainActor
 private func glanceConfiguration(_ metric: GlanceMetric) -> some WidgetConfiguration {
     StaticConfiguration(kind: metric.kind, provider: VoltaProvider()) { entry in
         GlanceView(metric: metric, entry: entry)

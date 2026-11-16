@@ -6,7 +6,7 @@ struct VoltaWidgetsBundle: WidgetBundle {
     var body: some Widget {
         VoltaHomeWidget()
         VoltaAccessoryWidget()
-        VoltaGlanceWidgets()
+        VoltaGlanceWidgets().body
         ChargingLiveActivity()
         DrivingLiveActivity()
         VehicleLockControl()
