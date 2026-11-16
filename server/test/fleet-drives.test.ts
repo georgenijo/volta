@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { deriveDrive, haversine, mergeSessions, partWindows, replacedDrive, sessionDistance, telemetryDriveId, telemetryDriveVehicle, thin, type Window } from '../src/fleet-drives';
+import { deriveDrive, deriveTotals, haversine, mergeSessions, partWindows, replacedDrive, sessionDistance, telemetryDriveId, telemetryDriveVehicle, thin, type Window } from '../src/fleet-drives';
 import { realGaps } from '../src/fleet-gaps';
 import { driveId, listInput, page } from '../src/validation';
 const at=(s:number)=>new Date(Date.UTC(2026,0,1)+s*1000);
@@ -254,4 +254,26 @@ test('session distance is linear in positions and sessions',()=>{
   const path=Array.from({length:100000},(_,i)=>({t:at(i*1.1),latitude:37.7+(i%1000)*.00001,longitude:-122.4}));
   const started=performance.now(),d=sessionDistance(path,sessions);
   expect(performance.now()-started).toBeLessThan(100);expect(d).toBeGreaterThan(0);
+});
+
+test('summary totals load GPS only when the whole-window odometer fails, then match the full derivation',async()=>{
+  // Two joined parts; GPS continues through the 5.5-minute Park stop. A reading
+  // inside the stop goes backwards, so the whole-window odometer fails while each
+  // part's own odometer still measures it. The full path then measures the whole
+  // window by GPS, before any per-part sum; the totals must agree.
+  const [w]=mergeSessions(2,[tripA,tripB],[]);
+  expect(w!.parts).toHaveLength(2);
+  const locations=moving(0,1710,10,s=>({latitude:37.7+s*.00002,longitude:-122.4}));
+  const odometers=[...moving(0,1200,60,s=>({odometer_km:100+s/200})),{source_ts:at(1365),odometer_km:99},...moving(1530,1710,60,s=>({odometer_km:106+(s-1530)/200}))];
+  const energy=[...moving(0,1200,10,s=>({energy_remaining_kwh:50-s/1000,speed_kph:50})),...moving(1530,1710,10,s=>({energy_remaining_kwh:48-(s-1530)/1000,speed_kph:30}))];
+  const fields=(r:any)=>({distanceKm:r.distanceKm,energyUsedKwh:r.energyUsedKwh,efficiencyWhPerKm:r.efficiencyWhPerKm,avgSpeedKph:r.avgSpeedKph,driveScore:r.driveScore});
+  const full=deriveDrive(w!,locations,odometers,energy,150,[]);
+  expect(full.distanceKm).toBeCloseTo(sessionDistance(locations.map(p=>({t:p.source_ts,latitude:p.latitude,longitude:p.longitude})),w!.parts!)!,6);
+  let loads=0;
+  const totals=await deriveTotals(w!,odometers,energy,150,[],undefined,{},async()=>{loads++;return locations;});
+  expect(loads).toBe(1);expect(fields(totals)).toEqual(fields(full));expect('_odometerMeasured' in totals).toBe(false);
+  // A good whole-window odometer never loads positions.
+  const steady=odometers.filter(p=>p.odometer_km!==99);
+  const measured=await deriveTotals(w!,steady,energy,150,[],undefined,{},async()=>{loads++;return locations;});
+  expect(loads).toBe(1);expect(fields(measured)).toEqual(fields(deriveDrive(w!,locations,steady,energy,150,[])));
 });

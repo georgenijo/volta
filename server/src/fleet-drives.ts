@@ -174,6 +174,17 @@ export function sessionDistance(path: {t: Date; latitude: number; longitude: num
  * `lean` (summary totals): distance, energy and score are derived exactly as
  * usual, but output-only previews (route, path, series, coverage, regen,
  * temperature, battery levels) are skipped and returned empty or null. */
+/** Summary totals: GPS feeds only the distance fallback, which runs only after
+ * the whole-window odometer fails. Skip loading positions until then, and then
+ * derive again with them, so distance follows the same precedence as the list
+ * and detail (whole-window odometer, whole-window GPS, then each joined part). */
+export async function deriveTotals(window: Window, payloads: Row[], samples: Row[], rated: number | null, gaps: Gap[], before: Row | undefined,
+  bounds: {odometerBefore?: Row; odometerAfter?: Row}, positions: () => Promise<Row[]>): Promise<Row> {
+  let row=deriveDrive(window,[],payloads,samples,rated,gaps,before,bounds,true,true);
+  if (!row._odometerMeasured) row=deriveDrive(window,await positions(),payloads,samples,rated,gaps,before,bounds,true,true);
+  const {_odometerMeasured,...totals}=row;
+  return totals;
+}
 export function deriveDrive(window: Window, locations: Row[], payloads: Row[], samples: Row[], rated: number | null, gaps: Gap[], before?: Row,
   bounds: {odometerBefore?: Row; odometerAfter?: Row} = {}, splitParts = true, lean = false): Row {
   const allGaps=gaps, real=realGaps(gaps);
@@ -256,7 +267,7 @@ export function deriveDrive(window: Window, locations: Row[], payloads: Row[], s
   const common={id:window.id,start:window.start,end:window.end,_cursorStart:window._cursorStart,source:'fleet_telemetry',
     startAddress:null,endAddress:null,startCity:null,endCity:null,
     startLatitude:path[0]?.latitude ?? null,startLongitude:path[0]?.longitude ?? null,endLatitude:path.at(-1)?.latitude ?? null,endLongitude:path.at(-1)?.longitude ?? null,ratedWhPerKm:rated,distanceKm:distance,durationMin:duration,drivingMin:driving};
-  if (lean) return {...common,startBatteryLevel:null,endBatteryLevel:null,energyUsedKwh:energy,energySource,regenKwh:null,efficiencyWhPerKm:actual,
+  if (lean) return {...common,_odometerMeasured:!!validDelta,startBatteryLevel:null,endBatteryLevel:null,energyUsedKwh:energy,energySource,regenKwh:null,efficiencyWhPerKm:actual,
     maxSpeedKph:speeds.length ? speeds.reduce((a,b)=>Math.max(a,b),0) : null,avgSpeedKph:distance !== null && duration>0 ? distance*60/duration : null,outsideTempAvgC:null,
     ...driveStyleScore(actual,rated,scorePoints),electricityRatePerKwh:null,rateCurrency:null,route:[],path:[],telemetry:null,elevationGainM:null};
   const socByTime=new Map(payloads.filter(p=>finite(p.soc_pct)).map(p=>[+new Date(p.source_ts),p.soc_pct]));
@@ -462,9 +473,8 @@ export class FleetDrives {
   /** `lean` (summary totals): only the columns distance, energy and the
    * full-resolution score read. Unselected view columns are never aggregated,
    * and payloads without an odometer reading are not transferred. Positions
-   * only feed the GPS distance fallback (which runs only while the odometer
-   * distance is unknown) and preview output, so a lean row reads them only
-   * when the odometer cannot measure the trip, then derives again. */
+   * only feed the GPS distance fallback and preview output, so a lean row
+   * reads them only when the whole-window odometer fails (deriveTotals). */
   async rows(vehicle: number, windows: Window[], rated: number | null, gaps: Gap[], labels = true, totalsOnly = false, lean = false): Promise<Row[]> {
     const rows: Row[]=[];
     const positions=(w: Window)=>lean ? this.sql`SELECT source_ts,latitude,longitude FROM volta_telemetry.drive_points WHERE vehicle_id=${vehicle} AND source_ts BETWEEN ${w.start} AND ${w.end} ORDER BY source_ts`
@@ -491,8 +501,8 @@ export class FleetDrives {
         AND (energy_remaining_kwh IS NOT NULL OR 'EnergyRemaining'=ANY(invalid_fields)) ORDER BY source_ts DESC LIMIT 1`,
         this.odometerBounds(vehicle,w)
       ]);
-      row=deriveDrive(w,locations,payloads,samples,rated,gaps,held[0],bounds,true,lean);
-      if (lean && row.distanceKm === null) row=deriveDrive(w,await positions(w),payloads,samples,rated,gaps,held[0],bounds,true,lean);
+      row=lean ? await deriveTotals(w,payloads,samples,rated,gaps,held[0],bounds,()=>positions(w))
+        : deriveDrive(w,locations,payloads,samples,rated,gaps,held[0],bounds);
       }
       // Isolated parking manoeuvres are noise; joined ones already belong to
       // their trip. Keep unknown distances unknown rather than inventing zero.

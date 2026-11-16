@@ -196,7 +196,8 @@ async function benchmark(options: Record<string, string[]>) {
       },
     };
     const profile = (name: string, value: any): Json => {
-      if (name === 'dashboard_summaries') return value.map((summary: any) => ({ range: summary.range, driveCount: summary.driveCount, chargeCount: summary.chargeCount })) as Json;
+      // Whole summaries: every total, not just counts, must match across refs.
+      if (name === 'dashboard_summaries') return value as Json;
       if (name.startsWith('drives_')) return { items: value.items.length, hasNextPage: value.nextCursor !== null };
       return {
         drivePages: value.drives.length,
