@@ -26,20 +26,20 @@ struct LiveDrivingCard: View {
         case .compact:
             VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
                 header(display, now: now)
-                HStack(alignment: .center, spacing: VoltaSpacing.md) {
+                HStack(alignment: .firstTextBaseline, spacing: VoltaSpacing.md) {
                     speed(display, now: now, size: 58)
                     Spacer(minLength: 0)
-                    GearSelector(gear: display.gear, isLive: display.gearIsLive)
+                    gear(display)
                 }
                 power(display, now: now)
             }
         case .standard:
             VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
                 header(display, now: now)
-                HStack(alignment: .center, spacing: VoltaSpacing.md) {
+                HStack(alignment: .firstTextBaseline, spacing: VoltaSpacing.md) {
                     speed(display, now: now, size: 64)
                     Spacer(minLength: 0)
-                    GearSelector(gear: display.gear, isLive: display.gearIsLive)
+                    gear(display)
                 }
                 power(display, now: now)
             }
@@ -48,17 +48,20 @@ struct LiveDrivingCard: View {
                 header(display, now: now)
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .center, spacing: VoltaSpacing.xl) {
-                        speed(display, now: now, size: 64).fixedSize()
+                        HStack(alignment: .firstTextBaseline, spacing: VoltaSpacing.lg) {
+                            speed(display, now: now, size: 64)
+                            gear(display)
+                        }
+                        .fixedSize()
                         Rectangle().fill(Color.voltaHairline).frame(width: 1)
                         power(display, now: now).frame(maxWidth: .infinity)
-                        GearSelector(gear: display.gear, isLive: display.gearIsLive)
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
-                        HStack(alignment: .center) {
+                        HStack(alignment: .firstTextBaseline) {
                             speed(display, now: now, size: 64)
                             Spacer(minLength: 0)
-                            GearSelector(gear: display.gear, isLive: display.gearIsLive)
+                            gear(display)
                         }
                         power(display, now: now)
                     }
@@ -77,43 +80,55 @@ struct LiveDrivingCard: View {
                 .textCase(.uppercase)
                 .foregroundStyle(LiveDrivingCard.blueText)
             Spacer(minLength: VoltaSpacing.sm)
-            if let text = LiveDriveText.freshness(display.freshness, now: now) {
-                FreshnessBadge(text: text, isLive: display.freshness == .live,
-                               isWarning: { if case .notRefreshed = display.freshness { true } else { false } }())
-            }
+            FreshnessBadge(text: LiveDriveText.freshness(display.freshness, now: now), tone: FreshnessBadge.Tone(display.freshness))
         }
     }
 
     /// Blue light enough to read as small text on the card (6:1).
     static let blueText = NowCard.parkedText
+    /// Status colours with no theme token: stale readings, and no readings at all.
+    static let staleAmber = Color(hex: 0xFF9F0A)
+    static let noDataGray = Color(hex: 0x8E8E93)
+
+    /// The gear pill sits on the speed's baseline.
+    private func gear(_ display: LiveDriveDisplay) -> some View {
+        GearSelector(gear: display.gear, isLive: display.gearIsLive)
+            .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
+    }
 
     // MARK: Speed
 
-    @ViewBuilder private func speed(_ display: LiveDriveDisplay, now: Date, size: CGFloat) -> some View {
-        switch display.speed {
-        case .live(let kph):
-            NowNumber(value: LiveDriveText.speed(kph: kph, units: units), unit: LiveDriveText.speedUnit(units),
-                      size: size, color: .voltaTextPrimary)
-        case .stale(let kph, let at):
-            VStack(alignment: .leading, spacing: 2) {
-                NowNumber(value: LiveDriveText.speed(kph: kph, units: units), unit: LiveDriveText.speedUnit(units),
-                          size: size, color: .voltaTextTertiary)
-                caption(LiveDriveText.age(at, now: now))
+    /// The speed line and one caption line, the same height in every state:
+    /// a hidden "188 mph" holds the line, and the caption line is always laid out.
+    private func speed(_ display: LiveDriveDisplay, now: Date, size: CGFloat) -> some View {
+        let unit = LiveDriveText.speedUnit(units)
+        let note: String? = switch display.speed {
+        case .live: nil
+        case .stopped: "Resumes when moving"
+        case .stale(_, let at): display.isStale ? nil : LiveDriveText.age(at, now: now)
+        case .unknown: "Speed unavailable"
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            // The placeholder alone sizes the line and sets its baseline; the
+            // value is drawn over it, so no state can change the card's height.
+            NowNumber(value: "188", unit: unit, size: size, color: .clear).hidden()
+                .overlay(alignment: Alignment(horizontal: .leading, vertical: .lastTextBaseline)) {
+                switch display.speed {
+                case .live(let kph):
+                    NowNumber(value: LiveDriveText.speed(kph: kph, units: units), unit: unit, size: size, color: .voltaTextPrimary)
+                case .stale(let kph, _):
+                    NowNumber(value: LiveDriveText.speed(kph: kph, units: units), unit: unit, size: size, color: .voltaTextTertiary)
+                case .stopped:
+                    Text("Stopped")
+                        .font(.system(size: size * 0.62, weight: .heavy))
+                        .foregroundStyle(Color.voltaTextPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                case .unknown:
+                    NowNumber(value: "—", unit: unit, size: size, color: .voltaTextTertiary)
+                }
             }
-        case .stopped(let since):
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Stopped")
-                    .font(.system(size: size * 0.62, weight: .heavy))
-                    .foregroundStyle(Color.voltaTextPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                caption("for \(NowCard.elapsed(from: since, to: now))")
-            }
-        case .unknown:
-            VStack(alignment: .leading, spacing: 2) {
-                NowNumber(value: "—", unit: LiveDriveText.speedUnit(units), size: size, color: .voltaTextTertiary)
-                caption("Speed unavailable")
-            }
+            caption(note ?? " ").opacity(note == nil ? 0 : 1)
         }
     }
 
@@ -126,7 +141,8 @@ struct LiveDrivingCard: View {
         case .awaitingMovement, .unknown: nil
         }
         let kind = reading.map { LiveDriveText.kind(kw: $0.kw) }
-        let tint: Color = !(reading?.live ?? false) ? .voltaTextTertiary : kind == .regen ? .voltaGreen : .voltaBlue
+        // A stale fill keeps its colour, dimmed: the badge says how old it is.
+        let tint: Color = (kind == .regen ? Color.voltaGreen : .voltaBlue).opacity(reading?.live == false ? 0.45 : 1)
         VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
             HStack(alignment: .firstTextBaseline, spacing: VoltaSpacing.sm) {
                 Text(LiveDriveText.powerTitle(display.power))
@@ -137,16 +153,14 @@ struct LiveDrivingCard: View {
                 Spacer(minLength: VoltaSpacing.sm)
                 switch display.power {
                 case .live(let kw):
-                    powerValue(kw, color: kind == .regen ? .voltaGreen : .voltaTextPrimary)
+                    powerValue(LiveDriveText.power(kw: kw), color: kind == .regen ? .voltaGreen : .voltaTextPrimary)
                 case .stale(let kw, let at):
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        caption(LiveDriveText.age(at, now: now))
-                        powerValue(kw, color: .voltaTextTertiary)
+                        if !display.isStale { caption(LiveDriveText.age(at, now: now)) }
+                        powerValue(LiveDriveText.power(kw: kw), color: .voltaTextTertiary)
                     }
-                case .awaitingMovement:
-                    caption("Updates when moving")
-                case .unknown:
-                    caption("Unavailable")
+                case .awaitingMovement, .unknown:
+                    powerValue("—", color: .voltaTextTertiary)
                 }
             }
             PowerMeter(kw: reading?.kw, tint: tint)
@@ -154,9 +168,9 @@ struct LiveDrivingCard: View {
         }
     }
 
-    private func powerValue(_ kw: Double, color: Color) -> some View {
+    private func powerValue(_ value: String, color: Color) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text(LiveDriveText.power(kw: kw))
+            Text(value)
                 .font(.system(.title2, weight: .bold))
                 .monospacedDigit()
                 .contentTransition(.numericText())
@@ -176,30 +190,53 @@ struct LiveDrivingCard: View {
 
 // MARK: - Parts
 
-/// "● Live", or the age of what is shown.
+/// "● Live", "● 1m old", "Saved …" or "No data": the card's one freshness.
 private struct FreshnessBadge: View {
+    enum Tone {
+        case live, stale, saved, none
+        init(_ freshness: LiveDriveDisplay.Freshness) {
+            switch freshness {
+            case .live: self = .live
+            case .lastReading, .notRefreshed: self = .stale
+            case .saved: self = .saved
+            case .unknown: self = .none
+            }
+        }
+        var color: Color {
+            switch self {
+            case .live: .voltaGreen
+            case .stale: LiveDrivingCard.staleAmber
+            case .saved: .voltaTextSecondary
+            case .none: LiveDrivingCard.noDataGray
+            }
+        }
+    }
+
     var text: String
-    var isLive: Bool
-    var isWarning: Bool
+    var tone: Tone
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulse = false
 
     var body: some View {
         HStack(spacing: 6) {
-            if isLive {
-                StatusDot(color: .voltaGreen, size: 7)
+            switch tone {
+            case .live:
+                StatusDot(color: tone.color, size: 7)
                     .opacity(pulse ? 0.35 : 1)
                     .animation(reduceMotion ? nil : .easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: pulse)
                     .onAppear { pulse = !reduceMotion }
                     .onChange(of: reduceMotion) { _, reduce in pulse = !reduce }
-            } else if isWarning {
-                Image(systemName: "clock.arrow.circlepath").font(.caption.weight(.semibold))
+            case .stale:
+                StatusDot(color: tone.color, size: 7)
+            case .saved, .none:
+                EmptyView()
             }
             Text(text)
-                .font(.system(.footnote, weight: isLive ? .semibold : .regular))
+                .font(.system(.footnote, weight: tone == .live || tone == .stale ? .semibold : .regular))
+                .monospacedDigit()
                 .lineLimit(1)
         }
-        .foregroundStyle(isLive ? Color.voltaGreen : isWarning ? Color.voltaAmber : Color.voltaTextSecondary)
+        .foregroundStyle(tone.color)
         .accessibilityIdentifier("liveDriving.freshness")
     }
 }
@@ -209,6 +246,7 @@ struct GearSelector: View {
     var gear: LiveDrive.Gear?
     var isLive: Bool
     @ScaledMetric(relativeTo: .body) private var cell: CGFloat = 30
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 2) {
@@ -229,7 +267,7 @@ struct GearSelector: View {
         }
         .padding(3)
         .background(Color.voltaControlFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .animation(.smooth(duration: 0.25), value: gear)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: gear)
         .accessibilityHidden(true)
     }
 }

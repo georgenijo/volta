@@ -144,7 +144,7 @@ export class Telemetry {
       // Location age is independent of fresh battery/charge/state observations.
       locationUpdatedAt: row.latitude == null || row.longitude == null ? null : row.date ?? null,
       location: row.latitude == null || row.longitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
-    const liveDrive = this.liveDrive(row, live?.drive ?? null);
+    const liveDrive = this.liveDrive(row, live?.drive ?? null, live?.movementAt ?? null);
     if (!live) return liveDrive ? {...result, liveDrive} : result;
     const sources: Record<string,string> = {batteryLevel:'BatteryLevel',usableBatteryLevel:'Soc',ratedRangeKm:'RatedRange',estRangeKm:'EstBatteryRange',chargeLimit:'ChargeLimitSoc',insideTempC:'InsideTemp',outsideTempC:'OutsideTemp',climateOn:'HvacPower',driverTempSettingC:'HvacLeftTemperatureRequest',odometerKm:'Odometer',firmware:'Version',packTempMaxC:'ModuleTempMax',packTempMinC:'ModuleTempMin',locked:'Locked',sentryMode:'SentryMode',chargePortDoorOpen:'ChargePortDoorOpen',chargePortLatch:'ChargePortLatch',energyRemainingKwh:'EnergyRemaining'};
     for (const [key,value] of Object.entries(live.values)) {
@@ -192,19 +192,25 @@ export class Telemetry {
    * power, or the open TeslaMate drive's newest position. Per value, a
    * current reading beats a stale one, then the newer one wins. Null when
    * nothing is known. */
-  private liveDrive(row: Row, stream: LiveDrive | null): LiveDrive | null {
+  /** The stream's drive values merged with TeslaMate's open-drive position.
+   * `movementAt` is the stream's newest position report: a TeslaMate reading
+   * from before it is older evidence and never holds now over it, and only a
+   * speed observed after it can end the stream's quiet span. */
+  private liveDrive(row: Row, stream: LiveDrive | null, movementAt: Date | null): LiveDrive | null {
     const now = +this.clock();
     const position = row.active_drive_id != null && row.drive_id === row.active_drive_id && row.date && +new Date(row.date) <= now ? row : null;
+    const newer = (at: Date) => !movementAt || +at > +movementAt;
     const recorded = (v: unknown): LiveReading<number> | null => position && typeof v === 'number' && Number.isFinite(v)
-      ? { value: v, observedAt: new Date(position.date), current: now - +new Date(position.date) <= teslamateCurrentMs, source: 'teslamate' } : null;
+      ? { value: v, observedAt: new Date(position.date),
+          current: now - +new Date(position.date) <= teslamateCurrentMs && newer(new Date(position.date)), source: 'teslamate' } : null;
     const pick = <T>(a: LiveReading<T> | null, b: LiveReading<T> | null) => !a || !b ? a ?? b
       : a.current !== b.current ? (a.current ? a : b) : +b.observedAt > +a.observedAt ? b : a;
     const speedKph = pick(stream?.speedKph ?? null, recorded(row.speed == null ? null : Number(row.speed)));
     const powerKw = pick(stream?.powerKw ?? null, recorded(row.power == null ? null : Number(row.power)));
     const gear = stream?.gear ?? null;
-    // A current speed from either source says more than the stream's silence.
-    const stoppedSince = speedKph?.current ? null : stream?.stoppedSince ?? null;
-    return gear || speedKph || powerKw || stoppedSince ? { gear, speedKph, powerKw, stoppedSince } : null;
+    // Only a current speed observed after the stream's last report says more than its silence.
+    const quiet = speedKph?.current && newer(speedKph.observedAt) ? null : stream?.quiet ?? null;
+    return gear || speedKph || powerKw || quiet ? { gear, speedKph, powerKw, quiet } : null;
   }
   private driveSelect(source = this.sql`public.drives`) {
     const s = this.sql, efficiency = s`eff.value`;

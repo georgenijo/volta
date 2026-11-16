@@ -12,7 +12,10 @@ import Foundation
 struct LiveDriveDisplay: Equatable {
     enum Speed: Equatable {
         case live(kph: Double)
-        /// The car has not moved since `since` (from the stream's silence).
+        /// The server's quiet span: a connected, proven-healthy stream in
+        /// gear has reported no movement since `since` (the car has moved
+        /// less than the report distance; about 1 km/h at most). Shown as
+        /// "Stopped", never as 0, which would be an invented reading.
         case stopped(since: Date)
         case stale(kph: Double, at: Date)
         case unknown
@@ -22,7 +25,7 @@ struct LiveDriveDisplay: Equatable {
         /// Battery power now: positive drives, negative is regen.
         case live(kw: Double)
         case stale(kw: Double, at: Date)
-        /// Stopped, and the stream reports power only while the car moves.
+        /// The stream reports power only while the car moves, and it has not.
         case awaitingMovement
         case unknown
     }
@@ -31,7 +34,8 @@ struct LiveDriveDisplay: Equatable {
         case live
         /// Nothing holds now; the newest reading is from `at`.
         case lastReading(at: Date)
-        /// This device has not heard from the server since `at`.
+        /// This device has not heard from the server since `since`: what is
+        /// shown held then.
         case notRefreshed(since: Date)
         case saved(at: Date)
         case unknown
@@ -72,8 +76,8 @@ struct LiveDriveDisplay: Equatable {
         let speed: Speed
         if let reading = drive?.speedKph, live(reading) {
             speed = .live(kph: max(0, reading.value))
-        } else if recent, let since = drive?.stoppedSince {
-            speed = .stopped(since: since)
+        } else if recent, let quiet = drive?.quiet {
+            speed = .stopped(since: quiet.since)
         } else if let reading = drive?.speedKph {
             speed = .stale(kph: max(0, reading.value), at: reading.observedAt)
         } else {
@@ -106,6 +110,14 @@ struct LiveDriveDisplay: Equatable {
         }
         return LiveDriveDisplay(gear: drive?.gear?.value, gearIsLive: live(drive?.gear), speed: speed, power: power,
                                 freshness: freshness)
+    }
+
+    /// Nothing on the card holds now: one age, in the header, covers every value.
+    var isStale: Bool {
+        switch freshness {
+        case .lastReading, .notRefreshed: true
+        case .live, .saved, .unknown: false
+        }
     }
 }
 
@@ -142,39 +154,56 @@ enum LiveDriveText {
         }
     }
 
-    /// "Live", "Updated 40 sec. ago", "Saved 2 hr. ago".
-    static func freshness(_ freshness: LiveDriveDisplay.Freshness, now: Date = .now) -> String? {
+    /// The header badge: "Live", "1m old", "Saved 2 hr. ago", "No data".
+    static func freshness(_ freshness: LiveDriveDisplay.Freshness, now: Date = .now) -> String {
         switch freshness {
         case .live: "Live"
-        case .lastReading(let at): "Seen \(age(at, now: now))"
-        case .notRefreshed(let since): "Updated \(age(since, now: now))"
+        case .lastReading(let at), .notRefreshed(let at): "\(shortAge(at, now: now)) old"
         case .saved(let at): "Saved \(age(at, now: now))"
-        case .unknown: nil
+        case .unknown: "No data"
         }
     }
 
+    /// "just now" under 5 s, else "40 sec. ago"; never "in 0 sec.".
     static func age(_ date: Date, now: Date = .now) -> String {
         now.timeIntervalSince(date) < 5 ? "just now" : VoltaFormat.relativeDate(min(date, now), now: now)
+    }
+
+    /// "12s", "1m", "3h", "2d": the badge's compact age.
+    static func shortAge(_ date: Date, now: Date = .now) -> String {
+        let s = Int(max(0, now.timeIntervalSince(date)))
+        return switch s {
+        case ..<60: "\(max(1, s))s"
+        case ..<3600: "\(s / 60)m"
+        case ..<86_400: "\(s / 3600)h"
+        default: "\(s / 86_400)d"
+        }
     }
 
     /// One sentence for VoiceOver.
     static func accessibility(_ display: LiveDriveDisplay, units: UnitPreferences, now: Date = .now) -> String {
         let unitName = units.distance == .miles ? "miles per hour" : "kilometres per hour"
+        // Per-value ages only when the card is otherwise live; stale says it once.
+        let each = !display.isStale
         let speed: String = switch display.speed {
         case .live(let kph): "\(Self.speed(kph: kph, units: units)) \(unitName)"
-        case .stopped: "Stopped"
-        case .stale(let kph, let at): "\(Self.speed(kph: kph, units: units)) \(unitName), \(age(at, now: now))"
+        case .stopped(let since): "Stopped for \(NowCard.elapsed(from: since, to: now)). Speed resumes when moving"
+        case .stale(let kph, let at): "\(Self.speed(kph: kph, units: units)) \(unitName)\(each ? ", \(age(at, now: now))" : "")"
         case .unknown: "Speed unknown"
         }
         let power: String = switch display.power {
         case .live(let kw): powerSentence(kw)
-        case .stale(let kw, let at): "\(powerSentence(kw)), \(age(at, now: now))"
+        case .stale(let kw, let at): "\(powerSentence(kw))\(each ? ", \(age(at, now: now))" : "")"
         case .awaitingMovement: "Power updates when the car moves"
         case .unknown: "Power unknown"
         }
         let gear = display.gear.map { "Gear \($0.rawValue)" } ?? "Gear unknown"
-        return ["Driving", speed, power, gear, freshness(display.freshness, now: now)].compactMap { $0 }
-            .joined(separator: ". ")
+        let freshness: String = switch display.freshness {
+        case .live: "Live"
+        case .lastReading(let at), .notRefreshed(let at): "Last reading \(age(at, now: now))"
+        case .saved, .unknown: Self.freshness(display.freshness, now: now)
+        }
+        return ["Driving", speed, power, gear, freshness].joined(separator: ". ")
     }
 
     private static func powerSentence(_ kw: Double) -> String {
@@ -206,16 +235,21 @@ final class LiveDrivingRefresher {
     private(set) var isRunning = false
     /// The latest refresh got no answer; the card ages what it shows.
     private(set) var lastFailed = false
+    /// When this refresher last published, across runs: a short visit
+    /// must not restart the 30 s wait.
     private var lastSurfacePublish: Date?
+    /// The drive ended during a refresh; history reloads once (`reloadHistory`).
+    private(set) var reloadDue = false
     private let sleep: @Sendable (Duration) async throws -> Void
 
     init(sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.sleep = sleep
     }
 
-    /// Refresh only while the Dashboard is visible, the scene active and the car driving.
-    nonisolated static func shouldRun(visible: Bool, sceneActive: Bool, status: VehicleStatus?) -> Bool {
-        guard visible, sceneActive, let status, status.telemetryFreshness?.savedAt == nil else { return false }
+    /// Refresh only while the Dashboard is visible, the scene active, the app
+    /// unlocked and the car driving.
+    nonisolated static func shouldRun(visible: Bool, sceneActive: Bool, unlocked: Bool, status: VehicleStatus?) -> Bool {
+        guard visible, sceneActive, unlocked, let status, status.telemetryFreshness?.savedAt == nil else { return false }
         return LiveDriveDisplay.isDriving(status)
     }
 
@@ -225,8 +259,6 @@ final class LiveDrivingRefresher {
              surfaces: (any VehicleSurfaces)?, now: @escaping () -> Date = { .now }) async -> Outcome {
         isRunning = true
         defer { isRunning = false }
-        // The load that showed the drive has just published.
-        lastSurfacePublish = now()
         while true {
             do { try await sleep(Self.interval) } catch { return .cancelled }
             if Task.isCancelled { return .cancelled }
@@ -241,14 +273,27 @@ final class LiveDrivingRefresher {
             if Task.isCancelled { return .cancelled }
             lastFailed = false
             guard dashboard.showLive(status, vehicleID: vehicleID, startedGeneration: generation) else { continue }
-            let at = now()
-            if let surfaces, let issued,
-               lastSurfacePublish.map({ at.timeIntervalSince($0) >= Self.surfaceInterval }) ?? true || !LiveDriveDisplay.isDriving(status) {
+            let at = now(), ended = !LiveDriveDisplay.isDriving(status)
+            // The newest publication by this refresher or by a Dashboard load.
+            let last = [lastSurfacePublish, dashboard.surfacesPublishedAt].compactMap { $0 }.max()
+            if let surfaces, let issued, ended || last.map({ at.timeIntervalSince($0) >= Self.surfaceInterval }) ?? true {
                 lastSurfacePublish = at
                 surfaces.publish(VehicleRefresh(status: status, issued: issued, vehicleName: dashboard.vehicle?.name),
                                  dataSource: dataSource)
             }
-            if !LiveDriveDisplay.isDriving(status) { return .driveEnded }
+            if ended {
+                reloadDue = true
+                return .driveEnded
+            }
         }
+    }
+
+    /// The drive ended: reload history once, so the finished drive appears.
+    /// Runs in its own `.task`, not the refresh's, which ends with the drive;
+    /// leaving the screen cancels it and it runs again on return.
+    func reloadHistory(_ load: () async -> Void) async {
+        guard reloadDue else { return }
+        await load()
+        if !Task.isCancelled { reloadDue = false }
     }
 }

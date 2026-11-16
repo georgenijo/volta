@@ -127,15 +127,20 @@ struct LiveDrive: Codable, Hashable, Sendable {
     var speedKph: Reading<Double>?
     /// Battery power: positive drives, negative is regen.
     var powerKw: Reading<Double>?
-    /// The stream shows the car has not moved since then (in R, N or D).
-    var stoppedSince: Date?
+    /// In R, N or D, the stream has reported no movement since `since`; the
+    /// car's average speed since then is below `speedBelowKph`. Not a stop.
+    struct Quiet: Codable, Hashable, Sendable {
+        var since: Date
+        var speedBelowKph: Double
+    }
+    var quiet: Quiet?
 
     init(gear: Reading<Gear>? = nil, speedKph: Reading<Double>? = nil, powerKw: Reading<Double>? = nil,
-         stoppedSince: Date? = nil) {
+         quiet: Quiet? = nil) {
         self.gear = gear
         self.speedKph = speedKph
         self.powerKw = powerKw
-        self.stoppedSince = stoppedSince
+        self.quiet = quiet
     }
 
     init(from decoder: Decoder) throws {
@@ -143,7 +148,7 @@ struct LiveDrive: Codable, Hashable, Sendable {
         gear = (try? c?.decodeIfPresent(Reading<Gear>.self, forKey: .gear)) ?? nil
         speedKph = (try? c?.decodeIfPresent(Reading<Double>.self, forKey: .speedKph)) ?? nil
         powerKw = (try? c?.decodeIfPresent(Reading<Double>.self, forKey: .powerKw)) ?? nil
-        stoppedSince = (try? c?.decodeIfPresent(Date.self, forKey: .stoppedSince)) ?? nil
+        quiet = (try? c?.decodeIfPresent(Quiet.self, forKey: .quiet)) ?? nil
     }
 }
 

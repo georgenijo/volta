@@ -160,12 +160,15 @@ struct DashboardView: View {
                            loadedAt: model.lastLoadedAt)) {
             await loadPowerCurve()
         }
-        // While the car drives and this screen shows: refresh its status. The
-        // drive ending reloads history, so the finished drive appears.
+        // While the car drives and this screen shows: refresh its status.
         .task(id: refreshesLiveDrive) {
             guard refreshesLiveDrive else { return }
-            if await liveDriving.run(dashboard: model, dataSource: dataSource, vehicleID: vehicleID,
-                                     surfaces: surfaces) == .driveEnded { await load() }
+            _ = await liveDriving.run(dashboard: model, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
+        }
+        // The drive ended: history reloads, so the finished drive appears. Its
+        // own task, since the refresh's ends with the drive; leaving the screen cancels it.
+        .task(id: liveDriving.reloadDue) {
+            await liveDriving.reloadHistory { await load() }
         }
         .onChange(of: model.status != nil, initial: true) { _, hasStatus in
             if hasStatus { StartupTrace.mark(.aboveFold) }
@@ -351,7 +354,8 @@ struct DashboardView: View {
     /// The Dashboard is in front (no Controls over it) and the car drives.
     private var refreshesLiveDrive: Bool {
         LiveDrivingRefresher.shouldRun(visible: isActiveTab && path.isEmpty && controlsHost == nil,
-                                       sceneActive: scenePhase == .active, status: model.status)
+                                       sceneActive: scenePhase == .active, unlocked: app?.isLocked != true,
+                                       status: model.status)
     }
     private var isPlaceholder: Bool { model.status == nil }
 
@@ -783,11 +787,14 @@ struct DashboardView: View {
                     ProgressView().controlSize(.mini).tint(Color.voltaTextSecondary)
                         .accessibilityLabel("Refreshing")
                 }
-                if freshness.isLive { StatusDot(color: .voltaGreen, size: 6) }
-                Text(freshness.text)
-                    .font(.footnote)
-                    .foregroundStyle(Color.voltaTextSecondary)
-                    .multilineTextAlignment(.trailing)
+                // The driving card says how fresh it is; saying it here too repeats it.
+                if NowVariant.of(status) != .driving {
+                    if freshness.isLive { StatusDot(color: .voltaGreen, size: 6) }
+                    Text(freshness.text)
+                        .font(.footnote)
+                        .foregroundStyle(Color.voltaTextSecondary)
+                        .multilineTextAlignment(.trailing)
+                }
             }
             .accessibilityElement(children: .combine)
         }
@@ -810,7 +817,7 @@ struct DashboardView: View {
             if let freshness = status.telemetryFreshness {
                 return freshness.connected ? ("Live", true) : (freshness.label, false)
             }
-            return ("Updated \(VoltaFormat.relativeDate(status.updatedAt, now: now))", false)
+            return ("Updated \(LiveDriveText.age(status.updatedAt, now: now))", false)
         }
     }
 

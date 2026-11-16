@@ -12,6 +12,11 @@ enum MockDriving: String, CaseIterable {
     case stale
     /// Driving per TeslaMate, with no gear, speed or power reported.
     case unknown
+    /// Cruises for 20 s after the first status, then shifts into Park.
+    case arriving
+
+    /// When this process first read the `arriving` drive (demo only).
+    nonisolated(unsafe) private static var arrivingStart: Date?
 
     static var current: MockDriving? {
         #if DEBUG
@@ -23,6 +28,12 @@ enum MockDriving: String, CaseIterable {
 
     /// `parked` with this drive's readings, at `now`.
     func apply(to status: inout VehicleStatus, now: Date) {
+        if self == .arriving {
+            let start = Self.arrivingStart ?? now
+            Self.arrivingStart = start
+            (now.timeIntervalSince(start) < 20 ? MockDriving.cruising : .parked).apply(to: &status, now: now)
+            return
+        }
         let moment = momentum(at: now)
         status.state = self == .parked ? .online : .driving
         status.updatedAt = now.addingTimeInterval(-2)
@@ -47,11 +58,13 @@ enum MockDriving: String, CaseIterable {
                 status.liveDrive = LiveDrive(gear: reading(.d, at: now.addingTimeInterval(-420)),
                                              speedKph: reading(speed), powerKw: reading(moment.powerKw))
             } else {
-                // Stopped: the stream went quiet with the last creeping speed held.
+                // At a light: the stream went quiet with the last creeping speed held.
                 let quiet = now.addingTimeInterval(-moment.stoppedFor)
+                let below = 1.5 * 2 / max(2, moment.stoppedFor - 2) * 3.6
                 status.liveDrive = LiveDrive(gear: reading(.d, at: now.addingTimeInterval(-420)),
                                              speedKph: reading(4, at: quiet, current: false),
-                                             powerKw: reading(-1.8, at: quiet, current: false), stoppedSince: quiet)
+                                             powerKw: reading(-1.8, at: quiet, current: false),
+                                             quiet: LiveDrive.Quiet(since: quiet, speedBelowKph: below))
             }
         case .parked:
             status.telemetryFreshness = TelemetryFreshness(connected: true, lastSeenAt: seen, recordedAt: [:])
@@ -66,6 +79,7 @@ enum MockDriving: String, CaseIterable {
         case .unknown:
             status.telemetryFreshness = nil
             status.liveDrive = nil
+        case .arriving: break
         }
     }
 
@@ -76,7 +90,7 @@ enum MockDriving: String, CaseIterable {
         case .cruising: return Moment(speedKph: 64, powerKw: 14.6, stoppedFor: 0)
         case .regen: return Moment(speedKph: 41, powerKw: -27.4, stoppedFor: 0)
         case .stopped: return Moment(speedKph: nil, powerKw: 0, stoppedFor: 38)
-        case .parked, .stale, .unknown: return Moment(speedKph: nil, powerKw: 0, stoppedFor: 0)
+        case .parked, .stale, .unknown, .arriving: return Moment(speedKph: nil, powerKw: 0, stoppedFor: 0)
         case .city:
             let t = now.timeIntervalSince1970.truncatingRemainder(dividingBy: 60)
             switch t {
@@ -89,7 +103,9 @@ enum MockDriving: String, CaseIterable {
             case ..<44: // brake for the light
                 let f = (t - 32) / 12
                 return Moment(speedKph: 56 * (1 - f) + 3 * f, powerKw: -34 * sin(f * .pi) - 2, stoppedFor: 0)
-            default: // wait at the light
+            case ..<56: // at the light, still reporting the last creep until it is quiet
+                return Moment(speedKph: 3, powerKw: 1.2, stoppedFor: 0)
+            default: // quiet at the light
                 return Moment(speedKph: nil, powerKw: 0, stoppedFor: t - 44)
             }
         }

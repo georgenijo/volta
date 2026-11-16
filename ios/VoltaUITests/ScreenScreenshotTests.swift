@@ -204,11 +204,15 @@ final class ScreenScreenshotTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: changed, evaluatedWith: card)], timeout: 15), .completed,
                        "the card refreshes by itself")
         app.terminate()
-        app.launchArguments = ["-demo-mode", "YES", "-demoDriving", "parked", "-VoltaDisableMotion"]
+        // Shifting into Park mid-refresh: the card leaves and the Dashboard reloads.
+        app.launchArguments = ["-demo-mode", "YES", "-demoDriving", "arriving", "-VoltaDisableMotion"]
         app.launch()
         try waitForScreen("dashboard")
-        XCTAssertTrue(element("card.now").waitForExistence(timeout: 10))
-        XCTAssertFalse(element("card.liveDriving").exists, "a parked car shows the parked card")
+        XCTAssertTrue(element("card.liveDriving").waitForExistence(timeout: 10))
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: gone, evaluatedWith: element("card.liveDriving"))], timeout: 40),
+                       .completed, "Park removes the driving card")
+        XCTAssertTrue(element("card.now").exists, "the parked card takes its place")
     }
 
     func testClimateControlsFitAndSend() throws {

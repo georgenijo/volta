@@ -63,7 +63,7 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         XCTAssertEqual(display.power, .unknown)
         XCTAssertNil(display.gear)
         XCTAssertEqual(display.freshness, .unknown)
-        XCTAssertNil(LiveDriveText.freshness(display.freshness, now: now))
+        XCTAssertEqual(LiveDriveText.freshness(display.freshness, now: now), "No data")
         let spoken = LiveDriveText.accessibility(display, units: .default, now: now)
         XCTAssertTrue(spoken.contains("Speed unknown") && spoken.contains("Power unknown") && spoken.contains("Gear unknown"), spoken)
         XCTAssertFalse(spoken.contains("0"), spoken)
@@ -77,7 +77,23 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         XCTAssertEqual(display.power, .stale(kw: 24, at: now.addingTimeInterval(-75)))
         XCTAssertFalse(display.gearIsLive)
         XCTAssertEqual(display.freshness, .lastReading(at: now.addingTimeInterval(-75)))
-        XCTAssertNotEqual(LiveDriveText.freshness(display.freshness, now: now), "Live")
+        XCTAssertTrue(display.isStale)
+        XCTAssertEqual(LiveDriveText.freshness(display.freshness, now: now), "1m old")
+        // The card says its age once, not per value.
+        let spoken = LiveDriveText.accessibility(display, units: .default, now: now)
+        XCTAssertEqual(spoken.components(separatedBy: "ago").count - 1, 1, spoken)
+        XCTAssertTrue(spoken.contains("Last reading"), spoken)
+    }
+
+    func testAgesReadNaturally() {
+        XCTAssertEqual(LiveDriveText.shortAge(now.addingTimeInterval(-12), now: now), "12s")
+        XCTAssertEqual(LiveDriveText.shortAge(now.addingTimeInterval(-130), now: now), "2m")
+        XCTAssertEqual(LiveDriveText.shortAge(now.addingTimeInterval(-7300), now: now), "2h")
+        XCTAssertEqual(LiveDriveText.shortAge(now.addingTimeInterval(3), now: now), "1s", "a reading from a fast clock is not in the future")
+        // The hero's "Updated" never reads "in 0 sec.".
+        var status = driving(nil)
+        status.updatedAt = now.addingTimeInterval(0.4)
+        XCTAssertEqual(DashboardView.freshness(status, now: now).text, "Updated just now")
     }
 
     func testAStatusNotRefreshedForFifteenSecondsStopsBeingLive() {
@@ -87,20 +103,24 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         XCTAssertEqual(display.power, .stale(kw: 42, at: now.addingTimeInterval(-1)))
         XCTAssertFalse(display.gearIsLive)
         XCTAssertEqual(display.freshness, .notRefreshed(since: fetched))
+        XCTAssertEqual(LiveDriveText.freshness(display.freshness, now: now), "16s old")
         XCTAssertEqual(LiveDriveDisplay.make(driving(moving), fetchedAt: now.addingTimeInterval(-15), now: now).freshness, .live)
         XCTAssertEqual(LiveDriveDisplay.make(driving(moving), fetchedAt: nil, now: now).speed,
                        .stale(kph: 64, at: now.addingTimeInterval(-1)), "never fetched here: never live")
     }
 
-    func testStoppedInDriveShowsStoppedNotTheHeldSpeed() {
+    func testAQuietCarShowsStoppedNotZeroOrTheHeldSpeed() {
         let quiet = now.addingTimeInterval(-40)
         let drive = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(6.4, ago: 40, current: false),
-                              powerKw: reading(-2, ago: 40, current: false), stoppedSince: quiet)
+                              powerKw: reading(-2, ago: 40, current: false),
+                              quiet: LiveDrive.Quiet(since: quiet, speedBelowKph: 0.29))
         let display = LiveDriveDisplay.make(driving(drive), fetchedAt: now, now: now)
         XCTAssertEqual(display.speed, .stopped(since: quiet))
-        XCTAssertEqual(display.power, .awaitingMovement, "the held power is from before the stop")
+        XCTAssertEqual(display.power, .awaitingMovement, "the held power is from before the car went quiet")
         XCTAssertEqual(display.freshness, .live)
-        XCTAssertEqual(LiveDriveText.accessibility(display, units: .default, now: now).contains("Stopped"), true)
+        let spoken = LiveDriveText.accessibility(display, units: .default, now: now)
+        XCTAssertTrue(spoken.contains("Stopped for"), spoken)
+        XCTAssertFalse(spoken.contains("6") || spoken.contains(" 0 "), "neither the held speed nor an invented zero: \(spoken)")
         // Stillness is as old as the fetch: an unrefreshed status shows the held reading's age instead.
         XCTAssertEqual(LiveDriveDisplay.make(driving(drive), fetchedAt: now.addingTimeInterval(-30), now: now).speed,
                        .stale(kph: 6.4, at: quiet))
@@ -120,7 +140,7 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         XCTAssertEqual(display.power, .unknown)
         XCTAssertNil(display.gear)
         XCTAssertEqual(display.freshness, .saved(at: now.addingTimeInterval(-3600)))
-        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, status: status))
+        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, unlocked: true, status: status))
     }
 
     // MARK: Drive and regen
@@ -172,11 +192,12 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
             let json = #"{"gear":{"value":"\#(gear)","observedAt":"2026-01-02T12:00:00Z","current":true,"source":"fleet_telemetry"}}"#
             XCTAssertEqual(try decoder.decode(LiveDrive.self, from: Data(json.utf8)).gear?.value.rawValue, gear)
         }
-        let odd = #"{"gear":{"value":"X","observedAt":"2026-01-02T12:00:00Z","current":true},"speedKph":{"value":"fast"},"powerKw":{"value":-12.5,"observedAt":"2026-01-02T12:00:00Z","current":false},"stoppedSince":null}"#
+        let odd = #"{"gear":{"value":"X","observedAt":"2026-01-02T12:00:00Z","current":true},"speedKph":{"value":"fast"},"powerKw":{"value":-12.5,"observedAt":"2026-01-02T12:00:00Z","current":false},"quiet":{"since":"soon"}}"#
         let drive = try decoder.decode(LiveDrive.self, from: Data(odd.utf8))
         XCTAssertNil(drive.gear)
         XCTAssertNil(drive.speedKph)
         XCTAssertEqual(drive.powerKw?.value, -12.5)
+        XCTAssertNil(drive.quiet, "a malformed quiet span is unknown")
         // A malformed block leaves the rest of the status intact.
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(VehicleStatus.skeleton)) as? [String: Any])
         object["liveDrive"] = "garbage"
@@ -190,23 +211,25 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
 
     // MARK: Refreshing
 
-    func testRefreshRunsOnlyWhileVisibleActiveAndDriving() {
+    func testRefreshRunsOnlyWhileVisibleActiveUnlockedAndDriving() {
         let status = driving(moving)
-        XCTAssertTrue(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, status: status))
-        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: false, sceneActive: true, status: status))
-        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: false, status: status))
-        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, status: nil))
-        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true,
+        XCTAssertTrue(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, unlocked: true, status: status))
+        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: false, sceneActive: true, unlocked: true, status: status))
+        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: false, unlocked: true, status: status))
+        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, unlocked: true, status: nil))
+        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, unlocked: true,
                                                       status: driving(LiveDrive(gear: reading(.p)))))
+        // Behind the app lock (reopened, authentication cancelled): no refresh, no publishing.
+        XCTAssertFalse(LiveDrivingRefresher.shouldRun(visible: true, sceneActive: true, unlocked: false, status: status))
     }
 
     func testRefreshShowsEachStatusAndStopsWhenTheDriveEnds() async {
         let source = ScriptedStatusSource(steps: [.status(driving(moving)), .failure, .status(driving(moving)),
                                                  .status(driving(LiveDrive(gear: reading(.p)), state: .online))])
         let model = DashboardModel()
-        await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID)
         let surfaces = CountingSurfaces()
-        var clock = now
+        await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID, surfaces: surfaces)
+        var clock = Date()
         let refresher = LiveDrivingRefresher(sleep: { _ in await Task.yield() })
         let outcome = await refresher.run(dashboard: model, dataSource: source, vehicleID: MockDataSource.vehicleID,
                                           surfaces: surfaces, now: { clock = clock.addingTimeInterval(5); return clock })
@@ -214,7 +237,7 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         XCTAssertFalse(refresher.isRunning)
         XCTAssertEqual(model.status?.liveDrive?.gear?.value, .p, "the parked status is shown")
         XCTAssertEqual(source.statusRequests, 4, "one load, then one request per refresh, failures included")
-        XCTAssertEqual(surfaces.published.count, 1, "surfaces hear the end of the drive, not every refresh")
+        XCTAssertEqual(surfaces.published.count, 2, "the load, then the end of the drive; not every refresh")
         XCTAssertEqual(surfaces.published.last?.status.state, .online)
     }
 
@@ -229,10 +252,54 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         let refresher = LiveDrivingRefresher(sleep: { _ in await Task.yield() })
         _ = await refresher.run(dashboard: model, dataSource: source, vehicleID: MockDataSource.vehicleID,
                                 surfaces: surfaces, now: { clock = clock.addingTimeInterval(5); return clock })
-        // 13 driving refreshes 5 s apart, starting 5 s after the load: two publishes, then the end.
-        XCTAssertEqual(surfaces.published.count, 3)
+        // 13 driving refreshes 5 s apart after a load that published nothing:
+        // the first publishes, then every 30 s (35, 65), then the end.
+        XCTAssertEqual(surfaces.published.count, 4)
         let tokens = surfaces.published.map(\.issued.value)
         XCTAssertEqual(tokens, tokens.sorted(), "issue order is kept")
+    }
+
+    func testShortVisitsDoNotPostponeSurfaceUpdates() async {
+        let source = ScriptedStatusSource(steps: [.status(driving(moving))])
+        let model = DashboardModel()
+        let surfaces = CountingSurfaces()
+        await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID, surfaces: surfaces)
+        XCTAssertEqual(surfaces.published.count, 1, "the load publishes")
+        let clock = TestClock(Date()), sleeps = TestCounter()
+        // Each visit refreshes four times (20 s), then the screen is left.
+        let refresher = LiveDrivingRefresher(sleep: { _ in
+            if sleeps.next() % 5 == 0 { throw CancellationError() }
+            await Task.yield()
+        })
+        for _ in 0..<3 {
+            let outcome = await refresher.run(dashboard: model, dataSource: source, vehicleID: MockDataSource.vehicleID,
+                                              surfaces: surfaces, now: { clock.advance(5) })
+            XCTAssertEqual(outcome, .cancelled)
+            _ = clock.advance(10) // away from the Dashboard
+        }
+        // Refreshes at 5–20, 35–50, 65–80 s: due 30 s after the load's publish, then 30 s after that.
+        XCTAssertEqual(surfaces.published.count, 3, "20 s visits keep the real last publication")
+    }
+
+    func testTheDriveEndingReloadsHistoryOnceOutsideTheRefresh() async {
+        let source = ScriptedStatusSource(steps: [.status(driving(moving)), .status(driving(LiveDrive(gear: reading(.p)), state: .online))])
+        let model = DashboardModel()
+        await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID)
+        let refresher = LiveDrivingRefresher(sleep: { _ in await Task.yield() })
+        XCTAssertFalse(refresher.reloadDue)
+        let outcome = await refresher.run(dashboard: model, dataSource: source, vehicleID: MockDataSource.vehicleID, surfaces: nil)
+        XCTAssertEqual(outcome, .driveEnded)
+        XCTAssertTrue(refresher.reloadDue, "due after the refresh has ended, so cancelling it cannot lose the reload")
+        // Leaving the screen cancels the reload; it stays due for the return.
+        let left = Task { await refresher.reloadHistory { try? await Task.sleep(for: .seconds(30)) } }
+        left.cancel()
+        await left.value
+        XCTAssertTrue(refresher.reloadDue)
+        var loads = 0
+        await refresher.reloadHistory { loads += 1 }
+        await refresher.reloadHistory { loads += 1 }
+        XCTAssertEqual(loads, 1, "once")
+        XCTAssertFalse(refresher.reloadDue)
     }
 
     func testCancellingTheRefreshStopsItWithoutAnotherRequest() async {
@@ -260,6 +327,45 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         XCTAssertFalse(model.showLive(driving(moving), vehicleID: 99, startedGeneration: model.loadGeneration))
     }
 
+    func testSlowHistoryDoesNotHoldBackLiveStatus() async throws {
+        let source = ScriptedStatusSource(steps: [.status(driving(moving))])
+        source.summaryDelay = .seconds(5)
+        let model = DashboardModel()
+        let load = Task { await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID) }
+        defer { load.cancel() }
+        await waitUntil { model.status != nil }
+        XCTAssertTrue(model.isLoading, "history is still loading")
+        XCTAssertTrue(model.showLive(driving(LiveDrive(gear: reading(.n))), vehicleID: MockDataSource.vehicleID,
+                                     startedGeneration: model.loadGeneration))
+        XCTAssertEqual(model.status?.liveDrive?.gear?.value, .n)
+    }
+
+    func testALoadsPendingStatusRefusesALiveAnswer() async throws {
+        let source = ScriptedStatusSource(steps: [.status(driving(moving))])
+        let model = DashboardModel()
+        await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID)
+        source.statusDelay = .seconds(5)
+        let load = Task { await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID) }
+        defer { load.cancel() }
+        await waitUntil { model.isLoading }
+        XCTAssertFalse(model.showLive(driving(moving), vehicleID: MockDataSource.vehicleID, startedGeneration: model.loadGeneration),
+                       "the load's own status is newer")
+    }
+
+    func testTheDrivingLiveActivityFollowsALiveGear() {
+        XCTAssertEqual(LiveActivityPlanner.drivingObservation(driving(LiveDrive(gear: reading(.p)))), .ended,
+                       "Park ends it while TeslaMate's drive is still open")
+        XCTAssertEqual(LiveActivityPlanner.drivingObservation(driving(LiveDrive(gear: reading(.d)), state: .online)), .driving)
+        XCTAssertEqual(LiveActivityPlanner.drivingObservation(driving(LiveDrive(gear: reading(.d, current: false)), state: .online)), .ended,
+                       "a gear that does not hold now says nothing; state decides")
+        XCTAssertEqual(LiveActivityPlanner.drivingObservation(driving(nil)), .driving)
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !condition(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(2)) }
+    }
+
     // MARK: Demo
 
     func testDemoModeDrivesBelievably() async throws {
@@ -277,12 +383,15 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
             case .regen:
                 guard case .live(let kw) = display.power else { return XCTFail("regen power") }
                 XCTAssertLessThan(kw, 0)
-            case .stopped: XCTAssertEqual(display.power, .awaitingMovement)
+            case .stopped:
+                XCTAssertEqual(display.power, .awaitingMovement)
+                XCTAssertEqual(display.speed, .stopped(since: now.addingTimeInterval(-38)))
             case .city, .cruising: XCTAssertEqual(display.freshness, .live)
+            case .arriving: XCTAssertTrue(LiveDriveDisplay.isDriving(status), "cruises first")
             }
         }
         // The city loop moves: speeds differ across a minute.
-        let speeds = stride(from: 0.0, to: 60, by: 5).map { offset -> LiveDriveDisplay.Speed in
+        let speeds = stride(from: 0.0, to: 60, by: 3).map { offset -> LiveDriveDisplay.Speed in
             var status = VehicleStatus.skeleton
             let at = Date(timeIntervalSince1970: 1_800_000_040 + offset)
             MockDriving.city.apply(to: &status, now: at)
@@ -300,13 +409,17 @@ private final class ScriptedStatusSource: VoltaDataSource, @unchecked Sendable {
     private let lock = NSLock()
     private var steps: [Step]
     private var requests = 0
+    private var delays: (status: Duration?, summary: Duration?) = (nil, nil)
     let base = MockDataSource(empty: false)
+    var statusDelay: Duration? { get { lock.withLock { delays.status } } set { lock.withLock { delays.status = newValue } } }
+    var summaryDelay: Duration? { get { lock.withLock { delays.summary } } set { lock.withLock { delays.summary = newValue } } }
 
     init(steps: [Step]) { self.steps = steps }
 
     var statusRequests: Int { lock.withLock { requests } }
 
     func status(vehicleID: Int) async throws -> VehicleStatus {
+        if let delay = statusDelay { try await Task.sleep(for: delay) }
         let step: Step = lock.withLock {
             requests += 1
             return steps.count > 1 ? steps.removeFirst() : steps[0]
@@ -317,7 +430,10 @@ private final class ScriptedStatusSource: VoltaDataSource, @unchecked Sendable {
         }
     }
     func vehicles() async throws -> [Vehicle] { try await base.vehicles() }
-    func summary(vehicleID: Int, range: SummaryRange) async throws -> ActivitySummary { try await base.summary(vehicleID: vehicleID, range: range) }
+    func summary(vehicleID: Int, range: SummaryRange) async throws -> ActivitySummary {
+        if let delay = summaryDelay { try await Task.sleep(for: delay) }
+        return try await base.summary(vehicleID: vehicleID, range: range)
+    }
     func timeline(vehicleID: Int, hours: Int) async throws -> [TimelineSegment] { try await base.timeline(vehicleID: vehicleID, hours: hours) }
     func drives(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<DriveSummary> { try await base.drives(vehicleID: vehicleID, range: range, cursor: cursor) }
     func drive(id: Int) async throws -> DriveDetail { try await base.drive(id: id) }
@@ -328,6 +444,18 @@ private final class ScriptedStatusSource: VoltaDataSource, @unchecked Sendable {
     func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { try await base.mileage(vehicleID: vehicleID, bucket: bucket) }
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { try await base.firmware(vehicleID: vehicleID) }
     func places(vehicleID: Int) async throws -> [Place] { try await base.places(vehicleID: vehicleID) }
+}
+
+private final class TestClock: @unchecked Sendable {
+    private var date: Date
+    init(_ date: Date) { self.date = date }
+    func advance(_ seconds: TimeInterval) -> Date { date += seconds; return date }
+}
+
+private final class TestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func next() -> Int { lock.withLock { count += 1; return count } }
 }
 
 @MainActor private final class CountingSurfaces: VehicleSurfaces {

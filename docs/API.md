@@ -227,8 +227,9 @@ VehicleStatus  { vehicleId, state: online|asleep|offline|driving|charging|updati
                  chargeReadyAt, liveDrive?: LiveDrive }
 TireReading    { pressureBar: number|null, updatedAt: timestamp|null }
 LiveDrive      { gear: LiveReading<P|R|N|D>|null, speedKph: LiveReading<number>|null,
-                 powerKw: LiveReading<number>|null, stoppedSince: timestamp|null }
+                 powerKw: LiveReading<number>|null, quiet: LiveQuiet|null }
 LiveReading    { value, observedAt, current: boolean, source: fleet_telemetry|teslamate }
+LiveQuiet      { since, speedBelowKph }
 ```
 
 `liveDrive` is what the car is doing on the road; it is omitted when nothing is
@@ -242,15 +243,24 @@ TeslaMate drive's newest position (`source`). The stream sends them with
 after 3 m; economy profile: every 10 s, after 15 m). On a connected stream
 they are current for five times the shortest gap between the car's newest
 fixes, within 10 to 60 s (10 s while that cadence is unknown); a TeslaMate
-position is current for 30 s. Per value a current reading beats a
-stale one, then the newer one wins. `powerKw` is battery power: positive
+position is current for 30 s, and only when it is newer than the stream's
+last position report. Per value a current reading beats a stale one, then
+the newer one wins. `powerKw` is battery power: positive
 drives, negative is regen. Stream power uses `PackVoltage` and `PackCurrent`
 from the same payload with the operator's recorded `PackCurrent` sign, and is
-null without that calibration. `stoppedSince` is set when a connected stream
-in R, N or D with a valid GPS fix has sent no position for longer than that
-window, which means the car has not moved since then (the receiver holds the last
-speed a stopping car reported, usually 1 to 5 mph); it is null when a current
-speed reading exists, and never inferred without a fix or a known cadence. Gear and readings
+null without that calibration. `quiet` is set when a connected stream in R,
+N or D with a valid GPS fix has sent no position for longer than that window,
+counted only up to the time the pipeline is proven to have stored everything
+the car sent: the receiver seen alive and the consumer caught up (stream
+health, written every 15 s), less 2 s for transit. Silence after a receiver
+or consumer failure proves nothing, so its readings just go stale. It is not a claim that the car stopped: a car moving slower than the report
+distance per interval (1.5 m/s in both profiles) can stay silent. It says
+the car has reported no movement since `since`, and its average speed since
+then is below `speedBelowKph` (that distance over the proven quiet time less
+one interval). The app shows it as stopped. The receiver holds the last speed a stopping car reported, usually
+1 to 5 mph, so that reading is never current here. `quiet` is null when a
+current speed observed after the stream's last report exists, and never inferred without a fix or a known
+cadence. Gear and readings
 outlast the drive: clients decide what to show from gear and `state`.
 
 Live charging comes from Fleet Telemetry's `DetailedChargeState` while the

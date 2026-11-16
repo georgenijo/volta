@@ -524,7 +524,7 @@ test('live drive: the stream leads while current, the open TeslaMate drive fills
     VALUES (90,1,90,(now() AT TIME ZONE 'UTC') - interval '5 seconds',37.44,-122.14,64,64,52,-12)`;
   let status=await get('/v1/vehicles/1/status');
   expect(status.state).toBe('driving');
-  expect(status.liveDrive).toMatchObject({gear:null,speedKph:{value:52,current:true,source:'teslamate'},powerKw:{value:-12,current:true,source:'teslamate'},stoppedSince:null});
+  expect(status.liveDrive).toMatchObject({gear:null,speedKph:{value:52,current:true,source:'teslamate'},powerKw:{value:-12,current:true,source:'teslamate'},quiet:null});
   // A connected stream in Drive with calibrated pack power leads.
   await owner`INSERT INTO volta_telemetry.power_calibration(vehicle_id,sign,source,evidence_note) VALUES (1,'discharge_positive','operator_live_gate','synthetic')`;
   const put=async(field:string,v:{num?:number,text?:string,unit?:string,lat?:number,lon?:number},t:Date,payload='drive-1')=>owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_num,value_text,latitude,longitude,source_unit,invalid,quality,payload_id)
@@ -542,27 +542,42 @@ test('live drive: the stream leads while current, the open TeslaMate drive fills
   expect(status.liveDrive.speedKph).toMatchObject({current:true,source:'fleet_telemetry'});expect(status.liveDrive.speedKph.value).toBeCloseTo(64.37,2);
   expect(status.liveDrive.powerKw).toMatchObject({value:42,current:true,source:'fleet_telemetry'});
   expect(Date.parse(status.liveDrive.speedKph.observedAt)).toBe(+recent);
-  // The stream goes quiet for a minute in Drive: stopped. TeslaMate's position
+  // The stream goes quiet for a minute in Drive. TeslaMate's position
   // is now 5 s old and current, so its speed and power show instead of the held ones.
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${quiet},received_at=${quiet} WHERE field<>'Gear'`;
   status=await get('/v1/vehicles/1/status');
-  expect(status.liveDrive.speedKph).toMatchObject({value:52,source:'teslamate',current:true});expect(status.liveDrive.stoppedSince).toBeNull();
-  // Without a current TeslaMate position the stream's stillness stands and the held speed is stale.
+  expect(status.liveDrive.speedKph).toMatchObject({value:52,source:'teslamate',current:true});expect(status.liveDrive.quiet).toBeNull();
+  // Without a current TeslaMate position the stream's quiet span stands and the held speed is stale.
   await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '2 minutes' WHERE id=90`;
   status=await get('/v1/vehicles/1/status');
-  expect(Date.parse(status.liveDrive.stoppedSince)).toBe(+quiet);
+  expect(Date.parse(status.liveDrive.quiet.since)).toBe(+quiet);
   expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});
   expect(status.liveDrive.powerKw).toMatchObject({source:'fleet_telemetry',current:false});
-  // Fixes only every 10 s (the economy profile): a minute's silence is still stillness, 30 s is not.
+  // TeslaMate's 100 km/h from 25 s ago is older than the stream's last report
+  // 15 s ago: it is within TeslaMate's window but never holds over the
+  // newer silence, so the car is quiet and no speed is current.
+  const lastReport=new Date(+now-15_000);
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${lastReport},received_at=${lastReport} WHERE field<>'Gear'`;
+  await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '25 seconds',speed=100 WHERE id=90`;
+  status=await get('/v1/vehicles/1/status');
+  expect(Date.parse(status.liveDrive.quiet.since)).toBe(+lastReport);
+  expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});
+  // A TeslaMate speed newer than that report does end the quiet span.
+  await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '5 seconds' WHERE id=90`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.speedKph).toMatchObject({value:100,source:'teslamate',current:true});expect(status.liveDrive.quiet).toBeNull();
+  await owner`UPDATE positions SET date=(now() AT TIME ZONE 'UTC') - interval '2 minutes' WHERE id=90`;
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${quiet},received_at=${quiet} WHERE field<>'Gear'`;
+  // Fixes only every 10 s (the economy profile): a minute's silence is a quiet span, 30 s is not.
   await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'fix-%'`;
   for (const i of [0,1,2]) await datum('Location',null,new Date(+quiet-i*10_000),'fix-'+i,1,{latitude:37.44,longitude:-122.14});
-  expect(Date.parse((await get('/v1/vehicles/1/status')).liveDrive.stoppedSince)).toBe(+quiet);
+  expect(Date.parse((await get('/v1/vehicles/1/status')).liveDrive.quiet.since)).toBe(+quiet);
   const half=new Date(+now-30_000);
   await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${half},received_at=${half} WHERE field<>'Gear'`;
   status=await get('/v1/vehicles/1/status');
-  expect(status.liveDrive.stoppedSince).toBeNull();expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:true});
+  expect(status.liveDrive.quiet).toBeNull();expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:true});
   // Parked: gear P, no stillness, the drive's readings stay stale.
   await owner`UPDATE volta_telemetry.latest_samples SET value_text='ShiftStateP',source_ts=${recent} WHERE field='Gear'`;
   status=await get('/v1/vehicles/1/status');
-  expect(status.liveDrive.gear).toMatchObject({value:'P',current:true});expect(status.liveDrive.stoppedSince).toBeNull();
+  expect(status.liveDrive.gear).toMatchObject({value:'P',current:true});expect(status.liveDrive.quiet).toBeNull();
 });

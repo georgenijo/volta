@@ -12,18 +12,30 @@ const gears: Record<string,LiveGear> = {ShiftStateP:'P',ShiftStateR:'R',ShiftSta
 export type LiveGear = 'P'|'R'|'N'|'D';
 /** One live drive value: when it was observed, and whether it still holds now. */
 export type LiveReading<T> = { value: T; observedAt: Date; current: boolean; source: 'fleet_telemetry'|'teslamate' };
-export type LiveDrive = { gear: LiveReading<LiveGear>|null; speedKph: LiveReading<number>|null; powerKw: LiveReading<number>|null; stoppedSince: Date|null };
+/** The stream in gear has reported no movement since `since`; the car's
+ * average speed since then is below `speedBelowKph`. Not a claim that it stopped. */
+export type LiveQuiet = { since: Date; speedBelowKph: number };
+export type LiveDrive = { gear: LiveReading<LiveGear>|null; speedKph: LiveReading<number>|null; powerKw: LiveReading<number>|null; quiet: LiveQuiet|null };
 /** Location arrives only after the car moves (normal profile: every 2 s
  * after 3 m; economy: every 10 s after 15 m, ingestion/fleetconfig), with
  * VehicleSpeed, PackVoltage and PackCurrent riding on it. The receiver holds
  * the last speed a stopping car reported (often 1 to 5 mph). So a speed or
- * power reading is current only for `stillnessMs` after it was observed, and
- * a connected stream in gear with no report for longer has not moved since.
+ * power reading is current only for `stillnessMs` after it was observed.
+ * A connected stream in gear quiet for longer proves only that the car has
+ * moved less than the report distance since (see `quietSpeedBelowKph`).
  * The window follows the installed profile as observed: five times the
  * shortest gap between the car's latest fixes, within 10 to 60 s; without
- * two recent fixes the cadence is unknown and stillness is never inferred. */
+ * two recent fixes the cadence is unknown and nothing is inferred. */
 export const stillnessMs = (fixIntervalS: number | null) => fixIntervalS == null || !Number.isFinite(fixIntervalS) || fixIntervalS <= 0
   ? null : Math.min(60_000, Math.max(10_000, fixIntervalS * 5_000));
+/** Location's MinimumDelta over IntervalSeconds, the same in both profiles
+ * (3 m / 2 s, 15 m / 10 s; checked against fleetconfig.go by the tests). */
+export const reportDistancePerIntervalM = 1.5;
+/** The speed a car quiet for `quietMs` must be below. A car checks each
+ * interval and reports once it has moved the report distance, so over
+ * (quiet − one interval) it moved less than that distance. */
+export const quietSpeedBelowKph = (fixIntervalS: number, quietMs: number) =>
+  reportDistancePerIntervalM * fixIntervalS / Math.max(fixIntervalS, quietMs / 1000 - fixIntervalS) * 3.6;
 /** Current window for a reading while the cadence is unknown. */
 export const defaultCurrentMs = 10_000;
 /** A TeslaMate position from the open drive is current this long. */
@@ -119,7 +131,7 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     // Whether the session began at an observed charge start, not mid-charge (after a split gap or a late join).
     startObserved: session ? last!.observed : null,
     energyAddedKwh: session && counted && +counted >= +session ? num(counter,{kWh:1}) : null };
-  const drive = driveValues(live, by, valid, connected, now);
+  const drive = driveValues(live, by, valid, connected, healthy ? h! : null, now);
   const tire = (suffix: string) => ({ pressureBar: num(`TpmsPressure${suffix}`, {bar:1,psi:1/14.5037738,kPa:.01}), updatedAt: times[`TpmsPressure${suffix}`] ?? null });
   return { values: {
     batteryLevel:num('BatteryLevel',{'%':1}), usableBatteryLevel:num('Soc',{'%':1}),
@@ -132,15 +144,27 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
   // A recognized overheat-protection reading is current evidence, not a gap:
   // status uses it to clear an older recorded climate state.
   overheatProtect: hvac === 'HvacPowerStateOverheatProtect',
-  freshness:{connected,lastSeenAt,recordedAt:times}, charge, drive, by };
+  freshness:{connected,lastSeenAt,recordedAt:times}, charge, drive: drive.drive, movementAt: drive.movementAt, by };
 }
+
+/** How long a report takes from the car to the broker, at most, when the
+ * receiver is up. A pipeline proven through T has stored what the car sent
+ * by T minus this. */
+export const reportTransitMs = 2_000;
 
 /** Gear, speed and pack power from the stream. Gear is change-only, so a
  * connected stream's gear holds now; speed and power hold only while the car
  * keeps reporting (see stillnessMs). Power needs voltage and current from
- * the same payload and the operator's recorded PackCurrent sign. */
+ * the same payload and the operator's recorded PackCurrent sign.
+ *
+ * Silence counts only as far as the pipeline is proven to have stored
+ * everything the car sent: the receiver seen alive and the consumer caught
+ * up (`health`, written every 15 s). A receiver that dies after a highway
+ * fix still looks connected for a while; its silence proves nothing, so the
+ * readings go stale and no quiet span is inferred. `movementAt` is the
+ * stream's newest position report, for merging with TeslaMate. */
 function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, by: Map<string, Row>,
-                     valid: (f: string) => Row | null, connected: boolean, now: Date): LiveDrive {
+                     valid: (f: string) => Row | null, connected: boolean, health: Row | null, now: Date): { drive: LiveDrive; movementAt: Date | null } {
   const at = (s: Row) => new Date(s.source_ts);
   const reading = <T>(value: T | null, s: Row | null, current: boolean): LiveReading<T> | null =>
     value == null || !s ? null : { value, observedAt: at(s), current, source: 'fleet_telemetry' };
@@ -154,11 +178,15 @@ function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, 
   const power = v && a && sign && v.payload_id === a.payload_id && +at(v) === +at(a) && v.source_unit === 'V' && a.source_unit === 'A' &&
     Number.isFinite(v.value_num) && v.value_num > 0 && Number.isFinite(a.value_num) ? v.value_num * a.value_num / 1000 * sign : null;
   // The newest position report, valid or not; a car without a GPS fix (a
-  // tunnel) may stop reporting while it moves, so only a valid fix proves stillness.
+  // tunnel) may stop reporting while it moves, so only a valid fix bounds its speed.
   const report = ['Location','VehicleSpeed'].map(f => by.get(f)).filter((r): r is Row => r != null && +at(r) <= +now)
     .sort((x, y) => +at(y) - +at(x))[0] ?? null;
   const fix = by.get('Location');
-  const stoppedSince = still != null && connected && gear != null && gear !== 'P' && report && fix && !fix.invalid && fix.quality === 'ok' &&
-    +at(fix) >= +at(report) && +now - +at(report) > still ? new Date(Math.max(+at(report), +at(g!))) : null;
-  return { gear: reading(gear, g, connected), speedKph: reading(speed, s, recent(s)), powerKw: reading(power, power == null ? null : v, recent(v)), stoppedSince };
+  const proven = health ? Math.min(+now, +new Date(health.receiver_seen_at), +new Date(health.caught_up_at)) - reportTransitMs : null;
+  const quietMs = report && proven != null ? proven - +at(report) : null;
+  const quiet = still != null && connected && gear != null && gear !== 'P' && report && fix && !fix.invalid && fix.quality === 'ok' &&
+    +at(fix) >= +at(report) && quietMs != null && quietMs > still
+    ? { since: new Date(Math.max(+at(report), +at(g!))), speedBelowKph: quietSpeedBelowKph(live.fixIntervalS!, quietMs) } : null;
+  return { drive: { gear: reading(gear, g, connected), speedKph: reading(speed, s, recent(s)), powerKw: reading(power, power == null ? null : v, recent(v)), quiet },
+           movementAt: report ? at(report) : null };
 }

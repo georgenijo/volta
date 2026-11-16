@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { liveValues, stillnessMs } from '../src/fleet-live';
+import { liveValues, quietSpeedBelowKph, reportDistancePerIntervalM, reportTransitMs, stillnessMs } from '../src/fleet-live';
 const now = new Date('2026-01-02T12:00:00Z'), old = '2026-01-01T00:00:00Z';
 const sample = (field:string, value:any, unit='', invalid=false) => ({field,source_ts:old,source_unit:unit,invalid,quality:invalid?'invalid':'ok',...value});
 const health = {receiver_generation:'fixture',receiver_started_at:old,receiver_seen_at:now,updated_at:now,caught_up_at:now,lag_records:0};
@@ -104,7 +104,7 @@ test('a connected drive reports gear, speed in km/h and signed same-payload powe
   const d = liveValues(driving(), now)!.drive;
   expect(d.gear).toEqual({value:'D',observedAt:new Date(moment),current:true,source:'fleet_telemetry'});
   expect(d.speedKph!.value).toBeCloseTo(64.37,2); expect(d.speedKph!.current).toBe(true);
-  expect(d.powerKw!.value).toBeCloseTo(42); expect(d.powerKw!.current).toBe(true); expect(d.stoppedSince).toBeNull();
+  expect(d.powerKw!.value).toBeCloseTo(42); expect(d.powerKw!.current).toBe(true); expect(d.quiet).toBeNull();
 });
 test('regen is negative power; the sign follows the operator calibration and is unknown without it',()=>{
   const f = driving(); f.samples.find(s => s.field === 'PackCurrent')!.value_num = -45;
@@ -128,29 +128,47 @@ test('gear maps P, R, N and D',()=>{
     expect(liveValues(f, now)!.drive.gear!.value).toBe(gear as any);
   }
 });
-test('a car in gear that stops reporting position is stopped; the held speed is not current',()=>{
+test('a car in gear that stops reporting position is quiet with a speed bound; the held speed is not current',()=>{
   const quiet = new Date(+now - 45_000).toISOString(), f = driving();
   for (const s of f.samples) s.source_ts = s.field === 'Gear' ? old : quiet;
   const d = liveValues(f, now)!.drive;
-  expect(d.stoppedSince).toEqual(new Date(quiet)); expect(d.speedKph!.current).toBe(false); expect(d.powerKw!.current).toBe(false);
+  expect(d.quiet?.since).toEqual(new Date(quiet)); expect(d.speedKph!.current).toBe(false); expect(d.powerKw!.current).toBe(false);
   expect(d.gear!.current).toBe(true);
   // Reported 9 s ago: still moving as far as anyone can tell.
   const recent = new Date(+now - 9000).toISOString(), g = driving();
   for (const s of g.samples) if (s.field !== 'Gear') s.source_ts = recent;
-  expect(liveValues(g, now)!.drive.stoppedSince).toBeNull(); expect(liveValues(g, now)!.drive.speedKph!.current).toBe(true);
-  // Shifted into Drive after the last report: stopped since the shift.
+  expect(liveValues(g, now)!.drive.quiet).toBeNull(); expect(liveValues(g, now)!.drive.speedKph!.current).toBe(true);
+  // Shifted into Drive after the last report: quiet since the shift.
   const later = new Date(+now - 20_000).toISOString(); f.samples.find(s => s.field === 'Gear')!.source_ts = later;
-  expect(liveValues(f, now)!.drive.stoppedSince).toEqual(new Date(later));
+  expect(liveValues(f, now)!.drive.quiet?.since).toEqual(new Date(later));
 });
 test('stillness needs a connected stream, a drive gear and a valid fix',()=>{
   const quiet = new Date(+now - 45_000).toISOString(), base = () => { const f = driving(); for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = quiet; return f; };
   const parked = base(); parked.samples.find(s => s.field === 'Gear')!.value_text = 'ShiftStateP';
-  expect(liveValues(parked, now)!.drive.stoppedSince).toBeNull();
+  expect(liveValues(parked, now)!.drive.quiet).toBeNull();
   const tunnel = base(); Object.assign(tunnel.samples.find(s => s.field === 'Location')!, {invalid:true,quality:'invalid',latitude:null,longitude:null});
-  expect(liveValues(tunnel, now)!.drive.stoppedSince).toBeNull();
+  expect(liveValues(tunnel, now)!.drive.quiet).toBeNull();
   const away = base(); away.connections = [{status:'DISCONNECTED',source_ts:old,received_at:old}];
   const d = liveValues(away, now)!.drive;
-  expect(d.stoppedSince).toBeNull(); expect(d.gear!.current).toBe(false); expect(d.speedKph!.current).toBe(false);
+  expect(d.quiet).toBeNull(); expect(d.gear!.current).toBe(false); expect(d.speedKph!.current).toBe(false);
+});
+test('silence after the receiver or consumer stops proves nothing: readings go stale, no quiet span',()=>{
+  // A highway fix 45 s ago, then the receiver died: its health still looks
+  // recent enough for a connected stream, but nothing after the fix is proven.
+  const fix = new Date(+now - 45_000), f = driving();
+  for (const s of f.samples) s.source_ts = s.field === 'Gear' ? old : fix.toISOString();
+  f.health.receiver_seen_at = new Date(+fix + 1000) as any;
+  let v = liveValues(f, now)!;
+  expect(v.freshness.connected).toBe(true);
+  expect(v.drive.quiet).toBeNull(); expect(v.drive.speedKph!.current).toBe(false); expect(v.drive.gear!.current).toBe(true);
+  // Receiver alive, but the consumer proven caught up only 8 s past the fix: not yet quiet.
+  f.health.receiver_seen_at = now as any; f.health.caught_up_at = new Date(+fix + 8000) as any;
+  v = liveValues(f, now)!; expect(v.drive.quiet).toBeNull();
+  // Proven 20 s past the fix: quiet, bounded by the proven span only.
+  f.health.caught_up_at = new Date(+fix + 20_000) as any;
+  v = liveValues(f, now)!;
+  expect(v.drive.quiet?.since).toEqual(fix); expect(v.drive.quiet!.speedBelowKph).toBeCloseTo(quietSpeedBelowKph(2, 18_000), 6);
+  expect(v.movementAt).toEqual(fix);
 });
 test('a disconnected stream keeps fresh-looking readings but never calls them current',()=>{
   const f = driving(); f.connections = [{status:'DISCONNECTED',source_ts:old,received_at:old}];
@@ -166,10 +184,31 @@ test('the stillness window follows the installed profile: economy reports every 
   const between = new Date(+now - 12_000).toISOString(), f = driving(); f.fixIntervalS = 10;
   for (const s of f.samples) s.source_ts = s.field === 'Gear' ? old : between;
   let d = liveValues(f, now)!.drive;
-  expect(d.stoppedSince).toBeNull(); expect(d.speedKph!.current).toBe(true);
-  // 55 s without a report on that profile: stopped.
+  expect(d.quiet).toBeNull(); expect(d.speedKph!.current).toBe(true);
+  // 55 s without a report on that profile: quiet.
   const quiet = new Date(+now - 55_000).toISOString(); for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = quiet;
-  d = liveValues(f, now)!.drive; expect(d.stoppedSince).toEqual(new Date(quiet)); expect(d.speedKph!.current).toBe(false);
+  d = liveValues(f, now)!.drive; expect(d.quiet?.since).toEqual(new Date(quiet)); expect(d.speedKph!.current).toBe(false);
   // Unknown cadence: never inferred, and readings are current only briefly.
-  f.fixIntervalS = null; d = liveValues(f, now)!.drive; expect(d.stoppedSince).toBeNull(); expect(d.speedKph!.current).toBe(false);
+  f.fixIntervalS = null; d = liveValues(f, now)!.drive; expect(d.quiet).toBeNull(); expect(d.speedKph!.current).toBe(false);
+});
+
+test('a quiet car is bounded below a creeping speed, never called stopped; the bound tightens with time',()=>{
+  // Normal profile: 3 m per 2 s. A car creeping at 0.3 mph (0.48 km/h) for 20 s moves 2.7 m and may not report.
+  const bound20 = quietSpeedBelowKph(2, 20_000);
+  expect(bound20).toBeCloseTo(1.5*2/18*3.6, 6); expect(bound20).toBeGreaterThan(0.3*1.609344);
+  expect(quietSpeedBelowKph(2, 60_000)).toBeLessThan(bound20);
+  // Economy: 15 m per 10 s, quiet for 60 s.
+  expect(quietSpeedBelowKph(10, 60_000)).toBeCloseTo(15/50*3.6, 6);
+  const quiet = new Date(+now - 20_000).toISOString(), f = driving();
+  for (const s of f.samples) s.source_ts = s.field === 'Gear' ? old : quiet;
+  const q = liveValues(f, now)!.drive.quiet!;
+  // Silence counts only up to what the pipeline has proven stored, less transit.
+  expect(q.since).toEqual(new Date(quiet)); expect(q.speedBelowKph).toBeCloseTo(quietSpeedBelowKph(2, 20_000 - reportTransitMs), 6);
+  expect(liveValues(f, now)!.drive).not.toHaveProperty('stoppedSince');
+});
+test('both streaming profiles report Location every interval only after the same distance per interval',async()=>{
+  const go = await Bun.file(new URL('../../ingestion/fleetconfig/fleetconfig.go', import.meta.url)).text();
+  const locations = [...go.matchAll(/Name: "Location", FieldConfig: FieldConfig\{IntervalSeconds: (\d+), MinimumDelta: f\(([\d.]+)\)/g)];
+  expect(locations.length).toBe(2);
+  for (const [, interval, delta] of locations) expect(Number(delta) / Number(interval)).toBe(reportDistancePerIntervalM);
 });
