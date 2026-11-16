@@ -425,6 +425,43 @@ private final class SavedFile: SavedDashboardStoring {
     func remove() {}
 }
 
+/// Command replies (and, when asked, status reads) the test releases,
+/// like a sleeping car that takes a while to answer.
+private final class SlowReplies: Sendable {
+    private let log: RequestLog
+    private let gates = Mutex<[String: ReplyGate]>([:])
+    private let keys = Mutex<[String: String]>([:])
+    let holdsStatus: Bool
+    /// Also holds the reads an intent makes before sending: the vehicle list
+    /// ("vehicles") and the command capabilities ("capabilities").
+    let holdsReads: Set<String>
+    init(log: RequestLog, holdsStatus: Bool = false, holdsReads: Set<String> = []) {
+        self.log = log; self.holdsStatus = holdsStatus; self.holdsReads = holdsReads
+    }
+
+    func gate(for request: URLRequest) -> ReplyGate? {
+        let path = request.url?.path ?? ""
+        let isCommand = request.httpMethod == "POST" && path.hasPrefix("/v1/vehicles/42/commands/")
+        let read: String? = switch (request.httpMethod ?? "GET", path) {
+        case ("GET", "/v1/vehicles"): holdsReads.contains("vehicles") ? "vehicles" : nil
+        case ("GET", "/v1/vehicles/42/commands"): holdsReads.contains("capabilities") ? "capabilities" : nil
+        default: nil
+        }
+        guard isCommand || read != nil || (holdsStatus && path == "/v1/vehicles/42/status") else { return nil }
+        log.add(request)
+        let name = isCommand ? request.url!.lastPathComponent : read ?? "status"
+        let gate = ReplyGate()
+        gates.withLock { $0[name] = gate }
+        keys.withLock { $0[name] = request.value(forHTTPHeaderField: "Idempotency-Key") }
+        return gate
+    }
+    /// The latest request for `name` ("climate_on", "lock", "status").
+    func gate(_ name: String) -> ReplyGate? { gates.withLock { $0[name] } }
+    func key(_ name: String) -> String? { keys.withLock { $0[name] } }
+}
+
+private func accepted(_ name: String) -> Data { Data(#"{"ok":true,"command":"\#(name)","requestId":"request_1"}"#.utf8) }
+
 private final class RequestLog: Sendable {
     private let entries = Mutex<[String]>([])
     func add(_ request: URLRequest) { entries.withLock { $0.append("\(request.httpMethod ?? "GET") \(request.url?.path ?? "")") } }
@@ -432,6 +469,20 @@ private final class RequestLog: Sendable {
 }
 
 @MainActor final class VehicleIntentServiceTests: XCTestCase {
+    /// A service whose follow-up work (status refresh, control reload, and
+    /// any command still running) finishes before the test's stubs go away.
+    private func intentService(model: @escaping @MainActor () -> AppModel,
+                               readSnapshot: @escaping @MainActor () -> WidgetSnapshot? = { nil },
+                               reloadControls: @escaping @MainActor () -> Void = {},
+                               answerWithin: Duration = VehicleIntentService.answerWithin,
+                               holdBackgroundTime: @escaping @MainActor (String) -> @MainActor () -> Void = { _ in {} })
+        -> VehicleIntentService {
+        let service = VehicleIntentService(model: model, readSnapshot: readSnapshot, reloadControls: reloadControls,
+                                           answerWithin: answerWithin, holdBackgroundTime: holdBackgroundTime)
+        addTeardownBlock { @MainActor in await service.finishBackgroundWork() }
+        return service
+    }
+
     private func settings() -> UserSettings {
         let name = "VoltaIntentTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
@@ -456,6 +507,7 @@ private final class RequestLog: Sendable {
                              savedDashboards: (any SavedDashboardStoring)? = nil,
                              selectedVehicleID: Int? = 42,
                              appLaunchRequests: Bool = false,
+                             commandIntentStore: VehicleCommandIntentStore? = nil,
                              handler: @escaping @Sendable (URLRequest) throws -> (Int, Data)) throws -> AppModel {
         StubProtocol.handler.withLock { $0 = handler }
         addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
@@ -467,7 +519,7 @@ private final class RequestLog: Sendable {
                         appLock: appLock ?? AppLock(),
                         launchArguments: ["Volta"], launchEnvironment: appLaunchRequests ? [:] : ["ActivePrewarm": "1"],
                         surfaces: surfaces,
-                        commandIntentStore: VehicleCommandIntentStore(inMemory: []),
+                        commandIntentStore: commandIntentStore ?? VehicleCommandIntentStore(inMemory: []),
                         savedDashboards: savedDashboards, willStartCommand: willStartCommand)
     }
 
@@ -475,7 +527,7 @@ private final class RequestLog: Sendable {
 
     func testDemoReadsAnswerFromSyntheticStatusWithoutTheAppGroup() async throws {
         let model = demoModel()
-        let service = VehicleIntentService(model: { model }, readSnapshot: {
+        let service = intentService(model: { model }, readSnapshot: {
             XCTFail("demo never reads the App Group snapshot"); return nil
         }, reloadControls: {})
         let reading = try await service.reading(now: Date())
@@ -491,7 +543,7 @@ private final class RequestLog: Sendable {
     func testDemoCommandsAreSimulated() async throws {
         let model = demoModel()
         let reloads = Box(0)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: { reloads.value += 1 })
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: { reloads.value += 1 })
         let text = try await service.perform(.lock)
         XCTAssertEqual(text, "Simulated in demo mode: locking Friday. No vehicle was contacted.")
         XCTAssertEqual(reloads.value, 1, "controls settle back on the observed state")
@@ -500,7 +552,7 @@ private final class RequestLog: Sendable {
     func testUnpairedReadsAndCommandsAskToSignIn() async {
         let model = AppModel(settings: settings(), tokenStore: IntentTokenStore(), launchArguments: ["Volta"],
                              surfaces: IntentSurfaces(), commandIntentStore: VehicleCommandIntentStore(inMemory: []))
-        let service = VehicleIntentService(model: { model }, readSnapshot: { snapshot() }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { snapshot() }, reloadControls: {})
         do { _ = try await service.reading(); XCTFail("expected notSignedIn") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .notSignedIn) }
         do { _ = try await service.perform(.lock); XCTFail("expected notSignedIn") }
@@ -510,12 +562,12 @@ private final class RequestLog: Sendable {
     func testPairedReadsUseTheCachedSnapshotAndSayUnknownWithoutOne() async throws {
         let model = try pairedModel { _ in (500, Data()) }
         let cached = snapshot()
-        let service = VehicleIntentService(model: { model }, readSnapshot: { cached }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { cached }, reloadControls: {})
         let reading = try await service.reading()
         XCTAssertFalse(reading.isDemo)
         XCTAssertEqual(reading.snapshot, cached)
 
-        let empty = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let empty = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await empty.reading(); XCTFail("expected noReading") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .noReading) }
     }
@@ -547,17 +599,18 @@ private final class RequestLog: Sendable {
         }
         XCTAssertEqual(model.vehicles.map(\.id), [42], "the saved dashboard was restored")
 
-        let noSnapshot = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let noSnapshot = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await noSnapshot.reading(); XCTFail("expected noReading, not the saved status") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .noReading) }
         let cached = snapshot()
-        let service = VehicleIntentService(model: { model }, readSnapshot: { cached }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { cached }, reloadControls: {})
         let reading = try await service.reading()
         XCTAssertEqual(reading.snapshot, cached)
 
         // Saved as already locked: the request still goes out, after a fresh capability check.
         // The car is the selected one; the restored list neither chose nor confirmed it.
         _ = try await service.perform(.lock)
+        await service.finishBackgroundWork()
         XCTAssertEqual(log.all, [
             "GET /v1/vehicles",                  // the intent's own check of the car (offline: the selection stands)
             "GET /v1/vehicles/42/commands",      // fresh capabilities
@@ -599,7 +652,7 @@ private final class RequestLog: Sendable {
         await model.loadVehicles()
         XCTAssertTrue(model.hasLoadedVehicles)
         XCTAssertEqual(model.vehicles.map(\.id), [7], "the restored list stays after a failed load")
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await service.perform(.lock); XCTFail("expected the vehicle request's error") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .serverUnreachable) }
         XCTAssertEqual(log.all, ["GET /v1/vehicles", "GET /v1/vehicles"],
@@ -625,12 +678,400 @@ private final class RequestLog: Sendable {
             }
         }
         XCTAssertEqual(model.vehicles.map(\.id), [7], "the saved dashboard was restored")
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         let text = try await service.perform(.lock)
         XCTAssertEqual(text, "Locking Friday.")
         XCTAssertEqual(log.all.filter { $0.contains("/commands") },
                        ["GET /v1/vehicles/42/commands", "POST /v1/vehicles/42/commands/lock"])
         XCTAssertFalse(log.all.contains { $0.contains("/vehicles/7/") }, "nothing about the saved car")
+    }
+
+    // MARK: A sleeping car, a cancelled intent, a lost result
+
+    /// A bounded wait for asynchronous work, not a timing assertion.
+    private func waitUntil(_ condition: @MainActor () -> Bool) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !condition(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+
+    /// Capabilities allow everything; command replies wait for the test.
+    private func slowCarModel(_ replies: SlowReplies, log: RequestLog, surfaces: IntentSurfaces = IntentSurfaces(),
+                              store: VehicleCommandIntentStore? = nil) throws -> AppModel {
+        StubProtocol.deferred.withLock { $0 = { replies.gate(for: $0) } }
+        addTeardownBlock { StubProtocol.deferred.withLock { $0 = nil } }
+        return try pairedModel(surfaces: surfaces, commandIntentStore: store) { request in
+            log.add(request)
+            switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
+            case ("GET", "/v1/vehicles/42/commands"):
+                return (200, Data(#"{"available":true,"reason":null,"commands":["lock","unlock","climate_on","flash"]}"#.utf8))
+            case ("GET", "/v1/vehicles"):
+                return (200, try JSONSerialization.data(withJSONObject: [["id": 42, "name": "Friday"]]))
+            default:
+                return (404, Data())
+            }
+        }
+    }
+
+    private func posts(_ log: RequestLog) -> [String] { log.all.filter { $0.hasPrefix("POST") } }
+    private func pending(_ model: AppModel) -> [PendingVehicleCommand] {
+        model.commandCoordinator.pending(dataSource: model.dataSource, vehicleID: 42)
+    }
+
+    /// The car takes longer to wake than Siri or Shortcuts allow: the intent
+    /// says so honestly, the app keeps running for the answer, and the next
+    /// command reports it.
+    func testASlowCarGetsAnHonestAnswerAndItsResultIsKept() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        let holds = Box(0), releases = Box(0)
+        let service = intentService(model: { model }, answerWithin: .milliseconds(200),
+                                    holdBackgroundTime: { _ in holds.value += 1; return { releases.value += 1 } })
+        let text = try await service.perform(.climateOn)
+        XCTAssertEqual(text, "Volta sent the request to turn on climate to Friday, but the car hasn’t answered yet; it may be waking up. Run this again in a moment to hear the result. It won’t be sent twice.")
+        XCTAssertEqual(holds.value, 1)
+        XCTAssertEqual(releases.value, 0, "the app keeps running until the answer arrives")
+        let climate = try XCTUnwrap(replies.gate("climate_on"))
+        XCTAssertFalse(climate.cancelled)
+        climate.release(200, accepted("climate_on"))
+        await service.finishBackgroundWork()
+        XCTAssertEqual(releases.value, 1)
+        XCTAssertTrue(pending(model).isEmpty, "the late answer is recorded")
+
+        let lock = Task { try await service.perform(.lock) }
+        await waitUntil { replies.gate("lock")?.started == true }
+        replies.gate("lock")?.release(200, accepted("lock"))
+        let next = try await lock.value
+        XCTAssertEqual(next, "Friday accepted your earlier request to turn on climate. Locking Friday.")
+        XCTAssertEqual(posts(log), ["POST /v1/vehicles/42/commands/climate_on", "POST /v1/vehicles/42/commands/lock"])
+    }
+
+    func testACarThatAnswersInTimeIsConfirmed() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        let service = intentService(model: { model })
+        let climate = Task { try await service.perform(.climateOn) }
+        await waitUntil { replies.gate("climate_on")?.started == true }
+        replies.gate("climate_on")?.release(200, accepted("climate_on"))
+        let text = try await climate.value
+        XCTAssertEqual(text, "Turning on climate in Friday.")
+    }
+
+    /// The owner's report: a second tap on a running shortcut (or Siri's or
+    /// Shortcuts' time limit) cancels the intent. That must not cut off the
+    /// request on its way, or its result is lost and every later command is
+    /// refused.
+    func testCancellingAnIntentNeverCutsOffItsCommand() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        let service = intentService(model: { model })
+        let first = Task { try await service.perform(.climateOn) }
+        await waitUntil { replies.gate("climate_on")?.started == true }
+        first.cancel()
+        _ = try? await first.value
+        let climate = try XCTUnwrap(replies.gate("climate_on"))
+        XCTAssertFalse(climate.cancelled, "the request on its way is not cut off")
+        climate.release(200, accepted("climate_on"))
+        await service.finishBackgroundWork()
+        XCTAssertTrue(pending(model).isEmpty, "its answer is recorded, so nothing is left unresolved")
+
+        let again = try await service.perform(.climateOn)
+        XCTAssertEqual(again, "Friday accepted your earlier request to turn on climate, so Volta didn’t send it again.")
+        XCTAssertEqual(posts(log), ["POST /v1/vehicles/42/commands/climate_on"], "never sent twice")
+    }
+
+    /// The next command waits for the one still on its way, then goes out.
+    func testTheNextCommandWaitsForTheEarlierOneThenSends() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        let service = intentService(model: { model }, answerWithin: .seconds(1))
+        let first = Task { try await service.perform(.climateOn) }
+        await waitUntil { replies.gate("climate_on")?.started == true }
+        let second = Task { try await service.perform(.lock) }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(posts(log), ["POST /v1/vehicles/42/commands/climate_on"], "lock waits for the earlier command")
+        replies.gate("climate_on")?.release(200, accepted("climate_on"))
+        await waitUntil { replies.gate("lock")?.started == true }
+        replies.gate("lock")?.release(200, accepted("lock"))
+        let firstText = try await first.value
+        let secondText = try await second.value
+        XCTAssertEqual(firstText, "Turning on climate in Friday.")
+        XCTAssertEqual(secondText, "Friday accepted your earlier request to turn on climate. Locking Friday.")
+    }
+
+    /// When the earlier command still hasn't answered, the next one says
+    /// which command it is waiting for and sends nothing.
+    func testTheNextCommandSaysWhatItIsWaitingFor() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        let service = intentService(model: { model }, answerWithin: .milliseconds(150))
+        _ = try await service.perform(.climateOn)
+        do { _ = try await service.perform(.lock); XCTFail("expected busy") }
+        catch {
+            let error = try XCTUnwrap(error as? VoltaIntentError)
+            XCTAssertEqual(error.kind, .busy)
+            XCTAssertEqual(error.message, "Friday hasn’t answered your earlier request to turn on climate yet, so nothing new was sent. Try again in a moment.")
+        }
+        do { _ = try await service.perform(.climateOn); XCTFail("expected busy") }
+        catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .busy, "the same command is never sent twice either") }
+        XCTAssertEqual(posts(log), ["POST /v1/vehicles/42/commands/climate_on"])
+        replies.gate("climate_on")?.release(200, accepted("climate_on"))
+        await service.finishBackgroundWork()
+    }
+
+    private func savedRecord(_ command: VehicleCommand, label: String, model: AppModel, id: UUID = UUID(),
+                             age: TimeInterval = 120) -> PendingVehicleCommand {
+        PendingVehicleCommand(intentID: id, backendID: model.dataSource.commandBackendID, vehicleID: 42,
+                              command: command, label: label, createdAt: .now.addingTimeInterval(-age))
+    }
+
+    /// A late result answers a repeat only while it is still the car's
+    /// latest command. Lock lands late, the owner unlocks in Controls, then
+    /// asks Siri to lock: the lock must be sent.
+    func testALateResultNeverStandsInForACommandAfterAnotherOne() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        let service = intentService(model: { model }, answerWithin: .milliseconds(150))
+        _ = try await service.perform(.lock)
+        replies.gate("lock")?.release(200, accepted("lock"))
+        await service.finishBackgroundWork()
+
+        let unlock = Task { await model.commandCoordinator.perform(.unlock, label: "Unlock", dataSource: model.dataSource, vehicleID: 42) }
+        await waitUntil { replies.gate("unlock")?.started == true }
+        replies.gate("unlock")?.release(200, accepted("unlock"))
+        let unlocked = await unlock.value
+        XCTAssertEqual(unlocked, .succeeded(simulated: false))
+
+        let relock = Task { try await service.perform(.lock) }
+        await waitUntil { posts(log).count == 3 }
+        replies.gate("lock")?.release(200, accepted("lock"))
+        let text = try await relock.value
+        XCTAssertEqual(text, "Friday accepted your earlier request to lock. Locking Friday.")
+        XCTAssertEqual(posts(log), ["POST /v1/vehicles/42/commands/lock", "POST /v1/vehicles/42/commands/unlock",
+                                    "POST /v1/vehicles/42/commands/lock"], "the new lock was sent")
+    }
+
+    /// The send runs in its own task, after the intent's last check. A car
+    /// change in between sends nothing to the car no longer selected.
+    func testASendNeverGoesOutAfterTheCarChangesBeforeItStarts() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        // Called as the send is set up, before its task runs.
+        let service = intentService(model: { model }, holdBackgroundTime: { _ in
+            model.settings.selectedVehicleID = 43
+            return {}
+        })
+        do { _ = try await service.perform(.lock); XCTFail("expected connectionChanged") }
+        catch { XCTAssertEqual(error as? VoltaIntentError, .connectionChanged) }
+        await service.finishBackgroundWork()
+        XCTAssertTrue(posts(log).isEmpty, "nothing was sent")
+        XCTAssertTrue(pending(model).isEmpty)
+    }
+
+    /// Cancelled as the confirmation finishes (a re-tap, or Siri giving up):
+    /// nothing is sent, not even an unlock.
+    func testCancellingRightAfterConfirmationSendsNothing() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        let service = intentService(model: { model })
+        let unlock = Task {
+            try await service.perform(.unlock) { _ in withUnsafeCurrentTask { $0?.cancel() } }
+        }
+        _ = try? await unlock.value
+        await service.finishBackgroundWork()
+        XCTAssertTrue(posts(log).isEmpty, "nothing was sent")
+        XCTAssertTrue(pending(model).isEmpty)
+    }
+
+    /// The send runs in a task that outlives the intent. Until the request
+    /// actually starts, the intent's cancellation still takes it back.
+    func testCancellingBeforeTheRequestStartsSendsNothing() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log)
+        let model = try slowCarModel(replies, log: log)
+        // Called as the send is set up, after every check and before its task runs.
+        let service = intentService(model: { model }, holdBackgroundTime: { _ in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return {}
+        })
+        let unlock = Task { try await service.perform(.unlock) { _ in } }
+        _ = try? await unlock.value
+        await service.finishBackgroundWork()
+        XCTAssertTrue(posts(log).isEmpty, "nothing was sent")
+        XCTAssertTrue(pending(model).isEmpty, "a request never sent leaves nothing unresolved")
+        XCTAssertEqual(model.commandCoordinator.activity(dataSource: model.dataSource, vehicleID: 42)?.message,
+                       "The request was cancelled before it was sent. Nothing was sent.")
+    }
+
+    /// A slow capability check uses the intent's time too: past the deadline
+    /// the intent answers, accurately, that nothing was sent.
+    func testASlowCapabilityCheckAnswersInTimeAndSendsNothing() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log, holdsReads: ["capabilities"])
+        let model = try slowCarModel(replies, log: log)
+        await model.loadVehicles()
+        let service = intentService(model: { model }, answerWithin: .milliseconds(200))
+        let lock = Task { try await service.perform(.lock) }
+        await waitUntil { replies.gate("capabilities")?.started == true }
+        do { _ = try await lock.value; XCTFail("expected a timeout") }
+        catch {
+            let error = try XCTUnwrap(error as? VoltaIntentError)
+            XCTAssertEqual(error.kind, .serverUnreachable)
+            XCTAssertEqual(error.message, "Your Volta server didn’t answer in time, so nothing was sent to Friday. Try again in a moment.")
+        }
+        replies.gate("capabilities")?.release(200, Data(#"{"available":true,"reason":null,"commands":["lock"]}"#.utf8))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(posts(log).isEmpty, "nothing was sent")
+    }
+
+    func testASlowVehicleListAnswersInTimeAndSendsNothing() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log, holdsReads: ["vehicles"])
+        let model = try slowCarModel(replies, log: log)
+        let service = intentService(model: { model }, answerWithin: .milliseconds(200))
+        let lock = Task { try await service.perform(.lock) }
+        await waitUntil { replies.gate("vehicles")?.started == true }
+        do { _ = try await lock.value; XCTFail("expected a timeout") }
+        catch {
+            let error = try XCTUnwrap(error as? VoltaIntentError)
+            XCTAssertEqual(error.kind, .serverUnreachable)
+            XCTAssertEqual(error.message, "Your Volta server didn’t answer in time, so nothing was sent. Try again in a moment.")
+        }
+        replies.gate("vehicles")?.release(200, try JSONSerialization.data(withJSONObject: [["id": 42, "name": "Friday"]]))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(posts(log).isEmpty, "nothing was sent")
+    }
+
+    /// A lost request that stops or turns something off, or sets a level,
+    /// is never replayed unattended: if the server never received it, a
+    /// replay would stop charging (or climate) now, under an unrelated command.
+    func testALostStopRequestIsNeverReplayedUnattended() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log), store = VehicleCommandIntentStore(inMemory: [])
+        let model = try slowCarModel(replies, log: log, store: store)
+        try store.upsert(savedRecord(.chargeStop, label: "Stop charging", model: model))
+        let service = intentService(model: { model })
+        do { _ = try await service.perform(.flashLights); XCTFail("expected unresolved") }
+        catch {
+            let error = try XCTUnwrap(error as? VoltaIntentError)
+            XCTAssertEqual(error.kind, .unresolvedCommand)
+            XCTAssertEqual(error.message, "Your earlier request to stop charging has no confirmed result, so nothing new was sent. Open Volta’s Controls to check it.")
+        }
+        XCTAssertTrue(posts(log).isEmpty, "nothing was replayed or sent")
+    }
+
+    func testOnlyCommandsThatSecureOrStartWhatWasAskedReplayUnattended() {
+        let unattended: [VehicleCommand] = [.lock, .sentryOn, .flash, .wakeUp, .climateOn, .chargeStart,
+                                            .defrost(on: true), .steeringWheelHeat(on: true)]
+        let attended: [VehicleCommand] = [.unlock, .climateOff, .setTemperatures(driverTempC: 21, passengerTempC: 21),
+                                          .chargeStop, .setChargeLimit(percent: 80), .openChargePort, .closeChargePort,
+                                          .actuateTrunk(whichTrunk: .front), .windowControl(command: .vent), .honk,
+                                          .sentryOff, .triggerHomeLink(latitude: 37.44, longitude: -122.16),
+                                          .seatHeater(heater: 0, level: 3), .defrost(on: false),
+                                          .steeringWheelHeat(on: false)]
+        for command in unattended { XCTAssertTrue(command.replaysUnattended, "\(command)") }
+        for command in attended { XCTAssertFalse(command.replaysUnattended, "\(command)") }
+    }
+
+    /// A replay the server never received performs the command now, so an
+    /// older lost request (here one made from Controls a while ago) is left
+    /// for Controls rather than replayed by an unrelated intent.
+    func testAnOlderLostResultIsLeftForControls() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log), store = VehicleCommandIntentStore(inMemory: [])
+        let model = try slowCarModel(replies, log: log, store: store)
+        try store.upsert(savedRecord(.climateOn, label: "Start climate", model: model,
+                                     age: VehicleIntentService.unattendedReplayAge + 60))
+        let service = intentService(model: { model })
+        do { _ = try await service.perform(.flashLights); XCTFail("expected unresolved") }
+        catch {
+            let error = try XCTUnwrap(error as? VoltaIntentError)
+            XCTAssertEqual(error.kind, .unresolvedCommand)
+            XCTAssertEqual(error.message, "Your earlier request to turn on climate has no confirmed result, so nothing new was sent. Open Volta’s Controls to check it.")
+        }
+        XCTAssertTrue(posts(log).isEmpty, "nothing was replayed or sent")
+        XCTAssertEqual(pending(model).count, 1)
+    }
+
+    /// A result lost when the app stopped mid-request (the owner's phone now
+    /// holds one): the next command replays it with its own key, which
+    /// returns the server's saved result, then sends.
+    func testALostResultIsReplayedWithItsKeyBeforeTheNextCommand() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log), store = VehicleCommandIntentStore(inMemory: [])
+        let model = try slowCarModel(replies, log: log, store: store)
+        let lost = savedRecord(.climateOn, label: "Start climate", model: model)
+        try store.upsert(lost)
+        let service = intentService(model: { model })
+        let lock = Task { try await service.perform(.lock) }
+        await waitUntil { replies.gate("climate_on")?.started == true }
+        XCTAssertEqual(replies.key("climate_on"), lost.intentID.uuidString, "replayed with the saved key, never a new one")
+        StubProtocol.responseHeaders.withLock { $0 = ["Idempotency-Replayed": "true"] }
+        addTeardownBlock { StubProtocol.responseHeaders.withLock { $0 = [:] } }
+        replies.gate("climate_on")?.release(200, accepted("climate_on"))
+        await waitUntil { replies.gate("lock")?.started == true }
+        XCTAssertNotEqual(replies.key("lock"), lost.intentID.uuidString)
+        replies.gate("lock")?.release(200, accepted("lock"))
+        let text = try await lock.value
+        XCTAssertEqual(text, "Friday accepted your earlier request to turn on climate. Locking Friday.")
+        XCTAssertTrue(pending(model).isEmpty)
+    }
+
+    func testALostResultForTheSameCommandIsNotSentAgain() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log), store = VehicleCommandIntentStore(inMemory: [])
+        let model = try slowCarModel(replies, log: log, store: store)
+        try store.upsert(savedRecord(.climateOn, label: "Start climate", model: model))
+        let service = intentService(model: { model })
+        let climate = Task { try await service.perform(.climateOn) }
+        await waitUntil { replies.gate("climate_on")?.started == true }
+        replies.gate("climate_on")?.release(200, accepted("climate_on"))
+        let text = try await climate.value
+        XCTAssertEqual(text, "Friday accepted your earlier request to turn on climate, so Volta didn’t send it again.")
+        XCTAssertEqual(posts(log).count, 1, "only the replay")
+    }
+
+    func testALostResultTheServerIsStillWorkingOnSendsNothingNew() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log), store = VehicleCommandIntentStore(inMemory: [])
+        let model = try slowCarModel(replies, log: log, store: store)
+        try store.upsert(savedRecord(.climateOn, label: "Start climate", model: model))
+        let service = intentService(model: { model })
+        let lock = Task { try await service.perform(.lock) }
+        await waitUntil { replies.gate("climate_on")?.started == true }
+        replies.gate("climate_on")?.release(409, Data(#"{"error":{"code":"command_in_progress","message":"busy"}}"#.utf8))
+        do { _ = try await lock.value; XCTFail("expected unresolved") }
+        catch {
+            let error = try XCTUnwrap(error as? VoltaIntentError)
+            XCTAssertEqual(error.kind, .unresolvedCommand)
+            XCTAssertEqual(error.message, "Your earlier request to turn on climate still has no confirmed result, so nothing new was sent. This request is still in progress. Check its result again shortly.")
+        }
+        XCTAssertEqual(posts(log), ["POST /v1/vehicles/42/commands/climate_on"], "no lock was sent")
+        XCTAssertEqual(pending(model).count, 1, "still saved for the next check")
+    }
+
+    /// A lost unlock is never replayed without the person: if the server
+    /// never received it, a replay would unlock the car now.
+    func testALostSensitiveResultIsNeverReplayedUnattended() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log), store = VehicleCommandIntentStore(inMemory: [])
+        let model = try slowCarModel(replies, log: log, store: store)
+        try store.upsert(savedRecord(.unlock, label: "Unlock", model: model))
+        let service = intentService(model: { model })
+        do { _ = try await service.perform(.lock); XCTFail("expected unresolved") }
+        catch {
+            let error = try XCTUnwrap(error as? VoltaIntentError)
+            XCTAssertEqual(error.kind, .unresolvedCommand)
+            XCTAssertEqual(error.message, "Your earlier request to unlock has no confirmed result, so nothing new was sent. Open Volta’s Controls to check it.")
+        }
+        XCTAssertTrue(posts(log).isEmpty)
+    }
+
+    /// The status read after an accepted command runs after the answer, so a
+    /// read that hangs or fails never holds it up.
+    func testTheStatusReadAfterACommandNeverDelaysTheAnswer() async throws {
+        let log = RequestLog(), replies = SlowReplies(log: log, holdsStatus: true), surfaces = IntentSurfaces()
+        let model = try slowCarModel(replies, log: log, surfaces: surfaces)
+        let service = intentService(model: { model })
+        let lock = Task { try await service.perform(.lock) }
+        await waitUntil { replies.gate("lock")?.started == true }
+        replies.gate("lock")?.release(200, accepted("lock"))
+        let text = try await lock.value
+        XCTAssertEqual(text, "Locking Friday.")
+        await waitUntil { replies.gate("status")?.started == true }
+        replies.gate("status")?.release(503, Data(#"{"error":{"code":"teslamate_unavailable","message":"down"}}"#.utf8))
+        await service.finishBackgroundWork()
+        XCTAssertTrue(surfaces.published.isEmpty, "a failed read publishes nothing")
     }
 
     func testPairedCommandIsRefusedWhenTeslaIsNotLinkedAndNothingIsSent() async throws {
@@ -642,7 +1083,7 @@ private final class RequestLog: Sendable {
             }
             return (404, Data())
         }
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await service.perform(.lock); XCTFail("expected teslaNotLinked") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .teslaNotLinked) }
         XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") }, "no command was sent")
@@ -657,7 +1098,7 @@ private final class RequestLog: Sendable {
             }
             return (404, Data())
         }
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await service.perform(.honk); XCTFail("expected notAllowed") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .notAllowed) }
         XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
@@ -669,7 +1110,7 @@ private final class RequestLog: Sendable {
             log.add(request)
             throw URLError(.cannotConnectToHost)
         }
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await service.perform(.lock); XCTFail("expected serverUnreachable") }
         catch {
             let error = error as? VoltaIntentError
@@ -696,10 +1137,11 @@ private final class RequestLog: Sendable {
             }
         }
         let reloads = Box(0)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: { reloads.value += 1 })
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: { reloads.value += 1 })
         let text = try await service.perform(.lock)
         XCTAssertEqual(text, "Locking Friday.")
         XCTAssertEqual(log.all.filter { $0.hasPrefix("POST") }, ["POST /v1/vehicles/42/commands/lock"])
+        await service.finishBackgroundWork()
         XCTAssertEqual(reloads.value, 1, "controls reload after an accepted command")
         let coordinator = model.commandCoordinator
         XCTAssertTrue(coordinator.pending(dataSource: model.dataSource, vehicleID: 42).isEmpty, "intent record cleared")
@@ -716,7 +1158,7 @@ private final class RequestLog: Sendable {
         }
         struct Cancelled: Error {}
         let askedFor = Box<String?>(nil)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do {
             _ = try await service.perform(.openFrunk) { name in askedFor.value = name; throw Cancelled() }
             XCTFail("expected cancel")
@@ -766,7 +1208,7 @@ private final class RequestLog: Sendable {
         let asked = Box<[VehicleIntentAction]>([])
         let capabilityChecksBeforePrompt = Box<[Bool]>([])
         let runStart = Box(0)
-        useRunner(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { intent, confirmation in
+        useRunner(intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { intent, confirmation in
             asked.value.append(confirmation.action)
             // Only this invocation's requests: its own capability check ran first.
             capabilityChecksBeforePrompt.value.append(log.all.dropFirst(runStart.value).contains("GET /v1/vehicles/42/commands"))
@@ -793,7 +1235,7 @@ private final class RequestLog: Sendable {
         let log = RequestLog()
         let model = try allowingModel(log: log)
         let asked = Box<[VehicleIntentAction]>([])
-        useRunner(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _, confirmation in
+        useRunner(intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _, confirmation in
             asked.value.append(confirmation.action)
         }
         _ = try await DisarmSentryIntent().perform()
@@ -808,7 +1250,7 @@ private final class RequestLog: Sendable {
     func testConfirmationRequiredActionsAreRefusedWithoutAPrompt() async throws {
         let log = RequestLog()
         let model = try allowingModel(log: log)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         for action in VehicleIntentAction.allCases where action.requiresConfirmation {
             do { _ = try await service.perform(action, confirm: nil); XCTFail("\(action) needs confirmation") }
             catch { XCTAssertEqual(error as? VoltaIntentError, .confirmationRequired) }
@@ -819,7 +1261,7 @@ private final class RequestLog: Sendable {
     func testSwitchingToDemoDuringConfirmationSendsNothing() async throws {
         let log = RequestLog()
         let model = try allowingModel(log: log)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do {
             _ = try await service.perform(.unlock) { _ in model.tryDemoMode() }
             XCTFail("expected connectionChanged")
@@ -831,7 +1273,7 @@ private final class RequestLog: Sendable {
     func testDisconnectingDuringConfirmationSendsNothing() async throws {
         let log = RequestLog()
         let model = try allowingModel(log: log)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do {
             _ = try await service.perform(.openTrunk) { _ in model.unpair() }
             XCTFail("expected connectionChanged")
@@ -848,7 +1290,7 @@ private final class RequestLog: Sendable {
             DispatchQueue.main.sync { MainActor.assumeIsolated { _ = ref.model?.unpair() } }
         })
         ref.model = model
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await service.perform(.lock); XCTFail("expected connectionChanged") }
         catch { XCTAssertEqual(error as? VoltaIntentError, .connectionChanged) }
         XCTAssertFalse(model.isPaired)
@@ -858,7 +1300,7 @@ private final class RequestLog: Sendable {
     func testSelectingAnotherCarDuringConfirmationSendsNothing() async throws {
         let log = RequestLog()
         let model = try allowingModel(log: log)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do {
             _ = try await service.perform(.unlock) { _ in model.settings.selectedVehicleID = 7 }
             XCTFail("expected connectionChanged")
@@ -873,7 +1315,7 @@ private final class RequestLog: Sendable {
                              surfaces: IntentSurfaces(), commandIntentStore: VehicleCommandIntentStore(inMemory: []))
         model.tryDemoMode()
         let before = CommandContext(model)
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do {
             _ = try await service.perform(.unlock) { _ in model.tryDemoMode() }
             XCTFail("expected connectionChanged")
@@ -896,7 +1338,7 @@ private final class RequestLog: Sendable {
         })
         ref.model = model
         let source = model.dataSource
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let service = intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await service.perform(.lock); XCTFail("expected connectionChanged") }
         catch {
             XCTAssertEqual(error as? VoltaIntentError, .connectionChanged)
@@ -952,7 +1394,7 @@ private final class RequestLog: Sendable {
         let log = RequestLog()
         let model = try allowingModel(log: log)
         let reloads = Box(0)
-        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil },
+        let recorder = RecordingPerformer(intentService(model: { model }, readSnapshot: { nil },
                                                                reloadControls: { reloads.value += 1 }))
         let opened = Box(0)
         useControlHost(recorder) { intent in
@@ -974,7 +1416,7 @@ private final class RequestLog: Sendable {
         let log = RequestLog()
         let model = try allowingModel(log: log)
         struct Unavailable: Error {}
-        useControlHost(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _ in
+        useControlHost(intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _ in
             throw Unavailable()
         }
         do { _ = try await SetVehicleLockIntent(value: false).perform(); XCTFail("expected the error") }
@@ -986,7 +1428,7 @@ private final class RequestLog: Sendable {
         let log = RequestLog()
         let model = try allowingModel(log: log)
         let opened = Box(0)
-        useControlHost(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _ in
+        useControlHost(intentService(model: { model }, readSnapshot: { nil }, reloadControls: {})) { _ in
             opened.value += 1
         }
         _ = try await SetVehicleLockIntent(value: true).perform()
@@ -998,7 +1440,7 @@ private final class RequestLog: Sendable {
     func testNoControlSendsAConfirmationRequiredAction() async throws {
         let log = RequestLog()
         let model = try allowingModel(log: log)
-        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
+        let recorder = RecordingPerformer(intentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
         useControlHost(recorder) { _ in }
         for action in VehicleIntentAction.allCases where action.requiresConfirmation {
             try await VoltaIntentHost.performControl(action, for: SetVehicleLockIntent())
@@ -1486,7 +1928,7 @@ private final class RequestLog: Sendable {
     func testEveryControlIntentSendsNothingWhereTheAppIsNotRegistered() async throws {
         let log = RequestLog()
         let model = try pairedModel { request in log.add(request); return (500, Data()) }
-        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
+        let recorder = RecordingPerformer(intentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
         let previous = VoltaIntentHost.performer
         defer { VoltaIntentHost.performer = previous }
 

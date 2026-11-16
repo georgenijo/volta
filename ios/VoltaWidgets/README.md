@@ -166,6 +166,33 @@ car, locks and Sentry) answer from this snapshot, or from synthetic demo status 
 demo mode, and always say how old the reading is. Command actions go through the
 app's `VehicleCommandCoordinator`, the same path as the Controls sheet.
 
+A sleeping car can take longer to answer than an intent may run. Siri stops an
+intent after about ten seconds and Shortcuts after thirty, and either one
+cancels it then; so does a second tap on a running shortcut, which is easy
+when nothing shows progress. `VehicleIntentService` therefore:
+
+- sends each command in its own task, so cancelling the intent never cuts off a
+  request already on its way, and holds background time until the answer
+  arrives and is recorded;
+- waits up to `answerWithin` (8 seconds) for the answer. Past that it says the
+  request was sent and the car hasn't answered yet, never that the car acted;
+- settles the earlier command before the next one: it waits for one still on
+  its way (within the same time), and replays one whose result was lost (the
+  app stopped mid-request) with its saved key, which returns the server's
+  saved result without acting twice. Only a request made in the last ten
+  minutes (`unattendedReplayAge`), for a command that secures the car or
+  starts what the person asked for (`VehicleCommand.replaysUnattended`: lock,
+  Sentry on, flash, wake, climate on, charge start, defrost or wheel heat on),
+  is replayed unattended, since a replay the server never received performs
+  the command now. Anything that unlocks, opens, disarms, vents, sounds the
+  horn, stops or turns something off, or sets a level, and any older request,
+  is left for Controls. A repeat of the command the
+  car just accepted is answered with that result instead of being sent again,
+  but only while nothing else has run since;
+- tells the next command what became of an earlier one ("Friday accepted your
+  earlier request to turn on climate. Locking Friday.") and refreshes the
+  observed status after answering, so a slow status read never delays it.
+
 Controls need their intents in the extension, so the control intents are in
 `Shared/`. They conform to `LiveActivityIntent` (and declare
 `allowedExecutionTargets = .main` on iOS 27), so the system performs them in the

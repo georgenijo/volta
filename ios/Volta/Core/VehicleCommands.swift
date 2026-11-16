@@ -71,6 +71,24 @@ enum VehicleCommand: Codable, Equatable, Hashable, Sendable {
         return true
     }
 
+    /// Whether an intent may replay a saved, unresolved request on its own,
+    /// with its key, before the next command. When the server never received
+    /// the original, the replay performs it now, so only commands that secure
+    /// the car or start what the person asked for qualify. Anything that
+    /// unlocks, opens, disarms, vents, sounds the horn, stops or turns
+    /// something off, or sets a level waits for the person in Controls.
+    var replaysUnattended: Bool {
+        switch self {
+        case .lock, .sentryOn, .flash, .wakeUp, .climateOn, .chargeStart:
+            true
+        case .defrost(let on), .steeringWheelHeat(let on):
+            on
+        case .unlock, .climateOff, .setTemperatures, .chargeStop, .setChargeLimit, .openChargePort, .closeChargePort,
+             .actuateTrunk, .windowControl, .honk, .sentryOff, .triggerHomeLink, .seatHeater:
+            false
+        }
+    }
+
     var retryCaution: String {
         switch self {
         case .unlock: "This will remotely unlock all doors. Make sure the vehicle is secure."
@@ -393,10 +411,11 @@ final class VehicleCommandCoordinator {
         return failure
     }
 
+    /// `intentID` names the request (its Idempotency-Key and its activity).
     func perform(_ command: VehicleCommand, label: String, dataSource: any VoltaDataSource,
-                 vehicleID: Int) async -> Outcome {
+                 vehicleID: Int, intentID: UUID = UUID()) async -> Outcome {
         guard pending(dataSource: dataSource, vehicleID: vehicleID).isEmpty else { return .failed }
-        let record = PendingVehicleCommand(intentID: UUID(), backendID: dataSource.commandBackendID,
+        let record = PendingVehicleCommand(intentID: intentID, backendID: dataSource.commandBackendID,
                                            vehicleID: vehicleID, command: command, label: label, createdAt: .now)
         return await send(record, dataSource: dataSource)
     }

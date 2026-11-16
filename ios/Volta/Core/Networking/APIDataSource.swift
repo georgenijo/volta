@@ -265,10 +265,11 @@ struct APIDataSource: VoltaDataSource {
     /// never created at all.
     private func startCommand(_ request: URLRequest) async throws -> (Data, URLResponse) {
         let running = RunningTask()
+        let startGate = CommandStartGate.current
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, URLResponse), any Error>) in
                 let started = commandGate.whileOpen {
-                    running.startUnlessCancelled {
+                    running.startUnlessCancelled(or: startGate) {
                         commandSession.dataTask(with: request) { data, response, error in
                             if let error { continuation.resume(throwing: error) }
                             else if let data, let response { continuation.resume(returning: (data, response)) }
@@ -340,10 +341,11 @@ private final class RunningTask: Sendable {
     private let state = Mutex<(task: URLSessionDataTask?, cancelled: Bool)>((nil, false))
 
     /// Creates, registers and resumes the task under the lock `cancel()`
-    /// takes. Returns false, creating nothing, if already cancelled.
-    func startUnlessCancelled(_ make: () -> URLSessionDataTask) -> Bool {
+    /// takes. Returns false, creating nothing, if already cancelled, or if
+    /// whoever holds `gate` took the request back first.
+    func startUnlessCancelled(or gate: CommandStartGate?, _ make: () -> URLSessionDataTask) -> Bool {
         state.withLock { state in
-            guard !state.cancelled else { return false }
+            guard !state.cancelled, gate?.begin() ?? true else { return false }
             let task = make()
             state.task = task
             task.resume()
@@ -355,6 +357,41 @@ private final class RunningTask: Sendable {
         let task = state.withLock { state in state.cancelled = true; return state.task }
         task?.cancel()
     }
+}
+
+/// Lets the caller that asked for a vehicle command take it back until the
+/// request actually starts, from outside the task that sends it (an intent
+/// hands its send to a task that outlives it). `begin()` and `abandon()`
+/// share one lock, so exactly one of them wins: an abandoned request is never
+/// created, and a started one runs to its answer. Bound for a send with
+/// `CommandStartGate.$current.withValue(gate) { … }`.
+final class CommandStartGate: Sendable {
+    @TaskLocal static var current: CommandStartGate?
+
+    private enum State { case waiting, started, abandoned }
+    private let state = Mutex(State.waiting)
+
+    init() {}
+
+    /// Claims the start; false when the request was taken back first.
+    func begin() -> Bool {
+        state.withLock { state in
+            if state == .waiting { state = .started }
+            return state == .started
+        }
+    }
+
+    /// Takes the request back unless it already started. True when nothing
+    /// was or will be sent through this gate.
+    @discardableResult
+    func abandon() -> Bool {
+        state.withLock { state in
+            if state == .waiting { state = .abandoned }
+            return state == .abandoned
+        }
+    }
+
+    var wasAbandoned: Bool { state.withLock { $0 == .abandoned } }
 }
 
 private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {

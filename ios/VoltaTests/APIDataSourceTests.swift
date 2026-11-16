@@ -7,20 +7,85 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     typealias Handler = @Sendable (URLRequest) throws -> (Int, Data)
     static let handler = Mutex<Handler?>(nil)
     static let responseHeaders = Mutex<[String: String]>([:])
+    /// Requests whose reply the test releases later (a car waking up): the
+    /// gate it returns, or nil to answer at once through `handler`.
+    static let deferred = Mutex<(@Sendable (URLRequest) -> ReplyGate?)?>(nil)
+    private var gate: ReplyGate?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if let gate = Self.deferred.withLock({ $0 })?(request) {
+            self.gate = gate
+            nonisolated(unsafe) let thread = Thread.current
+            gate.attach { [weak self] reply in
+                guard let self else { return }
+                self.perform(#selector(self.deliver(_:)), on: thread, with: ReplyBox(reply), waitUntilDone: false)
+            }
+            return
+        }
         do {
             let callback = Self.handler.withLock { $0 }
-            let (status, data) = try XCTUnwrap(callback)(request)
-            var headers = Self.responseHeaders.withLock { $0 }; headers["Content-Type"] = "application/json"
-            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
+            answer(try XCTUnwrap(callback)(request))
         } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
-    override func stopLoading() { }
+    override func stopLoading() { gate?.clientCancelled() }
+
+    @objc private func deliver(_ box: ReplyBox) {
+        switch box.reply {
+        case .success(let reply): answer(reply)
+        case .failure(let error): client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    private func answer(_ reply: (Int, Data)) {
+        var headers = Self.responseHeaders.withLock { $0 }; headers["Content-Type"] = "application/json"
+        let response = HTTPURLResponse(url: request.url!, statusCode: reply.0, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: reply.1)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class ReplyBox: NSObject, @unchecked Sendable {
+    let reply: Result<(Int, Data), any Error>
+    init(_ reply: Result<(Int, Data), any Error>) { self.reply = reply }
+}
+
+/// A reply held back until the test releases it. Records whether the
+/// request started and whether the client cut it off.
+final class ReplyGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var deliver: (@Sendable (Result<(Int, Data), any Error>) -> Void)?
+    private var held: Result<(Int, Data), any Error>?
+    private var _started = false, _cancelled = false
+
+    var started: Bool { lock.withLock { _started } }
+    /// The client cancelled the request (it would never hear the reply).
+    var cancelled: Bool { lock.withLock { _cancelled } }
+
+    func attach(_ deliver: @escaping @Sendable (Result<(Int, Data), any Error>) -> Void) {
+        let ready: Result<(Int, Data), any Error>? = lock.withLock {
+            _started = true
+            if let held { return held }
+            self.deliver = deliver
+            return nil
+        }
+        if let ready { deliver(ready) }
+    }
+
+    func release(_ status: Int, _ data: Data) { finish(.success((status, data))) }
+    func fail(_ error: any Error) { finish(.failure(error)) }
+
+    func clientCancelled() { lock.withLock { _cancelled = true; deliver = nil } }
+
+    private func finish(_ reply: Result<(Int, Data), any Error>) {
+        let deliver: (@Sendable (Result<(Int, Data), any Error>) -> Void)? = lock.withLock {
+            if let deliver = self.deliver { self.deliver = nil; return deliver }
+            if !_started { held = reply }
+            return nil
+        }
+        deliver?(reply)
+    }
 }
 
 private func bodyData(_ request: URLRequest) throws -> Data {
