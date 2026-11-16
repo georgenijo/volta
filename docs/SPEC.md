@@ -100,6 +100,15 @@ The API binds only to the tailnet; it is never exposed publicly.
   only), amber `#F59E0B` (needs attention, such as unlocked), red `#EF4444`
   (Sentry armed, icon only, or a real fault). Status that isn't one of these
   (Live, Online, command outcomes) stays neutral.
+- Selected controls on maps are a neutral pill (white at about 18%), not an
+  accent.
+- Routes and map pins: see `docs/DRIVE-INSIGHTS.md` "Route colours". Charging
+  places use 28 pt kind badges with a white ring: home `house.fill` on
+  `#3B82F6`, AC `powerplug.fill` on `#5ECB93`, Tesla Supercharger the red "T",
+  other DC fast `bolt.fill` on `#F59E0B`.
+- Charge state glyphs: charging `bolt.fill`, stopped (plugged in)
+  `powerplug.fill`, complete `bolt.badge.checkmark.fill`, unplugged
+  `powerplug`, unknown `questionmark.circle`.
 - Dashboard: see "Dashboard and Controls" below.
 - Floating glass bottom bar and circular buttons (use iOS 26 Liquid Glass
   `.glassEffect` where it fits).

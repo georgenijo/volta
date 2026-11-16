@@ -20,7 +20,7 @@ City label precedence: `addresses.city`, geofence name, `addresses.neighbourhood
 
 ## Scores
 
-**Efficiency v1** (list, card and detail ring): round(min(100, max(0, rated Wh/km ÷ actual Wh/km × 100))). Both inputs must be finite and positive. This is Volta's efficiency measure, not Wattly's proprietary algorithm. Rings are hidden without inputs. Period score is distance-weighted across known scores and states when some drives are unscored.
+**Efficiency v1** (list, card and detail ring): round(min(100, max(0, rated Wh/km ÷ actual Wh/km × 100))). Both inputs must be finite and positive. This is Volta's efficiency measure, not Wattly's proprietary algorithm. Rings are hidden without inputs. Period score is distance-weighted across known scores and states when some drives are unscored. Every score ring (Drives header, cards, detail) uses one band: 80 and above `#5ECB93`, 60–79 `#F5BE62`, below 60 `#FF8178`.
 
 **Smoothness v1** (detail): the existing independent speed-derived score. Intervals must be 0.5–6 seconds, with ≥70% whole-drive speed coverage and ≥120 moving intervals above 5 km/h. Acceleration/braking parts are the time shares within 2.0/2.5 m/s²; the optional co-timed power part is the share within 15 kW/s. Their available parts' mean is scored 0–100. Hard events are consecutive runs ≥0.3g; max g is the greatest speed-derived acceleration magnitude. These values are omitted/withheld without the cadence gate, and truncated telemetry cannot satisfy it. This is longitudinal acceleration inferred from speeds, not a measured total g force.
 
@@ -28,7 +28,22 @@ City label precedence: `addresses.city`, geofence name, `addresses.neighbourhood
 
 Roadtrips sort closed drives chronologically and chain nonoverlapping drives across stops of at most 120 minutes. A chain (including a single long drive) needs ≥100 km total distance. Open/invalid-end drives do not participate. This is a time-and-distance heuristic, not route matching or a claim about intent. The list opens chain details and individual drive details.
 
-Heatmap groups drive start dates by the device's calendar/time zone. Each month has a weekday-aligned calendar grid; intensity is distance relative to the largest loaded day. Selecting a day opens its real drives. Roadtrips and heatmap use the current selection's loaded pages. Remaining pagination is explicitly disclosed; blank cells are never described as complete history when more pages remain. Device-local day boundaries match the drives list. No route-density map or 3D replay is claimed.
+Heatmap groups drive start dates by the device's calendar/time zone. Each month has a weekday-aligned calendar grid; intensity is distance relative to the largest loaded day. Selecting a day opens its real drives. Roadtrips and heatmap use the current selection's loaded pages. Remaining pagination is explicitly disclosed; blank cells are never described as complete history when more pages remain. Device-local day boundaries match the drives list. No 3D replay is claimed.
+
+The heatmap's map counts road density from the same loaded drives. Recorded positions lie on a fixed ground grid of about 35 m cells (the cell edge is set per 10° latitude band, so it doesn't move as pages load); each cell counts the distinct drives that pass through it, so a drive counts once per cell however often it was sampled there or passed it. Each drive is evenly thinned to at most 400 positions before counting. Roads are drawn in strokes coloured by count on a log scale (1, 3, 10, 30+ drives), busiest on top. The Efficiency mode colours each cell by the distance-weighted average of its drives' consumption ratio against the shared reference (below). Counting runs off the main thread and is deterministic.
+
+## Route colours
+
+One palette (`RoutePalette`) colours every route: the trip map, the Drives overview map, the heatmap, their legends and the drive-detail efficiency gauge. Ramps are interpolated in OKLab.
+
+- **Speed**: fixed 0–130 km/h, clamped; `#7C8CFF` `#4BA8FF` `#39D8EE` `#9AEAC8` `#F3F5B0`. The legend's top label is an inequality ("80+ mph").
+- **Efficiency**: consumption ÷ reference, 0.5×–1.75×; `#5EEBC4` `#46B79C` `#868C96` (1.0×, dim on purpose) `#E9A34B` `#FF7A45`. The reference is the drive's rated Wh/km (`ratedWhPerKm`, as for the efficiency ring); without one it is 160 Wh/km and the legend marks it as an estimate (`~`). On maps of many drives the reference is the most common rating among them. Regen is `#B79CFF`.
+- **Elevation**: the trip's own minimum to maximum, legend in real values; `#7C8CFF` `#B2AEFF` `#F3D9FF`.
+- **Density**: `#6698DD` `#56B6EC` `#77DBED` `#F1F8FF` at 1, 3, 10, 30+ drives.
+- Unrecorded metric: `#6B7078` at 3 pt. Position gaps stay dashed. Plain routes (Drives overview) are `#4BA8FF`.
+
+The trip route is 5 pt with round caps over an 8 pt `#101318` casing; maps of many drives draw 3 pt over 5 pt. No glow. The start is a white ring with a dark centre, the end a white dot with a dark edge (a ring with a dot when they coincide), the same small markers in the drive-detail place list and on cards. Legends are glass chips at the map's bottom leading corner, read by VoiceOver as one sentence; MapKit's logo and Legal link sit beside them, just above a fade of at most 64 pt.
+
 
 ## Deployment compatibility
 
