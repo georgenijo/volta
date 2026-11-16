@@ -10,13 +10,26 @@ struct DashboardMap: View {
     /// Live charging power; non-nil switches the marker and pill to charging.
     var charging: Bool = false
     var chargerPowerKw: Double? = nil
+    /// MapKit takes ~100–200 ms of main-thread setup; at launch it waits until
+    /// the first frame, with the battery and status, is on screen.
+    var launchFrame = LaunchFrame.shared
 
     var body: some View {
         if let location {
-            map(for: location)
+            ZStack {
+                backdrop
+                if launchFrame.isShown {
+                    map(for: location).transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.25), value: launchFrame.isShown)
         } else {
             unavailable
         }
+    }
+
+    private var backdrop: some View {
+        LinearGradient(colors: [Color(hex: 0x1B1E23), .voltaBackground], startPoint: .top, endPoint: .bottom)
     }
 
     private func map(for location: Location) -> some View {
@@ -54,7 +67,7 @@ struct DashboardMap: View {
 
     private var unavailable: some View {
         ZStack {
-            LinearGradient(colors: [Color(hex: 0x1B1E23), .voltaBackground], startPoint: .top, endPoint: .bottom)
+            backdrop
             VStack(spacing: VoltaSpacing.sm) {
                 Image(systemName: "location.slash")
                     .font(.system(size: 28, weight: .light))
