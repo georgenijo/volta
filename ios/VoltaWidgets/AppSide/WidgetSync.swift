@@ -80,8 +80,18 @@ protocol VehicleSurfaces: AnyObject {
     /// A unique, increasing token for a `/status` request about to be issued.
     func nextStatusToken() -> StatusRequestToken
     func publish(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource)
+    /// `publish`, saying whether it was taken: an older token or another
+    /// vehicle's refresh is not. Callers that time updates use this.
+    func publishAccepted(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) -> Bool
     /// The "Live Activity while driving" setting changed (read it from settings).
     func drivingActivityPreferenceChanged()
+}
+
+extension VehicleSurfaces {
+    func publishAccepted(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) -> Bool {
+        publish(refresh, dataSource: dataSource)
+        return true
+    }
 }
 
 extension EnvironmentValues {
@@ -205,10 +215,14 @@ final class WidgetSync: VehicleSurfaces {
     }
 
     func publish(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) {
-        guard case .vehicle(let id, let contextName) = context, refresh.status.vehicleId == id else { return }
+        _ = publishAccepted(refresh, dataSource: dataSource)
+    }
+
+    func publishAccepted(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) -> Bool {
+        guard case .vehicle(let id, let contextName) = context, refresh.status.vehicleId == id else { return false }
         // A refresh issued earlier but finished later, or issued before a context
         // change, must not publish. Tokens are unique, so strictly greater.
-        guard refresh.issued.value > acceptAfter else { return }
+        guard refresh.issued.value > acceptAfter else { return false }
         acceptAfter = refresh.issued.value
         let name = refresh.vehicleName ?? contextName
         let units = settings.units
@@ -224,6 +238,7 @@ final class WidgetSync: VehicleSurfaces {
             await self?.syncActivities(epoch: epoch, status: status, vehicleName: name, units: units,
                                        dataSource: dataSource)
         }
+        return true
     }
 
     func nextStatusToken() -> StatusRequestToken {

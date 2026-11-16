@@ -105,6 +105,7 @@ struct LiveDrivingCard: View {
         let note: String? = switch display.speed {
         case .live: nil
         case .stopped: "Resumes when moving"
+        case .slow: "No movement reported"
         case .stale(_, let at): display.isStale ? nil : LiveDriveText.age(at, now: now)
         case .unknown: "Speed unavailable"
         }
@@ -118,8 +119,8 @@ struct LiveDrivingCard: View {
                     NowNumber(value: LiveDriveText.speed(kph: kph, units: units), unit: unit, size: size, color: .voltaTextPrimary)
                 case .stale(let kph, _):
                     NowNumber(value: LiveDriveText.speed(kph: kph, units: units), unit: unit, size: size, color: .voltaTextTertiary)
-                case .stopped:
-                    Text("Stopped")
+                case .stopped, .slow:
+                    Text({ if case .slow(let kph, _) = display.speed { LiveDriveText.below(kph: kph, units: units) } else { "Stopped" } }())
                         .font(.system(size: size * 0.62, weight: .heavy))
                         .foregroundStyle(Color.voltaTextPrimary)
                         .lineLimit(1)

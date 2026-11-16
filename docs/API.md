@@ -252,12 +252,14 @@ null without that calibration. `quiet` is set when a connected stream in R,
 N or D with a valid GPS fix has sent no position for longer than that window,
 counted only up to the time the pipeline is proven to have stored everything
 the car sent: the receiver seen alive and the consumer caught up (stream
-health, written every 15 s), less 2 s for transit. Silence after a receiver
-or consumer failure proves nothing, so its readings just go stale. It is not a claim that the car stopped: a car moving slower than the report
+health, written every 15 s), less 2 s for transit, and only while that proof
+is under 45 s old. Silence after a receiver or consumer failure proves
+nothing, so its readings just go stale. It is not a claim that the car stopped: a car moving slower than the report
 distance per interval (1.5 m/s in both profiles) can stay silent. It says
 the car has reported no movement since `since`, and its average speed since
 then is below `speedBelowKph` (that distance over the proven quiet time less
-one interval). The app shows it as stopped. The receiver holds the last speed a stopping car reported, usually
+one interval). The app shows the bound ("Under 2 mph"), and "Stopped" once
+the bound is under 0.5 km/h, where any allowed speed reads 0. The receiver holds the last speed a stopping car reported, usually
 1 to 5 mph, so that reading is never current here. `quiet` is null when a
 current speed observed after the stream's last report exists, and never inferred without a fix or a known
 cadence. Gear and readings

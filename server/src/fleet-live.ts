@@ -151,6 +151,10 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
  * receiver is up. A pipeline proven through T has stored what the car sent
  * by T minus this. */
 export const reportTransitMs = 2_000;
+/** Proof older than this is not current: stream health is written every
+ * 15 s, so three missed writes mean ingestion may have stopped. A quiet span
+ * proven before then could have ended since, so none is reported. */
+export const quietProofMs = 45_000;
 
 /** Gear, speed and pack power from the stream. Gear is change-only, so a
  * connected stream's gear holds now; speed and power hold only while the car
@@ -161,7 +165,8 @@ export const reportTransitMs = 2_000;
  * everything the car sent: the receiver seen alive and the consumer caught
  * up (`health`, written every 15 s). A receiver that dies after a highway
  * fix still looks connected for a while; its silence proves nothing, so the
- * readings go stale and no quiet span is inferred. `movementAt` is the
+ * readings go stale and no quiet span is inferred; nor is one proven
+ * earlier once the proof is older than `quietProofMs`. `movementAt` is the
  * stream's newest position report, for merging with TeslaMate. */
 function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, by: Map<string, Row>,
                      valid: (f: string) => Row | null, connected: boolean, health: Row | null, now: Date): { drive: LiveDrive; movementAt: Date | null } {
@@ -185,7 +190,7 @@ function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, 
   const proven = health ? Math.min(+now, +new Date(health.receiver_seen_at), +new Date(health.caught_up_at)) - reportTransitMs : null;
   const quietMs = report && proven != null ? proven - +at(report) : null;
   const quiet = still != null && connected && gear != null && gear !== 'P' && report && fix && !fix.invalid && fix.quality === 'ok' &&
-    +at(fix) >= +at(report) && quietMs != null && quietMs > still
+    +at(fix) >= +at(report) && quietMs != null && quietMs > still && +now - proven! <= quietProofMs
     ? { since: new Date(Math.max(+at(report), +at(g!))), speedBelowKph: quietSpeedBelowKph(live.fixIntervalS!, quietMs) } : null;
   return { drive: { gear: reading(gear, g, connected), speedKph: reading(speed, s, recent(s)), powerKw: reading(power, power == null ? null : v, recent(v)), quiet },
            movementAt: report ? at(report) : null };

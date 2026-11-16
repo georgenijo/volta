@@ -169,6 +169,16 @@ test('silence after the receiver or consumer stops proves nothing: readings go s
   v = liveValues(f, now)!;
   expect(v.drive.quiet?.since).toEqual(fix); expect(v.drive.quiet!.speedBelowKph).toBeCloseTo(quietSpeedBelowKph(2, 18_000), 6);
   expect(v.movementAt).toEqual(fix);
+  // Stillness proven once, then health froze 60 s ago (still "connected" for
+  // 120 s): the car may have moved since, so the quiet span is not reported.
+  const g = driving(), fix90 = new Date(+now - 90_000), frozen = new Date(+now - 60_000);
+  for (const s of g.samples) s.source_ts = s.field === 'Gear' ? old : fix90.toISOString();
+  Object.assign(g.health, {receiver_seen_at: frozen, caught_up_at: frozen, updated_at: frozen});
+  v = liveValues(g, now)!;
+  expect(v.freshness.connected).toBe(true); expect(v.drive.quiet).toBeNull(); expect(v.drive.speedKph!.current).toBe(false);
+  // Proof 40 s old still stands.
+  Object.assign(g.health, {receiver_seen_at: new Date(+now - 40_000), caught_up_at: new Date(+now - 40_000)});
+  expect(liveValues(g, now)!.drive.quiet?.since).toEqual(fix90);
 });
 test('a disconnected stream keeps fresh-looking readings but never calls them current',()=>{
   const f = driving(); f.connections = [{status:'DISCONNECTED',source_ts:old,received_at:old}];

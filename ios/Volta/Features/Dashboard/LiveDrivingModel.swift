@@ -13,12 +13,21 @@ struct LiveDriveDisplay: Equatable {
     enum Speed: Equatable {
         case live(kph: Double)
         /// The server's quiet span: a connected, proven-healthy stream in
-        /// gear has reported no movement since `since` (the car has moved
-        /// less than the report distance; about 1 km/h at most). Shown as
-        /// "Stopped", never as 0, which would be an invented reading.
+        /// gear has reported no movement since `since`, so the car is below
+        /// `belowKph`. Shown as "Under 2 mph", never as 0.
+        case slow(belowKph: Double, since: Date)
+        /// A quiet span whose bound is under `stoppedBelowKph`: any speed it
+        /// allows reads 0 on a speedometer, so "Stopped" (not "0 mph").
         case stopped(since: Date)
         case stale(kph: Double, at: Date)
         case unknown
+
+        var isQuiet: Bool {
+            switch self {
+            case .slow, .stopped: true
+            case .live, .stale, .unknown: false
+            }
+        }
     }
 
     enum Power: Equatable {
@@ -51,6 +60,8 @@ struct LiveDriveDisplay: Equatable {
     static let liveWindow: TimeInterval = 15
     /// Below this, power is shown as zero rather than as drive or regen.
     static let idlePowerKw = 0.5
+    /// A quiet car bounded below this rounds to 0 in km/h and mph alike.
+    static let stoppedBelowKph = 0.5
 
     /// Whether the car is on the road. A live gear decides (Park ends a drive
     /// before TeslaMate closes it; Drive starts one before TeslaMate opens it);
@@ -77,7 +88,8 @@ struct LiveDriveDisplay: Equatable {
         if let reading = drive?.speedKph, live(reading) {
             speed = .live(kph: max(0, reading.value))
         } else if recent, let quiet = drive?.quiet {
-            speed = .stopped(since: quiet.since)
+            speed = quiet.speedBelowKph < stoppedBelowKph ? .stopped(since: quiet.since)
+                : .slow(belowKph: quiet.speedBelowKph, since: quiet.since)
         } else if let reading = drive?.speedKph {
             speed = .stale(kph: max(0, reading.value), at: reading.observedAt)
         } else {
@@ -87,7 +99,7 @@ struct LiveDriveDisplay: Equatable {
         let power: Power
         if let reading = drive?.powerKw, live(reading) {
             power = .live(kw: reading.value)
-        } else if case .stopped = speed {
+        } else if speed.isQuiet {
             power = .awaitingMovement
         } else if let reading = drive?.powerKw {
             power = .stale(kw: reading.value, at: reading.observedAt)
@@ -96,7 +108,7 @@ struct LiveDriveDisplay: Equatable {
         }
 
         let anyLive = live(drive?.gear) || live(drive?.speedKph) || live(drive?.powerKw)
-            || { if case .stopped = speed { return true } else { return false } }()
+            || speed.isQuiet
         let freshness: Freshness
         if anyLive {
             freshness = .live
@@ -129,6 +141,11 @@ enum LiveDriveText {
 
     static func speed(kph: Double, units: UnitPreferences) -> String {
         VoltaFormat.number(units.distanceValue(km: kph), digits: 0)
+    }
+
+    /// "Under 2 mph": the bound rounded up, so it stays true.
+    static func below(kph: Double, units: UnitPreferences) -> String {
+        "Under \(Int(max(1, units.distanceValue(km: kph).rounded(.up)))) \(speedUnit(units))"
     }
 
     /// "42" for drive, "18" for regen: the sign is the label's job.
@@ -188,6 +205,8 @@ enum LiveDriveText {
         let speed: String = switch display.speed {
         case .live(let kph): "\(Self.speed(kph: kph, units: units)) \(unitName)"
         case .stopped(let since): "Stopped for \(NowCard.elapsed(from: since, to: now)). Speed resumes when moving"
+        case .slow(let kph, let since):
+            "\(below(kph: kph, units: units).replacingOccurrences(of: speedUnit(units), with: unitName)), no movement reported for \(NowCard.elapsed(from: since, to: now))"
         case .stale(let kph, let at): "\(Self.speed(kph: kph, units: units)) \(unitName)\(each ? ", \(age(at, now: now))" : "")"
         case .unknown: "Speed unknown"
         }
@@ -276,10 +295,10 @@ final class LiveDrivingRefresher {
             let at = now(), ended = !LiveDriveDisplay.isDriving(status)
             // The newest publication by this refresher or by a Dashboard load.
             let last = [lastSurfacePublish, dashboard.surfacesPublishedAt].compactMap { $0 }.max()
-            if let surfaces, let issued, ended || last.map({ at.timeIntervalSince($0) >= Self.surfaceInterval }) ?? true {
+            if let surfaces, let issued, ended || last.map({ at.timeIntervalSince($0) >= Self.surfaceInterval }) ?? true,
+               surfaces.publishAccepted(VehicleRefresh(status: status, issued: issued, vehicleName: dashboard.vehicle?.name),
+                                        dataSource: dataSource) {
                 lastSurfacePublish = at
-                surfaces.publish(VehicleRefresh(status: status, issued: issued, vehicleName: dashboard.vehicle?.name),
-                                 dataSource: dataSource)
             }
             if ended {
                 reloadDue = true

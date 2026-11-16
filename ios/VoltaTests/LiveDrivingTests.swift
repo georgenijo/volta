@@ -121,6 +121,19 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         let spoken = LiveDriveText.accessibility(display, units: .default, now: now)
         XCTAssertTrue(spoken.contains("Stopped for"), spoken)
         XCTAssertFalse(spoken.contains("6") || spoken.contains(" 0 "), "neither the held speed nor an invented zero: \(spoken)")
+        // A looser bound is not called a stop: it says what is known.
+        var looser = drive
+        looser.quiet = LiveDrive.Quiet(since: quiet, speedBelowKph: 1.35)
+        let slow = LiveDriveDisplay.make(driving(looser), fetchedAt: now, now: now)
+        XCTAssertEqual(slow.speed, .slow(belowKph: 1.35, since: quiet))
+        XCTAssertEqual(slow.power, .awaitingMovement)
+        var metric = UnitPreferences.default
+        metric.distance = .kilometers
+        XCTAssertEqual(LiveDriveText.below(kph: 1.35, units: .default), "Under 1 mph")
+        XCTAssertEqual(LiveDriveText.below(kph: 1.35, units: metric), "Under 2 km/h", "rounded up, so it stays true")
+        let slowSpoken = LiveDriveText.accessibility(slow, units: .default, now: now)
+        XCTAssertTrue(slowSpoken.contains("Under 1 miles per hour, no movement reported"), slowSpoken)
+        XCTAssertFalse(slowSpoken.contains("Stopped"), slowSpoken)
         // Stillness is as old as the fetch: an unrefreshed status shows the held reading's age instead.
         XCTAssertEqual(LiveDriveDisplay.make(driving(drive), fetchedAt: now.addingTimeInterval(-30), now: now).speed,
                        .stale(kph: 6.4, at: quiet))
@@ -281,6 +294,27 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
         XCTAssertEqual(surfaces.published.count, 3, "20 s visits keep the real last publication")
     }
 
+    func testOnlyAcceptedPublicationsCountTowardTheThirtySeconds() async {
+        let source = ScriptedStatusSource(steps: [.status(driving(moving))])
+        let model = DashboardModel()
+        let refusing = CountingSurfaces()
+        refusing.refusals = 1
+        await model.load(dataSource: source, vehicleID: MockDataSource.vehicleID, surfaces: refusing)
+        XCTAssertNil(model.surfacesPublishedAt, "an older token's publication was rejected: not an update")
+        // The refresher's first publication is rejected too; the next refresh tries again.
+        let surfaces = CountingSurfaces()
+        surfaces.refusals = 1
+        let clock = TestClock(Date()), sleeps = TestCounter()
+        let refresher = LiveDrivingRefresher(sleep: { _ in
+            if sleeps.next() > 3 { throw CancellationError() }
+            await Task.yield()
+        })
+        _ = await refresher.run(dashboard: model, dataSource: source, vehicleID: MockDataSource.vehicleID,
+                                surfaces: surfaces, now: { clock.advance(5) })
+        XCTAssertEqual(surfaces.published.count, 1, "rejected at 5 s, taken at 10 s, not due at 15 s")
+        XCTAssertEqual(surfaces.published.first?.issued.value, 2)
+    }
+
     func testTheDriveEndingReloadsHistoryOnceOutsideTheRefresh() async {
         let source = ScriptedStatusSource(steps: [.status(driving(moving)), .status(driving(LiveDrive(gear: reading(.p)), state: .online))])
         let model = DashboardModel()
@@ -398,7 +432,7 @@ private let moving = LiveDrive(gear: reading(.d, ago: 300), speedKph: reading(64
             return LiveDriveDisplay.make(status, fetchedAt: at, now: at).speed
         }
         XCTAssertGreaterThan(Set(speeds.map { "\($0)" }).count, 6)
-        XCTAssertTrue(speeds.contains { if case .stopped = $0 { true } else { false } })
+        XCTAssertTrue(speeds.contains(where: \.isQuiet), "waits at a light")
     }
 }
 
@@ -459,10 +493,19 @@ private final class TestCounter: @unchecked Sendable {
 }
 
 @MainActor private final class CountingSurfaces: VehicleSurfaces {
+    /// Publications to reject first, as an older token's would be.
+    var refusals = 0
     var published: [VehicleRefresh] = []
     private var issued: UInt64 = 0
     func setContext(_ context: VehicleSurfaceContext) {}
     func nextStatusToken() -> StatusRequestToken { issued += 1; return StatusRequestToken(value: issued) }
-    func publish(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) { published.append(refresh) }
+    func publish(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) {
+        _ = publishAccepted(refresh, dataSource: dataSource)
+    }
+    func publishAccepted(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) -> Bool {
+        if refusals > 0 { refusals -= 1; return false }
+        published.append(refresh)
+        return true
+    }
     func drivingActivityPreferenceChanged() {}
 }

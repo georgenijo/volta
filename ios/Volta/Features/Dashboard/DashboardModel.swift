@@ -322,9 +322,11 @@ final class DashboardModel {
         save(status: status, vehicleID: vehicleID, at: statusLoadedAt, timeline: timeline, summaries: summaries,
              todayRequestedAt: todayRequestedAt, todayRequestedZone: todayRequestedZone)
         guard !cancelled, let surfaces, let issued else { return }
-        surfaces.publish(VehicleRefresh(status: status, issued: issued, vehicleName: vehicle?.name,
-                                        today: today, timeline: timeline), dataSource: dataSource)
-        surfacesPublishedAt = .now
+        // Only a publication surfaces took counts: an older token's is rejected.
+        if surfaces.publishAccepted(VehicleRefresh(status: status, issued: issued, vehicleName: vehicle?.name,
+                                                   today: today, timeline: timeline), dataSource: dataSource) {
+            surfacesPublishedAt = .now
+        }
     }
 
     /// A status from the live driving refresh (`LiveDrivingRefresher`): shown
