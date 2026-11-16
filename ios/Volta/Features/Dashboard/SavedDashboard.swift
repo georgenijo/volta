@@ -201,17 +201,24 @@ final class MemorySavedDashboards: SavedDashboardStoring {
     func remove() { dashboard = nil }
 }
 
-/// The first dashboard's `/status`, sent by `AppModel` at launch when the
-/// saved dashboard means the shell will mount at once. The first dashboard
-/// for the same vehicle awaits it instead of sending its own; whoever
-/// discards it cancels it. Only status is sent early: history requests sent
-/// alongside it would compete for new connections and delay it.
+/// The first dashboard's requests (`/status`, then its history), sent by
+/// `AppModel` at launch when the saved dashboard means the shell will mount
+/// at once. The first dashboard for the same vehicle awaits them instead of
+/// sending its own; whoever discards them cancels them. History goes out
+/// early too: over HTTP/2, as the live API speaks, it shares status's
+/// connection, and every section arrives sooner without delaying status
+/// (see docs/STARTUP.md).
 @MainActor
 final class DashboardPrefetch {
     let vehicleID: Int
     /// The widget-ordering token, taken just before `/status` was sent.
     let issued: StatusRequestToken?
     let status: Task<VehicleStatus, any Error>
+    let timeline: Task<[TimelineSegment], any Error>
+    let summaries: [SummaryRange: Task<ActivitySummary, any Error>]
+    /// When and in which zone the today total was requested.
+    let requestedAt: Date
+    let requestedZone: String
     /// When `/status` was sent. The clock keeps counting while the app is suspended.
     let sentAt: ContinuousClock.Instant
     /// How old a prefetch the first dashboard still adopts. Older ones were
@@ -224,10 +231,34 @@ final class DashboardPrefetch {
         self.sentAt = sentAt
         issued = surfaces?.nextStatusToken()
         // Detached: a main-actor task would not start until the first frame is built.
+        requestedAt = .now
+        requestedZone = TimeZone.current.identifier
         status = Task.detached(priority: .userInitiated) { try await dataSource.status(vehicleID: vehicleID) }
+        timeline = Task.detached(priority: .userInitiated) { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }
+        var summaries: [SummaryRange: Task<ActivitySummary, any Error>] = [:]
+        for range in SummaryRange.allCases {
+            summaries[range] = Task.detached(priority: .userInitiated) { try await dataSource.summary(vehicleID: vehicleID, range: range) }
+        }
+        self.summaries = summaries
     }
 
-    func cancel() { status.cancel() }
+    func cancel() {
+        status.cancel(); timeline.cancel()
+        summaries.values.forEach { $0.cancel() }
+    }
+
+    /// `task`'s answer, or `request`'s when there is no task or the task got
+    /// no answer: a launch request can fail while the app is suspended on a
+    /// good network, so one new request is sent before showing an error.
+    nonisolated static func adopt<T: Sendable>(_ task: Task<T, any Error>?,
+                                               else request: () async throws -> T) async throws -> T {
+        if let task {
+            do { return try await value(of: task) } catch {
+                guard !Task.isCancelled, DashboardModel.isTransportFailure(error) else { throw error }
+            }
+        }
+        return try await request()
+    }
 
     func isUsable(for vehicleID: Int, now: ContinuousClock.Instant = .now) -> Bool {
         vehicleID == self.vehicleID && now - sentAt <= Self.maximumAge

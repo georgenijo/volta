@@ -54,6 +54,45 @@ sent. A launch in an iOS prewarm sends nothing, because the process may then be
 suspended for hours. The dashboard drops a launch status sent more than 5 s
 before it mounts, and retries once a launch status that got no answer.
 
+History (timeline and the three summaries) is sent at launch with status, under
+the same rules. Over HTTP/2, which the live API speaks, the requests share one
+connection: in the November 2026 runs below, every section arrived 77–209 ms
+sooner and fresh status was not slower. Over HTTP/1.1 each extra request opens
+its own TLS connection, and an earlier HTTP/1.1 run measured status *slower*
+(1.55 → 2.11 s at 150 ms RTT) with history sent early; revisit this if the
+server ever stops negotiating HTTP/2.
+
+### November 2026 results
+
+Release build on the dedicated simulator, ms after `AppModel` starts, median
+(range) of ten launches: two interleaved rounds of five per build after a
+warm-up, host load average 10–35 for all but one run. A is `main` with only this
+harness; B is the branch with status alone sent early; C, the branch as shipped,
+also sends history early. Milestones are logged at the next display refresh.
+
+| HTTP/2, server timings | first frame | saved data visible | fresh status visible | all sections visible |
+|---|---|---|---|---|
+| A | 288 (spinner) | — | 1703 | 2293 |
+| B | 1567 | 1643 | 1670 | 2168 |
+| C | 1516 | 1516 | 1516 | 2091 |
+
+| HTTP/2, +150 ms RTT | first frame | saved data visible | fresh status visible | all sections visible |
+|---|---|---|---|---|
+| A | 324 (spinner) | — | 1970 | 2776 |
+| B | 1710 | 1710 | 1710 | 2452 |
+| C | 1522 | 1522 | 1522 | 2243 |
+
+| HTTP/1.1, +150 ms RTT | first frame | saved data visible | fresh status visible | all sections visible |
+|---|---|---|---|---|
+| A | 290 (spinner) | — | 1864 | 3066 |
+| B | 1401 | 1401 | 1401 | 2265 |
+
+A's first frame is the "Loading vehicles…" spinner; its tab shell follows at
+1450–1694 ms. B and C draw their first frame later, but it already has the
+dashboard, and fresh status usually lands before that frame is committed. The
+remaining cost is the first layout of the redesigned dashboard, about 1.2 s
+after `AppModel` here in both A's shell and the branch's first frame.
+
 `DashboardModelTests` suspends history requests with explicit gates to verify
 that status and faster sections become usable while slower work remains pending.
 It also covers overlapping loads, cancellation and partial failures. Widget

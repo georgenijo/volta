@@ -197,7 +197,7 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
         let statuses = await statusCalls.value, summaries = await summaryCalls.value
         XCTAssertEqual(statuses, 1, "the dashboard awaits the launch request instead of sending another")
-        XCTAssertEqual(summaries, 3, "history is requested by the dashboard")
+        XCTAssertEqual(summaries, 3, "and the launch history requests, sending none of its own")
         XCTAssertEqual(model.status?.batteryLevel, 66)
         XCTAssertEqual(model.summaries.count, 3)
 
@@ -214,6 +214,8 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
         XCTAssertEqual(model.status?.batteryLevel, 72)
         XCTAssertTrue(prefetch.status.isCancelled)
+        XCTAssertTrue(prefetch.timeline.isCancelled)
+        XCTAssertTrue(prefetch.summaries.values.allSatisfy(\.isCancelled))
         await gate.open()
     }
 
@@ -335,6 +337,20 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         let statuses = await calls.value
         XCTAssertEqual(statuses, 2, "the dashboard asks again rather than show an old answer as fresh")
         XCTAssertFalse(prefetch.isUsable(for: 1))
+    }
+
+    func testLaunchHistoryThatGotNoAnswerIsRetriedOnce() async {
+        let source = StubSource(), calls = Counter(), model = DashboardModel()
+        source.timelineHandler = {
+            if await calls.next() == 1 { throw VoltaError.unreachable("timed out while suspended") }
+            return [segment]
+        }
+        let prefetch = DashboardPrefetch(dataSource: source, vehicleID: 1, surfaces: nil)
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
+        let timelines = await calls.value
+        XCTAssertEqual(timelines, 2)
+        XCTAssertEqual(model.timeline.count, 1)
+        XCTAssertFalse(model.timelineFailed)
     }
 
     func testAPrefetchThatGotNoAnswerIsRetriedOnce() async {
