@@ -532,6 +532,8 @@ test('live drive: the stream leads while current, the open TeslaMate drive fills
   await put('Gear',{text:'ShiftStateD'},new Date(+now-600_000));
   await put('VehicleSpeed',{num:40,unit:'mph'},recent);await put('Location',{lat:37.44,lon:-122.14,unit:'deg'},recent);
   await put('PackVoltage',{num:400,unit:'V'},recent);await put('PackCurrent',{num:105,unit:'A'},recent);
+  // Fixes 2 s apart: the normal profile's cadence, so stillness is judged after 10 s.
+  for (const i of [0,1,2]) await datum('Location',null,new Date(+recent-i*2000),'fix-'+i,1,{latitude:37.44,longitude:-122.14});
   await owner`INSERT INTO volta_telemetry.connectivity(vehicle_id,connection_id,status,source_ts,received_at) VALUES(1,'fixture','CONNECTED',${old},${old})`;
   await owner`INSERT INTO volta_telemetry.stream_health(id,receiver_generation,receiver_started_at,receiver_seen_at,consumer_started_at,caught_up_at,lag_records,updated_at)
     VALUES(1,'fixture',${old},${now},${old},${now},0,${now})`;
@@ -551,6 +553,14 @@ test('live drive: the stream leads while current, the open TeslaMate drive fills
   expect(Date.parse(status.liveDrive.stoppedSince)).toBe(+quiet);
   expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:false});
   expect(status.liveDrive.powerKw).toMatchObject({source:'fleet_telemetry',current:false});
+  // Fixes only every 10 s (the economy profile): a minute's silence is still stillness, 30 s is not.
+  await owner`DELETE FROM volta_telemetry.samples WHERE payload_id LIKE 'fix-%'`;
+  for (const i of [0,1,2]) await datum('Location',null,new Date(+quiet-i*10_000),'fix-'+i,1,{latitude:37.44,longitude:-122.14});
+  expect(Date.parse((await get('/v1/vehicles/1/status')).liveDrive.stoppedSince)).toBe(+quiet);
+  const half=new Date(+now-30_000);
+  await owner`UPDATE volta_telemetry.latest_samples SET source_ts=${half},received_at=${half} WHERE field<>'Gear'`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.liveDrive.stoppedSince).toBeNull();expect(status.liveDrive.speedKph).toMatchObject({source:'fleet_telemetry',current:true});
   // Parked: gear P, no stillness, the drive's readings stay stale.
   await owner`UPDATE volta_telemetry.latest_samples SET value_text='ShiftStateP',source_ts=${recent} WHERE field='Gear'`;
   status=await get('/v1/vehicles/1/status');

@@ -13,13 +13,19 @@ export type LiveGear = 'P'|'R'|'N'|'D';
 /** One live drive value: when it was observed, and whether it still holds now. */
 export type LiveReading<T> = { value: T; observedAt: Date; current: boolean; source: 'fleet_telemetry'|'teslamate' };
 export type LiveDrive = { gear: LiveReading<LiveGear>|null; speedKph: LiveReading<number>|null; powerKw: LiveReading<number>|null; stoppedSince: Date|null };
-/** Volta's profile sends Location at most every 2 s and only once the car
- * has moved 3 m; VehicleSpeed, PackVoltage and PackCurrent ride on it
- * (ingestion/fleetconfig). A speed or power reading is current only this
- * long after it was observed, and a connected stream in gear with no report
- * for longer has moved less than 3 m since. The receiver holds the last speed
- * a stopping car reported (often 1 to 5 mph), so it is never shown as current. */
-export const moveReportMs = 10_000;
+/** Location arrives only after the car moves (normal profile: every 2 s
+ * after 3 m; economy: every 10 s after 15 m, ingestion/fleetconfig), with
+ * VehicleSpeed, PackVoltage and PackCurrent riding on it. The receiver holds
+ * the last speed a stopping car reported (often 1 to 5 mph). So a speed or
+ * power reading is current only for `stillnessMs` after it was observed, and
+ * a connected stream in gear with no report for longer has not moved since.
+ * The window follows the installed profile as observed: five times the
+ * shortest gap between the car's latest fixes, within 10 to 60 s; without
+ * two recent fixes the cadence is unknown and stillness is never inferred. */
+export const stillnessMs = (fixIntervalS: number | null) => fixIntervalS == null || !Number.isFinite(fixIntervalS) || fixIntervalS <= 0
+  ? null : Math.min(60_000, Math.max(10_000, fixIntervalS * 5_000));
+/** Current window for a reading while the cadence is unknown. */
+export const defaultCurrentMs = 10_000;
 /** A TeslaMate position from the open drive is current this long. */
 export const teslamateCurrentMs = 30_000;
 
@@ -42,7 +48,11 @@ export class FleetLive {
           WHERE x.vehicle_id=s.vehicle_id AND x.source_ts>=s.start_ts
             AND x.source_ts<=CASE WHEN s.end_reason='open' THEN now() ELSE LEAST(s.end_ts,now()) END AND x.dc_power_kw>0)) FROM volta_telemetry.sessions s
         WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge,
-      (SELECT sign FROM volta_telemetry.power_calibration WHERE vehicle_id=b.vehicle_id) AS power_sign
+      (SELECT sign FROM volta_telemetry.power_calibration WHERE vehicle_id=b.vehicle_id) AS power_sign,
+      -- The report cadence the installed profile gives: the shortest gap between the newest fixes.
+      (SELECT extract(epoch FROM min(gap)) FROM (SELECT source_ts - lag(source_ts) OVER (ORDER BY source_ts) AS gap
+        FROM (SELECT source_ts FROM volta_telemetry.payload_points p WHERE p.vehicle_id=b.vehicle_id AND p.latitude IS NOT NULL
+          AND p.source_ts > now() - interval '15 minutes' AND p.source_ts <= now() ORDER BY source_ts DESC LIMIT 8) f) g) AS fix_interval_s
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(row.vin, 'utf8').digest('hex');
@@ -50,7 +60,8 @@ export class FleetLive {
     return { samples: row.samples as Row[], connections: (row.connections ?? []) as Row[], health: row.health as Row | null,
       lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true,
         observed: row.last_charge.observed === true, dc: row.last_charge.dc === true } : null,
-      powerSign: (row.power_sign ?? null) as string | null };
+      powerSign: (row.power_sign ?? null) as string | null,
+      fixIntervalS: row.fix_interval_s == null ? null : Number(row.fix_interval_s) };
   }
 }
 
@@ -126,14 +137,15 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
 
 /** Gear, speed and pack power from the stream. Gear is change-only, so a
  * connected stream's gear holds now; speed and power hold only while the car
- * keeps reporting (see moveReportMs). Power needs voltage and current from
+ * keeps reporting (see stillnessMs). Power needs voltage and current from
  * the same payload and the operator's recorded PackCurrent sign. */
 function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, by: Map<string, Row>,
                      valid: (f: string) => Row | null, connected: boolean, now: Date): LiveDrive {
   const at = (s: Row) => new Date(s.source_ts);
   const reading = <T>(value: T | null, s: Row | null, current: boolean): LiveReading<T> | null =>
     value == null || !s ? null : { value, observedAt: at(s), current, source: 'fleet_telemetry' };
-  const recent = (s: Row | null) => connected && s != null && +now - +at(s) <= moveReportMs;
+  const still = stillnessMs(live.fixIntervalS);
+  const recent = (s: Row | null) => connected && s != null && +now - +at(s) <= (still ?? defaultCurrentMs);
   const g = valid('Gear'), gear = g ? gears[g.value_text] ?? null : null;
   const s = valid('VehicleSpeed'), mph = s?.source_unit === 'mph' ? 1.609344 : s?.source_unit === 'km/h' ? 1 : null;
   const speed = s && mph != null && Number.isFinite(s.value_num) ? s.value_num * mph : null;
@@ -146,7 +158,7 @@ function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, 
   const report = ['Location','VehicleSpeed'].map(f => by.get(f)).filter((r): r is Row => r != null && +at(r) <= +now)
     .sort((x, y) => +at(y) - +at(x))[0] ?? null;
   const fix = by.get('Location');
-  const stoppedSince = connected && gear != null && gear !== 'P' && report && fix && !fix.invalid && fix.quality === 'ok' &&
-    +at(fix) >= +at(report) && +now - +at(report) > moveReportMs ? new Date(Math.max(+at(report), +at(g!))) : null;
+  const stoppedSince = still != null && connected && gear != null && gear !== 'P' && report && fix && !fix.invalid && fix.quality === 'ok' &&
+    +at(fix) >= +at(report) && +now - +at(report) > still ? new Date(Math.max(+at(report), +at(g!))) : null;
   return { gear: reading(gear, g, connected), speedKph: reading(speed, s, recent(s)), powerKw: reading(power, power == null ? null : v, recent(v)), stoppedSince };
 }

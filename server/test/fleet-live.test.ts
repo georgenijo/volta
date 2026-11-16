@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
-import { liveValues } from '../src/fleet-live';
+import { liveValues, stillnessMs } from '../src/fleet-live';
 const now = new Date('2026-01-02T12:00:00Z'), old = '2026-01-01T00:00:00Z';
 const sample = (field:string, value:any, unit='', invalid=false) => ({field,source_ts:old,source_unit:unit,invalid,quality:invalid?'invalid':'ok',...value});
 const health = {receiver_generation:'fixture',receiver_started_at:old,receiver_seen_at:now,updated_at:now,caught_up_at:now,lag_records:0};
-const fixture = (samples:any[]=[]) => ({samples,connections:[{status:'CONNECTED',source_ts:old,received_at:old}],health:{...health},lastCharge:null as {start:Date,open:boolean,observed:boolean,dc:boolean}|null,powerSign:null as string|null});
+const fixture = (samples:any[]=[]) => ({samples,connections:[{status:'CONNECTED',source_ts:old,received_at:old}],health:{...health},lastCharge:null as {start:Date,open:boolean,observed:boolean,dc:boolean}|null,powerSign:null as string|null,fixIntervalS:null as number|null});
 test('change-only values stay current despite sample age',()=>{
  const r=liveValues(fixture([sample('Locked',{value_bool:true}),sample('SentryMode',{value_text:'SentryModeStateArmed'}),sample('ModuleTempMax',{value_num:38},'C')]),now)!;
  expect(r.freshness.connected).toBe(true);expect(r.values).toMatchObject({locked:true,sentryMode:true,packTempMaxC:38});
@@ -97,7 +97,7 @@ const driving = (extra: any[] = []) => {
   const f = fixture([at(sample('Gear',{value_text:'ShiftStateD'})), at(sample('VehicleSpeed',{value_num:40},'mph')),
     at(sample('Location',{latitude:37.44,longitude:-122.14})), at(sample('PackVoltage',{value_num:400},'V')),
     at(sample('PackCurrent',{value_num:105},'A')), ...extra]);
-  f.powerSign = 'discharge_positive';
+  f.powerSign = 'discharge_positive'; f.fixIntervalS = 2;
   return f;
 };
 test('a connected drive reports gear, speed in km/h and signed same-payload power as current',()=>{
@@ -157,4 +157,19 @@ test('a disconnected stream keeps fresh-looking readings but never calls them cu
   const d = liveValues(f, now)!.drive;
   expect(d.gear!.current).toBe(false); expect(d.speedKph!.current).toBe(false); expect(d.powerKw!.current).toBe(false);
   expect(d.speedKph!.observedAt).toEqual(new Date(moment));
+});
+
+test('the stillness window follows the installed profile: economy reports every 10 s',()=>{
+  expect(stillnessMs(2)).toBe(10_000); expect(stillnessMs(10)).toBe(50_000); expect(stillnessMs(30)).toBe(60_000);
+  expect(stillnessMs(null)).toBeNull(); expect(stillnessMs(0)).toBeNull();
+  // Moving on the economy profile, 12 s since the last report: still moving, the reading still current.
+  const between = new Date(+now - 12_000).toISOString(), f = driving(); f.fixIntervalS = 10;
+  for (const s of f.samples) s.source_ts = s.field === 'Gear' ? old : between;
+  let d = liveValues(f, now)!.drive;
+  expect(d.stoppedSince).toBeNull(); expect(d.speedKph!.current).toBe(true);
+  // 55 s without a report on that profile: stopped.
+  const quiet = new Date(+now - 55_000).toISOString(); for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = quiet;
+  d = liveValues(f, now)!.drive; expect(d.stoppedSince).toEqual(new Date(quiet)); expect(d.speedKph!.current).toBe(false);
+  // Unknown cadence: never inferred, and readings are current only briefly.
+  f.fixIntervalS = null; d = liveValues(f, now)!.drive; expect(d.stoppedSince).toBeNull(); expect(d.speedKph!.current).toBe(false);
 });
