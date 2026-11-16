@@ -151,14 +151,7 @@ struct APIDataSource: VoltaDataSource {
     func me() async throws -> Device { try await get("me") }
     func revoke() async throws { _ = try await request("me", method: "DELETE") }
     func vehicles() async throws -> [Vehicle] { try await get("vehicles") }
-    /// A fresh status that commands may rely on; see `CommandStatusLedger`.
-    func status(vehicleID: Int) async throws -> VehicleStatus {
-        let status: VehicleStatus = try await get("vehicles/\(vehicleID)/status")
-        CommandStatusLedger.record(backendID: commandBackendID, vehicleID: vehicleID)
-        return status
-    }
-    func displayStatus(vehicleID: Int) async throws -> VehicleStatus { try await get("vehicles/\(vehicleID)/status") }
-    var commandsRequireFreshStatus: Bool { true }
+    func status(vehicleID: Int) async throws -> VehicleStatus { try await get("vehicles/\(vehicleID)/status") }
     func summary(vehicleID: Int, range: SummaryRange) async throws -> ActivitySummary {
         var query = [URLQueryItem(name: "range", value: range.rawValue)]
         if let tz = Self.summaryTimeZone() { query.append(.init(name: "tz", value: tz)) }

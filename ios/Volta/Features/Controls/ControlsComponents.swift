@@ -18,7 +18,7 @@ struct VehicleCommandContext {
 
     /// `command` can be sent now: supported, and nothing else in flight or unresolved.
     func canStart(_ command: VehicleCommand) -> Bool {
-        coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
+        model.canStart(command, coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID)
     }
 
     /// The coordinator's latest activity is `command` and still sending.

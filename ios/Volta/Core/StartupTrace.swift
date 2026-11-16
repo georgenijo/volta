@@ -1,6 +1,18 @@
 import Foundation
+import Observation
 import QuartzCore
 import os
+
+/// Whether this process has put its first frame on screen. Views not needed
+/// to read the screen (the dashboard's MapKit backdrop) wait for it, so they
+/// never hold up the first frame. True for every later mount.
+@MainActor @Observable
+final class LaunchFrame {
+    static let shared = LaunchFrame()
+    /// Xcode previews have no app root to report a frame, so they start shown.
+    private(set) var isShown = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    fileprivate func markShown() { isShown = true }
+}
 
 /// Startup milestones, each logged once per process with the milliseconds
 /// since the process started. `scripts/startup-fixture.py` benchmarks read
@@ -80,5 +92,6 @@ private final class NextRefresh: NSObject {
         let milestones = waiting
         waiting = []
         milestones.forEach(StartupTrace.log)
+        if milestones.contains(.firstFrame) { LaunchFrame.shared.markShown() }
     }
 }

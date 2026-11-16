@@ -45,6 +45,17 @@ final class ControlsModel {
 
     init(status: VehicleStatus?) { apply(status) }
 
+    /// The values come from the dashboard saved by an earlier launch, not
+    /// from the server: no command may be based on them.
+    var showsSavedStatus: Bool { status?.telemetryFreshness?.savedAt != nil }
+
+    /// `command` can be sent now: the coordinator would start it, and the
+    /// values it is based on were fetched in this process.
+    func canStart(_ command: VehicleCommand, coordinator: VehicleCommandCoordinator,
+                  dataSource: any VoltaDataSource, vehicleID: Int) -> Bool {
+        !showsSavedStatus && coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
+    }
+
     /// The limit to show: what the owner is stepping to, else the observed one.
     var displayedChargeLimit: Int? { pendingChargeLimit ?? chargeLimit }
     /// The cabin temperature to show: what the owner is stepping to, else the observed one.
@@ -65,7 +76,7 @@ final class ControlsModel {
     /// Takes a status the Dashboard loaded, unless this model already shows a newer one.
     func observe(_ status: VehicleStatus, dataSource: any VoltaDataSource, vehicleID: Int) {
         logKey = VehicleCommandLog.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID)
-        guard status.updatedAt >= (self.status?.updatedAt ?? .distantPast) else { return }
+        guard status.updatedAt >= (self.status?.updatedAt ?? .distantPast) || showsSavedStatus else { return }
         refreshGeneration += 1
         apply(status)
     }
@@ -92,6 +103,8 @@ final class ControlsModel {
         logKey = key
         refreshGeneration += 1
         // Only a send the coordinator will actually start is logged.
+        // Saved values never reach the coordinator.
+        guard !showsSavedStatus else { return false }
         let entry = coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
             ? log.begin(command, label: label, key: key) : nil
         let outcome = await coordinator.perform(command, label: label, dataSource: dataSource, vehicleID: vehicleID)
@@ -234,7 +247,7 @@ final class ControlsModel {
     private func sendStepped(_ command: VehicleCommand, coordinator: VehicleCommandCoordinator,
                              dataSource: any VoltaDataSource, vehicleID: Int,
                              surfaces: (any VehicleSurfaces)?) async {
-        guard coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID) else {
+        guard canStart(command, coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) else {
             let key = VehicleCommandLog.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID)
             log.finish(log.begin(command, label: command.controlLabel, key: key), with: .failed)
             return

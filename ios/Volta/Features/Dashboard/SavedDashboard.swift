@@ -224,7 +224,7 @@ final class DashboardPrefetch {
         self.sentAt = sentAt
         issued = surfaces?.nextStatusToken()
         // Detached: a main-actor task would not start until the first frame is built.
-        status = Task.detached(priority: .userInitiated) { try await dataSource.displayStatus(vehicleID: vehicleID) }
+        status = Task.detached(priority: .userInitiated) { try await dataSource.status(vehicleID: vehicleID) }
     }
 
     func cancel() { status.cancel() }

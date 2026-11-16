@@ -65,11 +65,6 @@ final class DashboardModel {
     /// The shown status came from the saved dashboard, not this process.
     private(set) var showsSavedStatus = false
 
-    /// The status the Controls sheet may start from: never saved status, so
-    /// no control or command is based on it. (`ControlsView` waits for its own
-    /// fresh status either way; see `VehicleCommandCoordinator.hasFreshStatus`.)
-    var controlsInitialStatus: VehicleStatus? { showsSavedStatus ? nil : status }
-
     /// Whether returning to the foreground should reload: fresh data is over
     /// 30 s old and no load is still filling the screen. Saved data alone
     /// never counts, so a launch with saved data sends one set of requests.
@@ -157,7 +152,7 @@ final class DashboardModel {
                         guard !Task.isCancelled, Self.isTransportFailure(error) else { throw error }
                     }
                 }
-                return try await dataSource.displayStatus(vehicleID: vehicleID)
+                return try await dataSource.status(vehicleID: vehicleID)
             }
             group.addTask { .timeline(await Self.result { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }) }
             for range in SummaryRange.allCases {

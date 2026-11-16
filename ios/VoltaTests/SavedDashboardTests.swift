@@ -11,6 +11,9 @@ private final class StubSource: VoltaDataSource, @unchecked Sendable {
     var statusHandler: @Sendable () async throws -> VehicleStatus = { makeStatus() }
     var timelineHandler: @Sendable () async throws -> [TimelineSegment] = { [] }
     var summaryHandler: @Sendable (SummaryRange) async throws -> ActivitySummary = { makeSummary($0) }
+    var capabilities = VehicleCommandCapabilities(available: false, reason: nil, commands: [])
+    /// Names of the commands sent, in order.
+    let sentCommands = Mutex<[String]>([])
 
     func vehicles() async throws -> [Vehicle] { try await vehiclesHandler() }
     func status(vehicleID: Int) async throws -> VehicleStatus { try await statusHandler() }
@@ -26,11 +29,10 @@ private final class StubSource: VoltaDataSource, @unchecked Sendable {
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { throw VoltaError.notFound }
     func places(vehicleID: Int) async throws -> [Place] { throw VoltaError.notFound }
     var commandBackendID: String { "stub-backend" }
-    func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities {
-        VehicleCommandCapabilities(available: false, reason: nil, commands: [])
-    }
+    func commandCapabilities(vehicleID: Int) async throws -> VehicleCommandCapabilities { capabilities }
     func command(vehicleID: Int, command: VehicleCommand, intentID: UUID) async throws -> VehicleCommandResult {
-        throw VoltaError.notFound
+        sentCommands.withLock { $0.append(command.name) }
+        return VehicleCommandResult(command: command.name, requestID: "request_123", replayed: false)
     }
 }
 
@@ -243,13 +245,11 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertNil(model.lastLoadedAt, "saved data is not a recent load")
         XCTAssertFalse(model.foregroundRefreshDue(now: .now.addingTimeInterval(3600)),
                        "becoming active while saved data shows sends nothing more")
-        XCTAssertNil(model.controlsInitialStatus, "the Controls sheet never starts from saved status")
         await gate.open()
         await task.value
         let statuses = await calls.value
         XCTAssertEqual(statuses, 1)
         XCTAssertNotNil(model.lastLoadedAt)
-        XCTAssertEqual(model.controlsInitialStatus?.batteryLevel, 90)
         XCTAssertTrue(model.foregroundRefreshDue(now: .now.addingTimeInterval(31)))
     }
 
@@ -401,75 +401,68 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         #endif
     }
 
-    func testSavedStatusEnablesNoCommandUntilTheSheetHasFreshStatus() async throws {
-        enum StatusMode { case gated, fails, fresh }
-        let mode = Mutex(StatusMode.fresh), commands = Mutex<[String]>([])
-        let release = DispatchSemaphore(value: 0)
-        let capabilities = try JSONSerialization.data(withJSONObject: [
-            "available": true, "commands": Array(VehicleCommand.supportedNames).sorted()])
-        var fresh = try XCTUnwrap(JSONSerialization.jsonObject(with: DecodingTests.fixture("status")) as? [String: Any])
-        fresh["chargeLimit"] = 90
-        let freshData = try JSONSerialization.data(withJSONObject: fresh)
-        StubProtocol.handler.withLock {
-            $0 = { request in
-                let path = request.url?.path ?? ""
-                if path == "/v1/vehicles/1/commands" { return (200, capabilities) }
-                if path.hasPrefix("/v1/vehicles/1/commands/") {
-                    let name = String(path.dropFirst("/v1/vehicles/1/commands/".count))
-                    commands.withLock { $0.append(name) }
-                    return (200, Data(#"{"ok":true,"command":"\#(name)","requestId":"request_123"}"#.utf8))
-                }
-                switch mode.withLock({ $0 }) {
-                case .gated: release.wait(); return (200, freshData)
-                case .fails: return (503, try DecodingTests.fixture("error"))
-                case .fresh: return (200, freshData)
-                }
-            }
-        }
-        StubProtocol.responseHeaders.withLock { $0 = [:] }
-        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
-        let api = APIDataSource(baseURL: URL(string: "https://volta.example")!, token: "synthetic-\(UUID())",
-                                session: URLSession(configuration: config))
+    /// The dashboard's controls model is fed whatever the dashboard shows
+    /// (`DashboardView` observes `model.status`), the saved status included.
+    func testSavedStatusSendsNoCommandUntilFreshStatusReplacesIt() async throws {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.capabilities = VehicleCommandCapabilities(available: true, reason: nil,
+                                                         commands: Array(VehicleCommand.supportedNames).sorted())
+        var freshStatus = makeStatus(); freshStatus.chargeLimit = 90
+        source.statusHandler = { await gate.wait(); throw VoltaError.unreachable("offline") }
         let coordinator = VehicleCommandCoordinator(store: VehicleCommandIntentStore(inMemory: []))
+        let controls = ControlsModel(status: nil)
+        controls.log = VehicleCommandLog()
 
-        // Saved status from the last launch: charge limit 80, a location
+        // Saved status from the last launch: charge limit 80, and a location
         // observed just now (as saved), which HomeLink would otherwise accept.
         var savedStatus = makeStatus()
         savedStatus.location = Location(latitude: 37.4419, longitude: -122.143)
         savedStatus.locationUpdatedAt = .now
         var dashboard = saved(); dashboard.status = savedStatus
-        let controls = ControlsModel(status: dashboard.labelledStatus)
+        let load = Task { await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: dashboard)) }
+        await waitUntil { model.status != nil }
+        controls.observe(try XCTUnwrap(model.status), dataSource: source, vehicleID: 1)
+        XCTAssertTrue(controls.showsSavedStatus)
         XCTAssertNil(ControlsView.homeLinkCommand(status: controls.status), "saved status never offers HomeLink")
 
-        // The sheet opens: capabilities succeed while its status is held back.
-        _ = try await api.displayStatus(vehicleID: 1)  // the dashboard's status never counts
-        mode.withLock { $0 = .gated }
-        await coordinator.refreshCapabilities(dataSource: api, vehicleID: 1)
-        XCTAssertTrue(coordinator.supports(.setChargeLimit(percent: 85), dataSource: api, vehicleID: 1))
-        let pending = Task { await controls.refresh(dataSource: api, vehicleID: 1) }
-        XCTAssertFalse(coordinator.canStart(.setChargeLimit(percent: 85), dataSource: api, vehicleID: 1))
-        await controls.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: api, vehicleID: 1)
-        XCTAssertEqual(controls.chargeLimit, 80)
-        release.signal()
-        await pending.value
-        XCTAssertEqual(commands.withLock { $0 }, [], "no command while the sheet's status was pending")
+        // Capabilities succeed while fresh status is still pending.
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 1)
+        XCTAssertTrue(coordinator.canStart(.setChargeLimit(percent: 85), dataSource: source, vehicleID: 1))
+        XCTAssertFalse(controls.canStart(.setChargeLimit(percent: 85), coordinator: coordinator, dataSource: source, vehicleID: 1))
+        await controls.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        await controls.setLocked(false, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        controls.stepChargeLimit(by: 5, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        await controls.commitChargeLimit(coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(source.sentCommands.withLock { $0 }, [], "nothing sent while status is pending")
 
-        // Reopened: the status request fails, so the saved values stay unusable.
-        let reopened = ControlsModel(status: dashboard.labelledStatus)
-        mode.withLock { $0 = .fails }
-        await coordinator.refreshCapabilities(dataSource: api, vehicleID: 1)
-        await reopened.refresh(dataSource: api, vehicleID: 1)
-        await reopened.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: api, vehicleID: 1)
-        await reopened.setLocked(false, coordinator: coordinator, dataSource: api, vehicleID: 1)
-        XCTAssertEqual(commands.withLock { $0 }, [], "no command after the refresh failed")
+        // The refresh fails: the saved values stay, and stay unusable.
+        await gate.open()
+        await load.value
+        XCTAssertNotNil(model.refreshError)
+        XCTAssertTrue(model.showsSavedStatus)
+        await controls.refresh(dataSource: source, vehicleID: 1)
+        XCTAssertTrue(controls.showsSavedStatus)
+        await controls.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(source.sentCommands.withLock { $0 }, [], "nothing sent after the refresh failed")
 
-        // A fresh status from the sheet itself enables commands, based on it.
-        mode.withLock { $0 = .fresh }
-        await reopened.refresh(dataSource: api, vehicleID: 1)
-        XCTAssertEqual(reopened.chargeLimit, 90)
-        XCTAssertTrue(coordinator.canStart(.setChargeLimit(percent: 95), dataSource: api, vehicleID: 1))
-        await reopened.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: api, vehicleID: 1)
-        XCTAssertEqual(commands.withLock { $0 }, ["set_charge_limit"])
+        // Fresh status replaces it; commands are based on it.
+        let fresh = freshStatus
+        source.statusHandler = { fresh }
+        await model.load(dataSource: source, vehicleID: 1)
+        controls.observe(try XCTUnwrap(model.status), dataSource: source, vehicleID: 1)
+        XCTAssertFalse(controls.showsSavedStatus)
+        XCTAssertEqual(controls.chargeLimit, 90)
+        await controls.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(source.sentCommands.withLock { $0 }, ["set_charge_limit"])
+    }
+
+    func testSavedLockAndSentryStatesAreDrawnNeutral() {
+        let saved = DockTile.tiles(locked: false, climateOn: nil, sentry: true, saved: true) { _ in true }
+        XCTAssertEqual(saved.first { $0.kind == .lock }?.tone, .neutral)
+        XCTAssertEqual(saved.first { $0.kind == .sentry }?.tone, .neutral)
+        let live = DockTile.tiles(locked: false, climateOn: nil, sentry: true) { _ in true }
+        XCTAssertEqual(live.first { $0.kind == .lock }?.tone, .attention)
+        XCTAssertEqual(live.first { $0.kind == .sentry }?.tone, .armed)
     }
 
     func testLiveChargingNamesSavedDataAndAFailedRefresh() {

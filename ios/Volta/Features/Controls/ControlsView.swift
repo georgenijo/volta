@@ -697,7 +697,7 @@ struct ClimateControlsView: View {
     }
 
     private func canSend(_ command: VehicleCommand) -> Bool {
-        coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID)
+        model.canStart(command, coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID)
     }
     private func send(_ command: VehicleCommand, label: String) {
         Task { await model.send(command, label: label, coordinator: coordinator, dataSource: dataSource,
