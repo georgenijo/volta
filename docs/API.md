@@ -139,6 +139,7 @@ the device's own token was revoked.
 | GET | `/v1/vehicles/{id}/mileage` | `bucket=day\|week\|month` | `[MileageBucket]` |
 | GET | `/v1/vehicles/{id}/firmware` | – | `[FirmwareUpdate]` |
 | GET | `/v1/vehicles/{id}/places` | – | `[Place]` (TeslaMate geofences) |
+| GET | `/v1/vehicles/{id}/tires` | `from,to,tz=UTC` | `TireHistory` (see [Tyre pressure history](#tyre-pressure-history)) |
 | GET | `/v1/vehicles/{id}/commands` | – | `CommandCapability` |
 | POST | `/v1/vehicles/{id}/commands/{name}` | command-specific object | `CommandReceipt` |
 
@@ -601,6 +602,70 @@ its events atomically. `PATCH /v1/vehicles/{id}/service-events/{event}` takes th
 completion body; `DELETE` removes that completion and recalculates due from the
 remaining history. Every mutation scopes the item/event to its vehicle. iOS
 exposes these via row menus and asks before deleting history.
+
+## Tyre pressure history
+
+`GET /v1/vehicles/{id}/tires` requires device pairing and validates the
+TeslaMate vehicle ID (another or unscoped car is 404). It runs one read-only
+SELECT over TeslaMate `positions.tpms_pressure_fl/fr/rl/rr`; it writes nothing
+and calls no Tesla or third-party service.
+
+Query: optional `from` and `to` (ISO 8601 instants, `from` inclusive, `to`
+exclusive; `to` defaults to now, so readings stamped in the future are left
+out, and `from` must precede `to` or, without one, now) and `tz` (IANA zone, default `UTC`). Bad values are
+400.
+
+```json
+{
+  "vehicleId": 1, "source": "teslamate", "unit": "bar",
+  "bucket": "day", "timeZone": "America/Los_Angeles",
+  "from": "2026-08-18T07:00:00.000Z", "to": "2026-11-16T20:00:00.000Z",
+  "firstReadingAt": "2026-08-18T15:02:11.000Z", "lastReadingAt": "2026-11-16T19:41:05.000Z",
+  "wheels": {
+    "fl": [{ "start": "2026-08-18T07:00:00.000Z", "minBar": 2.9, "avgBar": 3.01,
+             "maxBar": 3.1, "readings": 412, "firstAt": "…", "lastAt": "…",
+             "peerReadings": 409, "peerDeltaBar": -0.02, "peerBar": 3.03, "peerWheels": 3 }],
+    "fr": [], "rl": [], "rr": []
+  }
+}
+```
+
+- Each wheel has one point per local calendar day in `tz` (`bucket: "day"`),
+  or per local ISO week starting Monday when the span from `from` (or the
+  first reading) to `to` is over 400 days (`bucket: "week"`). `start` is the
+  bucket's local midnight as a UTC instant.
+- `minBar`, `avgBar` and `maxBar` are the bucket's lowest, mean and highest
+  reading in bar. TeslaMate stores 0.1 bar steps; the mean is not rounded.
+  Clients convert to psi for display.
+- Values of zero or below, or above 10 bar, mean the sensor had no reading and
+  are dropped.
+- `peerReadings`, `peerDeltaBar` and `peerBar` compare each wheel with the
+  others read at the same moment. Each TeslaMate `positions` row holds all four
+  sensors read together. A wheel's value in a row counts only when at least two
+  other wheels in that row also have plausible values. Its deviation is the
+  wheel minus the mean of those other wheels. `peerReadings` is the number of
+  such rows in the bucket, `peerDeltaBar` is their mean deviation, and
+  `peerBar` is the mean of the other wheels' means. Both are null when
+  `peerReadings` is 0. Each comparison uses only one row, so a sensor that
+  misses the cold morning readings is not compared against them: its daily
+  `minBar` can sit above its neighbours' while `peerDeltaBar` stays near 0.
+  `peerWheels` is how many other wheels read in every one of those rows (2 or
+  3); it is null when that number varied between rows or `peerReadings` is 0,
+  so a client never names more tyres than took part.
+  The server supplies these numbers only; it does not decide whether a tyre is
+  low.
+- Weekly points combine their days weighted by row count. `avgBar`,
+  `peerDeltaBar` and `peerBar` are sums divided by counts over the whole week,
+  never a mean of daily means.
+- A bucket with no reading is absent, never zero, and nothing is interpolated.
+  A wheel whose sensor never reported has an empty array. With no readings at
+  all, every array is empty and `firstReadingAt`/`lastReadingAt` are null.
+- Neither TeslaMate nor Fleet Telemetry records the door-placard recommended
+  pressure, so the response has none. The app draws its fixed 2.5 bar low
+  guide and labels it as a guide, not a recommendation.
+
+No database change is needed: the API's existing read-only TeslaMate role
+already reads `positions`. No deployment has been performed for this branch.
 
 ### Location age for nearby controls
 

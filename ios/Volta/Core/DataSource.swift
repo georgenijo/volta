@@ -25,6 +25,8 @@ protocol VoltaDataSource: Sendable {
     func deleteServiceEvent(vehicleID: Int, eventID: String) async throws
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation]
     func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary>
+    /// Per-wheel pressure history (`GET /v1/vehicles/{id}/tires`).
+    func tireHistory(vehicleID: Int, range: DateRange) async throws -> TirePressureHistory
     /// Stable local identity for isolating saved command intents by backend.
     var commandBackendID: String { get }
     /// Demo sources may simulate supported actions, but are never live-ready.
@@ -94,4 +96,5 @@ extension VoltaDataSource {
     func deleteServiceEvent(vehicleID: Int, eventID: String) async throws { throw VoltaError.commandsUnavailable }
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation] { throw VoltaError.notFound }
     func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary> { throw VoltaError.notFound }
+    func tireHistory(vehicleID: Int, range: DateRange) async throws -> TirePressureHistory { throw VoltaError.notFound }
 }

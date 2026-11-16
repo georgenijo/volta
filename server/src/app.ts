@@ -8,6 +8,7 @@ import { TeslaLink, unavailableStatus } from './tesla';
 import { commandName, commandParams, idempotencyKey } from './commands';
 import type { ChargingHistory } from './history';
 import type { DriveDetail } from './drive-detail';
+import { tireInput } from './tires';
 import { choice, driveId, integer, listInput, page, timeZone } from './validation';
 
 type Device = Awaited<ReturnType<Auth['authenticate']>>;
@@ -68,6 +69,7 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
   app.get('/v1/vehicles/:id/battery', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.battery(id)); });
   app.get('/v1/vehicles/:id/mileage', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.mileage(id, choice(c.req.query('bucket'), ['day','week','month'], 'month'))); });
   app.get('/v1/vehicles/:id/firmware', async c => { const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id); return c.json(await telemetry.firmware(id)); });
+  app.get('/v1/vehicles/:id/tires', async c => c.json(await telemetry.tires(integer(c.req.param('id'), 'id'), tireInput(c.req.query()))));
   app.get('/v1/vehicles/:id/places', async c => { await telemetry.vehicle(integer(c.req.param('id'), 'id')); return c.json(await telemetry.places()); });
   const services = () => { if (!service) throw new ApiError(503, 'service_unavailable', 'Service storage is unavailable'); return service; };
   app.get('/v1/vehicles/:id/service', async c => {

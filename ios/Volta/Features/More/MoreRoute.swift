@@ -12,6 +12,8 @@ enum MoreRoute: Hashable, Sendable {
     case places, security, dataManagement, support
     /// Pages Charger Map pushes: a place's sessions, then one session.
     case chargerPlace(ChargerLocation), chargerSession(ChargeSummary)
+    /// Charge curves of several sessions on one chart.
+    case chargeComparison(ChargeComparisonRequest)
 
     /// The page this route opens.
     @MainActor @ViewBuilder
@@ -40,6 +42,7 @@ enum MoreRoute: Hashable, Sendable {
         case .support: AboutView()
         case .chargerPlace(let location): ChargerLocationSessionsView(location: location)
         case .chargerSession(let session): ChargingDetailView(charge: session)
+        case .chargeComparison(let request): ChargeComparisonView(request: request)
         }
     }
 }

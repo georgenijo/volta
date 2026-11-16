@@ -127,6 +127,7 @@ struct ChargingHistoryView: View {
             case .charge(let id):
                 if let charge = feed.items.first(where: { $0.id == id }) {
                     ChargingDetailView(charge: charge)
+                        .environment(\.pushMoreRoute) { [path = $path] next in path.wrappedValue.append(.insight(next)) }
                 } else {
                     HistoryMissingSelection(systemImage: "bolt.fill", title: "Session not loaded",
                                             message: "This charging session is no longer in the list for this range.")

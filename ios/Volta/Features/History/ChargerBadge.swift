@@ -81,22 +81,26 @@ enum ChargerKind: Hashable, Sendable {
 struct ChargerBadge: View {
     var kind: ChargerKind
     var size: CGFloat = 28
+    /// Raised fill and a secondary-text glyph, for screens where colour
+    /// already means something else (a chart series).
+    var monochrome = false
 
     var body: some View {
         let ring = max(1, size / 14)
+        let glyph = monochrome ? Color.voltaTextSecondary : Color.voltaOnAccent
         ZStack {
-            Circle().fill(kind.fill)
+            Circle().fill(monochrome ? Color.voltaRaised : kind.fill)
             if kind == .supercharger {
-                Text("T").font(.system(size: size * 0.5, weight: .heavy)).foregroundStyle(.voltaOnAccent)
+                Text("T").font(.system(size: size * 0.5, weight: .heavy)).foregroundStyle(glyph)
             } else {
                 Image(systemName: kind.systemImage)
                     .font(.system(size: size * 13 / 28, weight: .semibold))
-                    .foregroundStyle(.voltaOnAccent)
+                    .foregroundStyle(glyph)
             }
         }
         .frame(width: size, height: size)
-        .overlay(Circle().strokeBorder(Color.voltaOnAccent, lineWidth: ring))
-        .shadow(color: Color.voltaShadow.opacity(size >= 24 ? 0.35 : 0), radius: 3, y: 1)
+        .overlay(Circle().strokeBorder(monochrome ? Color.voltaHairline : Color.voltaOnAccent, lineWidth: monochrome ? 1 : ring))
+        .shadow(color: Color.voltaShadow.opacity(size >= 24 && !monochrome ? 0.35 : 0), radius: 3, y: 1)
         .accessibilityHidden(true)
     }
 }

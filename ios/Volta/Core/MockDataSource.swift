@@ -67,7 +67,7 @@ struct MockDataSource: VoltaDataSource {
             tpms: TirePressures(fl: TireReading(pressureBar: 2.9, updatedAt: now.addingTimeInterval(-7200)),
                                fr: TireReading(pressureBar: 2.9, updatedAt: now.addingTimeInterval(-7200)),
                                rl: TireReading(pressureBar: 2.3, updatedAt: now.addingTimeInterval(-3600)),
-                               rr: TireReading(pressureBar: 2.8, updatedAt: now.addingTimeInterval(-3600))),
+                               rr: Self.tireMissingWheel ? TireReading(pressureBar: nil, updatedAt: nil) : TireReading(pressureBar: 2.8, updatedAt: now.addingTimeInterval(-3600))),
             telemetryFreshness: TelemetryFreshness(connected: true, lastSeenAt: now, recordedAt: [:]))
     }
     private var allDrives: [DriveSummary] {
@@ -134,29 +134,38 @@ struct MockDataSource: VoltaDataSource {
         }
     }
     /// Synthetic Bay Area sessions. The newest is a priced Tesla Supercharger
-    /// visit from Fleet Telemetry (negative id, 196 kW peak, 1 Hz-derived
-    /// curves); the next telemetry fast charge has no recorded price so its
-    /// detail shows an estimated cost. The last fast charge has no network brand.
+    /// visit from Fleet Telemetry (negative id, 238 kW peak from a low start,
+    /// 1 Hz-derived curves); the next telemetry fast charge (196 kW) has no
+    /// recorded price so its detail shows an estimated cost. The last fast
+    /// charge has no network brand. Home sessions start from different levels;
+    /// two are public AC away from home, and one old home session recorded no
+    /// curve (`noCurveChargeID`), so comparisons have something to compare.
     private var allCharges: [ChargeSummary] {
         guard !empty else { return [] }
         return (0..<15).map { i in
-            let fast = i % 5 == 0; let energy = fast ? 43.2 : 22.6
+            let fast = i % 5 == 0, away = !fast && (i == 3 || i == 8)
+            let startLevel = fast ? [15, 22, 31][i / 5] : [49, 38, 55, 44][i % 4]
+            let energy = fast ? 43.2 : (Double(80 - startLevel) * 0.73 * 10).rounded() / 10
             let start = ago(Double(i) * 48 + 15)
-            let duration = fast ? 27.0 : 190.0
+            let acKw = away ? 6.6 : 7.7
+            let duration = fast ? 27.0 : (energy / (acKw * 0.93) * 60).rounded()
             let telemetry = fast && i < 10
-            var charge = ChargeSummary(id: telemetry ? -(i + 1) : i + 1, start: start, end: start.addingTimeInterval(duration * 60), address: fast ? "Mountain View, CA" : home, placeName: fast ? "Mountain View Supercharger" : "Home", energyAddedKwh: energy, energyUsedKwh: energy / 0.92, startBatteryLevel: fast ? 22 : 49, endBatteryLevel: 80, durationMin: duration, maxPowerKw: telemetry ? 196 : fast ? 176 : 7.7, fastCharger: fast, cost: i == 5 ? nil : energy * (fast ? 0.33 : 0.23), currency: "USD", outsideTempAvgC: 16)
-            charge.latitude = fast ? 37.4148 : 37.4419
-            charge.longitude = fast ? -122.0782 : -122.1430
+            let place = fast ? "Mountain View Supercharger" : away ? "Downtown Garage" : "Home"
+            var charge = ChargeSummary(id: telemetry ? -(i + 1) : i + 1, start: start, end: start.addingTimeInterval(duration * 60), address: fast ? "Mountain View, CA" : away ? "Sunnyvale, CA" : home, placeName: place, energyAddedKwh: energy, energyUsedKwh: energy / 0.92, startBatteryLevel: startLevel, endBatteryLevel: 80, durationMin: duration, maxPowerKw: telemetry ? (i == 0 ? 238 : 196) : fast ? 176 : acKw, fastCharger: fast, cost: i == 5 ? nil : energy * (fast ? 0.33 : away ? 0.38 : 0.23), currency: "USD", outsideTempAvgC: 16)
+            charge.latitude = fast ? 37.4148 : away ? 37.3769 : 37.4419
+            charge.longitude = fast ? -122.0782 : away ? -122.0310 : -122.1430
             charge.fastChargerBrand = fast && i < 10 ? "Tesla" : nil
             charge.source = telemetry || i < 3 ? "fleet_telemetry" : "teslamate"
-            charge.city = fast ? "Mountain View" : "Palo Alto"
-            charge.street = fast ? "250 Sample Blvd" : "100 Example Ave"
-            charge.avgPowerKw = fast ? energy / (duration / 60) : 7.1
+            charge.city = fast ? "Mountain View" : away ? "Sunnyvale" : "Palo Alto"
+            charge.street = fast ? "250 Sample Blvd" : away ? "50 Example St" : "100 Example Ave"
+            charge.avgPowerKw = fast ? energy / (duration / 60) : acKw * 0.93
             // Home sessions on even days have a metered grid reading.
-            if !fast, i.isMultiple(of: 2) { charge.energyFromGridKwh = energy / 0.9 }
+            if !fast, !away, i.isMultiple(of: 2) { charge.energyFromGridKwh = energy / 0.9 }
             return charge
         }
     }
+    /// An old home session whose logger recorded no samples.
+    static let noCurveChargeID = 13
     private func page<T: Codable & Hashable & Sendable>(_ items: [T], cursor: String?) throws -> Page<T> {
         let offset: Int
         if let cursor { guard let value = Int(cursor), value >= 0, value <= items.count else { throw VoltaError.server(code: "invalid_cursor", message: "Invalid demo cursor.") }; offset = value } else { offset = 0 }
@@ -208,13 +217,14 @@ struct MockDataSource: VoltaDataSource {
         if id == Self.liveChargeID, Self.showsCharging { return liveCharge }
         guard let charge = allCharges.first(where: { $0.id == id }) else { throw VoltaError.notFound }
         if charge.source == "fleet_telemetry", charge.fastCharger { return Self.telemetryFastCharge(charge) }
+        if charge.id == Self.noCurveChargeID { return ChargeDetail(summary: charge, samples: [], efficiency: nil) }
         let samples = (0...20).map { i in
-            let f = Double(i) / 20; let power = (charge.maxPowerKw ?? 7.7) * (charge.fastCharger ? 1 - f * 0.75 : 1)
+            let f = Double(i) / 20; let power = (charge.maxPowerKw ?? 7.7) * (charge.fastCharger ? 1 - f * 0.75 : f > 0.92 ? 0.7 : 1)
             return ChargeSample(t: charge.start.addingTimeInterval(charge.durationMin * 60 * f), batteryLevel: Int(Double(charge.startBatteryLevel ?? 49) + f * Double(80 - (charge.startBatteryLevel ?? 49))), powerKw: power, voltage: charge.fastCharger ? 375 : 240, currentA: power * 1000 / (charge.fastCharger ? 375 : 240), ratedRangeKm: 250 + f * 143)
         }
         let telemetrySamples = (0...max(1, Int(charge.durationMin))).map { minute in
             let f = Double(minute) / max(charge.durationMin, 1)
-            let power = (charge.maxPowerKw ?? 7.7) * (charge.fastCharger ? 1 - f * 0.75 : 1)
+            let power = (charge.maxPowerKw ?? 7.7) * (charge.fastCharger ? 1 - f * 0.75 : f > 0.94 ? 0.6 + 0.4 * (1 - f) / 0.06 : 1)
             let level = Double(charge.startBatteryLevel ?? 49) + f * Double(80 - (charge.startBatteryLevel ?? 49))
             return FleetTelemetrySample(
                 t: charge.start.addingTimeInterval(Double(minute) * 60), latitude: nil, longitude: nil,
@@ -239,11 +249,12 @@ struct MockDataSource: VoltaDataSource {
     private static func telemetryFastCharge(_ charge: ChargeSummary) -> ChargeDetail {
         let duration = charge.durationMin * 60
         let from = Double(charge.startBatteryLevel ?? 22), to = Double(charge.endBatteryLevel ?? 80)
+        let peak = charge.maxPowerKw ?? 196, scale = peak / 196
         func power(_ f: Double) -> Double {
             guard f >= 0, f <= 1 else { return 0 }
-            if f < 0.06 { return 196 * f / 0.06 }
-            if f < 0.22 { return 196 - (f - 0.06) * 40 }
-            return max(38, 189.6 * pow(1 - (f - 0.22) / 0.78, 1.15) + 30 * (f - 0.22))
+            if f < 0.06 { return peak * f / 0.06 }
+            if f < 0.22 { return peak - (f - 0.06) * 40 * scale }
+            return max(38, 189.6 * scale * pow(1 - (f - 0.22) / 0.78, 1.15) + 30 * (f - 0.22))
         }
         let rows = stride(from: -300.0, through: duration, by: 15).map { offset -> FleetTelemetrySample in
             let f = offset / duration
@@ -279,7 +290,7 @@ struct MockDataSource: VoltaDataSource {
         enum Spot { case home, work, supercharger }
         var events: [(start: Date, end: Date, spot: Spot)] =
             allDrives.map { ($0.start, $0.end ?? now, $0.endAddress == home ? .home : .work) }
-            + allCharges.map { ($0.start, $0.end ?? now, $0.fastCharger ? .supercharger : .home) }
+            + allCharges.map { ($0.start, $0.end ?? now, $0.fastCharger ? .supercharger : $0.isAtHome ? .home : .work) }
         if Self.showsCharging { events.append((now.addingTimeInterval(-Self.liveChargeMinutes * 60), now, .home)) }
         events.sort { $0.start < $1.start }
         var position = ago(720), spot = Spot.home
@@ -390,12 +401,12 @@ extension MockDataSource {
     func chargerLocations(vehicleID: Int) async throws -> [ChargerLocation] {
         try check(vehicleID)
         guard !empty else { return [] }
-        return [ChargerLocation(id: "g:1", name: "Home", latitude: 37.4419, longitude: -122.1430, sessionCount: 12, lastVisit: ago(15), energyAddedKwh: 271.2, avgPowerKw: 7.7, powerSessionCount: 12, cost: 62.38, currency: "USD"),
+        return [ChargerLocation(id: "g:1", name: "Home", latitude: 37.4419, longitude: -122.1430, sessionCount: 10, lastVisit: ago(15), energyAddedKwh: 271.2, avgPowerKw: 7.7, powerSessionCount: 12, cost: 62.38, currency: "USD"),
                 ChargerLocation(id: "g:2", name: "Mountain View Supercharger", latitude: 37.4148, longitude: -122.0782, sessionCount: 3, lastVisit: ago(207), energyAddedKwh: 129.6, avgPowerKw: 104.3, powerSessionCount: 3, cost: nil, currency: nil)]
     }
     func chargerSessions(vehicleID: Int, locationID: String, cursor: String?) async throws -> Page<ChargeSummary> {
         try check(vehicleID)
-        return try page(allCharges.filter { locationID == "g:1" ? !$0.fastCharger : $0.fastCharger }, cursor: cursor)
+        return try page(allCharges.filter { locationID == "g:1" ? $0.isAtHome : $0.fastCharger }, cursor: cursor)
     }
 }
 private actor DemoServiceLog {

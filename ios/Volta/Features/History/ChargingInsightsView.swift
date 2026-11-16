@@ -68,6 +68,7 @@ struct ChargingInsightsView: View {
                         .padding(.top, 40)
                 } else {
                     shares(snapshot)
+                    ChargeCurveShortcuts(charges: snapshot.charges)
                 }
             }
         } secondary: {

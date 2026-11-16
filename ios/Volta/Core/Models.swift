@@ -156,7 +156,8 @@ struct TireReading: Codable, Hashable, Sendable {
     var pressureBar: Double?
     var updatedAt: Date?
     /// Visual guide only; the door placard is the authority for cold pressure.
-    var isLow: Bool { pressureBar.map { $0 < 2.5 } ?? false }
+    static let lowGuideBar = 2.5
+    var isLow: Bool { pressureBar.map { $0 < Self.lowGuideBar } ?? false }
 }
 struct TirePressures: Codable, Hashable, Sendable {
     var fl: TireReading

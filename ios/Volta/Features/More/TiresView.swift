@@ -8,7 +8,7 @@ struct TiresView: View {
     @State private var generation = 0
 
     var body: some View {
-        ScreenKit.Page {
+        ScreenKit.Page(scroll: "tires") {
             LoadableContent(state: state, retry: load) { status in
                 VStack(spacing: 24) {
                     if let freshness = status.telemetryFreshness {
@@ -46,6 +46,14 @@ struct TiresView: View {
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("screen.tires")
             }
+            // History and the rotation reminder load on their own, so they
+            // show even when no current reading is available.
+            VStack(spacing: 24) {
+                TireHistorySection()
+                TireRotationRow()
+            }
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
         }
         .screenKitPage("Tires")
         .task(id: vehicleID) { state = .loading; await load() }

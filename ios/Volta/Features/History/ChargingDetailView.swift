@@ -40,6 +40,7 @@ struct ChargingDetailView: View {
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
     @Environment(\.historySideBars) private var sideBars
+    @Environment(\.pushMoreRoute) private var pushRoute
     /// Optional so previews without an app model still render.
     @Environment(AppModel.self) private var model: AppModel?
     @State private var loader = HistoryDetailLoader<ChargeDetail>()
@@ -509,6 +510,10 @@ struct ChargingDetailView: View {
                                  summaryPeak: summary.maxPowerKw, height: 230)
                     .accessibilityIdentifier("charge.curve")
                 sourceNote(power)
+            }
+            if let pushRoute {
+                PillButton("Compare with…", systemImage: "chart.xyaxis.line") { pushRoute(.chargeComparison(.comparing(summary))) }
+                    .accessibilityIdentifier("charge.compare")
             }
         }
     }

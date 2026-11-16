@@ -7,6 +7,7 @@ import { FleetDrives, replacedDrive, overlappingWindows, resolveDriveSources, te
 import { FleetSeries } from './fleet-series';
 import { FleetCharges, chargeGroups, coveredCharge, failedCharge, limited, telemetryChargeId, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
 import { FleetLive, liveValues, teslamateCurrentMs, type LiveDrive, type LiveReading } from './fleet-live';
+import { TireHistory, type TireInput } from './tires';
 import { applyDriveEnergy, scoreFromStats, aggregateDriveScore } from './drive-parity';
 
 export class Telemetry {
@@ -27,6 +28,8 @@ export class Telemetry {
       return null;
     }
   }
+  /** Per-wheel pressure history (see tires.ts). */
+  async tires(id: number, input: TireInput) { await this.vehicle(id); return new TireHistory(this.sql, this.clock).read(id, input); }
   async vehicle(id: number) {
     this.visible(id);
     const [car] = await this.sql`SELECT id, efficiency FROM public.cars WHERE id = ${id}`;

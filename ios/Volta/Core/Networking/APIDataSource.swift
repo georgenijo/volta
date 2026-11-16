@@ -177,6 +177,15 @@ struct APIDataSource: VoltaDataSource {
     static func summaryTimeZone(_ zone: TimeZone = .current) -> String? {
         TimeZone.knownTimeZoneIdentifiers.contains(zone.identifier) ? zone.identifier : nil
     }
+    /// Days are the device's local days (`tz`), like `/summary`.
+    func tireHistory(vehicleID: Int, range: DateRange) async throws -> TirePressureHistory {
+        let formatter = ISO8601DateFormatter()
+        var query: [URLQueryItem] = []
+        if let from = range.from { query.append(.init(name: "from", value: formatter.string(from: from))) }
+        if let to = range.to { query.append(.init(name: "to", value: formatter.string(from: to))) }
+        if let tz = Self.summaryTimeZone() { query.append(.init(name: "tz", value: tz)) }
+        return try await get("vehicles/\(vehicleID)/tires", query: query)
+    }
     func timeline(vehicleID: Int, hours: Int) async throws -> [TimelineSegment] { try await get("vehicles/\(vehicleID)/timeline", query: [.init(name: "hours", value: String(hours))]) }
     func drives(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<DriveSummary> { try await get("vehicles/\(vehicleID)/drives", query: listQuery(range, cursor)) }
     func drive(id: Int) async throws -> DriveDetail { try await get("drives/\(id)") }
