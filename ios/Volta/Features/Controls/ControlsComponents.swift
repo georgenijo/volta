@@ -168,19 +168,15 @@ struct CommandLogList: View {
 
 extension VehicleCommandCoordinator {
     /// Retries a saved request and writes the result to its session log
-    /// entry, but only when the retry settled the request (the coordinator
-    /// no longer holds it). A retry that could not start, or that came back
-    /// unresolved again, says nothing about the original send, so its entry
-    /// stays "Outcome unknown".
+    /// entry, but only when the server answered the retry definitely. A retry
+    /// that could not start, or that came back unresolved again, says
+    /// nothing about the original send, so its entry stays "Outcome unknown".
     @discardableResult
     func retry(_ activity: Activity, log: VehicleCommandLog, dataSource: any VoltaDataSource,
                vehicleID: Int) async -> Outcome {
-        func isSaved() -> Bool {
-            pending(dataSource: dataSource, vehicleID: vehicleID).contains { $0.intentID == activity.id }
-        }
-        let wasSaved = isSaved()
+        let answeredBefore = wasAnswered(activity.id)
         let result = await retry(activity.id, dataSource: dataSource, vehicleID: vehicleID)
-        if wasSaved, !isSaved() {
+        if !answeredBefore, wasAnswered(activity.id) {
             log.settleRetry(of: activity.command,
                             key: VehicleCommandLog.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID),
                             with: result)

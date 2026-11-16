@@ -300,6 +300,10 @@ final class VehicleCommandCoordinator {
     private var inFlight: Set<String> = []
     private var storageUnavailable = false
     private var intentRevision = 0
+    /// Requests the server answered definitely in this session (accepted, or
+    /// a terminal failure). Removing the saved intent can fail afterwards, so
+    /// a saved intent alone does not say its request is still unanswered.
+    @ObservationIgnored private var answered: Set<UUID> = []
     @ObservationIgnored private let store: VehicleCommandIntentStore
 
     init(store: VehicleCommandIntentStore? = nil) {
@@ -328,6 +332,9 @@ final class VehicleCommandCoordinator {
     func isBusy(dataSource: any VoltaDataSource, vehicleID: Int) -> Bool {
         inFlight.contains(key(dataSource: dataSource, vehicleID: vehicleID))
     }
+
+    /// Whether the server gave a definite answer for this request.
+    func wasAnswered(_ intentID: UUID) -> Bool { answered.contains(intentID) }
 
     func supports(_ command: VehicleCommand, dataSource: any VoltaDataSource, vehicleID: Int) -> Bool {
         guard !storageUnavailable else { return false }
@@ -444,6 +451,7 @@ final class VehicleCommandCoordinator {
         defer { inFlight.remove(id) }
         do {
             _ = try await dataSource.command(vehicleID: record.vehicleID, command: record.command, intentID: record.intentID)
+            answered.insert(record.intentID)
             do { try removeIntent(record.intentID) }
             catch { storageUnavailable = true }
             let simulated = dataSource.simulatesVehicleCommands
@@ -464,6 +472,7 @@ final class VehicleCommandCoordinator {
                 do { try saveIntent(unresolvedRecord) }
                 catch { storageUnavailable = true }
             } else {
+                answered.insert(record.intentID)
                 do { try removeIntent(record.intentID) }
                 catch { storageUnavailable = true }
             }

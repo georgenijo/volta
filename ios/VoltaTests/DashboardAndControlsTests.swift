@@ -1138,6 +1138,39 @@ private actor SentLimits {
         XCTAssertTrue(commands.pending(dataSource: source, vehicleID: 1).isEmpty)
     }
 
+    func testRetryTheServerAnswersSettlesTheLogEvenWhenTheSavedRequestCannotBeRemoved() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let path = directory.path
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let source = StubSource()
+        let commands = VehicleCommandCoordinator(
+            store: VehicleCommandIntentStore(fileURL: directory.appendingPathComponent("pending.json")))
+        source.commandHandler = { _, _ in throw Boom() }
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus())
+        model.log = VehicleCommandLog()
+        let key = VehicleCommandLog.key(backendID: source.commandBackendID, vehicleID: 1)
+        await model.send(.flash, coordinator: commands, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(model.log.entries(for: key).map(\.outcome), [.unknown])
+
+        // Storage stops accepting writes while the server is answering.
+        source.commandHandler = { command, _ in
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: path)
+            return VehicleCommandResult(command: command.name, requestID: "request-2", replayed: true)
+        }
+        let saved = try XCTUnwrap(commands.activity(dataSource: source, vehicleID: 1))
+        let result = await commands.retry(saved, log: model.log, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(result, .succeeded(simulated: false))
+        XCTAssertEqual(commands.pending(dataSource: source, vehicleID: 1).count, 1,
+                       "the saved request could not be removed")
+        XCTAssertEqual(model.log.entries(for: key).map(\.outcome), [.accepted],
+                       "the server's answer is the evidence, not the storage cleanup")
+    }
+
     func testConfirmedNeedsALaterStatusShowingTheExpectedState() {
         let log = VehicleCommandLog(), key = VehicleCommandLog.key(backendID: "b", vehicleID: 1)
         let sent = Date(timeIntervalSince1970: 1_800_000_000)
