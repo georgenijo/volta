@@ -128,38 +128,7 @@ struct DriveTotals: Equatable {
     }
 }
 
-/// Totals header for the Idles list.
-struct IdleTotals: Equatable {
-    var parkedMinutes: Double
-    var rangeLostKm: PartialSum
-    var sessions: Int
-    /// Sessions with both battery endpoints recorded.
-    var drainKnown: Int
-    /// Battery % per 24h over only the time with a recorded drain.
-    var drainPerDay: Double?
-
-    init(_ idles: [IdleSummary]) {
-        sessions = idles.count
-        parkedMinutes = idles.reduce(0) { $0 + $1.durationMin }
-        rangeLostKm = PartialSum(idles.map(\.rangeLostKm))
-        let measured = idles.filter { $0.drain != nil }
-        drainKnown = measured.count
-        let minutes = measured.reduce(0) { $0 + $1.durationMin }
-        let drain = measured.reduce(0) { $0 + ($1.drain ?? 0) }
-        drainPerDay = minutes >= 60 ? Double(drain) / (minutes / 1440) : nil
-    }
-
-    var notes: [String] {
-        var notes: [String] = []
-        if rangeLostKm.isPartial {
-            notes.append("Range loss recorded for \(rangeLostKm.known) of \(sessions) sessions")
-        }
-        if drainKnown > 0 && drainKnown < sessions {
-            notes.append("Drain rate from the \(drainKnown) of \(sessions) sessions with battery data")
-        }
-        return notes
-    }
-}
+// The Parked (idles) totals live in `ParkedSummary`.
 
 enum HistoryTotalsScope {
     /// Heading for a totals block. Totals cover only loaded pages, so when a

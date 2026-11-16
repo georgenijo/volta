@@ -77,9 +77,12 @@ final class ScreenScreenshotTests: XCTestCase {
     func testIdles() throws {
         defer { app.terminate() }
         try launchDemo()
-        try tap("tab.idles")
-        try waitForScreen("idles")
+        try navigate("tab.idles", to: "idles")
         capture("idles")
+        // A stop opens its detail: pushed on a phone, beside the list on the open inner display.
+        try tapFirstRow(prefix: "row.idle.")
+        try waitForScreen("idle-detail")
+        capture("idle-detail")
     }
 
     func testMore() throws {
@@ -356,7 +359,10 @@ final class ScreenScreenshotTests: XCTestCase {
         // The system tab bar does not reliably carry SwiftUI's tab identifiers,
         // so `tab.<name>` is found by the tab's title.
         if identifier.hasPrefix("tab.") {
-            return app.tabBars.buttons[identifier.dropFirst(4).capitalized].firstMatch
+            let name = String(identifier.dropFirst(4))
+            // The idles tab is titled "Parked"; its identifier keeps the API's name.
+            let title = name == "idles" ? "Parked" : name.capitalized
+            return app.tabBars.buttons[title].firstMatch
         }
         return app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }

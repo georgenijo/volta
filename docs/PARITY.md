@@ -180,8 +180,8 @@ so no D row is `native-verified` or `source-verified`.
 
 | ID | Wattly feature | Status | Evidence | Gates | Next step |
 |---|---|---|---|---|---|
-| I1 | Idle sessions, duration, battery/range loss, vampire drain rate, map (08) | implemented | `Features/History/IdlesHistoryView.swift`, `IdleDetailView.swift`, `server` `idles()` | Idles are derived gaps between drives and charges; battery difference does not prove cause. | None. |
-| I2 | Asleep/Sentry/climate time breakdown (08) | need-data | `IdleDetailView` shows "State breakdown wasn't recorded" when absent; server returns `sentryMinutes` NULL and `asleepMinutes` only with full logger coverage | Missing: recorded Sentry state history (same source as L2), full logger state coverage. | Add a Sentry-state signal to the telemetry contract. |
+| I1 | Idle sessions, duration, battery/range loss, vampire drain rate, map (08) | implemented | Parked tab: `Features/History/IdlesHistoryView.swift`, `ParkedOverviewView.swift`, `ParkedSummary.swift`, `IdleDetailView.swift`, `server` `idles()` | Stops are derived gaps between drives and charges; range difference does not prove cause, so the screen states measured comparisons only. Per-day rates use only the parked time of stops that recorded range loss; energy is an estimate derived from range. An open stop has no loss until the next drive or charge. | None. |
+| I2 | Asleep/Sentry/climate time breakdown (08) | need-data | `IdleDetailView` shows "The car's state wasn't recorded for this stop" when absent; the Parked summary shows the asleep share over only the stops that recorded it, with the coverage stated. Server returns `sentryMinutes` NULL, and `asleepMinutes` and `climateMinutes` only with full logger coverage | Missing: recorded Sentry state history (same source as L2), full logger state coverage. | Add a Sentry-state signal to the telemetry contract. |
 | I3 | Sentry events and clips (08, 19) | won't-build-as-is | none | Sentry clips live on the car's USB drive and Tesla does not expose them over the API. See X5. | None. |
 
 ### Stats and efficiency (area 04)

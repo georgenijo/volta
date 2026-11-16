@@ -259,28 +259,50 @@ struct MockDataSource: VoltaDataSource {
         return ChargeDetail(summary: charge, samples: samples, efficiency: nil,
                             telemetry: FleetTelemetrySeries(source: "fleet_telemetry", samples: rows, gaps: [], truncated: false))
     }
+    /// Synthetic stops: the gaps between drives and charges, as the server
+    /// derives them. The car sits where the previous drive or charge left it.
+    /// While `-demoCharging` shows a charge in progress the last stop has
+    /// ended, so no stop is open. Each place loses range at its own rate;
+    /// some stops have no recorded range loss (a logger gap), short stops
+    /// record none, and state times exist only for fully logged stops.
     func idles(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<IdleSummary> {
         try check(vehicleID)
-        // Derive idle windows from the same drive/charge intervals used by the timeline.
-        let events = (allDrives.map { ($0.start, $0.end ?? now) } + allCharges.map { ($0.start, $0.end ?? now) }).sorted { $0.0 < $1.0 }
-        var position = ago(720)
-        var gaps: [(Date, Date)] = []
-        for (start, end) in events {
-            if start.timeIntervalSince(position) >= 600 { gaps.append((position, start)) }
-            position = max(position, end)
+        guard !empty else { return try page([IdleSummary](), cursor: cursor) }
+        enum Spot { case home, work, supercharger }
+        var events: [(start: Date, end: Date, spot: Spot)] =
+            allDrives.map { ($0.start, $0.end ?? now, $0.endAddress == home ? .home : .work) }
+            + allCharges.map { ($0.start, $0.end ?? now, $0.fastCharger ? .supercharger : .home) }
+        if Self.showsCharging { events.append((now.addingTimeInterval(-Self.liveChargeMinutes * 60), now, .home)) }
+        events.sort { $0.start < $1.start }
+        var position = ago(720), spot = Spot.home
+        var gaps: [(start: Date, end: Date, spot: Spot)] = []
+        for event in events {
+            if event.start.timeIntervalSince(position) >= 600 { gaps.append((position, event.start, spot)) }
+            if event.end > position { position = event.end; spot = event.spot }
         }
-        if !empty && now.timeIntervalSince(position) >= 600 { gaps.append((position, now)) }
-        let items = gaps.reversed().enumerated().map { i, gap in
-            let minutes = gap.1.timeIntervalSince(gap.0) / 60
-            let sentry = i % 3 == 2 ? 0 : min(80, minutes)
-            // Sentry draws ~250 W; sleep almost nothing.
-            let kwh = sentry / 60 * 0.25 + max(0, minutes - sentry) / 60 * 0.012
-            let away = i % 4 == 1
-            return IdleSummary(id: i + 1, start: gap.0, end: gap.1 >= now ? nil : gap.1, address: away ? "Union City, CA" : home, placeName: away ? nil : "Home", durationMin: minutes,
-                               startBatteryLevel: 74, endBatteryLevel: 74 - Int((kwh / 0.735).rounded()), rangeLostKm: kwh / 0.15, energyLostKwh: kwh,
-                               sentryMinutes: sentry, climateMinutes: 0, asleepMinutes: max(0, minutes - sentry),
-                               latitude: away ? 37.5934 : 37.4419, longitude: away ? -122.0439 : -122.1430,
-                               city: away ? "Union City" : "Palo Alto", street: away ? "1 Synthetic Way" : "100 Synthetic Ave")
+        if now.timeIntervalSince(position) >= 600 { gaps.append((position, now, spot)) }
+        let items = gaps.reversed().enumerated().map { i, gap -> IdleSummary in
+            let minutes = gap.end.timeIntervalSince(gap.start) / 60
+            let open = gap.end >= now
+            // km lost per day parked: Home ~3 mi, Work ~5.8 mi (busy lot), Supercharger ~4 mi.
+            let perDay: Double = switch gap.spot { case .home: 4.8; case .work: 9.3; case .supercharger: 6.4 }
+            let recorded = !open && i % 7 != 3
+            let km = !recorded ? nil : minutes < 45 ? 0 : (perDay * (1 + 0.2 * sin(Double(i))) * minutes / 1440 * 10).rounded() / 10
+            let level = 80 - i % 9
+            let logged = !open && i % 3 != 1
+            let asleepShare: Double = switch gap.spot { case .home: 0.9; case .work: 0.55; case .supercharger: 0.7 }
+            let place: (name: String, address: String, city: String, street: String, lat: Double, lon: Double) = switch gap.spot {
+            case .home: ("Home", home, "Palo Alto", "100 Synthetic Ave", 37.4419, -122.1430)
+            case .work: ("Work", "Union City, CA", "Union City", "1 Synthetic Way", 37.5934, -122.0439)
+            case .supercharger: ("Mountain View Supercharger", "Mountain View, CA", "Mountain View", "250 Sample Blvd", 37.4148, -122.0782)
+            }
+            return IdleSummary(id: i + 1, start: gap.start, end: open ? nil : gap.end, address: place.address, placeName: place.name,
+                               durationMin: minutes, startBatteryLevel: level,
+                               endBatteryLevel: open ? nil : km.map { level - Int(($0 / 4.9).rounded()) },
+                               rangeLostKm: km, energyLostKwh: km.map { $0 * 0.15 },
+                               sentryMinutes: nil, climateMinutes: logged ? min(15, minutes * 0.03) : nil,
+                               asleepMinutes: logged ? minutes * asleepShare : nil,
+                               latitude: place.lat, longitude: place.lon, city: place.city, street: place.street)
         }
         return try page(items.filter { within($0.start, range) }, cursor: cursor)
     }

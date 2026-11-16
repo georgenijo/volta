@@ -69,7 +69,7 @@ The API binds only to the tailnet; it is never exposed publicly.
 | `ios/Volta/Core/Models.swift`, `DataSource.swift`, `MockDataSource.swift`, `Formatting.swift` | shared contract — change only additively, note it in your report |
 | `ios/Volta/DesignSystem/` | Screens A (others may read, not edit) |
 | `ios/Volta/Features/Shell/`, `Dashboard/`, `Controls/` | Screens A |
-| `ios/Volta/Features/History/` (Charging, Drives, Idles, details) | Screens B |
+| `ios/Volta/Features/History/` (Charging, Drives, Parked (idles), details) | Screens B |
 | `ios/Volta/Features/More/`, `Settings/`, `Analytics/` | Screens C |
 | `server/`, `deploy/` | Backend worker |
 | `docs/ROADMAP.md`, `docs/TESLA.md`, `docs/DEPLOY.md` | Scoping worker |
@@ -80,7 +80,7 @@ The API binds only to the tailnet; it is never exposed publicly.
   then `MainShell()` (Screens A) with `.environment(\.dataSource, …)` and
   `.environment(\.units, …)` injected.
 - `MainShell` is a system tab view: Dashboard (car), Charging (bolt), Drives
-  (steering wheel), Idles (P) and More (grid). The system places the bar,
+  (steering wheel), Parked (P; the `idles` tab in code and the API) and More (grid). The system places the bar,
   at the bottom on most iPhones and on the side on iPhone Duo. Screens A
   owns the shell; it embeds `ChargingHistoryView()`,
   `DrivesHistoryView()`, `IdlesHistoryView()` (Screens B) and `MoreView()`

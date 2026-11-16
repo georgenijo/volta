@@ -34,12 +34,14 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | Shell (A) | `tab.dashboard` | Dashboard tab; tests find it by its title in the tab bar |
 | Shell (A) | `tab.charging` | Charging tab; tests find it by its title in the tab bar |
 | Shell (A) | `tab.drives` | Drives tab; tests find it by its title in the tab bar |
-| Shell (A) | `tab.idles` | Idles tab; tests find it by its title in the tab bar |
+| Shell (A) | `tab.idles` | Parked tab (`idles` in code and the API); tests find it by its title, "Parked", in the tab bar |
 | Shell (A) | `tab.more` | More tab; tests find it by its title in the tab bar |
 | Dashboard (A) | `button.controls` | Opens Controls sheet |
 | More (C) | `button.settings` | Pushes Settings from More |
 | Dashboard (A) | `screen.dashboard`, `scroll.dashboard` | Loaded heading and main scroll view |
-| History (B) | `screen.charging`, `screen.drives`, `screen.idles` | Loaded list headings |
+| History (B) | `screen.charging`, `screen.drives`, `screen.idles` | Loaded list headings (`screen.idles` is the Parked hero's loss figure) |
+| History (B) | `row.idle.<id>`, `row.idle.live`, `screen.idle-detail` | A Parked stop row, the Parked now card, and a stop's detail heading |
+| History (B) | `screen.parked-summary`, `scroll.parked-summary`, `button.parked.summary`, `button.parked.fastest` | Parked summary ("Where it sat" heading, scroll view), the control that opens it or returns to it, and the Fastest drain tile |
 | History (B) | `row.drive.<id>`, `row.charge.<id>` | Entire tappable populated row; stable model ID suffix |
 | History (B) | `screen.drive-detail`, `screen.charge-detail` | Loaded detail heading |
 | More (C) | `screen.more`, `scroll.more` | Heading and main scroll view |
@@ -75,7 +77,7 @@ result bundles are preserved. Run `--help` for all options.
 
 Named PNGs and the attachment manifest land in `docs/screens/latest/`:
 `dashboard-map`, `dashboard-mid`, `dashboard-scrolled`, `charging`, `drives`,
-`idles`, `more-top`, `more-bottom`, `settings-top`, `settings-bottom`,
+`idles`, `idle-detail`, `more-top`, `more-bottom`, `settings-top`, `settings-bottom`,
 `drive-detail`, `charge-detail`, `controls-top`, `controls-bottom`,
 `tesla-no-vehicle`, `settings-account`, `settings-charging`, `electricity-rate`. The no-vehicle capture launches with the
 debug-only `-demoNoVehicles YES` argument.

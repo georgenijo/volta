@@ -418,18 +418,7 @@ final class HistoryAggregateTests: XCTestCase {
         XCTAssertTrue(partial.energyAddedKwh.isPartial)
         XCTAssertEqual(partial.notes.count, 2)
 
-        let idles = IdleTotals([idle(1, minutes: 60, start: nil, end: nil), idle(2, minutes: 120, start: nil, end: nil)])
-        XCTAssertNil(idles.rangeLostKm.value)
-        XCTAssertNil(idles.drainPerDay, "no battery data must not be 0 %/day")
-        XCTAssertEqual(idles.parkedMinutes, 180)
-
-        // Rate only over time with a known drain: 2 % over 12 h = 4 %/day, not 2 % over 36 h.
-        let rated = IdleTotals([idle(1, minutes: 720, start: 80, end: 78, rangeLost: 5),
-                                idle(2, minutes: 1440, start: nil, end: nil)])
-        XCTAssertEqual(try XCTUnwrap(rated.drainPerDay), 4, accuracy: 1e-9)
-        XCTAssertEqual(rated.drainKnown, 1)
-        XCTAssertTrue(rated.rangeLostKm.isPartial)
-        XCTAssertEqual(rated.notes.count, 2)
+        // Parked totals: ParkedSummaryTests.
 
         let drives = DriveTotals([drive(1, km: 10, kwh: 1.5), drive(2, km: 90, kwh: nil)])
         XCTAssertEqual(try XCTUnwrap(drives.efficiencyWhPerKm), 150, accuracy: 1e-9)

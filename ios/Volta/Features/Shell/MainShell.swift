@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Root of the signed-in app: a system tab view with Dashboard, Charging,
-/// Drives, Idles and More.
+/// Drives, Parked and More.
 ///
 /// The system owns the bar. On iPhone Duo it moves the tabs to the side on
 /// the outer display and on the inner display in landscape; everywhere else
@@ -17,7 +17,7 @@ struct MainShell: View {
             case .dashboard: "Dashboard"
             case .charging: "Charging"
             case .drives: "Drives"
-            case .idles: "Idles"
+            case .idles: "Parked"
             case .more: "More"
             }
         }

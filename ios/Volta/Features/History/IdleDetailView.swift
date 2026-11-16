@@ -1,6 +1,8 @@
 import SwiftUI
 
-/// Idle sessions have no detail endpoint; everything comes from the summary.
+/// One stop. There is no detail endpoint; everything comes from the summary.
+/// Range lost in the user's unit is the main figure, with the battery
+/// percentage and the estimated energy beside it.
 struct IdleDetailView: View {
     var idle: IdleSummary
 
@@ -8,6 +10,8 @@ struct IdleDetailView: View {
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
     @Environment(\.barsOnSide) private var barsOnSide
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .largeTitle) private var numberSize: CGFloat = 52
     @State private var places = HistoryPlaces()
     @State private var page = HistoryWindow()
 
@@ -27,17 +31,17 @@ struct IdleDetailView: View {
             }
         }
         .readsHistoryWindow($page)
-        .historyPage("Parked")
+        .historyPage("Stop")
         .task { if idle.needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) } }
     }
 
     private func column<Content: View>(titled: Bool = true, @ViewBuilder _ content: () -> Content) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if barsOnSide && titled { HistoryInlineTitle(title: "Parked") }
+                if barsOnSide && titled { HistoryInlineTitle(title: "Stop") }
                 content()
             }
-            .padding(.horizontal, HistoryTheme.gutter)
+            .padding(.horizontal, VoltaSpacing.screen)
             .padding(.top, 8)
             .voltaReadableWidth()
         }
@@ -53,49 +57,99 @@ struct IdleDetailView: View {
         }
     }
 
+    private var text: ParkedText { ParkedText(units: units) }
+    private var loss: ParkedLoss { ParkedLoss(idle) }
+
     private var hero: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 HistoryIconTile(systemImage: "parkingsign", tint: HistoryTheme.blue)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(idle.title)
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
+                    Text(idle.placeLabel)
+                        .font(.system(.title3, weight: .bold))
+                        .foregroundStyle(Color.voltaTextPrimary)
                         .accessibilityAddTraits(.isHeader)
                         .accessibilityIdentifier("screen.idle-detail")
                     Text(subtitle)
-                        .font(.system(size: 13))
+                        .font(.footnote)
                         .foregroundStyle(HistoryTheme.secondary)
-                        .lineLimit(1)
                 }
             }
-            HStack(alignment: .lastTextBaseline) {
-                BigNumber(idle.drain.map { $0 > 0 ? "−\($0)" : "\($0)" } ?? "—", unit: "%", size: 56)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Parked").voltaLabelStyle()
-                    BigNumber(VoltaFormat.duration(idle.durationMin), size: 26)
-                }
-            }
-            BatteryRangeView(from: idle.batteryEndpoints.from, to: idle.batteryEndpoints.to, tint: drainTint)
+            figure
+            BatteryRangeView(from: idle.batteryEndpoints.from, to: idle.batteryEndpoints.to, tint: HistoryTheme.blue)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(batterySpoken)
         }
         .padding(.vertical, 6)
     }
 
-    private var drainTint: Color { (idle.drainPerDay ?? 0) > 3 ? HistoryTheme.amber : HistoryTheme.blue }
+    @ViewBuilder private var figure: some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+            : AnyLayout(HStackLayout(alignment: .lastTextBaseline, spacing: 12))
+        layout {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Range lost").voltaLabelStyle()
+                switch loss {
+                case .lost(let km, _):
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("−" + VoltaFormat.number(text.rowValue(km), digits: 1))
+                            .font(.system(size: numberSize, weight: .heavy))
+                            .tracking(-1)
+                            .monospacedDigit()
+                            .lineLimit(1).minimumScaleFactor(0.5)
+                        Text(units.distanceUnit).font(.body).foregroundStyle(HistoryTheme.secondary)
+                    }
+                    .foregroundStyle(Color.voltaTextPrimary)
+                default:
+                    Text(text.lossLine(loss))
+                        .font(.system(.title3, weight: .semibold))
+                        .foregroundStyle(Color.voltaTextPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Range lost: \(text.spokenLoss(loss))")
+            if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
+            VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 4) {
+                Text("Parked").voltaLabelStyle()
+                Text(ParkedText.span(idle.durationMin))
+                    .font(.system(.title2, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.voltaTextPrimary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Parked \(ParkedText.spokenSpan(idle.durationMin))")
+        }
+    }
+
+    private var batterySpoken: String {
+        switch (idle.startBatteryLevel, idle.endBatteryLevel) {
+        case let (s?, e?): "Battery \(s) percent when parked, \(e) percent when it left"
+        case let (s?, nil): "Battery \(s) percent when parked"
+        default: "Battery level not recorded"
+        }
+    }
 
     private var subtitle: String {
         let day = idle.start.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
-        let place = idle.address.flatMap { $0 == idle.title ? nil : " · " + $0 } ?? ""
+        let place = idle.address.flatMap { $0 == idle.placeLabel ? nil : " · " + $0 } ?? ""
         return day + place
     }
 
     private var stats: some View {
-        HistoryStatGrid(items: [
-            .init(label: "Range lost", value: idle.rangeLostKm.map { VoltaFormat.number(units.distanceValue(km: $0)) } ?? "—", unit: units.distanceUnit, systemImage: "road.lanes"),
-            .init(label: "Energy", value: idle.energyLostKwh.map { VoltaFormat.number($0, digits: 2) } ?? "—", unit: "kWh", systemImage: "bolt"),
-            .init(label: "Per day", value: idle.drainPerDay.map { VoltaFormat.number($0, digits: 1) } ?? "—", unit: "%", systemImage: "calendar"),
+        let rate: String
+        switch loss {
+        case .lost(_, let perDay?): rate = VoltaFormat.number(units.distanceValue(km: perDay))
+        case .noLoss where idle.durationMin >= ParkedRules.rateMinMinutes: rate = "0"
+        default: rate = "—"
+        }
+        return HistoryStatGrid(items: [
+            .init(label: "Per day", value: rate, unit: units.distanceUnit, systemImage: "calendar"),
+            .init(label: "Battery", value: idle.drain.map { $0 > 0 ? "−\($0)" : "\($0)" } ?? "—", unit: "%", systemImage: "battery.50percent"),
+            .init(label: "Energy", value: idle.isLive ? "—" : idle.energyLostKwh.map { "~" + VoltaFormat.number($0, digits: 2) } ?? "—",
+                  unit: "kWh est.", systemImage: "bolt"),
         ])
     }
 
@@ -106,8 +160,8 @@ struct IdleDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HistorySectionLabel(title: "Where the time went", systemImage: "chart.bar.xaxis")
                 if slices.isEmpty {
-                    Text("State breakdown wasn't recorded for this session.")
-                        .font(.system(size: 14))
+                    Text("The car's state wasn't recorded for this stop.")
+                        .font(.subheadline)
                         .foregroundStyle(HistoryTheme.secondary)
                 } else {
                     IdleBreakdownBar(slices: slices, height: 12)
@@ -117,27 +171,30 @@ struct IdleDetailView: View {
                             HStack(spacing: 12) {
                                 HistoryIconTile(systemImage: slice.systemImage, tint: slice.color)
                                     .scaleEffect(0.85)
+                                    .accessibilityHidden(true)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(slice.kind.rawValue)
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(.white)
+                                        .font(.system(.subheadline, weight: .semibold))
+                                        .foregroundStyle(Color.voltaTextPrimary)
                                     Text(slice.detail)
-                                        .font(.system(size: 12))
+                                        .font(.caption)
                                         .foregroundStyle(HistoryTheme.secondary)
                                 }
                                 Spacer()
                                 VStack(alignment: .trailing, spacing: 2) {
                                     Text(VoltaFormat.duration(slice.minutes))
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(.white)
+                                        .font(.system(.subheadline, weight: .semibold))
+                                        .foregroundStyle(Color.voltaTextPrimary)
                                         .monospacedDigit()
                                     Text("\(Int((slice.minutes / total * 100).rounded()))%")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .font(.system(.caption, weight: .medium))
                                         .foregroundStyle(HistoryTheme.secondary)
                                         .monospacedDigit()
                                 }
                             }
                             .padding(.vertical, 10)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("\(slice.kind.rawValue): \(ParkedText.spokenSpan(slice.minutes)), \(Int((slice.minutes / total * 100).rounded())) percent")
                         }
                     }
                 }
@@ -158,34 +215,35 @@ struct IdleDetailView: View {
     private func timeRow(_ label: String, _ date: Date?, battery: Int?) -> some View {
         HStack {
             Text(label)
-                .font(.system(size: 15))
+                .font(.subheadline)
                 .foregroundStyle(HistoryTheme.secondary)
             Spacer()
             Text(date.map { VoltaFormat.dayTime($0) } ?? "Still parked")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(Color.voltaTextPrimary)
             Text(battery.map { "\($0)%" } ?? "—")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(HistoryTheme.secondary)
                 .monospacedDigit()
-                .frame(width: 48, alignment: .trailing)
+                .frame(minWidth: 48, alignment: .trailing)
         }
         .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
     }
 }
 
-#Preview("Idle detail") {
+#Preview("Stop") {
     NavigationStack {
         IdleDetailView(idle: IdleSummary(id: 1, start: .now.addingTimeInterval(-9 * 3600), end: .now.addingTimeInterval(-3600),
                                          address: "Palo Alto, CA", placeName: "Home", durationMin: 480,
                                          startBatteryLevel: 74, endBatteryLevel: 72, rangeLostKm: 7.1, energyLostKwh: 1.4,
-                                         sentryMinutes: 80, climateMinutes: 15, asleepMinutes: 340))
+                                         sentryMinutes: nil, climateMinutes: 15, asleepMinutes: 340))
     }
     .environment(\.dataSource, MockDataSource())
     .preferredColorScheme(.dark)
 }
 
-#Preview("Idle detail · unrecorded") {
+#Preview("Stop · unrecorded") {
     NavigationStack {
         IdleDetailView(idle: IdleSummary(id: 2, start: .now.addingTimeInterval(-3600), end: nil,
                                          address: "Union City, CA", placeName: nil, durationMin: 45,
