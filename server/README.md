@@ -82,6 +82,11 @@ minutes in Postgres, including malformed bodies/names; an operator can wait out
 or clear `volta.rate_limits` if the limit is exhausted. Client IP/identity headers
 are never trusted. The CLI uses only the auth-role URL and never prints tokens.
 
+`VOLTA_VEHICLE_ID` (optional, a TeslaMate `cars.id`) limits the API to one car:
+`/v1/vehicles` lists only it, and every vehicle, drive, charge and billing route
+for any other car answers 404 `not_found`, exactly as if it did not exist. Unset
+serves every car. Health stays global.
+
 Sign in with Apple is off unless `APPLE_BUNDLE_ID` names the iOS app. With it
 set, `POST /v1/auth/apple` verifies Apple's identity token against Apple's
 published keys (signature, issuer, audience, at most ten minutes old, accepted
@@ -162,7 +167,9 @@ upstream-generated DDL, not an application migration or production bootstrap.
   exists, the drive is omitted from lists and summary/mileage calculations; its
   detail returns 409. This keeps older measurable history accessible and does
   not invent a distance. Aggregate energy and cost are null if any included record lacks that
-  measurement; incomplete records are not silently omitted from totals.
+  measurement; incomplete records are not silently omitted from totals. Summary
+  `efficiencyWhPerKm` is a ratio, not a total: it is the energy of the drives that
+  measured it over those same drives' distance, and null only when none did.
 - **Idles:** only completed gaps *between* activity islands; no invented interval
   before first or after last activity. Nested/overlapping drives/charges merge.
   Gap duration must strictly exceed minMinutes. Stable id is twice the last

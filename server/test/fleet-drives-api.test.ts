@@ -209,6 +209,19 @@ test('drive detail adds forward-filled charts and DEM elevation for telemetry dr
     const legacy=await read('/v1/drives/5');expect(legacy.charts).toBeNull();expect(legacy.elevationGainM).toBe(30);expect(legacy.elevationLossM).toBe(12);
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
+test('summary efficiency uses the trips that measured energy when another trip has none',async()=>{
+  await trip(0,600);await trip(1200,1800,3);
+  // The second trip never reports EnergyRemaining and has no calibrated pack power.
+  await owner`DELETE FROM volta_telemetry.samples WHERE field='EnergyRemaining' AND source_ts>=${at(1200)}`;
+  const list=(await get('/v1/vehicles/1/drives')).items;expect(list).toHaveLength(2);
+  const measured=list.find((d:any)=>d.energyUsedKwh !== null),unknown=list.find((d:any)=>d.energyUsedKwh === null);
+  expect(measured).toBeDefined();expect(unknown).toBeDefined();
+  const summary=await get('/v1/vehicles/1/summary?range=today');
+  expect(summary.driveCount).toBe(2);expect(summary.distanceKm).toBeCloseTo(measured.distanceKm+unknown.distanceKm,9);
+  expect(summary.energyUsedKwh).toBeNull();
+  expect(summary.efficiencyWhPerKm).toBeCloseTo(measured.energyUsedKwh*1000/measured.distanceKm,9);
+  expect(summary.driveScore).toBe(Math.round((measured.driveScore*measured.distanceKm+unknown.driveScore*unknown.distanceKm)/(measured.distanceKm+unknown.distanceKm)));
+});
 test('joined-trip energy from pack power is the same in list, detail, summary and mileage',async()=>{
   await owner`INSERT INTO volta_telemetry.power_calibration(vehicle_id,sign,source,evidence_note) VALUES (1,'discharge_positive','operator_live_gate','synthetic fixture')`;
   await trip(0,600);await trip(930,1110,3);

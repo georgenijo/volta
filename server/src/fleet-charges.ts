@@ -193,12 +193,13 @@ export class FleetCharges {
   }
   /** Measured summary (null when no power). `legacy` = TeslaMate processes
    * (id,start,end,cost,latitude,longitude) for a location fallback; cost is
-   * reconciled per overlap group by resolveCharges. */
-  async row(vehicle: number, w: ChargeWindow, gaps: Span[], legacy: Row[], currency: string | null, withSamples = false) {
+   * reconciled per overlap group by resolveCharges. Without `labels` (summary
+   * totals) the location, place and network brand lookups are skipped. */
+  async row(vehicle: number, w: ChargeWindow, gaps: Span[], legacy: Row[], currency: string | null, withSamples = false, labels = true) {
     const samples = await this.samples(vehicle,w), derived = deriveCharge(w,samples,gaps);
     if (!derived) return null;
     const overlap = legacy.filter(r => +new Date(r.start) < +derived.end && (!r.end || +new Date(r.end) > +derived.start));
-    if (derived.latitude === null) {
+    if (labels && derived.latitude === null) {
       // Change-only GPS: a parked charge reports no Location; use the last
       // fix (12 h bound keeps the pivot scan small), else TeslaMate's.
       const [fix] = await this.sql`SELECT latitude,longitude FROM volta_telemetry.payload_points WHERE vehicle_id=${vehicle}
@@ -208,7 +209,7 @@ export class FleetCharges {
       else if (tm) { derived.latitude = tm.latitude; derived.longitude = tm.longitude; }
     }
     // TeslaMate's own geofence/address tables; never an external geocoder.
-    const [place] = derived.latitude === null ? [] : await this.sql`WITH here AS (SELECT ${derived.latitude}::double precision AS lat,${derived.longitude}::double precision AS lon)
+    const [place] = !labels || derived.latitude === null ? [] : await this.sql`WITH here AS (SELECT ${derived.latitude}::double precision AS lat,${derived.longitude}::double precision AS lon)
       SELECT (SELECT g.name FROM public.geofences g WHERE 6371000*2*asin(least(1.0,sqrt(power(sin(radians((g.latitude-lat)/2)),2)
           +cos(radians(lat))*cos(radians(g.latitude))*power(sin(radians((g.longitude-lon)/2)),2))))<=g.radius ORDER BY g.radius,g.id LIMIT 1) AS "placeName",
         a.display_name AS address,COALESCE(NULLIF(a.city,''),NULLIF(a.neighbourhood,''),NULLIF(a.name,'')) AS city,
@@ -217,7 +218,7 @@ export class FleetCharges {
           +cos(radians(lat))*cos(radians(a.latitude))*power(sin(radians((a.longitude-lon)/2)),2)))) AS m
         FROM public.addresses a WHERE a.latitude BETWEEN lat-.002 AND lat+.002 AND a.longitude BETWEEN lon-.003 AND lon+.003 ORDER BY m,a.id LIMIT 1) a ON a.m<=150`;
     // Network brand from the overlapping TeslaMate processes' DC charger reports.
-    const [brand] = derived.fastCharger && overlap.length ? await this.sql`SELECT max(fast_charger_brand) FILTER (WHERE fast_charger_present
+    const [brand] = labels && derived.fastCharger && overlap.length ? await this.sql`SELECT max(fast_charger_brand) FILTER (WHERE fast_charger_present
       AND NULLIF(fast_charger_brand,'') IS NOT NULL) AS brand FROM public.charges WHERE charging_process_id=ANY(${overlap.map(r => r.id)}::integer[])` : [];
     const row: Row = {id:w.id,_cursorStart:w._cursorStart,start:derived.start,end:derived.end,address:place?.address ?? null,placeName:place?.placeName ?? null,
       energyAddedKwh:derived.energyAddedKwh,energyUsedKwh:null,startBatteryLevel:derived.startBatteryLevel,endBatteryLevel:derived.endBatteryLevel,

@@ -127,7 +127,10 @@ export function createApp(auth: Auth, telemetry: Telemetry, log: (entry: object)
   // Tesla-billed sessions synced by the operator CLI; separate from TeslaMate charges.
   const billed = () => { if (!history) throw new ApiError(501, 'tesla_link_unavailable', 'Tesla sign-in is not set up on this server'); return history; };
   app.get('/v1/tesla/charging-history', async c => c.json(await billed().summary()));
-  app.get('/v1/vehicles/:id/tesla-charging-sessions', async c => c.json(await billed().sessions(integer(c.req.param('id'), 'id'), c.req.query())));
+  app.get('/v1/vehicles/:id/tesla-charging-sessions', async c => {
+    const id = integer(c.req.param('id'), 'id'); telemetry.visible(id);
+    return c.json(await billed().sessions(id, c.req.query()));
+  });
   app.get('/v1/vehicles/:id/commands', async c => {
     const id = integer(c.req.param('id'), 'id'); await telemetry.vehicle(id);
     c.header('Cache-Control', 'no-store');

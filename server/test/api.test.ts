@@ -10,6 +10,7 @@ import { Auth } from '../src/auth';
 import { createApp } from '../src/app';
 import { connect } from '../src/db';
 import { Telemetry } from '../src/telemetry';
+import { telemetryDriveId } from '../src/fleet-drives';
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url || new URL(url).pathname !== '/volta_test' || !['127.0.0.1','localhost'].includes(new URL(url).hostname)) throw new Error('Tests require an isolated localhost database named volta_test. Run bun run test:local.');
@@ -422,6 +423,24 @@ describe('metric telemetry contract', () => {
     const cars = await json('/v1/vehicles'); expect(cars).toHaveLength(3);
     expect(cars[0]).toEqual({ id:1, name:'Synthetic Model 3', model:'3', trim:'LR', exteriorColor:'White', vinSuffix:'000001', firmware:'2026.2', hasData:true });
   });
+  test('a configured vehicle hides every other car as not found', async () => {
+    const only = createApp(auth, new Telemetry(reader, 'USD', undefined, false, () => {}, 3), () => {}, null, null, new ServiceLog(authDb));
+    const get = (path: string) => only.request(path, { headers: { Authorization: `Bearer ${token}` } });
+    expect((await (await get('/v1/vehicles')).json() as any).map((c: any) => c.id)).toEqual([3]);
+    expect((await get('/v1/vehicles/3/status')).status).toBe(200);
+    expect((await get('/v1/charges/2')).status).toBe(200);
+    const hidden = ['/v1/vehicles/1/status','/v1/vehicles/1/summary','/v1/vehicles/1/timeline','/v1/vehicles/1/drives','/v1/vehicles/1/charges',
+      '/v1/vehicles/1/idles','/v1/vehicles/1/battery','/v1/vehicles/1/mileage','/v1/vehicles/1/firmware','/v1/vehicles/1/places','/v1/vehicles/1/service',
+      '/v1/vehicles/1/charger-locations','/v1/vehicles/1/commands','/v1/vehicles/1/tesla-charging-sessions','/v1/drives/1','/v1/charges/1',
+      `/v1/drives/${telemetryDriveId(1, new Date())}`,`/v1/charges/${telemetryDriveId(1, new Date())}`];
+    for (const path of hidden) {
+      const r = await get(path); expect([path, r.status]).toEqual([path, 404]); expect((await r.json() as any).error.code).toBe('not_found');
+    }
+    expect((await only.request('/v1/vehicles/1/service', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Wipers', intervalMonths: 12 }) })).status).toBe(404);
+    // Unset, every car stays visible.
+    expect(await json('/v1/vehicles')).toHaveLength(3);
+  });
   test('hasData marks vehicles without any SOC observation, matching status 409', async () => {
     const byId = async () => Object.fromEntries((await json('/v1/vehicles')).map((c:any) => [c.id, c.hasData]));
     expect(await byId()).toEqual({ 1:true, 2:false, 3:true });
@@ -652,11 +671,34 @@ describe('metric telemetry contract', () => {
   test('unknown measurements cannot silently turn aggregate energy into a partial total', async () => {
     await owner`UPDATE drives SET end_rated_range_km = NULL WHERE id = 1`;
     await owner`UPDATE positions SET rated_battery_range_km = NULL WHERE id = 3`;
+    // Drive 2 now uses 30 km of rated range over 20 km: efficiency must weight
+    // only the measured drives' own distance (11.25 kWh over 65 km).
+    await owner`UPDATE drives SET end_rated_range_km = 320 WHERE id = 2`;
     await owner`UPDATE charging_processes SET charge_energy_added = NULL, cost = NULL WHERE id = 1`;
     const summary = await json('/v1/vehicles/1/summary?range=7d');
-    expect(summary.distanceKm).toBe(105); expect(summary.energyUsedKwh).toBeNull(); expect(summary.efficiencyWhPerKm).toBeNull();
+    expect(summary.distanceKm).toBe(105); expect(summary.energyUsedKwh).toBeNull();
+    // Efficiency is a ratio, so one unmeasured drive does not hide it.
+    expect(summary.efficiencyWhPerKm).toBeCloseTo((30+30+15)*0.15*1000/65, 9);
     expect(summary.energyAddedKwh).toBeNull(); expect(summary.chargeCost).toBeNull();
     expect((await json('/v1/vehicles/1/mileage?bucket=month'))[0].energyUsedKwh).toBeNull();
+  });
+  test('no drive with measured energy leaves the summary efficiency unknown', async () => {
+    await owner`UPDATE drives SET end_rated_range_km = NULL`;
+    await owner`UPDATE positions SET rated_battery_range_km = NULL WHERE drive_id IS NOT NULL`;
+    const summary = await json('/v1/vehicles/1/summary?range=7d');
+    expect(summary.driveCount).toBe(4); expect(summary.energyUsedKwh).toBeNull(); expect(summary.efficiencyWhPerKm).toBeNull();
+  });
+  test('a Supercharger session above 181 kW does not overflow smallint power', async () => {
+    await owner`INSERT INTO charging_processes (id, car_id, position_id, start_date, end_date, duration_min, charge_energy_added, start_battery_level, end_battery_level)
+      VALUES (50, 1, 6, (now() AT TIME ZONE 'UTC') - interval '3 hours', (now() AT TIME ZONE 'UTC') - interval '2 hours 40 minutes', 20, 50, 20, 70)`;
+    await owner`INSERT INTO charges (id, charging_process_id, date, battery_level, charge_energy_added, charger_power, ideal_battery_range_km, fast_charger_present)
+      VALUES (50, 50, (now() AT TIME ZONE 'UTC') - interval '3 hours', 20, 0, 250, 100, true),
+             (51, 50, (now() AT TIME ZONE 'UTC') - interval '2 hours 50 minutes', 45, 25, 250, 220, true),
+             (52, 50, (now() AT TIME ZONE 'UTC') - interval '2 hours 40 minutes', 70, 50, 0, 340, true)`;
+    const list = await json('/v1/vehicles/1/charges');
+    const session = list.items.find((c: any) => c.id === 50);
+    expect(session.maxPowerKw).toBe(250); expect(session.avgPowerKw).toBeCloseTo(250, 9);
+    expect((await json('/v1/charges/50')).avgPowerKw).toBeCloseTo(250, 9);
   });
   test('timeline clips boundaries and prioritizes activities without overlaps', async () => {
     const timeline = await json('/v1/vehicles/1/timeline?hours=72'); expect(timeline.some((r:any) => r.kind==='drive')).toBe(true); expect(timeline.some((r:any) => r.kind==='asleep')).toBe(true);

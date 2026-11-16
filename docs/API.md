@@ -9,6 +9,10 @@ HTTP status. `null` means "unknown / not recorded", never zero.
 The Swift mirror of these shapes is `ios/Volta/Core/Models.swift`. Keep both in
 sync; change additively.
 
+With `VOLTA_VEHICLE_ID` set (one TeslaMate car id), `/v1/vehicles` lists only
+that car and every route for another car's vehicle, drive or charge answers 404
+`not_found`.
+
 ## Fleet Telemetry detail (operator opt-in)
 
 `FLEET_TELEMETRY_ENABLED=true` adds `telemetry` to drive/charge detail; null means
@@ -415,6 +419,10 @@ timestamp then position ID. No observation in that window means null. These
 lookups use recorded data and do not call a geocoder. Clients must accept the
 fields being absent or null and must not geocode addresses as a substitute; without coordinates a
 session is mapped only via a matching `Place` (geofence) name.
+
+`ActivitySummary.energyUsedKwh` is null when any included drive lacks
+measured energy; `efficiencyWhPerKm` instead uses the drives that measured
+energy (their energy over their own distance) and is null only when none did.
 
 `/summary` accepts optional `tz`, an IANA zone name validated with `Intl`
 (for example `America/New_York`); omitted means `UTC`. Invalid or empty names

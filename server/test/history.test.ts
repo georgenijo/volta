@@ -6,6 +6,8 @@ import { connect } from '../src/db';
 import { ApiError } from '../src/errors';
 import { type Announce, ChargingHistory, ResumeLost, derive, parsePage, probe, resume, sync, upsertPage, window } from '../src/history';
 import type { Telemetry } from '../src/telemetry';
+// Billing routes only consult the configured-vehicle filter (none here).
+const noTelemetry = { visible: () => {} } as unknown as Telemetry;
 import { HistoryCallError, TeslaLink } from '../src/tesla';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -48,7 +50,7 @@ const commander = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
 const tesla = new TeslaLink(`http://127.0.0.1:${commander.port}`, SECRET);
 const auth = { authenticate: async (header?: string) => { if (header !== `Bearer ${DEVICE}`) throw new ApiError(401, 'unauthorized', 'Valid device token required'); return { id: 7, name: 'Synthetic phone', createdAt: null, lastSeenAt: null }; } } as unknown as Auth;
 const history = new ChargingHistory(authDb, reader, tesla);
-const app = createApp(auth, {} as Telemetry, () => {}, tesla, history);
+const app = createApp(auth, noTelemetry, () => {}, tesla, history);
 const get = (path: string, a = app) => a.request(path, { headers: { Authorization: `Bearer ${DEVICE}` } });
 const body = async (r: Response) => { const text = await r.text(); return { status: r.status, text, json: JSON.parse(text) as any }; };
 const window1 = window(SINCE, UNTIL, 2);
@@ -222,10 +224,10 @@ describe('storage and device reads', () => {
     // The device-facing Tesla status contract is unchanged: no namespace field.
     link = { connected: true, enabled: true, account: ACCOUNT_1 };
     expect(JSON.stringify(await tesla.status())).not.toContain(ACCOUNT_1);
-    const off = createApp(auth, {} as Telemetry, () => {}, null, new ChargingHistory(authDb, reader, null));
+    const off = createApp(auth, noTelemetry, () => {}, null, new ChargingHistory(authDb, reader, null));
     expect((await body(await get('/v1/vehicles/1/tesla-charging-sessions', off))).status).toBe(501);
     expect((await body(await get('/v1/tesla/charging-history', off))).json).toMatchObject({ available: false, connected: false });
-    expect((await get('/v1/tesla/charging-history', createApp(auth, {} as Telemetry, () => {}))).status).toBe(501);
+    expect((await get('/v1/tesla/charging-history', createApp(auth, noTelemetry, () => {}))).status).toBe(501);
     expect((await app.request('/v1/vehicles/1/tesla-charging-sessions')).status).toBe(401);
   });
 
@@ -248,7 +250,7 @@ describe('storage and device reads', () => {
     // A commander failure on the second check fails closed too.
     reset();
     const broken = new ChargingHistory(authDb, reader, Object.assign(Object.create(tesla), { historyLink: (() => { let n = 0; return async () => { if (n++) throw new ApiError(503, 'tesla_unavailable', 'x'); return { enabled: true, account: ACCOUNT_1 }; }; })() }));
-    expect((await body(await get('/v1/vehicles/1/tesla-charging-sessions', createApp(auth, {} as Telemetry, () => {}, tesla, broken)))).status).toBe(503);
+    expect((await body(await get('/v1/vehicles/1/tesla-charging-sessions', createApp(auth, noTelemetry, () => {}, tesla, broken)))).status).toBe(503);
   });
 
   test('database roles: only volta_auth touches history; the reader cannot', async () => {

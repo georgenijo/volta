@@ -15,6 +15,9 @@ services:
       # The iOS app's bundle ID. Empty leaves Sign in with Apple off.
       APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID:-}
       ELEVATION_DEM_DIR: /elevation
+      # Serve only this TeslaMate car id (cars.id); other cars answer 404.
+      # Set VOLTA_VEHICLE_ID to an empty value to serve every car.
+      VOLTA_VEHICLE_ID: ${VOLTA_VEHICLE_ID-2}
     volumes:
       - ${ELEVATION_DEM_PATH:-/opt/volta-elevation}:/elevation:ro
     ports:
