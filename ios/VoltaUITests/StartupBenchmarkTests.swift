@@ -51,6 +51,9 @@ final class StartupBenchmarkTests: XCTestCase {
                 let shot = XCTAttachment(screenshot: app.screenshot())
                 shot.name = "startup-dashboard"; shot.lifetime = .keepAlways; add(shot)
             }
+            // History keeps loading after status. Stay in the foreground long
+            // enough for the app's `startup` log milestones to record it.
+            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "history settles")], timeout: 4)
             app.terminate()
         }
         let data = try JSONSerialization.data(withJSONObject: samples, options: [.prettyPrinted, .sortedKeys])
