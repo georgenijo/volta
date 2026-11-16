@@ -720,6 +720,10 @@ struct DashboardView: View {
             Spacer(minLength: VoltaSpacing.sm)
             let freshness = Self.freshness(status)
             HStack(spacing: 6) {
+                if model.showsSavedStatus, model.refreshError == nil {
+                    ProgressView().controlSize(.mini).tint(Color.voltaTextSecondary)
+                        .accessibilityLabel("Refreshing")
+                }
                 if freshness.isLive { StatusDot(color: .voltaGreen, size: 6) }
                 Text(freshness.text)
                     .font(.footnote)
@@ -735,6 +739,11 @@ struct DashboardView: View {
     /// "Live" while telemetry streams; otherwise how old the data is, in the
     /// wording the app already uses.
     static func freshness(_ status: VehicleStatus, now: Date = .now) -> (text: String, isLive: Bool) {
+        // Saved by an earlier launch: never "Live", whatever it said then.
+        if let freshness = status.telemetryFreshness, let savedAt = freshness.savedAt {
+            return (TelemetryFreshness.savedLabel(savedAt: savedAt, carLastSeen: freshness.lastSeenAt ?? status.updatedAt,
+                                                  now: now), false)
+        }
         switch status.state {
         case .asleep, .offline:
             return ("\(status.state.displayName) · \(VoltaFormat.relativeDate(status.updatedAt, now: now))", false)

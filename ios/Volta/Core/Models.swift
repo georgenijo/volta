@@ -129,13 +129,15 @@ struct TelemetryFreshness: Codable, Hashable, Sendable {
     /// `SavedDashboard`): when it was fetched. Never sent by the server.
     var savedAt: Date? = nil
     private enum CodingKeys: String, CodingKey { case connected, lastSeenAt, recordedAt }
+    /// "Saved 2 hr. ago · car last seen 14:05": when this device saved it,
+    /// and when the car itself was last heard from.
+    static func savedLabel(savedAt: Date, carLastSeen: Date?, now: Date = .now) -> String {
+        let saved = "Saved \(VoltaFormat.relativeDate(min(savedAt, now), now: now))"
+        return carLastSeen.map { "\(saved) · car last seen \(VoltaFormat.dateTime($0))" } ?? saved
+    }
     var label: String { label() }
     func label(now: Date = .now) -> String {
-        if let savedAt {
-            // Saved, refreshing: keep when the car itself was last heard from.
-            let saved = "Saved data from \(VoltaFormat.relativeDate(min(savedAt, now), now: now))"
-            return lastSeenAt.map { "\(saved) · car last seen \(VoltaFormat.dateTime($0))" } ?? saved
-        }
+        if let savedAt { return Self.savedLabel(savedAt: savedAt, carLastSeen: lastSeenAt, now: now) }
         if connected { return "Telemetry connected" }
         return lastSeenAt.map { "Last telemetry as of \(VoltaFormat.dateTime($0))" } ?? "Telemetry disconnected · no observations yet"
     }

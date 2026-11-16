@@ -83,7 +83,7 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         var freshness = TelemetryFreshness(connected: true, lastSeenAt: .now, recordedAt: [:])
         XCTAssertEqual(freshness.label, "Telemetry connected")
         freshness.savedAt = .now.addingTimeInterval(-300)
-        XCTAssertTrue(freshness.label.hasPrefix("Saved data from"))
+        XCTAssertTrue(freshness.label.hasPrefix("Saved "))
         XCTAssertTrue(freshness.label.contains("car last seen"), "the car's own last report stays in the caption")
         let encoded = try? JSONEncoder().encode(freshness)
         let decoded = encoded.flatMap { try? JSONDecoder().decode(TelemetryFreshness.self, from: $0) }
@@ -112,7 +112,7 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(model.vehicle?.name, "Saved")
         XCTAssertEqual(model.summaries[.thirtyDays]?.distanceKm, 300)
         XCTAssertEqual(model.timeline.count, 1)
-        XCTAssertTrue(model.status?.telemetryFreshness?.label.hasPrefix("Saved data from") == true,
+        XCTAssertTrue(model.status?.telemetryFreshness?.label.hasPrefix("Saved ") == true,
                       "saved status is labelled, never shown as live")
 
         await gate.open()
@@ -454,6 +454,19 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(controls.chargeLimit, 90)
         await controls.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: source, vehicleID: 1)
         XCTAssertEqual(source.sentCommands.withLock { $0 }, ["set_charge_limit"])
+    }
+
+    func testDashboardCaptionNamesSavedDataAndNeverSaysLive() throws {
+        var status = makeStatus()
+        status.telemetryFreshness = TelemetryFreshness(connected: true, lastSeenAt: .now.addingTimeInterval(-900), recordedAt: [:])
+        XCTAssertEqual(DashboardView.freshness(status).text, "Live")
+        var dashboard = saved(); dashboard.status = status
+        let caption = DashboardView.freshness(dashboard.labelledStatus)
+        XCTAssertFalse(caption.isLive, "saved status was live when saved, not now")
+        XCTAssertTrue(caption.text.hasPrefix("Saved "))
+        XCTAssertTrue(caption.text.contains("car last seen"))
+        var asleep = dashboard; asleep.status.state = .asleep
+        XCTAssertTrue(DashboardView.freshness(asleep.labelledStatus).text.hasPrefix("Saved "))
     }
 
     func testLiveChargingNamesSavedDataAndAFailedRefresh() {

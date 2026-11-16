@@ -149,7 +149,6 @@ struct LiveChargingSheet: View {
     }
 
     private var stateColor: Color {
-        if status.telemetryFreshness?.savedAt != nil { return .voltaAmber }
         return charging ? .voltaGreen : status.chargingState == .complete ? .voltaBlue : .voltaTextSecondary
     }
 
