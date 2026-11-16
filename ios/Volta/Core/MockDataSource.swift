@@ -71,10 +71,16 @@ struct MockDataSource: VoltaDataSource {
     private var allDrives: [DriveSummary] {
         guard !empty else { return [] }
         return (0..<60).map { i in
-            let km = i % 9 == 8 ? 126.4 : 12.8 + Double(i % 7) * 3.1
-            let duration = km / 0.76
+            let highway = i % 9 == 8
+            let km = highway ? 126.4 : 12.8 + Double(i % 7) * 3.1
+            // Average speeds spread across city and highway driving so the
+            // efficiency-by-speed view has bands to compare; one band stays empty.
+            let speed = highway ? 98.0 : [32.0, 41, 48, 56, 64, 38, 72][i % 7]
+            let duration = km / speed * 60
+            // Synthetic: a little worse when slow, much worse at highway speed.
+            let whPerKm = 148 + 0.016 * (speed - 42) * (speed - 42)
             let start = ago(Double(i / 2) * 24 + (i % 2 == 0 ? 2 : 10))
-            return driveOverview(TripFixtures.summary(DriveSummary(id: i + 1, start: start, end: start.addingTimeInterval(duration * 60), startAddress: i % 2 == 0 ? "Union City, CA" : home, endAddress: i % 2 == 0 ? home : "Union City, CA", distanceKm: km, durationMin: duration, startBatteryLevel: 80, endBatteryLevel: max(20, 80 - Int(km / 4.7)), energyUsedKwh: km * 0.164, efficiencyWhPerKm: 164, maxSpeedKph: 104, avgSpeedKph: 45.6, outsideTempAvgC: 12 + Double(i % 10))))
+            return driveOverview(TripFixtures.summary(DriveSummary(id: i + 1, start: start, end: start.addingTimeInterval(duration * 60), startAddress: i % 2 == 0 ? "Union City, CA" : home, endAddress: i % 2 == 0 ? home : "Union City, CA", distanceKm: km, durationMin: duration, startBatteryLevel: 80, endBatteryLevel: max(20, 80 - Int(km / 4.7)), energyUsedKwh: km * whPerKm / 1000, efficiencyWhPerKm: whPerKm.rounded(), maxSpeedKph: max(104, speed + 22), avgSpeedKph: speed, outsideTempAvgC: 12 + Double(i % 10))))
         }
     }
     private func driveOverview(_ base: DriveSummary) -> DriveSummary {

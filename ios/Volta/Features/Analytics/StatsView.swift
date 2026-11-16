@@ -171,6 +171,8 @@ struct StatsView: View {
                 }
             }
         }
+
+        SpeedEfficiencyCard(drives: s.drives)
     }
 
     private func inline(_ value: String, _ label: String) -> some View {
