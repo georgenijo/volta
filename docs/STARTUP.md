@@ -6,11 +6,34 @@ timeline or activity summary must not delay this state. History requests still
 run concurrently and fill their sections as they complete; this does not make
 the server queries themselves faster.
 
-The first dashboard consumes the vehicle list that `AppModel` just loaded,
-avoiding a second `/vehicles` request at startup. This handoff is used once and
-discarded on vehicle selection, account changes, or backgrounding. Later
-dashboard mounts and refreshes fetch a current list. Fresh status can appear
-while that list is pending; a list failure does not discard successful history.
+The first dashboard consumes the vehicle list that `AppModel` loads at startup,
+avoiding a second `/vehicles` request. When the shell mounts before that list
+arrives (see below), the dashboard awaits the same request. This handoff is used
+once and discarded on vehicle selection, account changes, or backgrounding.
+Later dashboard mounts and refreshes fetch a current list. Fresh status can
+appear while that list is pending; a list failure does not discard successful history.
+
+## Saved dashboard and launch requests
+
+After each load with fresh status, the dashboard saves what it shows (vehicles,
+status, 48-hour timeline, summaries) to one file in Application Support:
+`.completeFileProtection`, excluded from backups, and keyed to the backend
+(server address plus a digest of the device token) and vehicle. On the next
+launch `AppModel` reads it before the first frame, so the tab shell and the
+saved dashboard appear in that frame. The status is labelled "Saved data from …"
+until fresh status replaces it; a failed refresh keeps it with the usual
+"Couldn't refresh" banner. Saved data never reaches widgets or Live Activities.
+Yesterday's saved "Today" totals are hidden by the existing reporting-day rule.
+Unpairing, demo mode and a revoked token delete the file, and a load that
+outlives its pairing cannot write it. Nothing is read or sent while app lock is
+on; unlocking restores it.
+
+A restored pairing sends `/status` (only when a saved dashboard will mount the
+shell) and then `/vehicles` from `AppModel.init`, in detached tasks, so neither
+waits for the first frame to be laid out. The first dashboard awaits that
+status, with its widget-ordering token taken just before it was sent. History
+is not sent early: over HTTP/1.1 every extra launch request opens its own TLS
+connection and delayed status.
 
 `DashboardModelTests` suspends history requests with explicit gates to verify
 that status and faster sections become usable while slower work remains pending.
@@ -70,6 +93,16 @@ Use `https://127.0.0.1:9443`, including that IP in the test certificate's SAN.
    CPU-heavy work concurrently with timings. Export attachments with
    `xcrun xcresulttool export attachments --path <result> --output-path <folder>`.
 
+`scripts/startup-bench.sh <simulator-id> <derived-data> <profile> <out-dir> <ca-cert>`
+runs the readiness test while streaming the app's `startup` log milestones
+(`StartupTrace`: `appModel`, `firstFrame`, `shell`, `vehicles`, `cachedStatus`,
+`status`, `sections`, in milliseconds since process start), then prints each
+launch and the medians. It also reports each milestone relative to `appModel`:
+the time before it is mostly the simulator's dyld and Swift conformance setup,
+which swings with host load. `firstFrame` is the first display refresh after the
+root view appears. Each readiness launch now stays open four seconds so history
+milestones are recorded.
+
 The readiness test retains one warm-up and five measured fresh-process launches
 in `startup-samples.json`; compare medians and ranges excluding trial zero.
 Its clock includes `XCUIApplication.launch()` and accessibility polling overhead.
@@ -81,7 +114,12 @@ no exported metric is not a timing result.
 
 The `observed-server` profile replays a small server-only timing sample (20 ms
 vehicles, 29 ms status, 15 ms timeline, 4.189 s summaries). It excludes transit
-and is not a general production-latency claim. `instant` isolates local work;
+and is not a general production-latency claim. `server-2026-11` uses the November 2026 live route timings (status 10 ms,
+summaries 270 ms / 320 ms / 1.16 s). `server-2026-11-rtt150` adds a simulated
+150 ms round trip, roughly a phone on Tailscale or cellular: two round trips per
+new connection (TCP and TLS 1.3) and one per request. The fixture speaks
+HTTP/1.1, so it charges every parallel request a new connection; an HTTP/2
+server multiplexes them over one. `instant` isolates local work;
 `slow-history` stresses delayed summaries; `history-failure` verifies that
 status remains usable when history fails. Change profiles between runs:
 
