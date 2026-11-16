@@ -1,75 +1,139 @@
 import SwiftUI
 import WidgetKit
 
-/// Dashboard tab: 3D map backdrop, battery + range, quick controls, metric
-/// cards, 48h activity strip, and Today/7D/30D summary.
+/// Dashboard tab. Three layouts from one set of sections:
+/// - compact width (iPhone Duo's outer display, ordinary iPhones): one
+///   column under a short map;
+/// - regular width, wider than tall (the inner display open flat): a "stage"
+///   pane (map, battery, dock) and a scrolling pane (Now card, metrics,
+///   activity) that meet on the hinge;
+/// - regular width, taller than wide (the inner display upright): map and
+///   battery above the hinge, the rest below it.
+///
+/// The Dashboard owns the vehicle's `ControlsModel`, so the dock, the Now
+/// card and Controls share state and one command path, and Controls survives
+/// switching between a sheet and a pushed screen when the device folds.
 struct DashboardView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
     @Environment(\.vehicleSurfaces) private var surfaces
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.vehicleCommandCoordinator) private var sharedCoordinator
+    @Environment(\.dynamicTypeSize) private var environmentTypeSize
+    /// The text size this view lays out for (the DEBUG override included,
+    /// which applies below this view).
+    private var typeSize: DynamicTypeSize { DebugTypeSizeOverride.size ?? environmentTypeSize }
     /// Owns the vehicle selection; absent in previews.
     @Environment(AppModel.self) private var app: AppModel?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.barsOnSide) private var barsOnSide
 
     @State private var model = DashboardModel()
+    @State private var controls = ControlsModel(status: nil)
+    @State private var localCoordinator = VehicleCommandCoordinator()
     @State private var scrollOffset: CGFloat = 0
+    /// Controls are open (wherever they are shown).
     @State private var showControls = false
+    /// Where Controls are on screen now. It trails `showControls` and
+    /// `controlsPushed`: a sheet must finish dismissing before the same
+    /// screen can be pushed, or the push is dropped.
+    @State private var controlsHost: ControlsView.Presentation?
+    /// Bumped when the Controls sheet finishes dismissing. `onDismiss` runs a
+    /// closure from an earlier body, whose size class can be stale, so the
+    /// sync runs from `onChange` with current values instead.
+    @State private var controlsSheetDismissals = 0
+    /// The Dashboard's navigation stack; Controls is its only destination.
+    /// A path, because `navigationDestination(isPresented:)` ignores a push
+    /// requested just after a sheet dismisses.
+    @State private var path: [Route] = []
+
+    enum Route: Hashable { case controls }
     @State private var showVehicle = false
     @State private var showNotifications = false
     @State private var showLiveCharge = false
     @State private var scrollPosition = ScrollPosition(edge: .top)
     /// Window is wider than it is tall (iPhone Duo's inner display opened flat).
     @State private var isLandscape = false
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.barsOnSide) private var barsOnSide
+    /// Top safe area, for sizing the compact map under the status bar.
+    @State private var safeTop: CGFloat = 0
+    @State private var confirmation: CommandConfirmation?
+    @State private var powerCurve: [ChargeCurvePoint] = []
+    /// The command activity the Dashboard itself started, shown in its banner.
+    @State private var dashboardActivityID: UUID?
+    @State private var awaitingActivity = false
 
-    /// Regular width and wide: map and battery on one side, cards on the other.
-    private var usesPanes: Bool {
-        guard horizontalSizeClass == .regular, isLandscape else { return false }
+    enum Layout { case stage, upright, column }
+
+    private var layout: Layout {
+        guard horizontalSizeClass == .regular else { return .column }
         switch model.phase {
-        case .loading, .loaded: return true
-        case .failed, .noData: return false
+        case .failed, .noData: return .column
+        case .loading, .loaded: return isLandscape ? .stage : .upright
         }
     }
 
-    /// Visible map height below the safe area before content starts.
-    private let mapReveal: CGFloat = 300
-    /// Total map height (extends under the content top, where it fades out).
-    private let mapHeight: CGFloat = 520
+    /// Controls is a pushed two-pane screen in a regular-width window wider
+    /// than tall, and a sheet otherwise.
+    private var controlsPushed: Bool { horizontalSizeClass == .regular && isLandscape }
+
+    /// Visible map height below the safe area in the single column.
+    private let mapReveal: CGFloat = 200
+
+    private var coordinator: VehicleCommandCoordinator { sharedCoordinator ?? localCoordinator }
+    private var context: VehicleCommandContext {
+        VehicleCommandContext(model: controls, coordinator: coordinator, dataSource: dataSource,
+                              vehicleID: vehicleID, surfaces: surfaces)
+    }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
-                if usesPanes {
-                    panes
-                } else {
-                    ZStack(alignment: .top) {
-                        Color.voltaBackground.ignoresSafeArea()
-                        mapLayer
-                        content
-                        topScrim
-                        if barsOnSide { wordmark.padding(.top, VoltaSpacing.md) }
-                    }
+                switch layout {
+                case .stage: stage
+                case .upright: upright
+                case .column: column
                 }
             }
-            .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { isLandscape = $0 }
             .toolbarTitleDisplayMode(.inline)
             .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
             .toolbar { toolbar }
+            .navigationDestination(for: Route.self) { _ in
+                ControlsView(model: controls, vehicleName: model.vehicle?.name, presentation: .pushed)
+            }
+        }
+        .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { isLandscape = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { safeTop = $0 }
+        .onChange(of: showControls) { syncControlsHost() }
+        .onChange(of: controlsPushed) { syncControlsHost() }
+        .onChange(of: controlsSheetDismissals) { syncControlsHost() }
+        .onChange(of: path) {
+            // Back from pushed Controls closes them.
+            if path.isEmpty, controlsHost == .pushed { controlsHost = nil; showControls = false }
         }
         .preferredColorScheme(.dark)
         .task(id: vehicleID) {
             await initialLoad()
+            await coordinator.refreshCapabilities(dataSource: dataSource, vehicleID: vehicleID)
             #if DEBUG
             // Screenshot aid: `-dashboardScrollY 420` starts the dashboard scrolled;
             let y = UserDefaults.standard.double(forKey: "dashboardScrollY")
             if y > 0 { scrollPosition.scrollTo(y: y) }
-            // `-dashboardOpenControls YES` opens the Controls sheet on launch.
+            // `-dashboardOpenControls YES` opens Controls on launch.
             if UserDefaults.standard.bool(forKey: "dashboardOpenControls") { showControls = true }
             // `-dashboardOpenLiveCharge YES` opens the live charging sheet on launch.
             if UserDefaults.standard.bool(forKey: "dashboardOpenLiveCharge"), model.status?.isCharging == true { showLiveCharge = true }
             #endif
+        }
+        .task(id: CurveKey(chargeID: model.status?.isCharging == true ? model.status?.activeChargeId : nil,
+                           loadedAt: model.lastLoadedAt)) {
+            await loadPowerCurve()
+        }
+        .onChange(of: model.status) { _, status in
+            if let status { controls.observe(status, dataSource: dataSource, vehicleID: vehicleID) }
+        }
+        .onChange(of: coordinator.activity(dataSource: dataSource, vehicleID: vehicleID)?.id) { _, id in
+            if awaitingActivity, let id { dashboardActivityID = id; awaitingActivity = false }
         }
         .onChange(of: scenePhase) { _, phase in
             // Back in the foreground: refresh the screen, widgets and Live Activities.
@@ -84,8 +148,9 @@ struct DashboardView: View {
             WidgetCenter.shared.reloadAllTimelines()
             Task { await load() }
         }
-        .sheet(isPresented: $showControls) {
-            ControlsView(initialStatus: model.status, vehicleName: model.vehicle?.name)
+        .sheet(isPresented: sheetControls, onDismiss: { controlsSheetDismissals += 1 }) {
+            ControlsView(model: controls, vehicleName: model.vehicle?.name, presentation: .sheet)
+                .modifier(DebugTypeSizeOverride())
         }
         .sheet(isPresented: $showLiveCharge, onDismiss: { Task { await load() } }) {
             if let status = model.status {
@@ -97,6 +162,33 @@ struct DashboardView: View {
                              selectedID: vehicleID, onSelect: selectVehicle)
                 .presentationDetents(selectVehicle == nil ? [.medium] : [.medium, .large])
         }
+        .alert(item: $confirmation) { item in
+            Alert(title: Text(item.title), message: Text(item.message),
+                  primaryButton: .cancel(), secondaryButton: .destructive(Text(item.button)) { send(item.command) })
+        }
+        .modifier(DebugTypeSizeOverride())
+    }
+
+    /// Controls open as a pushed screen; folding to a compact window moves
+    /// them to the sheet (and back) without closing them. Only the user
+    /// closing the screen where it is now (Back, Close, a swipe) clears
+    /// `showControls`; a move between hosts does not.
+    private var sheetControls: Binding<Bool> {
+        Binding(get: { controlsHost == .sheet },
+                set: { if !$0, controlsHost == .sheet { controlsHost = nil; showControls = false } })
+    }
+
+    private func syncControlsHost() {
+        let wanted: ControlsView.Presentation? = showControls ? (controlsPushed ? .pushed : .sheet) : nil
+        guard controlsHost != wanted else { return }
+        if controlsHost == .sheet, wanted == .pushed {
+            // Dismiss first; the sheet's onDismiss calls back here to push.
+            controlsHost = nil
+        } else {
+            controlsHost = wanted
+        }
+        let wantedPath: [Route] = controlsHost == .pushed ? [.controls] : []
+        if path != wantedPath { path = wantedPath }
     }
 
     /// Switching re-keys the signed-in shell (`\.vehicleID`), which reloads every
@@ -121,20 +213,231 @@ struct DashboardView: View {
                          initialVehicles: app?.takeInitialDashboardVehicles(vehicleID: vehicleID), surfaces: surfaces)
     }
 
-    // MARK: Map
+    private struct CurveKey: Equatable {
+        var chargeID: Int?
+        var loadedAt: Date?
+    }
+
+    /// The live session's power, for the Now card's sparkline: the same
+    /// session detail and curve the live charging sheet draws.
+    private func loadPowerCurve() async {
+        guard let status = model.status, status.isCharging, let id = status.activeChargeId else {
+            powerCurve = []
+            return
+        }
+        guard let detail = try? await dataSource.charge(id: id), !Task.isCancelled else { return }
+        let start = min(status.chargeStartedAt ?? detail.summary.start, detail.summary.start)
+        let curve = ChargeCurve.curve(telemetry: detail.telemetry, samples: detail.samples, field: "Power",
+                                      start: start, end: detail.summary.end ?? .now,
+                                      telemetryValue: { $0.powerKw }, sampleValue: { $0.powerKw })
+        powerCurve = ChargeCurve.reduced(curve.points, maxPoints: 120)
+    }
+
+    // MARK: Commands
+
+    /// Sends a command from the dock or the Now card through the Controls
+    /// path: asks first where Controls asks, and opens Controls (which says
+    /// why) when the server cannot run it.
+    private func perform(_ command: VehicleCommand) {
+        guard context.supports(command) else {
+            showControls = true
+            return
+        }
+        guard context.canStart(command) else { return }
+        if let required = CommandConfirmation.required(for: command) {
+            confirmation = required
+        } else {
+            send(command)
+        }
+    }
+
+    private func send(_ command: VehicleCommand) {
+        awaitingActivity = true
+        context.send(command)
+    }
+
+    private func tap(_ tile: DockTile) {
+        switch tile.tap {
+        case .send(let command): perform(command)
+        case .openControls: showControls = true
+        }
+    }
+
+    /// The Dashboard shows command feedback for what it sent, and for any
+    /// send still in flight or unresolved.
+    /// The Dashboard's own sends, and anything still unresolved. Hidden while
+    /// Controls is open, which shows the same banner.
+    @ViewBuilder private var activityBanner: some View {
+        if controlsHost == nil,
+           let activity = coordinator.activity(dataSource: dataSource, vehicleID: vehicleID),
+           activity.id == dashboardActivityID || activity.phase == .pending || activity.phase == .unknown {
+            VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
+                Task { await context.refresh() }
+            }
+        }
+    }
+
+    // MARK: Layouts
+
+    private var displayStatus: VehicleStatus { controls.effective(model.status ?? .skeleton) }
+    private var isPlaceholder: Bool { model.status == nil }
+
+    /// Open flat: the stage on one side of the hinge, the details on the other.
+    private var stage: some View {
+        VoltaPanes {
+            stagePane
+        } secondary: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: VoltaSpacing.xl - 4) {
+                    banners
+                    nowCard(.standard)
+                    metricTiles(displayStatus)
+                    details
+                }
+                .padding(.horizontal, VoltaSpacing.screen)
+                .padding(.top, VoltaSpacing.sm)
+                .padding(.bottom, VoltaSpacing.tabBarClearance)
+                .redacted(reason: isPlaceholder ? .placeholder : [])
+                .disabled(isPlaceholder)
+            }
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier("scroll.dashboard")
+            .refreshable { await load() }
+            .overlay(alignment: .bottom) { activityBanner }
+        }
+        .background(Color.voltaBackground.ignoresSafeArea())
+    }
+
+    /// Map, identity, battery and the dock; scrolls only at accessibility sizes.
+    @ViewBuilder private var stagePane: some View {
+        let status = displayStatus
+        if typeSize.isAccessibilitySize {
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Tall enough that the pill clears the wordmark.
+                    stageMap(status).frame(height: 300)
+                    stageControls(status, dock: true)
+                }
+            }
+            .scrollIndicators(.hidden)
+        } else {
+            VStack(spacing: 0) {
+                // The map runs on behind the battery and fades out there, so
+                // the car sits lower and the pill clears the wordmark.
+                stageMap(status, runsUnder: 150).frame(maxHeight: .infinity)
+                stageControls(status, dock: true)
+            }
+        }
+    }
+
+    private func stageControls(_ status: VehicleStatus, dock showsDock: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            identityRow(status)
+            hero(status).padding(.top, VoltaSpacing.xs)
+            if showsDock {
+                dock.padding(.top, VoltaSpacing.xl - 4)
+            }
+        }
+        .padding(.horizontal, VoltaSpacing.screen)
+        .padding(.bottom, VoltaSpacing.lg)
+        // The map gives way; the battery and dock keep their size.
+        .fixedSize(horizontal: false, vertical: true)
+        .redacted(reason: isPlaceholder ? .placeholder : [])
+        .disabled(isPlaceholder)
+    }
+
+    /// The map as a pane's backdrop: wordmark over it while the bars are on
+    /// the side, pill and marker centered, a fade into the background.
+    private func stageMap(_ status: VehicleStatus, runsUnder: CGFloat = 0) -> some View {
+        DashboardMap(location: status.location,
+                     sentry: status.sentryMode ?? false,
+                     state: model.status?.state,
+                     charging: status.isCharging,
+                     chargerPowerKw: status.chargerPowerKw)
+            .overlay(alignment: .bottom) {
+                LinearGradient(stops: [.init(color: .clear, location: 0),
+                                       .init(color: .voltaBackground.opacity(0.85), location: 0.45),
+                                       .init(color: .voltaBackground, location: 0.7)],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 90 + runsUnder * 1.3)
+                    .allowsHitTesting(false)
+            }
+            .padding(.bottom, -runsUnder)
+            .ignoresSafeArea(edges: [.top, .leading])
+            .contentShape(.rect)
+            .onTapGesture { if status.isCharging { showLiveCharge = true } }
+            .accessibilityAddTraits(status.isCharging ? .isButton : [])
+            .accessibilityIdentifier("button.liveCharge.map")
+            .redacted(reason: isPlaceholder ? .placeholder : [])
+            .overlay(alignment: .top) {
+                if barsOnSide { wordmark(height: 26).padding(.top, VoltaSpacing.lg) }
+            }
+    }
+
+    /// Upright: map and battery above the hinge; Now card, dock and the rest below.
+    private var upright: some View {
+        let status = displayStatus
+        return VoltaPanes(axis: .vertical) {
+            VStack(spacing: 0) {
+                stageMap(status, runsUnder: 120).frame(maxHeight: .infinity)
+                stageControls(status, dock: false)
+            }
+        } secondary: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
+                    banners
+                    nowCard(.wide)
+                    dock
+                    metricTiles(status)
+                    details
+                }
+                .padding(.horizontal, VoltaSpacing.screen)
+                .padding(.top, VoltaSpacing.lg)
+                .padding(.bottom, VoltaSpacing.tabBarClearance)
+                .redacted(reason: isPlaceholder ? .placeholder : [])
+                .disabled(isPlaceholder)
+            }
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier("scroll.dashboard")
+            .refreshable { await load() }
+            .overlay(alignment: .bottom) { activityBanner }
+        }
+        .background(Color.voltaBackground.ignoresSafeArea())
+    }
+
+    /// Compact width: one column under a short map.
+    @ViewBuilder private var column: some View {
+        ZStack(alignment: .top) {
+            Color.voltaBackground.ignoresSafeArea()
+            mapLayer
+            columnContent
+            topScrim
+            if barsOnSide {
+                wordmark(height: 18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, VoltaSpacing.screen)
+                    .padding(.top, VoltaSpacing.sm)
+            }
+        }
+        .overlay(alignment: .bottom) { activityBanner }
+    }
 
     private var mapLayer: some View {
         let progress = min(max(scrollOffset / mapReveal, 0), 1)
-        return DashboardMap(location: model.status?.location,
-                            sentry: model.status?.sentryMode ?? false,
+        let status = displayStatus
+        // The pill and marker are centered on the map, so its height puts
+        // them in the visible part above the content.
+        let height = (safeTop + mapReveal) * 1.42
+        return DashboardMap(location: status.location,
+                            sentry: status.sentryMode ?? false,
                             state: model.status?.state,
-                            charging: model.status?.isCharging ?? false,
-                            chargerPowerKw: model.status?.chargerPowerKw)
-            .frame(height: mapHeight)
+                            charging: status.isCharging,
+                            chargerPowerKw: status.chargerPowerKw)
+            .frame(height: height)
             .overlay(alignment: .bottom) {
                 LinearGradient(colors: [.clear, .voltaBackground.opacity(0.85), .voltaBackground],
                                startPoint: .top, endPoint: .bottom)
-                    .frame(height: 200)
+                    .frame(height: height - safeTop - mapReveal + 60)
             }
             .overlay(Color.voltaBackground.opacity(progress * 0.85))
             .offset(y: -max(scrollOffset, 0) * 0.45 + max(-scrollOffset, 0) * 0.5)
@@ -143,6 +446,71 @@ struct DashboardView: View {
             .ignoresSafeArea(edges: [.top, .horizontal])
             .allowsHitTesting(false)
             .redacted(reason: model.status == nil ? .placeholder : [])
+    }
+
+    @ViewBuilder
+    private var columnContent: some View {
+        switch model.phase {
+        case .failed(let message):
+            failure(message)
+        case .noData:
+            noData
+        case .loading, .loaded:
+            columnScroll
+        }
+    }
+
+    private var columnScroll: some View {
+        let status = displayStatus
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // The map can't take touches; while charging it opens the live session.
+                Color.clear.frame(height: mapReveal)
+                    .contentShape(.rect)
+                    .onTapGesture { if status.isCharging { showLiveCharge = true } }
+                    .accessibilityHidden(!status.isCharging)
+                    .accessibilityLabel("Live charging session")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityIdentifier("button.liveCharge.map")
+                VStack(alignment: .leading, spacing: 0) {
+                    banners
+                    identityRow(status)
+                    hero(status).padding(.top, VoltaSpacing.xs)
+                    nowCard(.compact).padding(.top, VoltaSpacing.xl)
+                    dock.padding(.top, VoltaSpacing.md)
+                    metricTiles(status).padding(.top, VoltaSpacing.md)
+                    details.padding(.top, VoltaSpacing.xl + 4)
+                }
+                .padding(.horizontal, VoltaSpacing.screen)
+                .voltaReadableWidth(720)
+                .redacted(reason: isPlaceholder ? .placeholder : [])
+                .disabled(isPlaceholder)
+            }
+            .padding(.bottom, VoltaSpacing.tabBarClearance)
+        }
+        .scrollIndicators(.hidden)
+        .scrollPosition($scrollPosition)
+        .accessibilityIdentifier("scroll.dashboard")
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y + geo.contentInsets.top
+        } action: { _, new in
+            scrollOffset = new
+        }
+        .refreshable { await load() }
+    }
+
+    /// Darkens the top once the map has scrolled away, so the bar buttons and
+    /// status bar stay legible over the cards.
+    private var topScrim: some View {
+        let fade = min(max((scrollOffset - mapReveal * 0.6) / 80, 0), 1)
+        return LinearGradient(stops: [.init(color: .voltaBackground, location: 0),
+                                      .init(color: .voltaBackground.opacity(0.95), location: 0.6),
+                                      .init(color: .clear, location: 1)],
+                              startPoint: .top, endPoint: .bottom)
+            .frame(height: 170)
+            .ignoresSafeArea(edges: [.top, .horizontal])
+            .opacity(fade)
+            .allowsHitTesting(false)
     }
 
     // MARK: Toolbar
@@ -154,7 +522,7 @@ struct DashboardView: View {
         // A title keeps a horizontal bar alive, so with side bars the wordmark
         // is drawn over the map instead.
         if !barsOnSide {
-            ToolbarItem(placement: .principal) { wordmark }
+            ToolbarItem(placement: .principal) { wordmark(height: 20) }
         }
         ToolbarItem(placement: .topBarLeading) {
             Button { showVehicle = true } label: {
@@ -178,140 +546,26 @@ struct DashboardView: View {
         }
     }
 
-    private var wordmark: some View {
+    private func wordmark(height: CGFloat) -> some View {
         Image("Wordmark")
             .renderingMode(.template)
             .resizable()
             .scaledToFit()
-            .frame(height: 20)
+            .frame(height: height)
             .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
             .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
             .accessibilityLabel("Volta")
             .accessibilityAddTraits(.isHeader)
     }
 
-    /// Darkens the top once the map has scrolled away, so the bar buttons and
-    /// status bar stay legible over the cards.
-    private var topScrim: some View {
-        let fade = min(max((scrollOffset - mapReveal * 0.6) / 80, 0), 1)
-        return LinearGradient(stops: [.init(color: .voltaBackground, location: 0),
-                                      .init(color: .voltaBackground.opacity(0.95), location: 0.6),
-                                      .init(color: .clear, location: 1)],
-                              startPoint: .top, endPoint: .bottom)
-            .frame(height: 170)
-            .ignoresSafeArea(edges: [.top, .horizontal])
-            .opacity(fade)
-            .allowsHitTesting(false)
-    }
-
-    // MARK: Content
+    // MARK: Sections
 
     @ViewBuilder
-    private var content: some View {
-        switch model.phase {
-        case .failed(let message):
-            failure(message)
-        case .noData:
-            noData
-        case .loading, .loaded:
-            scroll
-        }
-    }
-
-    private var scroll: some View {
+    private var banners: some View {
         let status = model.status ?? .skeleton
-        let isPlaceholder = model.status == nil
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                // The map can't take touches; while charging its pill opens the live session.
-                Color.clear.frame(height: mapReveal)
-                    .contentShape(.rect)
-                    .onTapGesture { if status.isCharging { showLiveCharge = true } }
-                    .accessibilityHidden(!status.isCharging)
-                    .accessibilityLabel("Live charging session")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityIdentifier("button.liveCharge.map")
-                VStack(alignment: .leading, spacing: 0) {
-                    banners(status)
-                    hero(status)
-                    HairlineDivider().padding(.top, VoltaSpacing.xl)
-                    details(status)
-                }
-                .padding(.horizontal, VoltaSpacing.screen)
-                .voltaReadableWidth(720)
-                .redacted(reason: isPlaceholder ? .placeholder : [])
-                .disabled(isPlaceholder)
-            }
-            .padding(.bottom, VoltaSpacing.tabBarClearance)
-        }
-        .scrollIndicators(.hidden)
-        .scrollPosition($scrollPosition)
-        .accessibilityIdentifier("scroll.dashboard")
-        .onScrollGeometryChange(for: CGFloat.self) { geo in
-            geo.contentOffset.y + geo.contentInsets.top
-        } action: { _, new in
-            scrollOffset = new
-        }
-        .refreshable { await load() }
-    }
-
-    /// Regular-width, wide window: the map with the battery over it is one
-    /// pane and the scrolling cards are the other. Same content and controls
-    /// as the single column, so nothing is lost or added between displays.
-    private var panes: some View {
-        let status = model.status ?? .skeleton
-        let isPlaceholder = model.status == nil
-        return VoltaPanes {
-            ZStack(alignment: .bottom) {
-                DashboardMap(location: status.location,
-                             sentry: status.sentryMode ?? false,
-                             state: model.status?.state,
-                             charging: status.isCharging,
-                             chargerPowerKw: status.chargerPowerKw)
-                    .overlay(alignment: .bottom) {
-                        LinearGradient(colors: [.clear, .voltaBackground.opacity(0.85), .voltaBackground],
-                                       startPoint: .top, endPoint: .bottom)
-                            .frame(height: 300)
-                    }
-                    .ignoresSafeArea()
-                    .contentShape(.rect)
-                    .onTapGesture { if status.isCharging { showLiveCharge = true } }
-                    .accessibilityAddTraits(status.isCharging ? .isButton : [])
-                    .accessibilityIdentifier("button.liveCharge.map")
-                    .redacted(reason: isPlaceholder ? .placeholder : [])
-                VStack(alignment: .leading, spacing: 0) {
-                    hero(status)
-                }
-                .padding(.horizontal, VoltaSpacing.screen)
-                .padding(.bottom, VoltaSpacing.xl)
-                .redacted(reason: isPlaceholder ? .placeholder : [])
-            }
-            .overlay(alignment: .top) { wordmark.padding(.top, VoltaSpacing.md) }
-        } secondary: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    banners(status)
-                    details(status)
-                }
-                .padding(.horizontal, VoltaSpacing.screen)
-                .padding(.top, VoltaSpacing.sm)
-                .padding(.bottom, VoltaSpacing.tabBarClearance)
-                .redacted(reason: isPlaceholder ? .placeholder : [])
-                .disabled(isPlaceholder)
-            }
-            .scrollIndicators(.hidden)
-            .accessibilityIdentifier("scroll.dashboard")
-            .refreshable { await load() }
-            .background(Color.voltaBackground.ignoresSafeArea())
-        }
-        .background(Color.voltaBackground.ignoresSafeArea())
-    }
-
-    @ViewBuilder
-    private func banners(_ status: VehicleStatus) -> some View {
         if let error = model.refreshError {
             InlineBanner(systemImage: "wifi.exclamationmark",
-                         message: "Couldn't refresh. Showing data from \(lastUpdatedText(status)). \(error)",
+                         message: "Couldn't refresh. Showing data from \(VoltaFormat.relativeDate(status.updatedAt)). \(error)",
                          tint: .voltaAmber) { model.refreshError = nil }
                 .padding(.bottom, VoltaSpacing.lg)
         }
@@ -323,29 +577,36 @@ struct DashboardView: View {
         }
     }
 
-    /// Who the car is and how much charge it has.
-    @ViewBuilder
-    private func hero(_ status: VehicleStatus) -> some View {
-        identityRow(status)
-        if let freshness = status.telemetryFreshness {
-            Text(freshness.label)
-                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
-                .padding(.top, VoltaSpacing.sm)
-        }
-        batteryBlock(status)
-            .padding(.top, VoltaSpacing.xl)
+    private func nowCard(_ style: NowCard.Style) -> some View {
+        NowCard(status: displayStatus, style: style, context: context, powerCurve: powerCurve,
+                parkedSince: NowCardContent.parkedSince(model.timeline),
+                openLiveCharge: { if model.status?.isCharging == true { showLiveCharge = true } },
+                perform: perform, openControls: { showControls = true })
     }
 
-    /// Quick controls, metric cards, the activity strip and the summary.
+    private var dock: some View {
+        DashboardDock(
+            tiles: DockTile.tiles(locked: controls.status == nil ? model.status?.locked : controls.locked,
+                                  climateOn: controls.status == nil ? model.status?.climateOn : controls.climateOn,
+                                  sentry: controls.status == nil ? model.status?.sentryMode : controls.sentry,
+                                  supports: context.supports),
+            sending: { tile in
+                if case .send(let command) = tile.tap { return context.isSending(command) }
+                return false
+            },
+            blocked: { tile in
+                if case .send(let command) = tile.tap { return !context.canStart(command) }
+                return false
+            },
+            tap: tap)
+    }
+
+    /// Activity strip, then Today / 7D / 30D.
     @ViewBuilder
-    private func details(_ status: VehicleStatus) -> some View {
-        QuickControlsRow(status: status) { showControls = true }
-        HairlineDivider()
-        metricGrid(status)
-            .padding(.top, VoltaSpacing.xl)
+    private var details: some View {
         ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
                       loading: model.loadingSections.contains(.timeline))
-            .padding(.top, VoltaSpacing.xxl + 4)
+            .padding(.top, VoltaSpacing.sm)
         HairlineDivider().padding(.top, VoltaSpacing.xl)
         // Re-render when today's reporting day ends so its totals drop.
         TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
@@ -353,7 +614,7 @@ struct DashboardView: View {
                                    failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
                                    loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
         }
-        .padding(.top, VoltaSpacing.xl)
+        .padding(.top, VoltaSpacing.lg)
     }
 
     private func failure(_ message: String) -> some View {
@@ -395,49 +656,53 @@ struct DashboardView: View {
         .padding(.top, 120)
     }
 
-    // MARK: Sections
-
+    /// "FRIDAY ⌄" (opens the vehicle sheet) and the data's freshness.
     private func identityRow(_ status: VehicleStatus) -> some View {
-        HStack(spacing: VoltaSpacing.lg) {
-            Image(systemName: "person.fill")
-                .font(.system(size: 15))
-                .foregroundStyle(Color.voltaTextSecondary)
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(Color.voltaRaised))
-            Text(model.vehicle?.name ?? "Vehicle")
-                .font(.system(.subheadline, weight: .medium))
-                .tracking(2.5)
-                .textCase(.uppercase)
-                .foregroundStyle(Color.white.opacity(0.9))
-            Spacer()
-            HStack(spacing: 6) {
-                StatusDot(color: status.state.color, size: 6)
-                Text(stateLine(status))
-                    .font(.caption)
-                    .foregroundStyle(Color.voltaTextSecondary)
+        HStack(spacing: VoltaSpacing.md) {
+            Button { showVehicle = true } label: {
+                HStack(spacing: VoltaSpacing.sm) {
+                    Text(model.vehicle?.name ?? "Vehicle")
+                        .font(.system(.subheadline, weight: .semibold))
+                        .tracking(2.5)
+                        .textCase(.uppercase)
+                        .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.voltaTextSecondary)
+                }
+                .frame(minHeight: 44)
+                .contentShape(.rect)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(model.vehicle?.name ?? "Vehicle"). Vehicle details\(selectVehicle == nil ? "" : " and switching")")
+            .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: VoltaSpacing.sm)
+            let freshness = Self.freshness(status)
+            HStack(spacing: 6) {
+                if freshness.isLive { StatusDot(color: .voltaTextPrimary, size: 6) }
+                Text(freshness.text)
+                    .font(.footnote)
+                    .foregroundStyle(Color.voltaTextSecondary)
+                    .multilineTextAlignment(.trailing)
+            }
+            .accessibilityElement(children: .combine)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
         // UI-test readiness marker: only present once real data has loaded.
         .accessibilityIdentifier(model.status != nil ? "screen.dashboard" : "")
     }
 
-    private func stateLine(_ status: VehicleStatus) -> String {
+    /// "Live" while telemetry streams; otherwise how old the data is, in the
+    /// wording the app already uses.
+    static func freshness(_ status: VehicleStatus, now: Date = .now) -> (text: String, isLive: Bool) {
         switch status.state {
         case .asleep, .offline:
-            "\(status.state.displayName) · \(lastUpdatedText(status))"
-        case .charging:
-            if let minutes = status.minutesToFull {
-                "Charging · \(VoltaFormat.duration(minutes: Double(minutes))) left"
-            } else { "Charging" }
+            return ("\(status.state.displayName) · \(VoltaFormat.relativeDate(status.updatedAt, now: now))", false)
         default:
-            status.state.displayName
+            if let freshness = status.telemetryFreshness {
+                return freshness.connected ? ("Live", true) : (freshness.label, false)
+            }
+            return ("Updated \(VoltaFormat.relativeDate(status.updatedAt, now: now))", false)
         }
-    }
-
-    private func lastUpdatedText(_ status: VehicleStatus) -> String {
-        VoltaFormat.relativeDate(status.updatedAt)
     }
 
     /// The range shown and a label that says which one it is: TeslaMate often
@@ -448,60 +713,49 @@ struct DashboardView: View {
         return ("Range", nil)
     }
 
-    private func batteryBlock(_ status: VehicleStatus) -> some View {
+    /// Battery (green only while charging), range, and the range bar.
+    private func hero(_ status: VehicleStatus) -> some View {
         let range = Self.rangeDisplay(status)
-        return VStack(spacing: VoltaSpacing.xl) {
+        return VStack(spacing: VoltaSpacing.md + 2) {
             HStack(alignment: .bottom) {
                 BigNumber("\(status.batteryLevel)", unit: "%", size: 66,
                           color: status.isCharging ? .voltaGreen : .voltaTextPrimary)
                     .shadow(color: .black.opacity(0.5), radius: 10, y: 4)
                 Spacer()
-                VStack(alignment: .trailing, spacing: VoltaSpacing.sm) {
+                VStack(alignment: .trailing, spacing: VoltaSpacing.xs) {
                     Text(range.label).voltaLabelStyle()
                     BigNumber(range.km.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
-                              unit: units.distanceUnit, size: 24, weight: .semibold)
+                              unit: units.distanceUnit, size: 26, weight: .semibold)
                 }
                 .padding(.bottom, 10)
             }
             .accessibilityElement(children: .combine)
-            RangeBar(level: status.batteryLevel, limit: status.chargeLimit,
+            RangeBar(level: status.batteryLevel, limit: controls.displayedChargeLimit ?? status.chargeLimit,
                      charging: status.isCharging)
-            if status.isCharging {
-                LiveChargeStats(status: status) { showLiveCharge = true }
-                    .padding(.top, -VoltaSpacing.sm)
+        }
+    }
+
+    /// Pack, Cabin and Outside: value, unit, and a caption on its own line.
+    private func metricTiles(_ status: VehicleStatus) -> some View {
+        let pack = MetricTile(title: "Pack", value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
+                              caption: status.packTempMaxC == nil ? "Streams when awake"
+                                : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "Maximum cell")
+        let cabin = MetricTile(title: "Cabin", value: temperatureNumber(status.insideTempC), unit: units.temperatureUnit,
+                               caption: "Climate \(StateDisplay.climate(status.climateOn).text.lowercased())")
+        let outside = MetricTile(title: "Outside", value: temperatureNumber(status.outsideTempC), unit: units.temperatureUnit,
+                                 caption: "At the car")
+        return Group {
+            if typeSize.isAccessibilitySize {
+                VStack(spacing: VoltaSpacing.sm) { pack; cabin; outside }
+            } else {
+                HStack(spacing: VoltaSpacing.sm + 2) { pack; cabin; outside }
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private func metricGrid(_ status: VehicleStatus) -> some View {
-        let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
-        return LazyVGrid(columns: columns, spacing: 14) {
-            MetricCard(systemImage: "minus.plus.batteryblock", title: "Pack Temp",
-                       value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
-                       gauge: GradientGauge(value: status.packTempMaxC.map(Self.tempFraction))) {
-                Text(status.packTempMaxC == nil ? "Streams when awake" : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "No minimum recorded")
-                    .font(.caption).foregroundStyle(Color.voltaTextSecondary)
-            }
-            efficiencyCard
-            climateCard(status)
-            weatherCard(status)
-        }
-    }
-
-    private var efficiencyCard: some View {
-        let eff = model.summaries[.thirtyDays]?.efficiencyWhPerKm
-        let value = eff.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—"
-        // 100 Wh/km (great) … 250 Wh/km (heavy).
-        let fraction = eff.map { ($0 - 100) / 150 }
-        return MetricCard(systemImage: "leaf", title: "30D Eff", value: value, unit: units.efficiencyUnit,
-                          gauge: GradientGauge(value: fraction,
-                                               colors: [.voltaGreen, .voltaGreen, .voltaAmber, .voltaRed],
-                                               knob: .filled(.voltaGreen)),
-                          tint: nil) {
-            Text(Self.efficiencyDetail(model.summaries[.thirtyDays],
-                                       loading: model.loadingSections.contains(.summary(.thirtyDays))))
-                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
-        }
+    private func temperatureNumber(_ celsius: Double?) -> String {
+        celsius.map { VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0) } ?? "—"
     }
 
     /// "No drives" only when the 30-day summary loaded and counted none; a
@@ -512,71 +766,68 @@ struct DashboardView: View {
         return summary.driveCount == 0 ? "No drives in 30 days" : "Unavailable"
     }
 
-    private func climateCard(_ status: VehicleStatus) -> some View {
-        let on = status.climateOn ?? false
-        return MetricCard(systemImage: "fan", title: "Climate",
-                          value: temperatureNumber(status.insideTempC), unit: units.temperatureUnit,
-                          badge: .init(text: status.climateOn == nil ? "—" : (on ? "On" : "Off"),
-                                       color: on ? .voltaGreen : .voltaTextSecondary, inHeader: true),
-                          gauge: GradientGauge(value: status.insideTempC.map(Self.tempFraction), knob: .ring,
-                                               secondaryValue: status.outsideTempC.map(Self.tempFraction)),
-                          tint: on ? .voltaGreen : .voltaTeal) {
-            if let outside = status.outsideTempC {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("OUT").font(.caption2.weight(.medium)).tracking(1.2)
-                        .foregroundStyle(Color.voltaTextSecondary)
-                    Text("\(VoltaFormat.number(units.temperatureValue(celsius: outside), digits: 0))°")
-                        .font(.system(.title3, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                }
-                .fixedSize()
-            }
-        }
-    }
-
-    private func weatherCard(_ status: VehicleStatus) -> some View {
-        let hour = Calendar.current.component(.hour, from: .now)
-        let night = hour < 6 || hour >= 19
-        let t = status.outsideTempC
-        let extreme = t.map { $0 <= 0 || $0 >= 35 } ?? false
-        let symbol: String = {
-            guard let t else { return "cloud" }
-            if t <= 0 { return "snowflake" }
-            return night ? "moon.stars.fill" : (t >= 24 ? "sun.max.fill" : "cloud.sun.fill")
-        }()
-        let dayFraction = (Double(hour) + Double(Calendar.current.component(.minute, from: .now)) / 60) / 24
-        return MetricCard(systemImage: "cloud.sun", title: "Weather",
-                          value: temperatureNumber(t), unit: units.temperatureUnit,
-                          headerAccessory: extreme
-                            ? AnyView(Image(systemName: "exclamationmark.triangle.fill")
-                                .symbolRenderingMode(.multicolor)
-                                .foregroundStyle(Color.voltaAmber)
-                                .accessibilityLabel(t.map { $0 <= 0 ? "Freezing" : "Very hot" } ?? ""))
-                            : nil,
-                          gauge: GradientGauge(value: dayFraction, colors: GradientGauge.daylight, knob: .ring),
-                          tint: .voltaBlue) {
-            Image(systemName: symbol)
-                .symbolRenderingMode(.hierarchical)
-                .font(.system(size: 30))
-                .foregroundStyle(Color.white.opacity(0.9))
-        }
-    }
-
-    private func temperatureNumber(_ celsius: Double?) -> String {
-        celsius.map { VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0) } ?? "—"
-    }
-
-    /// Maps -5 °C … 45 °C onto the gauge.
+    /// Maps -5 °C … 45 °C onto a gauge.
     static func tempFraction(_ celsius: Double) -> Double { (celsius + 5) / 50 }
 }
 
-extension Color {
-    fileprivate static let voltaTeal = Color(hex: 0x14B8A6)
+// MARK: - Metric tile
+
+/// "PACK / 100 °F / Min 88°F": value 32 pt (the widest that fits "100" in a
+/// third of a pane), unit 17 pt, caption 13 pt, all scaled with Dynamic Type.
+struct MetricTile: View {
+    var title: String
+    var value: String
+    var unit: String
+    var caption: String
+    @ScaledMetric(relativeTo: .largeTitle) private var valueSize: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var unitSize: CGFloat = 17
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).voltaLabelStyle()
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value)
+                    .font(.system(size: valueSize, weight: .heavy))
+                    .tracking(-valueSize * 0.02)
+                    .monospacedDigit()
+                    .foregroundStyle(Color.voltaTextPrimary)
+                Text(unit)
+                    .font(.system(size: unitSize))
+                    .foregroundStyle(Color.voltaTextSecondary)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            Text(caption)
+                .font(.footnote)
+                .foregroundStyle(Color.voltaTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, VoltaSpacing.md)
+        .padding(.vertical, VoltaSpacing.md)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .voltaCardBackground(radius: 18)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+extension ControlsModel {
+    /// `base` with this model's own values (which may be newer, or simulated
+    /// in demo mode) for the states controls change.
+    func effective(_ base: VehicleStatus) -> VehicleStatus {
+        guard status != nil else { return base }
+        var status = base
+        status.locked = locked
+        status.climateOn = climateOn
+        status.sentryMode = sentry
+        status.chargingState = chargingState
+        status.chargeLimit = chargeLimit
+        return status
+    }
 }
 
 // MARK: - Range bar
 
-/// Thin blue bar with glow; a faint tick marks the charge limit.
+/// Thin blue bar with glow (green while charging); a tick marks the charge limit.
 struct RangeBar: View {
     var level: Int
     var limit: Int?
@@ -600,7 +851,7 @@ struct RangeBar: View {
                     } animation: { _ in .easeInOut(duration: 1.2) }
                 if let limit, limit < 100 {
                     Rectangle()
-                        .fill(Color.white.opacity(0.35))
+                        .fill(Color.white.opacity(0.6))  // 3:1 or better on the background
                         .frame(width: 2, height: 10)
                         .offset(x: w * CGFloat(limit) / 100 - 1)
                 }
@@ -619,103 +870,6 @@ struct RangeBar: View {
     }
 }
 
-// MARK: - Live charging
-
-/// "⚡ 7.7 kW · ⏱ 4h 28m · ⊕ +1.4 kWh   LIVE ›" under the battery bar.
-struct LiveChargeStats: View {
-    var status: VehicleStatus
-    var open: () -> Void
-
-    var body: some View {
-        Button(action: open) {
-            HStack(spacing: VoltaSpacing.md) {
-                if let kw = status.chargerPowerKw {
-                    item("bolt.fill", "\(VoltaFormat.number(kw, digits: kw >= 20 ? 0 : 1)) kW", color: .voltaGreen)
-                }
-                if let minutes = status.minutesToFull {
-                    item("clock", VoltaFormat.duration(minutes: Double(minutes)), color: .voltaAmber)
-                }
-                if let added = status.chargeEnergyAddedKwh {
-                    item("plus.circle", "+\(VoltaFormat.number(added, digits: 1)) kWh", color: .voltaTextSecondary)
-                }
-                Spacer(minLength: 0)
-                HStack(spacing: 3) {
-                    StatusDot(color: .voltaGreen, size: 5)
-                    Text("LIVE").tracking(1.4)
-                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
-                }
-                .font(.system(.caption2, weight: .bold))
-                .foregroundStyle(Color.voltaGreen)
-                .padding(.horizontal, 9).padding(.vertical, 5)
-                .background(Color.voltaGreen.opacity(0.14), in: .capsule)
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Live charging session")
-        .accessibilityIdentifier("button.liveCharge")
-    }
-
-    private func item(_ symbol: String, _ text: String, color: Color) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
-            Text(text).font(.system(.footnote, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(color == .voltaTextSecondary ? Color.voltaTextPrimary.opacity(0.85) : color)
-        }
-        .lineLimit(1)
-    }
-}
-
-// MARK: - Quick controls
-
-/// Row of icon buttons reflecting status; any tap opens the Controls sheet.
-struct QuickControlsRow: View {
-    var status: VehicleStatus
-    var open: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            let doors = StateDisplay.doors(status.locked)
-            item(doors.symbol,
-                 color: doors.tone == .active ? .voltaRed.opacity(0.85) : neutral(doors),
-                 label: "Doors: \(doors.text)")
-            let climate = StateDisplay.climate(status.climateOn)
-            item(climate.symbol, color: climate.tone == .active ? .voltaGreen : neutral(climate),
-                 label: "Climate: \(climate.text)")
-            item("car.side.front.open", color: .voltaTextPrimary.opacity(0.75), label: "Frunk")
-            item("car.side.rear.open", color: .voltaTextPrimary.opacity(0.75), label: "Trunk")
-            let sentry = StateDisplay.sentry(status.sentryMode)
-            item(sentry.symbol,
-                 color: sentry.tone == .active ? .voltaRed.opacity(0.85) : neutral(sentry),
-                 label: "Sentry: \(sentry.text)")
-            item("location.fill", color: .voltaTextPrimary.opacity(0.6), label: "Locate")
-            item("ellipsis", color: .voltaTextPrimary.opacity(0.85), label: "All controls")
-                .accessibilityIdentifier("button.controls")
-        }
-        .padding(.vertical, VoltaSpacing.lg + 2)
-    }
-
-    private func neutral(_ display: StateDisplay) -> Color {
-        display.isKnown ? .voltaTextPrimary.opacity(0.75) : .voltaTextTertiary
-    }
-
-    private func item(_ symbol: String, color: Color, label: String) -> some View {
-        Button(action: open) {
-            Image(systemName: symbol)
-                .resizable()
-                .scaledToFit()
-                .fontWeight(.regular)
-                .frame(width: 28, height: 24)
-                .foregroundStyle(color)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(VoltaPressStyle())
-        .accessibilityLabel(label)
-        .accessibilityHint("Opens controls")
-    }
-}
-
 // MARK: - Activity summary
 
 struct ActivitySummarySection: View {
@@ -726,21 +880,43 @@ struct ActivitySummarySection: View {
     @Environment(\.units) private var units
     @State private var range: SummaryRange = .today
 
+    private var activityLabel: some View {
+        Text("Activity").voltaLabelStyle()
+            .font(.system(.footnote, weight: .semibold))
+    }
+
+    private var picker: some View {
+        SegmentedRangePicker(selection: $range, minimumHitHeight: 44)
+            .fixedSize()
+    }
+
+    @ViewBuilder
+    private func stats(_ summary: ActivitySummary?) -> some View {
+        StatColumn(value: summary.map { VoltaFormat.number(units.distanceValue(km: $0.distanceKm), digits: 0) } ?? "—",
+                   caption: units.distanceUnit.uppercased())
+        StatColumn(value: summary.map { "\($0.chargeCount)" } ?? "—", caption: "CHARGES")
+        StatColumn(value: summary?.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—",
+                   caption: units.efficiencyUnit)
+    }
+
     var body: some View {
         let summary = summaries[range]
         VStack(alignment: .leading, spacing: VoltaSpacing.xl) {
-            HStack {
-                Text("Activity").voltaLabelStyle()
-                    .font(.system(.footnote, weight: .semibold))
-                Spacer()
-                SegmentedRangePicker(selection: $range)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    activityLabel
+                    Spacer()
+                    picker
+                }
+                VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
+                    activityLabel
+                    picker
+                }
             }
-            HStack {
-                StatColumn(value: summary.map { VoltaFormat.number(units.distanceValue(km: $0.distanceKm), digits: 0) } ?? "—",
-                           caption: units.distanceUnit.uppercased())
-                StatColumn(value: summary.map { "\($0.chargeCount)" } ?? "—", caption: "CHARGES")
-                StatColumn(value: summary?.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—",
-                           caption: units.efficiencyUnit)
+            // Three across, or one above another at large text sizes.
+            ViewThatFits(in: .horizontal) {
+                HStack { stats(summary) }
+                VStack(spacing: VoltaSpacing.lg) { stats(summary) }
             }
             if summary == nil, loadingRanges.contains(range) {
                 ProgressView("Loading \(range.voltaLabel) activity…")
@@ -897,4 +1073,27 @@ struct FailingDataSource: VoltaDataSource {
     func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { throw error }
     func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { throw error }
     func places(vehicleID: Int) async throws -> [Place] { throw error }
+}
+
+/// Layout aid: `-dashboardTypeSize accessibility5` renders the Dashboard and
+/// Controls at that text size. The app caps text at Large (`VoltaApp`), so
+/// accessibility sizes can't be reached from Settings. DEBUG builds only.
+private struct DebugTypeSizeOverride: ViewModifier {
+    static var size: DynamicTypeSize? {
+        #if DEBUG
+        guard let raw = UserDefaults.standard.string(forKey: "dashboardTypeSize") else { return nil }
+        return DynamicTypeSize.allCases.first { "\($0)" == raw }
+        #else
+        return nil
+        #endif
+    }
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let size = Self.size {
+            content.environment(\.dynamicTypeSize, size)
+        } else {
+            content
+        }
+    }
 }

@@ -81,11 +81,15 @@ struct SegmentedRangePicker<Option: Hashable>: View {
     @Binding var selection: Option
     var options: [Option]
     var label: (Option) -> String
+    /// Height each segment's tap target grows to (0 keeps the drawn size).
+    var minimumHitHeight: CGFloat = 0
     @Namespace private var ns
 
-    init(selection: Binding<Option>, options: [Option], label: @escaping (Option) -> String) {
+    init(selection: Binding<Option>, options: [Option], minimumHitHeight: CGFloat = 0,
+         label: @escaping (Option) -> String) {
         _selection = selection
         self.options = options
+        self.minimumHitHeight = minimumHitHeight
         self.label = label
     }
 
@@ -108,7 +112,8 @@ struct SegmentedRangePicker<Option: Hashable>: View {
                                     .matchedGeometryEffect(id: "sel", in: ns)
                             }
                         }
-                        .contentShape(Capsule())
+                        .frame(minWidth: minimumHitHeight, minHeight: minimumHitHeight)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selected ? .isSelected : [])
@@ -118,8 +123,8 @@ struct SegmentedRangePicker<Option: Hashable>: View {
 }
 
 extension SegmentedRangePicker where Option == SummaryRange {
-    init(selection: Binding<SummaryRange>) {
-        self.init(selection: selection, options: SummaryRange.allCases) { $0.voltaLabel }
+    init(selection: Binding<SummaryRange>, minimumHitHeight: CGFloat = 0) {
+        self.init(selection: selection, options: SummaryRange.allCases, minimumHitHeight: minimumHitHeight) { $0.voltaLabel }
     }
 }
 

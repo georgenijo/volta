@@ -846,3 +846,306 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         try XCTUnwrap(JSONSerialization.jsonObject(with: command.encodedBody()) as? [String: Any])
     }
 }
+
+// MARK: - Duo cockpit: Now card, dock, stepped settings, command log, panes
+
+private actor SentLimits {
+    private(set) var values: [Int] = []
+    private(set) var cancelled: [Bool] = []
+    func append(_ value: Int, cancelled wasCancelled: Bool) { values.append(value); cancelled.append(wasCancelled) }
+}
+
+@MainActor final class DuoCockpitTests: XCTestCase {
+    private func coordinator() -> VehicleCommandCoordinator {
+        VehicleCommandCoordinator(store: VehicleCommandIntentStore(inMemory: []))
+    }
+
+    private func status(_ state: VehicleState = .online, charging: ChargingState? = .disconnected,
+                        locked: Bool? = true, updatedAt: Date = .now) -> VehicleStatus {
+        var status = makeStatus(locked: locked, chargingState: charging)
+        status.state = state
+        status.updatedAt = updatedAt
+        return status
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
+    // MARK: Now card
+
+    func testNowVariantFollowsWhatTheCarIsDoing() {
+        XCTAssertEqual(NowVariant.of(status(charging: .charging)), .charging)
+        XCTAssertEqual(NowVariant.of(status(.charging, charging: nil)), .charging, "state alone says charging")
+        XCTAssertEqual(NowVariant.of(status(charging: .stopped)), .pluggedIn)
+        XCTAssertEqual(NowVariant.of(status(charging: .complete)), .pluggedIn)
+        XCTAssertEqual(NowVariant.of(status(charging: .disconnected)), .parked)
+        XCTAssertEqual(NowVariant.of(status(charging: nil)), .parked)
+        XCTAssertEqual(NowVariant.of(status(.driving)), .driving)
+        XCTAssertEqual(NowVariant.of(status(.asleep, charging: .complete)), .unreachable(.asleep),
+                       "a sleeping car is unreachable even while plugged in")
+        XCTAssertEqual(NowVariant.of(status(.offline)), .unreachable(.offline))
+    }
+
+    func testNowCardTextComesOnlyFromReportedFields() {
+        var charging = status(charging: .charging)
+        XCTAssertNil(NowCardContent.timeToLimit(charging))
+        XCTAssertNil(NowCardContent.electrical(charging))
+        XCTAssertEqual(NowCardContent.power(nil), "—")
+        charging.minutesToFull = 48
+        charging.chargerCurrentA = 32
+        charging.chargerVoltage = 241
+        charging.chargeEnergyAddedKwh = 2.94
+        XCTAssertEqual(NowCardContent.timeToLimit(charging), "48m to 80%")
+        XCTAssertEqual(NowCardContent.electrical(charging), "32 A · 241 V · +2.9 kWh added")
+        XCTAssertEqual(NowCardContent.power(7.7), "7.7")
+        XCTAssertEqual(NowCardContent.power(150.4), "150")
+    }
+
+    func testParkedSinceUsesTheLatestDriveAlreadyLoaded() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = TimelineSegment(kind: .drive, start: now.addingTimeInterval(-9000), end: now.addingTimeInterval(-8000))
+        let latest = TimelineSegment(kind: .drive, start: now.addingTimeInterval(-6000), end: now.addingTimeInterval(-5280))
+        let charge = TimelineSegment(kind: .charge, start: now.addingTimeInterval(-4000), end: now.addingTimeInterval(-100))
+        XCTAssertEqual(NowCardContent.parkedSince([latest, charge, older], now: now), latest.end)
+        XCTAssertNil(NowCardContent.parkedSince([charge], now: now), "no drive in the window: unknown, not guessed")
+    }
+
+    // MARK: Dock
+
+    func testDockTilesStateFirstAndSendWhenKnownAndSupported() {
+        let tiles = DockTile.tiles(locked: true, climateOn: false, sentry: true) { _ in true }
+        XCTAssertEqual(tiles.map(\.kind), DockTile.Kind.allCases)
+        XCTAssertEqual(tiles[0].title, "Locked")
+        XCTAssertEqual(tiles[0].action, "Unlock")
+        XCTAssertEqual(tiles[0].tap, .send(.unlock))
+        XCTAssertEqual(tiles[1].tap, .send(.climateOn))
+        XCTAssertEqual(tiles[2].title, "Sentry on")
+        XCTAssertEqual(tiles[2].tone, .armed)
+        XCTAssertEqual(tiles[2].tap, .send(.sentryOff))
+        XCTAssertEqual(tiles[7].tap, .openControls)
+        let unlocked = DockTile.tiles(locked: false, climateOn: true, sentry: false) { _ in true }
+        XCTAssertEqual(unlocked[0].tone, .attention)
+        XCTAssertEqual(unlocked[0].tap, .send(.lock))
+        XCTAssertEqual(unlocked[0].accessibilityLabel, "Doors unlocked. Lock")
+    }
+
+    func testDockTilesOpenControlsWhenStateUnknown() {
+        let tiles = DockTile.tiles(locked: nil, climateOn: nil, sentry: nil) { _ in true }
+        for tile in tiles.prefix(3) {
+            XCTAssertEqual(tile.tap, .openControls, "\(tile.kind) must not guess a direction")
+            XCTAssertEqual(tile.action, "Unknown")
+            XCTAssertEqual(tile.tone, .unknown)
+        }
+        XCTAssertEqual(tiles[3].tap, .send(.windowControl(command: .vent)), "stateless tiles still send")
+    }
+
+    func testDockTilesOpenControlsWhenControlsAreNotEnabled() {
+        let tiles = DockTile.tiles(locked: true, climateOn: false, sentry: false) { $0 == .flash }
+        XCTAssertEqual(tiles.first { $0.kind == .lights }?.tap, .send(.flash))
+        for tile in tiles where tile.kind != .lights {
+            XCTAssertEqual(tile.tap, .openControls, "\(tile.kind)")
+        }
+        XCTAssertEqual(tiles[0].action, "Open Controls")
+        XCTAssertEqual(tiles[0].accessibilityLabel, "Locked. Opens Controls")
+    }
+
+    // MARK: Stepped charge limit
+
+    func testSteppedChargeLimitSendsOneCommandForTheFinalValue() async {
+        let source = StubSource(), sent = SentLimits(), commands = coordinator()
+        source.commandHandler = { command, _ in
+            if case .setChargeLimit(let percent) = command { await sent.append(percent, cancelled: Task.isCancelled) }
+            return VehicleCommandResult(command: command.name, requestID: "request-1", replayed: false)
+        }
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(chargeLimit: 80))
+        model.log = VehicleCommandLog()
+        model.settingDelay = .milliseconds(50)
+        for _ in 0..<3 {
+            model.stepChargeLimit(by: 5, coordinator: commands, dataSource: source, vehicleID: 1)
+        }
+        XCTAssertEqual(model.displayedChargeLimit, 95, "the stepper shows the pending value at once")
+        XCTAssertEqual(model.chargeLimit, 80, "observed state does not move before the car reports it")
+        var values: [Int] = []
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while values.isEmpty, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+            values = await sent.values
+        }
+        try? await Task.sleep(for: .milliseconds(150))
+        values = await sent.values
+        let cancelled = await sent.cancelled
+        XCTAssertEqual(values, [95])
+        XCTAssertEqual(cancelled, [false], "the debounced send must not run in a cancelled task")
+        let names = await source.commands.names
+        XCTAssertEqual(names, ["set_charge_limit"])
+        await waitUntil { model.pendingChargeLimit == nil }
+        XCTAssertNil(model.pendingChargeLimit)
+    }
+
+    func testSteppingBackToTheObservedLimitSendsNothing() async {
+        let source = StubSource(), commands = coordinator()
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(chargeLimit: 80))
+        model.log = VehicleCommandLog()
+        model.settingDelay = .milliseconds(20)
+        model.stepChargeLimit(by: 5, coordinator: commands, dataSource: source, vehicleID: 1)
+        model.stepChargeLimit(by: -5, coordinator: commands, dataSource: source, vehicleID: 1)
+        try? await Task.sleep(for: .milliseconds(200))
+        let names = await source.commands.names
+        XCTAssertTrue(names.isEmpty)
+        XCTAssertNil(model.pendingChargeLimit)
+    }
+
+    func testChargeLimitStepsStayInRange() {
+        let model = ControlsModel(status: makeStatus(chargeLimit: 100))
+        model.settingDelay = .seconds(60)
+        let source = StubSource(), commands = coordinator()
+        model.stepChargeLimit(by: 5, coordinator: commands, dataSource: source, vehicleID: 1)
+        XCTAssertNil(model.pendingChargeLimit, "already at the top: nothing pending")
+        let unknown = ControlsModel(status: makeStatus(chargeLimit: nil))
+        unknown.stepChargeLimit(by: 5, coordinator: commands, dataSource: source, vehicleID: 1)
+        XCTAssertNil(unknown.displayedChargeLimit, "an unreported limit is never invented")
+    }
+
+    // MARK: Command log
+
+    func testCommandLogWordingFollowsTheEvidence() {
+        let log = VehicleCommandLog(), key = VehicleCommandLog.key(backendID: "b", vehicleID: 1)
+        let sent = Date(timeIntervalSince1970: 1_800_000_000)
+        let lock = log.begin(.lock, label: "Lock", key: key, at: sent)
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .sending)
+        log.finish(lock, with: .succeeded(simulated: false))
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .accepted)
+        let demo = log.begin(.flash, label: "Flash lights", key: key, at: sent)
+        log.finish(demo, with: .succeeded(simulated: true))
+        let failed = log.begin(.honk, label: "Honk", key: key, at: sent)
+        log.finish(failed, with: .failed)
+        let unknown = log.begin(.unlock, label: "Unlock", key: key, at: sent)
+        log.finish(unknown, with: .unknown)
+        XCTAssertEqual(log.entries(for: key).map(\.outcome), [.unknown, .failed, .simulated, .accepted],
+                       "newest first")
+        XCTAssertEqual(VehicleCommandLog.Outcome.unknown.text, "Outcome unknown")
+        XCTAssertTrue(log.entries(for: VehicleCommandLog.key(backendID: "b", vehicleID: 2)).isEmpty)
+    }
+
+    func testConfirmedNeedsALaterStatusShowingTheExpectedState() {
+        let log = VehicleCommandLog(), key = VehicleCommandLog.key(backendID: "b", vehicleID: 1)
+        let sent = Date(timeIntervalSince1970: 1_800_000_000)
+        let lock = log.begin(.lock, label: "Lock", key: key, at: sent)
+        log.finish(lock, with: .succeeded(simulated: false))
+        log.observe(status(locked: true, updatedAt: sent.addingTimeInterval(-5)), key: key)
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .accepted, "a status from before the send proves nothing")
+        log.observe(status(locked: false, updatedAt: sent.addingTimeInterval(5)), key: key)
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .accepted, "the car still reports unlocked")
+        log.observe(status(locked: nil, updatedAt: sent.addingTimeInterval(6)), key: key)
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .accepted, "an unreported lock confirms nothing")
+        log.observe(status(locked: true, updatedAt: sent.addingTimeInterval(10)), key: key)
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .confirmed)
+    }
+
+    func testCommandsTheCarDoesNotReportStayAccepted() {
+        let log = VehicleCommandLog(), key = VehicleCommandLog.key(backendID: "b", vehicleID: 1)
+        let sent = Date(timeIntervalSince1970: 1_800_000_000)
+        for command: VehicleCommand in [.flash, .honk, .actuateTrunk(whichTrunk: .front), .windowControl(command: .vent),
+                                        .setTemperatures(driverTempC: 21, passengerTempC: 21)] {
+            let id = log.begin(command, label: command.controlLabel, key: key, at: sent)
+            log.finish(id, with: .succeeded(simulated: false))
+            XCTAssertNil(command.isObserved(in: status()), "\(command.name)")
+        }
+        log.observe(status(updatedAt: sent.addingTimeInterval(60)), key: key)
+        XCTAssertTrue(log.entries(for: key).allSatisfy { $0.outcome == .accepted })
+        var limit = status(updatedAt: sent.addingTimeInterval(60))
+        limit.chargeLimit = 90
+        XCTAssertEqual(VehicleCommand.setChargeLimit(percent: 90).isObserved(in: limit), true)
+        XCTAssertEqual(VehicleCommand.setChargeLimit(percent: 85).isObserved(in: limit), false)
+        limit.chargePortDoorOpen = true
+        XCTAssertEqual(VehicleCommand.openChargePort.isObserved(in: limit), true)
+        XCTAssertEqual(VehicleCommand.closeChargePort.isObserved(in: limit), false)
+    }
+
+    func testControlsSendsAreLoggedWithTheirOutcome() async {
+        let source = StubSource(), commands = coordinator()
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus())
+        let log = VehicleCommandLog()
+        model.log = log
+        await model.send(.flash, coordinator: commands, dataSource: source, vehicleID: 1)
+        let key = VehicleCommandLog.key(backendID: source.commandBackendID, vehicleID: 1)
+        XCTAssertEqual(log.entries(for: key).map(\.label), ["Flash lights"])
+        XCTAssertEqual(log.entries(for: key).map(\.outcome), [.accepted])
+    }
+
+    // MARK: Controls rows
+
+    func testChargePortOffersOnlyTheActionThatChangesIt() {
+        XCTAssertEqual(ControlsView.chargePortCommands(doorOpen: true), [.closeChargePort])
+        XCTAssertEqual(ControlsView.chargePortCommands(doorOpen: false), [.openChargePort])
+        XCTAssertEqual(ControlsView.chargePortCommands(doorOpen: nil), [.openChargePort, .closeChargePort])
+    }
+
+    func testChargingSubtitleStatesTheChargingState() {
+        var charging = status(charging: .charging)
+        charging.chargerPowerKw = 7.7
+        charging.minutesToFull = 48
+        XCTAssertEqual(ControlsView.chargingSubtitle(state: .charging, status: charging), "7.7 kW · 48m to 80%")
+        XCTAssertEqual(ControlsView.chargingSubtitle(state: .disconnected, status: nil), "Not plugged in")
+        XCTAssertEqual(ControlsView.chargingSubtitle(state: .complete, status: nil), "Complete · plugged in")
+        XCTAssertEqual(ControlsView.chargingSubtitle(state: nil, status: nil), "State not recorded")
+    }
+
+    func testConfirmationTableMatchesControls() {
+        for command: VehicleCommand in [.unlock, .actuateTrunk(whichTrunk: .front), .actuateTrunk(whichTrunk: .rear),
+                                        .openChargePort, .windowControl(command: .vent), .honk] {
+            XCTAssertNotNil(CommandConfirmation.required(for: command), "\(command.name)")
+        }
+        for command: VehicleCommand in [.flash, .climateOn, .sentryOff, .chargeStop, .setChargeLimit(percent: 80)] {
+            XCTAssertNil(CommandConfirmation.required(for: command), "\(command.name)")
+        }
+    }
+
+    // MARK: Identity row
+
+    func testFreshnessSaysLiveOnlyWhenTelemetryIsConnected() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var live = status(updatedAt: now)
+        live.telemetryFreshness = TelemetryFreshness(connected: true, lastSeenAt: now, recordedAt: [:])
+        XCTAssertEqual(DashboardView.freshness(live, now: now).text, "Live")
+        XCTAssertTrue(DashboardView.freshness(live, now: now).isLive)
+        live.telemetryFreshness?.connected = false
+        XCTAssertFalse(DashboardView.freshness(live, now: now).isLive)
+        let asleep = status(.asleep, updatedAt: now.addingTimeInterval(-3600))
+        XCTAssertFalse(DashboardView.freshness(asleep, now: now).isLive)
+        XCTAssertTrue(DashboardView.freshness(asleep, now: now).text.hasPrefix("Asleep"))
+    }
+
+    // MARK: Panes
+
+    func testPanesMeetAtTheMiddleOfAFlatHinge() {
+        // Open flat: an inactive division region 40 pt wide around the hinge.
+        let split = PaneSplit.resolve(length: 867, division: (455.5...495.5, false), windowOffset: 0,
+                                      insets: (0, 84))
+        XCTAssertEqual(split, PaneSplit(firstEnd: 475.5, secondStart: 475.5))
+    }
+
+    func testPanesGiveUpTheFoldMarginsWhenPartlyFolded() {
+        let split = PaneSplit.resolve(length: 867, division: (455.5...495.5, true), windowOffset: 0,
+                                      insets: (0, 84))
+        XCTAssertEqual(split, PaneSplit(firstEnd: 455.5, secondStart: 495.5))
+    }
+
+    func testPanesFallBackToTheWindowMiddleOnlyAtTheWindowEdge() {
+        let middle = PaneSplit.resolve(length: 867, division: nil, windowOffset: 0, insets: (0, 84))
+        XCTAssertEqual(middle, PaneSplit(firstEnd: 475.5, secondStart: 475.5), "bars count toward the middle")
+        XCTAssertNil(PaneSplit.resolve(length: 600, division: nil, windowOffset: 300, insets: (0, 0)),
+                     "a detail column cannot know where the window's middle is")
+        XCTAssertNil(PaneSplit.resolve(length: 400, division: nil, windowOffset: 0, insets: (0, 0)),
+                     "too narrow for two panes")
+        XCTAssertEqual(PaneSplit.resolve(length: 600, division: (40...80, false), windowOffset: 0, insets: (0, 0)),
+                       PaneSplit(firstEnd: 300, secondStart: 300), "a hinge near an edge is not this container's")
+    }
+}

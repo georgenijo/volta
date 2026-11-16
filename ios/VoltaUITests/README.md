@@ -36,7 +36,9 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | Shell (A) | `tab.drives` | Drives tab; tests find it by its title in the tab bar |
 | Shell (A) | `tab.idles` | Parked tab (`idles` in code and the API); tests find it by its title, "Parked", in the tab bar |
 | Shell (A) | `tab.more` | More tab; tests find it by its title in the tab bar |
-| Dashboard (A) | `button.controls` | Opens Controls sheet |
+| Dashboard (A) | `button.controls` | Dock's Controls tile: opens Controls (a sheet in compact width, pushed two-pane in regular-width landscape) |
+| Dashboard (A) | `dock.<kind>` | Other dock tiles: `lock`, `climate`, `sentry`, `windows`, `frunk`, `trunk`, `lights` |
+| Dashboard (A) | `card.now`, `stepper.chargeLimit`, `button.liveCharge` | Now card, its charge limit stepper, and the power area that opens the live charging sheet |
 | More (C) | `button.settings` | Pushes Settings from More |
 | Dashboard (A) | `screen.dashboard`, `scroll.dashboard` | Loaded heading and main scroll view |
 | History (B) | `screen.charging`, `screen.drives`, `screen.idles` | Loaded list headings (`screen.idles` is the Parked hero's loss figure) |
@@ -48,7 +50,9 @@ Identifiers supplement, rather than replace, human-readable accessibility labels
 | More (C) | `row.more.<slug>` | More rows: `stats`, `battery-health`, `battery-climate`, `tires`, `maintenance`, `firmware`, `mileage`, `specs`, `charger-map`, `switch-vehicle` |
 | History (B) | `button.drives.roadtrips`, `button.drives.heatmap` | Drives shortcut chips |
 | Settings (C) | `screen.settings`, `scroll.settings` | Heading and main scroll view |
-| Controls (A) | `screen.controls`, `scroll.controls` | Sheet heading and scroll view |
+| Controls (A) | `screen.controls`, `scroll.controls` | Heading and scroll view (the left pane when pushed) |
+| Controls (A) | `row.doors`, `button.climate`, `screen.climate` | Doors row; "Seats, wheel & defrost" row and its heading |
+| Controls (A) | `list.commandLog`, `banner.commandActivity` | "Sent this session" list; the latest command's result banner |
 | Settings (C) | `button.account` | Pushes Account from Settings |
 | Settings (C) | `row.settings.charging`, `screen.settings-charging`, `button.electricity-rate` | Charging settings row, its page, and the rate card that opens the form |
 | Settings (C) | `screen.electricity-rate`, `field.rate.home`, `field.rate.dc`, `button.rate.save`, `button.rate.cancel` | Electricity rate sheet |
