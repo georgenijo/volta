@@ -12,7 +12,9 @@ const auth=new Auth(authDB),telemetry=new Telemetry(reader,'USD',()=>new Date('2
 const at=(s:number)=>new Date(Date.UTC(2026,0,2)+s*1000);
 let token='';
 beforeEach(async()=>{
-  await owner`TRUNCATE volta_telemetry.samples,volta_telemetry.sessions,volta_telemetry.gaps,volta_telemetry.vehicle_bindings,volta_telemetry.power_calibration`;
+  // Other files leave live state behind and bun orders files differently per run;
+  // latest samples and connectivity widen telemetry coverage, so clear them too.
+  await owner`TRUNCATE volta_telemetry.samples,volta_telemetry.latest_samples,volta_telemetry.connectivity,volta_telemetry.stream_health,volta_telemetry.sessions,volta_telemetry.gaps,volta_telemetry.vehicle_bindings,volta_telemetry.power_calibration`;
   await owner`TRUNCATE public.charges,public.charging_processes,public.positions,public.drives,public.states,public.updates,public.cars,public.car_settings,public.addresses,public.geofences,volta.devices,volta.pairing_codes,volta.rate_limits RESTART IDENTITY CASCADE`;
   await owner.file(new URL('fixtures.sql',import.meta.url));
   await owner`UPDATE cars SET vin='5YJ3E1EA0XF000001' WHERE id=1`; // Synthetic VIN-shaped identity for the detail series binding.
