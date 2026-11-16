@@ -124,9 +124,11 @@ animation is kept. Later mounts, and the two-pane layouts on the inner display
 (where those sections are on screen), draw everything at once.
 
 New milestones: `aboveFold` is the first frame with the dashboard's top filled
-in (saved or fresh status). `belowFold` is the frame with the deferred
-sections. `sections` is held until `belowFold`, so it still means every
-history section is on screen.
+in (saved or fresh status). `belowFold` is the frame with the metric cards
+and history sections: the deferred frame in the single column, the first one
+in the two-pane layouts. A single-column launch holds `sections` until
+`belowFold`, so it still means every history section is on screen; a fold to
+the two panes before the gate opens releases it the same way.
 
 ### November 2026 results, first-frame gate
 

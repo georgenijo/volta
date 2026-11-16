@@ -43,8 +43,9 @@ enum StartupTrace {
         /// A frame with the dashboard's above-fold content filled in
         /// (status, battery, Now card, dock), saved or fresh, was committed.
         case aboveFold
-        /// The single-column dashboard's below-fold sections (metric cards,
-        /// activity strip, summaries), which wait for the first frame, were committed.
+        /// The dashboard's metric cards and history sections were committed:
+        /// in the single column they wait for the first frame (below the
+        /// fold); the two-pane layouts draw them at once.
         case belowFold
     }
 
@@ -60,11 +61,7 @@ enum StartupTrace {
         return Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000)
     }()
     @MainActor private static var reached: Set<Milestone> = []
-    @MainActor private static var logged: Set<Milestone> = []
-    /// Milestones that may not be logged before another one: key waits for value.
-    @MainActor private static var holds: [Milestone: Milestone] = [:]
-    /// Milestones reached while held, by the milestone they wait for.
-    @MainActor private static var heldBack: [Milestone: [Milestone]] = [:]
+    @MainActor private static var order = MilestoneOrder()
 
     /// Marks `.firstFrame`. Call when the root view appears.
     @MainActor static func markFirstFrameAtNextRefresh() { mark(.firstFrame) }
@@ -80,8 +77,7 @@ enum StartupTrace {
     /// sections the screen has not mounted yet does not show them. Call
     /// before `milestone` is logged; a prerequisite already logged is no hold.
     @MainActor static func hold(_ milestone: Milestone, until prerequisite: Milestone) {
-        guard !logged.contains(milestone), !logged.contains(prerequisite) else { return }
-        holds[milestone] = prerequisite
+        order.hold(milestone, until: prerequisite)
     }
 
     /// Drops `milestone` if it is still waiting for a display refresh: a
@@ -91,16 +87,42 @@ enum StartupTrace {
     }
 
     @MainActor fileprivate static func log(_ milestone: Milestone) {
-        if let prerequisite = holds[milestone], !logged.contains(prerequisite) {
-            heldBack[prerequisite, default: []].append(milestone)
-            return
-        }
-        logged.insert(milestone)
+        order.release(milestone).forEach(write)
+    }
+
+    @MainActor private static func write(_ milestone: Milestone) {
         let elapsed = processStart.map { Int((Date.now.timeIntervalSince($0) * 1_000).rounded()) } ?? -1
         signposter.emitEvent("milestone", "\(milestone.rawValue, privacy: .public)")
         logger.notice("startup milestone=\(milestone.rawValue, privacy: .public) ms=\(elapsed, privacy: .public)")
-        // Reached earlier, so already in the frame this milestone committed.
-        heldBack.removeValue(forKey: milestone)?.forEach(log)
+    }
+}
+
+/// The order milestones are logged in: one held for another waits until that
+/// one is logged, then is logged with it (it was already reached, so the same
+/// frame shows it).
+struct MilestoneOrder {
+    typealias Milestone = StartupTrace.Milestone
+    private(set) var logged: [Milestone] = []
+    /// Key waits for value.
+    private var holds: [Milestone: Milestone] = [:]
+    /// Milestones reached while held, by the milestone they wait for.
+    private var heldBack: [Milestone: [Milestone]] = [:]
+
+    /// No hold once either milestone has been logged.
+    mutating func hold(_ milestone: Milestone, until prerequisite: Milestone) {
+        guard !logged.contains(milestone), !logged.contains(prerequisite) else { return }
+        holds[milestone] = prerequisite
+    }
+
+    /// `milestone` was reached at a committed frame: returns what to log now,
+    /// in order (nothing while it is held).
+    mutating func release(_ milestone: Milestone) -> [Milestone] {
+        if let prerequisite = holds[milestone], !logged.contains(prerequisite) {
+            heldBack[prerequisite, default: []].append(milestone)
+            return []
+        }
+        logged.append(milestone)
+        return [milestone] + (heldBack.removeValue(forKey: milestone) ?? []).flatMap { release($0) }
     }
 }
 

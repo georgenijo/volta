@@ -72,6 +72,13 @@ struct DashboardView: View {
 
     enum Layout { case stage, upright, column }
 
+    /// Whether `layout` mounts its metric cards and history now. Below the
+    /// fold in the single column, they wait for the launch's first frame;
+    /// the two panes show them on screen, so they never wait.
+    static func mountsBelowFold(_ layout: Layout, launchFrameShown: Bool) -> Bool {
+        layout != .column || launchFrameShown
+    }
+
     private var layout: Layout {
         guard horizontalSizeClass == .regular else { return .column }
         switch model.phase {
@@ -536,13 +543,12 @@ struct DashboardView: View {
                     dock.padding(.top, VoltaSpacing.md)
                     // Below the fold in one column: at launch these wait for
                     // the first frame, like the map, and fade in with it.
-                    if launchFrame.isShown {
+                    if Self.mountsBelowFold(.column, launchFrameShown: launchFrame.isShown) {
                         Group {
                             metricGrid(status).padding(.top, VoltaSpacing.md)
                             details.padding(.top, VoltaSpacing.xl + 4)
                         }
                         .transition(.opacity)
-                        .onAppear { StartupTrace.mark(.belowFold) }
                     }
                 }
                 .animation(.easeOut(duration: 0.25), value: launchFrame.isShown)
@@ -556,7 +562,11 @@ struct DashboardView: View {
         .scrollIndicators(.hidden)
         .onAppear {
             // History drawn below the fold is on screen only once that part is.
-            if !launchFrame.isShown { StartupTrace.hold(.sections, until: .belowFold) }
+            // `details` marks `belowFold` in every layout, so a fold to the
+            // two panes before the first frame releases this too.
+            if !Self.mountsBelowFold(.column, launchFrameShown: launchFrame.isShown) {
+                StartupTrace.hold(.sections, until: .belowFold)
+            }
         }
         .scrollPosition($scrollPosition)
         .accessibilityIdentifier("scroll.dashboard")
@@ -689,6 +699,8 @@ struct DashboardView: View {
             }
             .padding(.top, VoltaSpacing.md)
         }
+        // Every layout shows these, so whichever is on screen releases `sections`.
+        .onAppear { StartupTrace.mark(.belowFold) }
     }
 
     private func failure(_ message: String) -> some View {
