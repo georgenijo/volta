@@ -202,7 +202,7 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(prefetch: prefetch))
         let statuses = await statusCalls.value, summaries = await summaryCalls.value
         XCTAssertEqual(statuses, 1, "the dashboard awaits the launch request instead of sending another")
-        XCTAssertEqual(summaries, 3)
+        XCTAssertEqual(summaries, 3, "history is requested by the dashboard")
         XCTAssertEqual(model.status?.batteryLevel, 66)
         XCTAssertEqual(model.summaries.count, 3)
 

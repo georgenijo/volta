@@ -124,7 +124,7 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
         let start = model.takeInitialDashboardVehicles(vehicleID: 2)
         XCTAssertEqual(start?.saved?.status.batteryLevel, 64)
         XCTAssertNotNil(start?.store)
-        XCTAssertEqual(start?.prefetch?.vehicleID, 2, "the dashboard's requests were sent at launch")
+        XCTAssertEqual(start?.prefetch?.vehicleID, 2, "the dashboard's status was requested at launch")
         start?.prefetch?.cancel()
         XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2)?.saved, "only the first dashboard shows it")
         await model.loadVehicles()
@@ -159,6 +159,34 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
         let lockedModel = try pairedModel(locked, saved: MemorySavedDashboards(savedDashboard(backend: pairedBackend))) { vehiclesJSON() }
         XCTAssertTrue(lockedModel.isLocked)
         XCTAssertTrue(lockedModel.vehicles.isEmpty, "nothing loads behind the lock screen")
+    }
+
+    func testRestoredPairingSendsOneVehicleRequestBeforeTheRootViewAppears() async throws {
+        let calls = Mutex(0)
+        let model = try pairedModel(settings()) { calls.withLock { $0 += 1 }; return vehiclesJSON() }
+        await waitUntil { calls.withLock { $0 } == 1 }
+        XCTAssertEqual(calls.withLock { $0 }, 1, "sent while the first frame is built")
+        await model.loadVehicles()
+        XCTAssertEqual(calls.withLock { $0 }, 1, "the first load consumes the launch request")
+        XCTAssertEqual(model.vehicles.map(\.id), [1, 2])
+        await model.loadVehicles()
+        XCTAssertEqual(calls.withLock { $0 }, 2, "later loads ask the server again")
+    }
+
+    func testLockedLaunchSendsNoVehicleRequest() async throws {
+        let calls = Mutex(0)
+        let locked = settings()
+        locked.appLockEnabled = true
+        let model = try pairedModel(locked) { calls.withLock { $0 += 1 }; return vehiclesJSON() }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(model.isLocked)
+        XCTAssertEqual(calls.withLock { $0 }, 0)
+    }
+
+    /// A bounded wait for background requests, not a timing assertion.
+    private func waitUntil(_ condition: () -> Bool) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !condition(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(1)) }
     }
 
     func testLaunchPrefetchIsDiscardedOnBackgroundOrVehicleSwitch() throws {

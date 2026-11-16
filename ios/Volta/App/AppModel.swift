@@ -11,6 +11,7 @@ final class AppModel {
             dashboardCanUseInitialVehicles = false
             tesla.setClient(dataSource as? any TeslaAccountClient)
             savedDashboards.acceptedBackend = savedDashboardBackend
+            launchVehicles?.cancel(); launchVehicles = nil
         }
     }
     private(set) var vehicles: [Vehicle] = []
@@ -39,13 +40,16 @@ final class AppModel {
     /// The vehicle request in flight, which a dashboard mounted from the saved
     /// list awaits instead of sending its own.
     @ObservationIgnored private var vehiclesLoad: Task<Void, Never>?
+    /// `/vehicles`, sent when a stored pairing is restored rather than when the
+    /// root view first appears; the next vehicle load consumes it.
+    @ObservationIgnored private var launchVehicles: Task<[Vehicle], any Error>?
     /// The last dashboard saved for this backend; see `SavedDashboard`.
     @ObservationIgnored private let savedDashboards: any SavedDashboardStoring
     /// The saved dashboard read at launch, offered once to the first dashboard.
     @ObservationIgnored private var launchDashboard: SavedDashboard? {
         didSet { if launchDashboard == nil { launchPrefetch?.cancel(); launchPrefetch = nil } }
     }
-    /// That dashboard's requests, sent at launch; see `DashboardPrefetch`.
+    /// That dashboard's `/status`, sent at launch; see `DashboardPrefetch`.
     @ObservationIgnored private var launchPrefetch: DashboardPrefetch?
     /// Widget snapshot + Live Activities. Told about every pairing, demo and
     /// vehicle change; see `surfaceContext`.
@@ -116,7 +120,7 @@ final class AppModel {
               saved.vehicles.contains(where: { $0.id == saved.vehicleID }) else { return }
         vehicles = saved.vehicles
         launchDashboard = saved
-        // The shell mounts in the first frame; its dashboard's requests need
+        // The shell mounts in the first frame; its dashboard's status need
         // not wait for that frame to be built.
         if saved.vehicleID == selectedVehicleID {
             launchPrefetch = DashboardPrefetch(dataSource: dataSource, vehicleID: saved.vehicleID, surfaces: surfaces)
@@ -227,6 +231,10 @@ final class AppModel {
             pairingState = .paired; dataSource = makeAPI(url: url, token: token)
             needsCredentialRetry = false; errorMessage = nil
             isLocked = settings.appLockEnabled
+            if !isLocked {
+                // Detached: a main-actor task would not start until the first frame is built.
+                launchVehicles = Task.detached(priority: .userInitiated) { [dataSource] in try await dataSource.vehicles() }
+            }
             restoreSavedDashboard()
         } catch let error as KeychainTokenStore.StoreError where error.status == -25308 {
             needsCredentialRetry = true
@@ -372,7 +380,11 @@ final class AppModel {
             if generation == currentGeneration { isLoadingVehicles = false; hasLoadedVehicles = true; vehiclesLoad = nil }
         }
         do {
-            let vehicles = try await source.vehicles()
+            let launch = launchVehicles
+            launchVehicles = nil
+            let vehicles: [Vehicle]
+            if let launch { vehicles = try await DashboardPrefetch.value(of: launch) }
+            else { vehicles = try await source.vehicles() }
             guard generation == currentGeneration else { return }
             dashboardCanUseInitialVehicles = !hasLoadedVehicles
             self.vehicles = vehicles
@@ -443,6 +455,7 @@ final class AppModel {
     func lock() {
         dashboardCanUseInitialVehicles = false
         launchDashboard = nil
+        launchVehicles?.cancel(); launchVehicles = nil
         lockGeneration = UUID(); appLock.cancel(); isUnlocking = false
         if !isLaunchDemo && settings.appLockEnabled && isPaired { isLocked = true }
     }
