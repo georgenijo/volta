@@ -389,14 +389,15 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 			vehicleState["sentry_mode"] = true
 		}
 	}
-	// HVAC running for any reason is legacy is_climate_on; only a departure
-	// precondition is is_preconditioning. Unknown states stay null.
+	// User or departure climate is is_climate_on; only a departure
+	// precondition is is_preconditioning. Cabin overheat protection is its
+	// own mode with its own limit, so it and unknown states stay null.
 	if hvac := fields["HvacPower"]; hvac.Text != nil {
 		climate := r["climate_state"].(map[string]any)
 		switch *hvac.Text {
 		case "HvacPowerStateOff":
 			climate["is_climate_on"], climate["is_preconditioning"] = false, false
-		case "HvacPowerStateOn", "HvacPowerStateOverheatProtect":
+		case "HvacPowerStateOn":
 			climate["is_climate_on"], climate["is_preconditioning"] = true, false
 		case "HvacPowerStatePrecondition":
 			climate["is_climate_on"], climate["is_preconditioning"] = true, true

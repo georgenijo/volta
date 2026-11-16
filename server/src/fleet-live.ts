@@ -57,11 +57,12 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     +new Date(c.received_at) >= +new Date(h!.receiver_started_at) && +new Date(c.source_ts) <= +now);
   const lastSeenAt = [...live.samples.map(s => s.source_ts), ...live.connections.map(c => c.source_ts)]
     .filter(t => t && +new Date(t) <= +now).sort((a,b) => +new Date(b)-+new Date(a))[0] ?? null;
-  // Any running HVAC (including precondition and cabin overheat protection) is
-  // climate on, as legacy is_climate_on reports it. Unknown stays unknown.
+  // User climate and departure preconditioning are climate on. Cabin overheat
+  // protection is a separate mode with its own limit: calling it "on" would
+  // offer Stop instead of Start and show the cabin set point, so it is unknown.
   const hvac = text('HvacPower');
   const climateOn = hvac === 'HvacPowerStateOff' ? false :
-    ['HvacPowerStateOn','HvacPowerStatePrecondition','HvacPowerStateOverheatProtect'].includes(hvac) ? true : null;
+    ['HvacPowerStateOn','HvacPowerStatePrecondition'].includes(hvac) ? true : null;
   const sentry = text('SentryMode');
   const sentryMode = sentry === 'SentryModeStateOff' ? false :
     ['SentryModeStateIdle','SentryModeStateArmed','SentryModeStateAware','SentryModeStatePanic','SentryModeStateQuiet'].includes(sentry) ? true : null;

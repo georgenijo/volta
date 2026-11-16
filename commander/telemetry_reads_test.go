@@ -402,7 +402,7 @@ func TestTelemetryClimateMapped(t *testing.T) {
 		on, precond any
 	}{
 		{"HvacPowerStateOff", false, false}, {"HvacPowerStateOn", true, false},
-		{"HvacPowerStatePrecondition", true, true}, {"HvacPowerStateOverheatProtect", true, false},
+		{"HvacPowerStatePrecondition", true, true}, {"HvacPowerStateOverheatProtect", nil, nil},
 		{"HvacPowerStateUnknown", nil, nil},
 	} {
 		s := readSnapshot(now)

@@ -348,7 +348,7 @@ test('live overlapping metrics prefer connected change-only data, otherwise comp
   expect(status.climateOn).toBe(false);expect(status.driverTempSettingC).toBe(20.5);
   await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateOn' WHERE field='HvacPower'`;
   expect((await get('/v1/vehicles/1/status')).climateOn).toBe(true);
-  await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateUnknown' WHERE field='HvacPower'`;
+  await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateOverheatProtect' WHERE field='HvacPower'`;
   status=await get('/v1/vehicles/1/status');
   expect(status.climateOn).toBe(fallback.climateOn);
 });

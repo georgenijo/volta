@@ -268,7 +268,7 @@ Binding, health, connectivity and latest fields are read in one SQL snapshot.
 | --- | --- |
 | `drive_state` | Location → latitude/longitude (degrees), GpsHeading → integer heading, VehicleSpeed → integer mph, Gear → D/R/N/P, PackVoltage × PackCurrent → integer kW only with same payload/time and operator-verified sign |
 | `charge_state` | BatteryLevel → battery_level, Soc → usable_battery_level (integer percent); RatedRange/IdealBatteryRange/EstBatteryRange → miles; DetailedChargeState → Disconnected/NoPower/Starting/Charging/Complete/Stopped; AC/DCChargingPower → integer charger_power kW; DCChargingEnergyIn → charge_energy_added kWh; ChargeLimitSoc → integer percent; TimeToFullCharge → hours; ChargerVoltage/ChargeAmps → integer volts/amps; FastChargerPresent/ChargePortDoorOpen → booleans |
-| `climate_state` | InsideTemp/OutsideTemp → degrees Celsius; HvacLeft/RightTemperatureRequest → driver/passenger_temp_setting Celsius; HvacPower → is_climate_on (On, Precondition, OverheatProtect) and is_preconditioning (Precondition only) |
+| `climate_state` | InsideTemp/OutsideTemp → degrees Celsius; HvacLeft/RightTemperatureRequest → driver/passenger_temp_setting Celsius; HvacPower → is_climate_on (On, Precondition; Off is false; OverheatProtect and unknown stay null) and is_preconditioning (Precondition only) |
 | `vehicle_state` | Odometer → miles; Locked/SentryMode → booleans; TpmsPressureFl/Fr/Rl/Rr → bar; Version → car_version |
 
 `source_unit` is checked: native mi/mph remain unchanged; km and km/h convert by

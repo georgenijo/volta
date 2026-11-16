@@ -19,10 +19,10 @@ test('invalid, unknown units, unknown sentry and nonfinite measurements stay unk
  const r=liveValues(fixture([sample('Locked',{},'',true),sample('SentryMode',{value_text:'SentryModeStateUnknown'}),sample('ModuleTempMax',{value_num:100},'F'),sample('TpmsPressureFl',{value_num:Infinity},'bar')]),now)!;
  expect(r.values.locked).toBeNull();expect(r.values.sentryMode).toBeNull();expect(r.values.packTempMaxC).toBeNull();expect(r.tpms.fl.pressureBar).toBeNull();
 });
-test('HVAC power maps every running state to climate on; set point needs Celsius',()=>{
+test('HVAC power: user climate and precondition are on, overheat protection unknown; set point needs Celsius',()=>{
  const on=(state:string)=>liveValues(fixture([sample('HvacPower',{value_text:state})]),now)!.values.climateOn;
  expect(on('HvacPowerStateOff')).toBe(false);expect(on('HvacPowerStateOn')).toBe(true);expect(on('HvacPowerStatePrecondition')).toBe(true);
- expect(on('HvacPowerStateOverheatProtect')).toBe(true);expect(on('HvacPowerStateUnknown')).toBeNull();
+ expect(on('HvacPowerStateOverheatProtect')).toBeNull();expect(on('HvacPowerStateUnknown')).toBeNull();
  expect(liveValues(fixture([sample('HvacLeftTemperatureRequest',{value_num:21},'C')]),now)!.values.driverTempSettingC).toBe(21);
  expect(liveValues(fixture([sample('HvacLeftTemperatureRequest',{value_num:70},'F')]),now)!.values.driverTempSettingC).toBeNull();
  expect(liveValues(fixture([sample('HvacPower',{},'',true)]),now)!.values.climateOn).toBeNull();
