@@ -277,9 +277,9 @@ struct ChargingHistoryView: View {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 let located = visible.compactMap { c in c.location(places.state).coordinate.map { ($0, ChargerKind(c)) } }
-                // The inline title (bars on the side) sits on the map: the map
-                // grows by its row so the pins keep their space.
-                let title: CGFloat = barsOnSide ? 44 : 0
+                // The inline title (bars on the side) and the search field sit
+                // on the map: the map grows by them so the pins keep their space.
+                let title: CGFloat = (barsOnSide ? 44 : 0) + searchHeight
                 SessionsMapHero(coordinates: located.map(\.0), kinds: located.map(\.1),
                                 height: top + title + page.reveal(barsOnSide ? 0.28 : 0.24, 140...190), topInset: top + title) {
                     withAnimation(.snappy) { showMap = true }
