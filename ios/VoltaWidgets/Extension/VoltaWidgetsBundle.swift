@@ -8,5 +8,9 @@ struct VoltaWidgetsBundle: WidgetBundle {
         VoltaAccessoryWidget()
         ChargingLiveActivity()
         DrivingLiveActivity()
+        VehicleLockControl()
+        VehicleClimateControl()
+        VehicleChargePortControl()
+        VehicleBatteryControl()
     }
 }

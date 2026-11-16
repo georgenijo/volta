@@ -135,6 +135,7 @@ final class AppGroupSnapshotStore: WidgetSnapshotStoring {
     func write(_ snapshot: WidgetSnapshot) throws {
         try WidgetSnapshotStore.write(snapshot)
         WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadAllControls()
     }
     func reset() { WidgetSnapshotStore.reset() }
 }

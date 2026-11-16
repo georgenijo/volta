@@ -8,6 +8,7 @@ WidgetKit extension (`com.georgenijo.volta.widgets`) with:
 | Lock Screen | `VoltaAccessoryWidget` | `accessoryCircular` (battery gauge), `accessoryRectangular` (battery + range + bar), `accessoryInline` |
 | Live Activity | `ChargingActivityAttributes` | Lock Screen banner, Dynamic Island expanded / compact / minimal: SOC toward the charge limit, kW, countdown to the limit, energy added, range |
 | Live Activity | `DrivingActivityAttributes` (optional) | distance this drive, battery, range, elapsed time, energy used |
+| Controls | `VehicleLockControl`, `VehicleClimateControl`, `VehicleChargePortControl`, `VehicleBatteryControl` | Control Center, Lock Screen and Action button: lock toggle, climate toggle, open-charge-port button, battery and range (opens Volta) |
 
 Every family and Live Activity state has an Xcode `#Preview` with fixture data
 (`Extension/Fixtures.swift`, mirroring `MockDataSource`'s "Friday").
@@ -19,6 +20,8 @@ VoltaWidgets/
   Shared/     compiled by BOTH the app and the extension (Foundation + ActivityKit only)
     WidgetSnapshot.swift          WidgetSnapshot, WidgetSnapshotStore, VoltaAppGroup
     VoltaActivityAttributes.swift ChargingActivityAttributes, DrivingActivityAttributes
+    VehicleReadout.swift          spoken answers and control labels for a snapshot (unknown stays unknown)
+    VoltaControlIntents.swift     control intents; they forward to the app via VoltaIntentHost
   AppSide/    compiled by the APP ONLY (uses ios/Volta/Core models)
     WidgetBridge.swift            VehicleStatus -> WidgetSnapshot mapping, WidgetSnapshotStore.reset()
     LiveActivityPlanner.swift     pure start/update/finish/dismiss decisions (unit tested)
@@ -153,6 +156,26 @@ Activities. Entering demo clears both, so widgets show "Open Volta".
   as is so it goes stale on its own. No activity starts from already-stale data.
 - The charging activity is always on; driving is opt-in under
   Settings > General > Live Activities ("Show while driving").
+
+## Siri, Shortcuts and controls
+
+Siri and Shortcuts actions live in the app target (`ios/Volta/Features/Intents/`),
+so they run in the app process. Read actions (battery, range, charging, where's my
+car, locks and Sentry) answer from this snapshot, or from synthetic demo status in
+demo mode, and always say how old the reading is. Command actions go through the
+app's `VehicleCommandCoordinator`, the same path as the Controls sheet.
+
+Controls need their intents in the extension, so the control intents are in
+`Shared/`. They conform to `LiveActivityIntent` (and declare
+`allowedExecutionTargets = .main` on iOS 27), so the system performs them in the
+app process, where the device token is; the app registers
+`VoltaIntentHost.performer` at launch. The extension never reads credentials: if
+a control intent ever ran there it would fail with "Open Volta" and send nothing.
+The app reloads controls (`ControlCenter.shared.reloadAllControls()`) whenever it
+writes or clears the snapshot and after every accepted command.
+
+Unlock, frunk, trunk, Sentry off, the lock toggle and "where's my car" require an
+unlocked device (`authenticationPolicy = .requiresAuthentication`).
 
 ## Data path
 

@@ -87,10 +87,12 @@ extension WidgetSnapshot {
 }
 
 extension WidgetSnapshotStore {
-    /// Deletes the snapshot and reloads every widget so they show the empty state.
+    /// Deletes the snapshot and reloads every widget and control so they show
+    /// the empty state.
     @MainActor
     static func reset() {
         clear()
         WidgetCenter.shared.reloadAllTimelines()
+        ControlCenter.shared.reloadAllControls()
     }
 }
