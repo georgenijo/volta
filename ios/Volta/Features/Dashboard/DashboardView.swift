@@ -176,11 +176,15 @@ struct DashboardView: View {
         }
         // The lock control's request (gated by AppModel) opens Controls here, once.
         .onChange(of: app?.controlsPresentationRequested == true, initial: true) {
-            if app?.takeControlsPresentation() == true { showControls = true }
+            if ControlsRouting.opensControlsForRequest(app) { showControls = true }
         }
-        // Locking closes the Controls sheet; inactivity only covers it.
-        .onChange(of: app?.closesControlsSheet == true) { _, closes in
-            if closes, controlsHost == .sheet { showControls = false }
+        // Locking closes the Controls sheet and never shows one; inactivity only covers it.
+        .onChange(of: app?.isLocked == true) { _, locked in
+            if locked, !ControlsRouting.keepsControlsOnLock(host: controlsHost) { showControls = false }
+            syncControlsHost()
+        }
+        .onChange(of: app?.refusedUnlocks) {
+            if !ControlsRouting.keepsControlsAfterRefusedUnlock(host: controlsHost) { showControls = false }
         }
         .sheet(isPresented: $showLiveCharge, onDismiss: { Task { await load() } }) {
             if let status = model.status {
@@ -212,7 +216,8 @@ struct DashboardView: View {
     }
 
     private func syncControlsHost() {
-        let wanted: ControlsView.Presentation? = showControls ? (controlsPushed ? .pushed : .sheet) : nil
+        let wanted = ControlsRouting.host(wantsControls: showControls, pushedLayout: controlsPushed,
+                                          locked: app?.isLocked == true)
         if controlsHost != wanted {
             if controlsHost == .sheet, wanted == .pushed {
                 // Dismiss first; the sheet's onDismiss calls back here to push.

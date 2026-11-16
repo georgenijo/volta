@@ -53,6 +53,9 @@ final class AppModel {
     let signInServerURL: String
     private(set) var isUnlocking = false
     private(set) var isLocked = false
+    /// Counts unlocks the user cancelled or that failed. The Dashboard closes
+    /// Controls the lock was hiding (see `ControlsRouting`).
+    private(set) var refusedUnlocks = 0
     var errorMessage: String?
     let settings: UserSettings
     @ObservationIgnored private let tokenStore: any TokenStoring
@@ -538,12 +541,13 @@ final class AppModel {
             guard generation == currentGeneration && lockGeneration == currentLock else { return }
             isLocked = !unlocked
             // Authentication cancelled or failed: a waiting Controls request is dropped.
-            if !unlocked { controlsRequest = nil }
+            if !unlocked { controlsRequest = nil; refusedUnlocks += 1 }
             if unlocked && !hasLoadedVehicles { restoreSavedDashboard(); await loadVehicles() }
         } catch {
             if generation == currentGeneration && lockGeneration == currentLock {
                 errorMessage = error.localizedDescription
                 controlsRequest = nil
+                refusedUnlocks += 1
             }
         }
     }
@@ -628,10 +632,6 @@ extension AppModel {
     var controlsCovered: Bool {
         Self.controlsCovered(isLocked: isLocked, needsPrivacy: needsPrivacy)
     }
-
-    /// The Controls sheet closes when the app locks; mere inactivity only
-    /// covers it, so pulling down Control Center keeps Controls open.
-    var closesControlsSheet: Bool { isLocked }
 
     /// The Dashboard calls this when it opens Controls for the request.
     /// True once per request.

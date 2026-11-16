@@ -60,7 +60,9 @@ struct MainShell: View {
         }
         .tint(.voltaBlue)
         // The lock control's request opens Controls on the Dashboard.
-        .onChange(of: app?.controlsPresentationRequested == true) { _, requested in if requested { selection = .dashboard } }
+        .onChange(of: app?.controlsPresentationRequested == true, initial: true) { _, requested in
+            selection = ControlsRouting.shellTab(requested: requested, current: selection)
+        }
         .sensoryFeedback(.selection, trigger: selection)
         .preferredColorScheme(.dark)
     }

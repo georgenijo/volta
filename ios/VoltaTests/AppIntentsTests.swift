@@ -988,31 +988,36 @@ private final class RequestLog: Sendable {
 
     /// Through the root's scene-phase handling (`sceneDidChange`), as the view
     /// calls it, with the Dashboard's Controls sheet open: inactivity covers
-    /// without closing; locking closes (`closesControlsSheet`).
+    /// without closing; locking closes it (through the Dashboard's handlers).
     func testSceneChangesCoverTheControlsSheetAndLockingClosesIt() async throws {
         let model = try await vehiclesModel(appLock: StubAuthentication())
         XCTAssertTrue(model.appLockEnabled)
         model.sceneDidChange(to: .active, otherSheetUp: false)
         model.requestControls()
         model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertTrue(model.takeControlsPresentation(), "the Dashboard opened Controls")
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: false)
+        dashboard.requestChanged()
+        XCTAssertEqual(dashboard.host, .sheet, "the Dashboard opened Controls")
         XCTAssertFalse(model.controlsCovered, "active and unlocked: uncovered")
-        XCTAssertFalse(model.closesControlsSheet)
 
         model.sceneDidChange(to: .inactive, otherSheetUp: true)
+        dashboard.lockChanged()
         XCTAssertTrue(model.needsPrivacy, "the root shows its shield")
         XCTAssertTrue(model.controlsCovered, "inactive: covered")
-        XCTAssertFalse(model.closesControlsSheet, "inactive: still presented")
+        XCTAssertEqual(dashboard.host, .sheet, "inactive: still presented")
 
         model.sceneDidChange(to: .active, otherSheetUp: true)
+        dashboard.lockChanged()
         XCTAssertFalse(model.controlsCovered, "active again: uncovered")
-        XCTAssertFalse(model.closesControlsSheet, "still presented")
+        XCTAssertEqual(dashboard.host, .sheet, "still presented")
 
         model.sceneDidChange(to: .inactive, otherSheetUp: true)
         model.sceneDidChange(to: .background, otherSheetUp: true)
+        dashboard.lockChanged()
         XCTAssertTrue(model.isLocked)
         XCTAssertTrue(model.controlsCovered, "locked: covered")
-        XCTAssertTrue(model.closesControlsSheet, "locked: the Dashboard closes the sheet")
+        XCTAssertNil(dashboard.host, "locked: the Dashboard closed the sheet")
+        XCTAssertFalse(dashboard.wantsControls)
     }
 
     func testARequestMadeWhileInactiveWaitsForTheSceneToBeActive() async throws {
@@ -1028,10 +1033,167 @@ private final class RequestLog: Sendable {
         XCTAssertFalse(model.controlsCovered)
     }
 
+    // MARK: Dashboard routing (what DashboardView and MainShell do with Controls)
+
+    func testControlsHostRules() {
+        for pushed in [false, true] { for locked in [false, true] {
+            XCTAssertNil(ControlsRouting.host(wantsControls: false, pushedLayout: pushed, locked: locked))
+        } }
+        XCTAssertEqual(ControlsRouting.host(wantsControls: true, pushedLayout: false, locked: false), .sheet)
+        XCTAssertNil(ControlsRouting.host(wantsControls: true, pushedLayout: false, locked: true),
+                     "never a sheet while locked")
+        XCTAssertEqual(ControlsRouting.host(wantsControls: true, pushedLayout: true, locked: false), .pushed)
+        XCTAssertEqual(ControlsRouting.host(wantsControls: true, pushedLayout: true, locked: true), .pushed,
+                       "pushed Controls sit under the root's lock overlay")
+        XCTAssertFalse(ControlsRouting.keepsControlsOnLock(host: .sheet))
+        XCTAssertTrue(ControlsRouting.keepsControlsOnLock(host: .pushed))
+        XCTAssertTrue(ControlsRouting.keepsControlsOnLock(host: nil), "mid-move from the sheet to the push")
+        XCTAssertFalse(ControlsRouting.keepsControlsAfterRefusedUnlock(host: nil), "hidden by the lock: closed")
+        XCTAssertTrue(ControlsRouting.keepsControlsAfterRefusedUnlock(host: .pushed))
+        XCTAssertEqual(ControlsRouting.shellTab(requested: true, current: .charging), .dashboard)
+        XCTAssertEqual(ControlsRouting.shellTab(requested: false, current: .charging), .charging)
+    }
+
+    /// Pushed on the open inner display, locked in the background, then
+    /// folded: no sheet over the unlock screen. Unlocking shows Controls in
+    /// the sheet the folded layout calls for, still open where they were.
+    func testFoldingWhileLockedShowsNoSheetUntilUnlocked() async throws {
+        let auth = StubAuthentication()
+        let model = try await vehiclesModel(appLock: auth)
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: true)
+        dashboard.open()
+        XCTAssertEqual(dashboard.host, .pushed)
+
+        model.didEnterBackground()
+        dashboard.lockChanged()
+        XCTAssertEqual(dashboard.host, .pushed, "behind the lock overlay")
+        dashboard.fold(pushed: false)
+        XCTAssertNil(dashboard.host, "no sheet while locked")
+        XCTAssertTrue(dashboard.wantsControls, "the user's place is kept")
+
+        auth.result = true
+        await model.unlock()
+        dashboard.lockChanged()
+        XCTAssertEqual(dashboard.host, .sheet, "unlocked: in the folded layout's host")
+        XCTAssertEqual(dashboard.appearances, 2, "pushed, then the sheet: one Controls at a time")
+    }
+
+    func testACancelledUnlockKeepsHiddenControlsClosed() async throws {
+        let auth = StubAuthentication()
+        let model = try await vehiclesModel(appLock: auth)
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: true)
+        dashboard.open()
+        model.didEnterBackground()
+        dashboard.lockChanged()
+        dashboard.fold(pushed: false)
+
+        auth.result = false
+        await model.unlock()
+        XCTAssertEqual(model.refusedUnlocks, 1)
+        dashboard.unlockRefused()
+        XCTAssertFalse(dashboard.wantsControls, "cancelled: closed")
+
+        auth.result = true
+        await model.unlock()
+        dashboard.lockChanged()
+        XCTAssertNil(dashboard.host, "a later unlock doesn't bring them back")
+    }
+
+    func testACancelledUnlockLeavesPushedControlsInPlace() async throws {
+        let auth = StubAuthentication()
+        let model = try await vehiclesModel(appLock: auth)
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: true)
+        dashboard.open()
+        model.didEnterBackground()
+        dashboard.lockChanged()
+        auth.result = false
+        await model.unlock()
+        dashboard.unlockRefused()
+        XCTAssertEqual(dashboard.host, .pushed)
+    }
+
+    func testLockingDismissesTheControlsSheet() async throws {
+        let auth = StubAuthentication()
+        let model = try await vehiclesModel(appLock: auth)
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: false)
+        dashboard.open()
+        XCTAssertEqual(dashboard.host, .sheet)
+        model.didEnterBackground()
+        dashboard.lockChanged()
+        XCTAssertNil(dashboard.host)
+        XCTAssertFalse(dashboard.wantsControls, "dismissed, not hidden")
+        auth.result = true
+        await model.unlock()
+        dashboard.lockChanged()
+        XCTAssertNil(dashboard.host, "stays closed after unlocking")
+    }
+
+    func testUnlockedFoldAndUnfoldMoveOneControls() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: true)
+        dashboard.open()
+        dashboard.fold(pushed: false)
+        XCTAssertEqual(dashboard.host, .sheet)
+        dashboard.fold(pushed: true)
+        XCTAssertEqual(dashboard.host, .pushed)
+        XCTAssertTrue(dashboard.wantsControls, "never closed, so the screen's state is kept")
+        XCTAssertEqual(dashboard.appearances, 3, "one host at a time")
+    }
+
+    /// The request reaches the Dashboard through the shell: the shell selects
+    /// the Dashboard tab, the Dashboard opens Controls and acknowledges the
+    /// request, once.
+    func testTheRequestSelectsTheDashboardAndOpensControlsOnce() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: false)
+        model.requestControls()
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertEqual(ControlsRouting.shellTab(requested: model.controlsPresentationRequested, current: .drives),
+                       .dashboard)
+        dashboard.requestChanged()
+        XCTAssertEqual(dashboard.host, .sheet)
+        XCTAssertFalse(model.controlsPresentationRequested, "acknowledged")
+        XCTAssertEqual(ControlsRouting.shellTab(requested: model.controlsPresentationRequested, current: .dashboard),
+                       .dashboard)
+
+        dashboard.close()
+        dashboard.requestChanged()
+        XCTAssertNil(dashboard.host, "the same request doesn't open Controls twice")
+    }
+
+    /// Cold launch: the request is ready before the shell and the Dashboard
+    /// exist. The shell's initial selection and the Dashboard's first
+    /// appearance pick it up.
+    func testARequestMadeBeforeTheDashboardExistsOpensItOnAppearance() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        model.requestControls()
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertEqual(ControlsRouting.shellTab(requested: model.controlsPresentationRequested, current: .charging),
+                       .dashboard, "the shell's initial selection")
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: false)
+        dashboard.requestChanged()  // initial: true
+        XCTAssertEqual(dashboard.host, .sheet)
+        XCTAssertEqual(dashboard.appearances, 1)
+    }
+
+    /// `-dashboardOpenControls` and the request both open Controls: one screen.
+    func testTheLaunchArgumentAndARequestOpenOneControls() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        var dashboard = DashboardControlsHarness(app: model, pushedLayout: false)
+        model.requestControls()
+        model.updateControlsRequest(otherSheetUp: false)
+        dashboard.open()  // the launch argument
+        dashboard.requestChanged()
+        XCTAssertEqual(dashboard.host, .sheet)
+        XCTAssertEqual(dashboard.appearances, 1)
+        XCTAssertFalse(model.controlsPresentationRequested)
+    }
+
     /// A retry of a saved request (the Controls screen's Retry) goes through
-    /// the same transport, so an invalidated source sends nothing and the
-    /// request stays unresolved and unanswered.
-    func testARetryOnAnInvalidatedSourceSendsNothing() async throws {
+    /// the same transport, so an invalidated source sends nothing. A refused
+    /// replay says nothing about the original send, so the request stays
+    /// unresolved (the replay branch; `answered` is covered by the next test).
+    func testARetryOnAnInvalidatedSourceSendsNothingAndStaysUnresolved() async throws {
         let log = RequestLog()
         StubProtocol.handler.withLock { $0 = { request in
             log.add(request)
@@ -1054,8 +1216,9 @@ private final class RequestLog: Sendable {
         let retried = await coordinator.retry(activity, log: VehicleCommandLog(), dataSource: source, vehicleID: 42)
         XCTAssertEqual(retried, .unknown, "the original send is still unresolved")
         XCTAssertEqual(log.all.filter { $0.hasPrefix("POST") }.count, postsBefore, "the retry sent nothing")
-        XCTAssertEqual(coordinator.pending(dataSource: source, vehicleID: 42).map(\.intentID), [activity.id])
-        XCTAssertFalse(coordinator.wasAnswered(activity.id), "a refusal on this device is not the server's answer")
+        XCTAssertEqual(coordinator.pending(dataSource: source, vehicleID: 42).map(\.intentID), [activity.id],
+                       "still saved for a later retry")
+        XCTAssertEqual(coordinator.activity(dataSource: source, vehicleID: 42)?.phase, .unknown)
     }
 
     /// A fresh send refused before it starts is removed but never "answered".
@@ -1167,5 +1330,42 @@ private final class RequestLog: Sendable {
         #else
         XCTAssertFalse(VoltaIntentHost.declaresAppOnlyExecution)
         #endif
+    }
+}
+
+/// The Dashboard's Controls state, driven as `DashboardView` drives it: each
+/// method is the body of the matching handler (`onChange` of the request,
+/// the lock, a refused unlock, the layout), and `sync` picks the host as
+/// `syncControlsHost()` does.
+@MainActor private struct DashboardControlsHarness {
+    let app: AppModel
+    var pushedLayout: Bool
+    var wantsControls = false
+    var host: ControlsView.Presentation?
+    /// How many times Controls came on screen in a host.
+    var appearances = 0
+
+    init(app: AppModel, pushedLayout: Bool) { self.app = app; self.pushedLayout = pushedLayout }
+
+    mutating func open() { wantsControls = true; sync() }
+    mutating func close() { wantsControls = false; sync() }
+    mutating func requestChanged() {
+        if ControlsRouting.opensControlsForRequest(app) { wantsControls = true }
+        sync()
+    }
+    mutating func lockChanged() {
+        if app.isLocked, !ControlsRouting.keepsControlsOnLock(host: host) { wantsControls = false }
+        sync()
+    }
+    mutating func unlockRefused() {
+        if !ControlsRouting.keepsControlsAfterRefusedUnlock(host: host) { wantsControls = false }
+        sync()
+    }
+    mutating func fold(pushed: Bool) { pushedLayout = pushed; sync() }
+
+    private mutating func sync() {
+        let wanted = ControlsRouting.host(wantsControls: wantsControls, pushedLayout: pushedLayout, locked: app.isLocked)
+        if wanted != host, wanted != nil { appearances += 1 }
+        host = wanted
     }
 }
