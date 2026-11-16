@@ -7,8 +7,18 @@ import SwiftUI
 /// The terms are entered by hand and stored only on this phone.
 struct LeaseMileageView: View {
     struct Snapshot: Sendable {
+        /// The terms the drives were loaded for; nil before a lease is set up.
+        var terms: LeaseTerms?
         var odometerKm: Double?
-        var buckets: [MileageBucket]
+        /// Drives that started inside the lease, up to now.
+        var drives: [DriveSummary]
+        var drivesComplete: Bool
+    }
+
+    private struct LoadKey: Hashable {
+        var vehicleID: Int
+        var terms: LeaseTerms?
+        var termsLoaded: Bool
     }
 
     @Environment(\.dataSource) private var dataSource
@@ -40,18 +50,24 @@ struct LeaseMileageView: View {
         else { UserDefaults.standard.removeObject(forKey: storageKey) }
     }
 
+    /// A snapshot loaded for other terms reads as loading until the new one arrives.
+    private var shownState: Loadable<Snapshot> {
+        if case .loaded(let snapshot) = state, snapshot.terms != terms { return .loading }
+        return state
+    }
+
     private var progress: LeaseProgress? {
-        guard let terms, let snapshot = state.value else { return nil }
+        guard let terms, let snapshot = shownState.value else { return nil }
         return LeaseProgress(terms: terms, odometerKm: snapshot.odometerKm, now: .now)
     }
 
     var body: some View {
         ScreenKit.Page(scroll: "lease", splits: progress != nil) {
-            LoadableContent(state: state, retry: load) { snapshot in
+            LoadableContent(state: shownState, retry: load) { snapshot in
                 if let terms, let progress {
                     hero(progress)
-                    pace(progress)
-                    projection(progress)
+                    if progress.phase != .ended { pace(progress) }
+                    projection(progress, snapshot: snapshot)
                     if progress.odometerBelowStart {
                         InlineBanner(systemImage: "exclamationmark.triangle",
                                      message: "The car's odometer (\(units.formatDistance(snapshot.odometerKm, fractionDigits: 0))) reads below your starting odometer (\(units.formatDistance(terms.startOdometerKm, fractionDigits: 0))). Check your lease figures.",
@@ -62,20 +78,20 @@ struct LeaseMileageView: View {
                 }
             }
         } secondary: {
-            if let terms, let progress, let snapshot = state.value {
+            if let terms, let progress, let snapshot = shownState.value {
                 chart(progress, terms: terms, snapshot: snapshot)
                 termsCard(terms)
             }
         }
         .screenKitPage("Lease Mileage", screen: "lease")
-        .task(id: vehicleID) { await load() }
+        .task(id: LoadKey(vehicleID: vehicleID, terms: terms, termsLoaded: termsLoaded)) { await load() }
         .task(id: storageKey) {
             let data = storageKey.flatMap { UserDefaults.standard.data(forKey: $0) }
             terms = data.flatMap { try? JSONDecoder().decode(LeaseTerms.self, from: $0) }.flatMap { $0.isValid ? $0 : nil }
             termsLoaded = true
         }
         .sheet(isPresented: $editing) {
-            LeaseTermsSheet(terms: terms, odometerKm: state.value?.odometerKm, units: units,
+            LeaseTermsSheet(terms: terms, odometerKm: shownState.value?.odometerKm ?? state.value?.odometerKm, units: units,
                             isLaunchDemo: model.isLaunchDemo, onSave: save)
         }
     }
@@ -97,19 +113,28 @@ struct LeaseMileageView: View {
     private func hero(_ p: LeaseProgress) -> some View {
         Card(padding: 20, tint: ScreenKit.mint) {
             VStack(alignment: .leading, spacing: 14) {
-                SectionLabel(p.phase == .ended ? "Used over the lease" : "Used so far", trailing: phaseLabel(p))
-                ScreenKit.Numeral(value: p.usedKm.map { number($0) } ?? "—", unit: units.distanceUnit, size: 52)
-                Text("of \(units.formatDistance(p.allowanceKm, fractionDigits: 0)) allowance")
-                    .font(.subheadline).foregroundStyle(ScreenKit.secondary)
-                LeaseProgressBar(used: p.usedFraction, time: p.timeFraction)
-                    .accessibilityElement()
-                    .accessibilityLabel("Allowance used")
-                    .accessibilityValue(p.usedFraction.map { "\(percent($0)) of allowance, \(percent(p.timeFraction)) of the term" }
-                                        ?? "Unknown, \(percent(p.timeFraction)) of the term")
-                HStack(alignment: .firstTextBaseline) {
-                    legendDot(LeaseProgressBar.tint(used: p.usedFraction, time: p.timeFraction), "Distance used")
-                    legendTick("Time elapsed")
-                    Spacer(minLength: 0)
+                if p.phase == .ended {
+                    // Today's odometer is not the end-of-term reading: label it as what it is.
+                    SectionLabel("Since lease start", trailing: phaseLabel(p))
+                    ScreenKit.Numeral(value: p.sinceStartKm.map { number($0) } ?? "—", unit: units.distanceUnit, size: 52)
+                    Text("Odometer now against your starting figure, including any driving after the lease ended on \(day(p.end)).")
+                        .font(.subheadline).foregroundStyle(ScreenKit.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    SectionLabel("Used so far", trailing: phaseLabel(p))
+                    ScreenKit.Numeral(value: p.usedKm.map { number($0) } ?? "—", unit: units.distanceUnit, size: 52)
+                    Text("of \(units.formatDistance(p.allowanceKm, fractionDigits: 0)) allowance")
+                        .font(.subheadline).foregroundStyle(ScreenKit.secondary)
+                    LeaseProgressBar(used: p.usedFraction, time: p.timeFraction)
+                        .accessibilityElement()
+                        .accessibilityLabel("Allowance used")
+                        .accessibilityValue(p.usedFraction.map { "\(percent($0)) of allowance, \(percent(p.timeFraction)) of the term" }
+                                            ?? "Unknown, \(percent(p.timeFraction)) of the term")
+                    HStack(alignment: .firstTextBaseline) {
+                        legendDot(LeaseProgressBar.tint(used: p.usedFraction, time: p.timeFraction), "Distance used")
+                        legendTick("Time elapsed")
+                        Spacer(minLength: 0)
+                    }
                 }
                 Text("Your lease figures, entered on this iPhone.")
                     .font(.caption).foregroundStyle(ScreenKit.tertiary)
@@ -119,7 +144,7 @@ struct LeaseMileageView: View {
 
     private func phaseLabel(_ p: LeaseProgress) -> String {
         switch p.phase {
-        case .notStarted: "Starts \(p.start.formatted(date: .abbreviated, time: .omitted))"
+        case .notStarted: "Starts \(day(p.start))"
         case .ended: "Ended"
         case .active: "\(Int(p.remainingDays.rounded(.up))) days left"
         }
@@ -152,7 +177,7 @@ struct LeaseMileageView: View {
     private func paceCaption(_ p: LeaseProgress) -> String? {
         switch p.phase {
         case .notStarted: return nil
-        case .ended: return "Over the term"
+        case .ended: return nil
         case .active:
             guard let actual = p.actualKmPerDay else {
                 return p.usedKm == nil ? "Odometer unknown" : "After the first week"
@@ -165,12 +190,25 @@ struct LeaseMileageView: View {
     // MARK: Projection
 
     @ViewBuilder
-    private func projection(_ p: LeaseProgress) -> some View {
+    private func projection(_ p: LeaseProgress, snapshot: Snapshot) -> some View {
         Card(padding: 20) {
             VStack(alignment: .leading, spacing: 12) {
-                SectionLabel(p.phase == .ended ? "At lease end" : "Projected at lease end",
-                             trailing: p.end.formatted(date: .abbreviated, time: .omitted))
-                if let projected = p.projectedKmAtEnd, let over = p.projectedOverKm {
+                SectionLabel(p.phase == .ended ? "At lease end" : "Projected at lease end", trailing: day(p.end))
+                if p.phase == .ended {
+                    Text("Final mileage unavailable")
+                        .font(.title3.weight(.semibold)).foregroundStyle(.white)
+                    Text("Volta has no odometer reading from the end of the term, so it can't say how far the car went within it. The reading on your return paperwork is the figure that counts.")
+                        .font(.subheadline).foregroundStyle(ScreenKit.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let terms {
+                        let recordedKm = recordedTotal(terms: terms, snapshot: snapshot)
+                        if recordedKm > 0 {
+                            Text("Drives TeslaMate recorded within the term add up to \(units.formatDistance(recordedKm, fractionDigits: 0))\(snapshot.drivesComplete ? "" : ", from the drives that loaded"); any drive it missed isn't included.")
+                                .font(.footnote).foregroundStyle(ScreenKit.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } else if let projected = p.projectedKmAtEnd, let over = p.projectedOverKm {
                     ScreenKit.Numeral(value: number(projected), unit: units.distanceUnit, size: 40)
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: over > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
@@ -181,9 +219,7 @@ struct LeaseMileageView: View {
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(.white)
                     }
-                    Text(p.isProjectionEstimate
-                         ? "Estimate: your pace so far, continued to the end of the term. Your contract's excess-mileage rate applies to any overage."
-                         : "Final distance against your allowance.")
+                    Text("Estimate: your pace so far, continued to the end of the term. Your contract's excess-mileage rate applies to any overage.")
                         .font(.footnote).foregroundStyle(ScreenKit.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
@@ -203,16 +239,23 @@ struct LeaseMileageView: View {
 
     // MARK: Chart
 
+    private func recordedTotal(terms: LeaseTerms, snapshot: Snapshot) -> Double {
+        LeaseProgress.recorded(snapshot.drives, start: terms.start(), end: terms.end(), now: .now).last?.km ?? 0
+    }
+
     @ViewBuilder
     private func chart(_ p: LeaseProgress, terms: LeaseTerms, snapshot: Snapshot) -> some View {
-        let recorded = LeaseProgress.cumulative(snapshot.buckets, start: terms.start, now: .now)
+        let recorded = LeaseProgress.recorded(snapshot.drives, start: p.start, end: p.end, now: .now)
         let recordedKm = recorded.last?.km ?? 0
         let today = min(Date.now, p.end)
+        // While the lease runs, the odometer figure is its own marker: the
+        // recorded line stops at the last recorded drive and is never joined to it.
+        let odometer = p.phase == .active ? p.usedKm : nil
         Card(padding: 20) {
             VStack(alignment: .leading, spacing: 14) {
                 SectionLabel("Distance against allowance", trailing: units.distanceUnit)
                 if p.phase == .notStarted {
-                    Text("The chart starts on \(p.start.formatted(date: .abbreviated, time: .omitted)).")
+                    Text("The chart starts on \(day(p.start)).")
                         .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                 } else {
                     Chart {
@@ -233,7 +276,7 @@ struct LeaseMileageView: View {
                                 .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
                                 .interpolationMethod(.stepEnd)
                         }
-                        if p.phase == .active, let used = p.usedKm, let projected = p.projectedKmAtEnd {
+                        if let used = odometer, let projected = p.projectedKmAtEnd {
                             // Estimate: today's odometer figure continued at the current pace.
                             LineMark(x: .value("Date", today), y: .value("Distance", units.distanceValue(km: used)),
                                      series: .value("Series", "Projection"))
@@ -249,9 +292,15 @@ struct LeaseMileageView: View {
                                 .foregroundStyle(ScreenKit.hairline)
                                 .lineStyle(StrokeStyle(lineWidth: 1))
                         }
+                        if let used = odometer {
+                            PointMark(x: .value("Date", today), y: .value("Distance", units.distanceValue(km: used)))
+                                .symbol(.diamond)
+                                .symbolSize(70)
+                                .foregroundStyle(.white)
+                        }
                     }
                     .chartXScale(domain: p.start...max(p.end, p.start.addingTimeInterval(86_400)))
-                    .chartYScale(domain: 0...max(units.distanceValue(km: max(p.allowanceKm, recordedKm, p.projectedKmAtEnd ?? 0)) * 1.05, 1))
+                    .chartYScale(domain: 0...max(units.distanceValue(km: max(p.allowanceKm, recordedKm, odometer ?? 0, p.projectedKmAtEnd ?? 0)) * 1.05, 1))
                     .chartXAxis {
                         AxisMarks(values: .automatic(desiredCount: 3)) { _ in
                             AxisValueLabel(format: .dateTime.month(.abbreviated).year())
@@ -267,12 +316,13 @@ struct LeaseMileageView: View {
                     .frame(height: 200)
                     .accessibilityElement()
                     .accessibilityLabel("Recorded distance against the allowance line")
-                    .accessibilityValue("\(units.formatDistance(recordedKm, fractionDigits: 0)) recorded since the lease start. An even pace allows \(units.formatDistance(p.expectedKmToDate, fractionDigits: 0)) by today and \(units.formatDistance(p.allowanceKm, fractionDigits: 0)) by \(p.end.formatted(date: .abbreviated, time: .omitted)).")
+                    .accessibilityValue(chartSummary(p, recordedKm: recordedKm, odometer: odometer))
                     ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 14) { chartLegend(p) }
-                        VStack(alignment: .leading, spacing: 6) { chartLegend(p) }
+                        HStack(spacing: 14) { chartLegend(p, odometer: odometer) }
+                        VStack(alignment: .leading, spacing: 6) { chartLegend(p, odometer: odometer) }
                     }
-                    if let note = coverageNote(recordedKm: recordedKm, usedKm: p.usedKm) {
+                    if let note = coverageNote(p, recordedKm: recordedKm, hasDrives: !recorded.isEmpty, odometer: odometer,
+                                               complete: snapshot.drivesComplete) {
                         Text(note).font(.footnote).foregroundStyle(ScreenKit.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -281,18 +331,36 @@ struct LeaseMileageView: View {
         }
     }
 
+    private func chartSummary(_ p: LeaseProgress, recordedKm: Double, odometer: Double?) -> String {
+        var text = "\(units.formatDistance(recordedKm, fractionDigits: 0)) in recorded drives within the lease."
+        if let odometer { text += " The odometer shows \(units.formatDistance(odometer, fractionDigits: 0)) since your starting figure." }
+        if p.phase == .active {
+            text += " An even pace allows \(units.formatDistance(p.expectedKmToDate, fractionDigits: 0)) by today"
+        } else {
+            text += " The allowance was"
+        }
+        return text + " \(p.phase == .active ? "and " : "")\(units.formatDistance(p.allowanceKm, fractionDigits: 0)) by \(day(p.end))."
+    }
+
     /// The chart sums drives TeslaMate recorded; the totals above use the
     /// odometer. Say so when the two disagree, rather than scaling either.
-    private func coverageNote(recordedKm: Double, usedKm: Double?) -> String? {
-        guard let usedKm, usedKm > 0 else { return nil }
-        guard abs(recordedKm - usedKm) > max(usedKm * 0.02, 1) else { return nil }
-        return "The chart adds up recorded drives (\(units.formatDistance(recordedKm, fractionDigits: 0))). The odometer shows \(units.formatDistance(usedKm, fractionDigits: 0)) since your starting figure, which the totals use."
+    private func coverageNote(_ p: LeaseProgress, recordedKm: Double, hasDrives: Bool, odometer: Double?, complete: Bool) -> String? {
+        var parts: [String] = []
+        if p.phase == .ended {
+            parts.append("The chart stops at the end of the lease and adds up the drives TeslaMate recorded within it.")
+        } else if let odometer, odometer > 0, abs(recordedKm - odometer) > max(odometer * 0.02, 1) {
+            parts.append(hasDrives
+                         ? "The line adds up recorded drives (\(units.formatDistance(recordedKm, fractionDigits: 0))), drawn only where TeslaMate recorded them. The marker is the odometer, \(units.formatDistance(odometer, fractionDigits: 0)) since your starting figure, which the totals use."
+                         : "No drives were recorded within the lease. The marker is the odometer, \(units.formatDistance(odometer, fractionDigits: 0)) since your starting figure, which the totals use.")
+        }
+        if !complete { parts.append("Not every drive could be loaded.") }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private func termsCard(_ terms: LeaseTerms) -> some View {
         let rows: [(String, String)] = [
-            ("Start", terms.start.formatted(date: .abbreviated, time: .omitted)),
-            ("End", terms.end().formatted(date: .abbreviated, time: .omitted)),
+            ("Start", day(terms.start())),
+            ("End", day(terms.end())),
             ("Term", "\(terms.termMonths) months"),
             ("Allowance", units.formatDistance(terms.allowanceKm, fractionDigits: 0)),
             ("Starting odometer", units.formatDistance(terms.startOdometerKm, fractionDigits: 0)),
@@ -318,6 +386,7 @@ struct LeaseMileageView: View {
     private func number(_ km: Double) -> String { VoltaFormat.number(units.distanceValue(km: km), digits: 0) }
     private func monthly(_ kmPerDay: Double) -> String { number(kmPerDay * LeaseProgress.daysPerMonth) }
     private func percent(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded())) percent" }
+    private func day(_ date: Date) -> String { date.formatted(date: .abbreviated, time: .omitted) }
 
     private func legendDot(_ color: Color, _ label: String) -> some View {
         HStack(spacing: 6) {
@@ -326,9 +395,15 @@ struct LeaseMileageView: View {
         }
     }
 
-    @ViewBuilder private func chartLegend(_ p: LeaseProgress) -> some View {
+    @ViewBuilder private func chartLegend(_ p: LeaseProgress, odometer: Double?) -> some View {
         legendDot(ScreenKit.mint, "Recorded drives")
         legendDash("Allowance", color: ScreenKit.secondary)
+        if odometer != nil {
+            HStack(spacing: 6) {
+                Image(systemName: "diamond.fill").font(.system(size: 8)).foregroundStyle(.white).accessibilityHidden(true)
+                Text("Odometer").font(.caption).foregroundStyle(ScreenKit.secondary)
+            }
+        }
         if p.phase == .active, p.projectedKmAtEnd != nil { legendDash("Projection (estimate)", color: projectionTint(p)) }
     }
 
@@ -353,16 +428,33 @@ struct LeaseMileageView: View {
         }
     }
 
+    /// The odometer, and every drive that started inside the lease, from the
+    /// paged drives endpoint (not daily totals, whose UTC days would cut across
+    /// the lease's local-midnight start).
+    static func fetch(source: any VoltaDataSource, vehicleID id: Int, terms: LeaseTerms?, now: Date = .now,
+                      calendar: Calendar = .current) async throws -> Snapshot {
+        // The odometer is optional: without it the screen says "unknown".
+        async let status = try? source.status(vehicleID: id)
+        guard let terms else { return Snapshot(terms: nil, odometerKm: await status?.odometerKm, drives: [], drivesComplete: true) }
+        let start = terms.start(calendar: calendar), end = terms.end(calendar: calendar)
+        guard start < now else { return Snapshot(terms: terms, odometerKm: await status?.odometerKm, drives: [], drivesComplete: true) }
+        let range = DateRange(from: start, to: min(end, now))
+        let page = try await fetchAllPages { try await source.drives(vehicleID: id, range: range, cursor: $0) }
+        let inside = page.items.filter { $0.start >= start && $0.start < min(end, now) }
+        return Snapshot(terms: terms, odometerKm: await status?.odometerKm, drives: inside, drivesComplete: page.isComplete)
+    }
+
     private func load() async {
-        let source = dataSource, id = vehicleID
+        guard termsLoaded else { return }
+        let requested = terms
+        if case .failed = state { state = .loading }
         do {
-            async let buckets = source.mileage(vehicleID: id, bucket: .day)
-            // The odometer is optional: without it the screen says "unknown".
-            let status = try? await source.status(vehicleID: id)
-            let snapshot = Snapshot(odometerKm: status?.odometerKm, buckets: try await buckets)
+            let snapshot = try await Self.fetch(source: dataSource, vehicleID: vehicleID, terms: requested)
+            guard !Task.isCancelled, requested == terms else { return }
             withAnimation(.smooth) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
+            guard !Task.isCancelled, requested == terms else { return }
             state = .failed(error.localizedDescription)
         }
     }
@@ -425,7 +517,9 @@ struct LeaseTermsSheet: View {
 
     private var draft: LeaseTerms? {
         guard let allowance = Self.parse(allowanceText), allowance > 0, let odometer = Self.parse(odometerText) else { return nil }
-        let terms = LeaseTerms(start: start, termMonths: months, allowanceKm: km(allowance), startOdometerKm: km(odometer))
+        // Only the day is kept: the picker's hidden time of day never reaches the terms.
+        let terms = LeaseTerms(startDay: CivilDate(start, calendar: .current), termMonths: months,
+                               allowanceKm: km(allowance), startOdometerKm: km(odometer))
         return terms.isValid ? terms : nil
     }
 
@@ -509,7 +603,7 @@ struct LeaseTermsSheet: View {
         .presentationBackground(ScreenKit.background)
         .onAppear {
             guard let terms else { return }
-            start = terms.start
+            start = terms.start()
             months = terms.termMonths
             allowanceText = VoltaFormat.number(units.distanceValue(km: terms.allowanceKm), digits: 0).filter { $0.isNumber }
             odometerText = VoltaFormat.number(units.distanceValue(km: terms.startOdometerKm), digits: 0).filter { $0.isNumber }

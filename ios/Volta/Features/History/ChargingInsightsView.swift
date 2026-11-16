@@ -21,10 +21,19 @@ struct ChargingInsightsView: View {
     }
 
     struct Snapshot: Sendable {
+        /// The period these sessions were loaded for. A snapshot is only shown
+        /// under its own period, never relabelled as another.
+        var period: Period
         var charges: [ChargeSummary]
         var drives: [DriveSummary]
         var isComplete: Bool
     }
+
+    /// Series colours: green stays for energy going in, not a generic series.
+    static let homeColor = Color(hex: 0x3B82F6)
+    static let awayColor = Color(hex: 0xC9CED6)
+    static let acColor = Color(hex: 0x5ECB93)
+    static let dcColor = Color(hex: 0xF59E0B)
 
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
@@ -32,12 +41,20 @@ struct ChargingInsightsView: View {
     @State private var period: Period = .year
     @State private var state: Loadable<Snapshot> = .loading
 
-    private var hasCharges: Bool { !(state.value?.charges.isEmpty ?? true) }
+    /// What the screen shows for the selected period: a snapshot loaded for
+    /// another period reads as loading until the selected one arrives.
+    static func shown(_ state: Loadable<Snapshot>, period: Period) -> Loadable<Snapshot> {
+        if case .loaded(let snapshot) = state, snapshot.period != period { return .loading }
+        return state
+    }
+
+    private var shownState: Loadable<Snapshot> { Self.shown(state, period: period) }
+    private var hasCharges: Bool { !(shownState.value?.charges.isEmpty ?? true) }
 
     var body: some View {
         ScreenKit.Page(scroll: "charging-insights", splits: hasCharges) {
             ScreenKit.Segmented(options: Period.allCases.map { ($0, $0.rawValue) }, selection: $period)
-            LoadableContent(state: state, retry: load) { snapshot in
+            LoadableContent(state: shownState, retry: load) { snapshot in
                 if !snapshot.isComplete {
                     InlineBanner(systemImage: "exclamationmark.triangle",
                                  message: "Partial history: not every session could be loaded, so these figures cover only what did.",
@@ -45,15 +62,15 @@ struct ChargingInsightsView: View {
                 }
                 if snapshot.charges.isEmpty {
                     EmptyState(systemImage: "bolt.slash", title: "No charging sessions",
-                               message: period.days.map { "Sessions from the last \($0) days will be broken down here." }
+                               message: snapshot.period.days.map { "Sessions from the last \($0) days will be broken down here." }
                                    ?? "Your charging sessions will be broken down here.")
                         .padding(.top, 40)
                 } else {
-                    shares(snapshot.charges)
+                    shares(snapshot)
                 }
             }
         } secondary: {
-            if hasCharges, let snapshot = state.value { costOverTime(snapshot) }
+            if hasCharges, let snapshot = shownState.value { costOverTime(snapshot) }
         }
         .screenKitPage("Charging Insights", screen: "charging-insights")
         .task(id: TaskKey(vehicleID: vehicleID, period: period)) { await load() }
@@ -64,22 +81,23 @@ struct ChargingInsightsView: View {
     // MARK: Shares
 
     @ViewBuilder
-    private func shares(_ charges: [ChargeSummary]) -> some View {
-        let location = ChargingInsights.homeAway(charges, fallbackCurrency: units.currency)
-        let current = ChargingInsights.acDc(charges, fallbackCurrency: units.currency)
-        ShareCard(title: "Home and away", period: period.title, split: location,
-                  colors: (HistoryTheme.green, Color(hex: 0x7DD3C0)),
-                  footnote: "Home is a charging place your TeslaMate geofence names Home.")
-        ShareCard(title: "AC and DC fast", period: period.title, split: current,
-                  colors: (HistoryTheme.green, HistoryTheme.blue), footnote: nil)
+    private func shares(_ s: Snapshot) -> some View {
+        let location = ChargingInsights.homeAway(s.charges)
+        let current = ChargingInsights.acDc(s.charges)
+        ShareCard(title: "Home and away", period: s.period.title, split: location,
+                  colors: (Self.homeColor, Self.awayColor),
+                  footnote: "Home is a charging place your TeslaMate geofence names exactly Home, whatever the charger type.")
+        ShareCard(title: "AC and DC fast", period: s.period.title, split: current,
+                  colors: (Self.acColor, Self.dcColor), footnote: nil)
     }
 
     // MARK: Cost per distance
 
     @ViewBuilder
     private func costOverTime(_ s: Snapshot) -> some View {
+        let period = s.period
         let series = ChargingInsights.costPerDistance(charges: s.charges, drives: s.drives, bucket: period.bucket,
-                                                      calendar: .current, fallbackCurrency: units.currency)
+                                                      calendar: .current)
         let per = units.distance == .miles ? "100 mi" : "100 km"
         Card(padding: 20) {
             VStack(alignment: .leading, spacing: 14) {
@@ -94,14 +112,14 @@ struct ChargingInsightsView: View {
                                 y: .value("Cost", per100(point.costPerKm)), width: .ratio(0.7))
                             .foregroundStyle(ScreenKit.amber.gradient)
                             .clipShape(.rect(cornerRadius: 3))
-                            .accessibilityLabel(bucketTitle(point.start))
+                            .accessibilityLabel(bucketTitle(point.start, period: period))
                             .accessibilityValue("\(VoltaFormat.money(per100(point.costPerKm), currency: currency)) per \(per), \(units.formatDistance(point.distanceKm, fractionDigits: 0)) driven, \(point.sessions) session\(point.sessions == 1 ? "" : "s")")
                         RuleMark(y: .value("Average", per100(perKm)))
                             .foregroundStyle(ScreenKit.secondary.opacity(0.6))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                             .accessibilityHidden(true)
                     }
-                    .chartXScale(domain: chartDomain(series.points))
+                    .chartXScale(domain: chartDomain(series.points, period: period))
                     .chartXAxis {
                         AxisMarks(values: axisDates(series.points)) { _ in
                             AxisValueLabel(format: period.bucket == .month ? .dateTime.month(.abbreviated) : .dateTime.month(.abbreviated).day(),
@@ -124,7 +142,7 @@ struct ChargingInsightsView: View {
                         .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if let note = exclusionNote(series) {
+                if let note = exclusionNote(series, period: period) {
                     Text(note).font(.footnote).foregroundStyle(ScreenKit.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -136,7 +154,7 @@ struct ChargingInsightsView: View {
                                 footer: "Charges aren't tied to particular drives, so each \(period.bucketNoun) compares what you paid to charge with how far you drove in it.") {
                 let rows = Array(series.points.reversed())
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, point in
-                    ScreenKit.ValueRow(title: bucketTitle(point.start),
+                    ScreenKit.ValueRow(title: bucketTitle(point.start, period: period),
                                        subtitle: "\(VoltaFormat.money(point.cost, currency: currency)) · \(units.formatDistance(point.distanceKm, fractionDigits: 0))",
                                        showsDivider: index < rows.count - 1) {
                         Text(VoltaFormat.money(per100(point.costPerKm), currency: currency))
@@ -157,7 +175,7 @@ struct ChargingInsightsView: View {
 
     /// The plotted buckets, widened to at least four bucket lengths so one or
     /// two bars stay bar-shaped instead of filling the chart.
-    private func chartDomain(_ points: [ChargingInsights.CostPoint]) -> ClosedRange<Date> {
+    private func chartDomain(_ points: [ChargingInsights.CostPoint], period: Period) -> ClosedRange<Date> {
         let calendar = Calendar.current
         guard let first = points.first?.start, let last = points.last?.start else { return Date.now...Date.now }
         let end = calendar.date(byAdding: period.bucket, value: 1, to: last) ?? last
@@ -171,11 +189,12 @@ struct ChargingInsightsView: View {
         return points.enumerated().filter { $0.offset % step == 0 }.map(\.element.start)
     }
 
-    private func exclusionNote(_ series: ChargingInsights.CostSeries) -> String? {
+    private func exclusionNote(_ series: ChargingInsights.CostSeries, period: Period) -> String? {
         var parts: [String] = []
         let noun = period.bucketNoun
         func count(_ n: Int) -> String { "\(n) \(n == 1 ? noun : noun + "s")" }
         if series.unknownCostBuckets > 0 { parts.append("\(count(series.unknownCostBuckets)) with an unpriced session") }
+        if series.unknownCurrencyBuckets > 0 { parts.append("\(count(series.unknownCurrencyBuckets)) with a session missing its currency") }
         if series.otherCurrencyBuckets > 0 { parts.append("\(count(series.otherCurrencyBuckets)) with sessions in another currency") }
         if series.noChargeBuckets > 0 { parts.append("\(count(series.noChargeBuckets)) with driving but no charging") }
         if series.noDistanceBuckets > 0 { parts.append("\(count(series.noDistanceBuckets)) with charging but no driving") }
@@ -183,23 +202,34 @@ struct ChargingInsightsView: View {
         return "Not shown: " + parts.joined(separator: "; ") + "."
     }
 
-    private func bucketTitle(_ date: Date) -> String {
+    private func bucketTitle(_ date: Date, period: Period) -> String {
         period.bucket == .month ? date.formatted(.dateTime.month(.wide).year())
                                 : "Week of " + date.formatted(.dateTime.month(.abbreviated).day())
     }
 
-    private func load() async {
-        let source = dataSource, id = vehicleID
-        let from = period.days.flatMap { Calendar.current.date(byAdding: .day, value: -$0 + 1, to: Calendar.current.startOfDay(for: .now)) }
+    /// Charges and drives for `period`, tagged with it.
+    static func fetch(source: any VoltaDataSource, vehicleID id: Int, period: Period, now: Date = .now,
+                      calendar: Calendar = .current) async throws -> Snapshot {
+        let from = period.days.flatMap { calendar.date(byAdding: .day, value: -$0 + 1, to: calendar.startOfDay(for: now)) }
         let range = DateRange(from: from, to: nil)
+        async let charges = fetchAllPages { try await source.charges(vehicleID: id, range: range, cursor: $0) }
+        async let drives = fetchAllPages { try await source.drives(vehicleID: id, range: range, cursor: $0) }
+        let (c, d) = try await (charges, drives)
+        return Snapshot(period: period, charges: c.items, drives: d.items, isComplete: c.isComplete && d.isComplete)
+    }
+
+    private func load() async {
+        let requested = period
+        // A failure shown for the old period would read as this one's.
+        if case .failed = state { state = .loading }
         do {
-            async let charges = fetchAllPages { try await source.charges(vehicleID: id, range: range, cursor: $0) }
-            async let drives = fetchAllPages { try await source.drives(vehicleID: id, range: range, cursor: $0) }
-            let (c, d) = try await (charges, drives)
-            let snapshot = Snapshot(charges: c.items, drives: d.items, isComplete: c.isComplete && d.isComplete)
+            let snapshot = try await Self.fetch(source: dataSource, vehicleID: vehicleID, period: requested)
+            // A slower answer for a period no longer selected is dropped.
+            guard !Task.isCancelled, requested == period else { return }
             withAnimation(.smooth) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
+            guard !Task.isCancelled, requested == period else { return }
             state = .failed(error.localizedDescription)
         }
     }
@@ -232,7 +262,7 @@ private struct ShareCard: View {
                           first: VoltaFormat.money(split.first.cost, currency: currency),
                           second: VoltaFormat.money(split.second.cost, currency: currency),
                           firstDetail: priced(split.first), secondDetail: priced(split.second))
-                    if split.costUnknown > 0 || split.otherCurrency > 0 { note(costNote(currency)) }
+                    if split.costUnknown > 0 || split.currencyUnknown > 0 || split.otherCurrency > 0 { note(costNote(currency)) }
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Cost").voltaLabelStyle()
@@ -258,6 +288,7 @@ private struct ShareCard: View {
     private func costNote(_ currency: String) -> String {
         var parts: [String] = []
         if split.costUnknown > 0 { parts.append("\(sessions(split.costUnknown)) without a recorded cost") }
+        if split.currencyUnknown > 0 { parts.append("\(sessions(split.currencyUnknown)) with a cost but no recorded currency") }
         if split.otherCurrency > 0 { parts.append("\(sessions(split.otherCurrency)) priced in another currency") }
         return "Cost shares are in \(currency) and leave out " + parts.joined(separator: " and ") + "."
     }
