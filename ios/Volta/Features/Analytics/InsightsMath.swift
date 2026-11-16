@@ -220,6 +220,20 @@ struct LeaseProgress: Equatable, Sendable {
     }
 }
 
+// MARK: - Charging places
+
+extension ChargeSummary {
+    /// Home is a charging place TeslaMate names exactly "Home", ignoring case
+    /// and surrounding whitespace ("Home Depot" is not home). The one rule
+    /// Charging History's Home filter and Charging Insights share.
+    static func isHomePlace(_ name: String?) -> Bool {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        return name.compare("Home", options: .caseInsensitive) == .orderedSame
+    }
+
+    var isAtHome: Bool { Self.isHomePlace(placeName) }
+}
+
 // MARK: - Charging insights
 
 enum ChargingInsights {
@@ -320,16 +334,37 @@ enum ChargingInsights {
         return Split(first: first, second: second, currency: primary)
     }
 
-    /// Home is a charging place TeslaMate names exactly "Home" (ignoring case
-    /// and surrounding spaces). Location only: a fast charger at home is still home.
-    static func isHome(_ charge: ChargeSummary) -> Bool {
-        guard let name = charge.placeName?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
-        return name.compare("Home", options: .caseInsensitive) == .orderedSame
-    }
+    /// Location only (see `ChargeSummary.isHomePlace`): a fast charger at home is still home.
+    static func isHome(_ charge: ChargeSummary) -> Bool { charge.isAtHome }
 
     /// Home against everywhere else.
     static func homeAway(_ charges: [ChargeSummary]) -> Split {
         split(charges, first: "Home", second: "Away", isFirst: isHome)
+    }
+
+    /// What the cost section says besides its figures: which sessions are left
+    /// out of the total and why. When nothing is priced in a known currency,
+    /// the reason the cost is unknown. nil when every session is priced in the
+    /// split's currency.
+    static func costNote(_ split: Split) -> String? {
+        var parts: [String] = []
+        if split.costUnknown > 0 { parts.append("\(sessions(split.costUnknown)) without a recorded cost") }
+        if split.currencyUnknown > 0 { parts.append("\(sessions(split.currencyUnknown)) with a cost but no recorded currency") }
+        if split.otherCurrency > 0 { parts.append("\(sessions(split.otherCurrency)) priced in another currency") }
+        if let currency = split.currency {
+            return parts.isEmpty ? nil : "Cost shares are in \(currency) and leave out \(list(parts))."
+        }
+        // Without a currency to total in, the reason is either missing costs or missing currencies.
+        guard split.currencyUnknown > 0 else { return "Unknown: no session in this period has a recorded cost." }
+        return "Unknown: \(list(parts)), so nothing can be added up."
+    }
+
+    static func sessions(_ n: Int) -> String { "\(n) session\(n == 1 ? "" : "s")" }
+
+    /// "a", "a and b", "a, b and c".
+    static func list(_ parts: [String]) -> String {
+        guard parts.count > 1, let last = parts.last else { return parts.first ?? "" }
+        return parts.dropLast().joined(separator: ", ") + " and " + last
     }
 
     /// AC charging against DC fast charging.
@@ -373,6 +408,16 @@ enum ChargingInsights {
             let km = points.reduce(0) { $0 + $1.distanceKm }
             return km > 0 ? points.reduce(0) { $0 + $1.cost } / km : nil
         }
+    }
+
+    /// Why no cost per distance can be shown, when no bucket was plotted.
+    static func costPerDistanceUnavailable(_ series: CostSeries, bucketNoun noun: String) -> String {
+        if series.currency == nil {
+            return series.unknownCurrencyBuckets > 0
+                ? "Recorded costs in this period have no currency, so cost per distance is unknown."
+                : "No session in this period has a recorded cost, so cost per distance is unknown."
+        }
+        return "No \(noun) in this period had driving and a recorded cost for every session."
     }
 
     static func costPerDistance(charges: [ChargeSummary], drives: [DriveSummary], bucket component: Calendar.Component,

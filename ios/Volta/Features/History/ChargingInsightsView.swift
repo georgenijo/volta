@@ -38,8 +38,8 @@ struct ChargingInsightsView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
-    @State private var period: Period = .year
-    @State private var state: Loadable<Snapshot> = .loading
+    @State private var model = ChargingInsightsModel()
+    private var period: Period { model.period }
 
     /// What the screen shows for the selected period: a snapshot loaded for
     /// another period reads as loading until the selected one arrives.
@@ -48,12 +48,12 @@ struct ChargingInsightsView: View {
         return state
     }
 
-    private var shownState: Loadable<Snapshot> { Self.shown(state, period: period) }
+    private var shownState: Loadable<Snapshot> { model.shown }
     private var hasCharges: Bool { !(shownState.value?.charges.isEmpty ?? true) }
 
     var body: some View {
         ScreenKit.Page(scroll: "charging-insights", splits: hasCharges) {
-            ScreenKit.Segmented(options: Period.allCases.map { ($0, $0.rawValue) }, selection: $period)
+            ScreenKit.Segmented(options: Period.allCases.map { ($0, $0.rawValue) }, selection: $model.period)
             LoadableContent(state: shownState, retry: load) { snapshot in
                 if !snapshot.isComplete {
                     InlineBanner(systemImage: "exclamationmark.triangle",
@@ -136,9 +136,7 @@ struct ChargingInsightsView: View {
                     .frame(height: 170)
                     .accessibilityLabel("Charging cost per \(per) by \(period.bucketNoun)")
                 } else {
-                    Text(series.currency == nil
-                         ? "No session in this period has a recorded cost, so cost per distance is unknown."
-                         : "No \(period.bucketNoun) in this period had driving and a recorded cost for every session.")
+                    Text(ChargingInsights.costPerDistanceUnavailable(series, bucketNoun: period.bucketNoun))
                         .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -218,18 +216,34 @@ struct ChargingInsightsView: View {
         return Snapshot(period: period, charges: c.items, drives: d.items, isComplete: c.isComplete && d.isComplete)
     }
 
-    private func load() async {
-        let requested = period
-        // A failure shown for the old period would read as this one's.
+    private func load() async { await model.load(source: dataSource, vehicleID: vehicleID) }
+}
+
+/// The selected period and what loaded for it. Every `load` (a period change
+/// or a retry) takes a new generation; only the latest generation's success
+/// or failure reaches `state`, so a slow older request can never overwrite a
+/// newer one, even for the same period.
+@MainActor @Observable
+final class ChargingInsightsModel {
+    var period: ChargingInsightsView.Period = .year
+    private(set) var state: Loadable<ChargingInsightsView.Snapshot> = .loading
+    private(set) var generation = 0
+
+    var shown: Loadable<ChargingInsightsView.Snapshot> { ChargingInsightsView.shown(state, period: period) }
+
+    func load(source: any VoltaDataSource, vehicleID: Int, now: Date = .now, calendar: Calendar = .current) async {
+        generation += 1
+        let mine = generation
+        // A failure shown for an earlier request would read as this one's.
         if case .failed = state { state = .loading }
         do {
-            let snapshot = try await Self.fetch(source: dataSource, vehicleID: vehicleID, period: requested)
-            // A slower answer for a period no longer selected is dropped.
-            guard !Task.isCancelled, requested == period else { return }
+            let snapshot = try await ChargingInsightsView.fetch(source: source, vehicleID: vehicleID, period: period,
+                                                                now: now, calendar: calendar)
+            guard mine == generation else { return }
             withAnimation(.smooth) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
-            guard !Task.isCancelled, requested == period else { return }
+            guard mine == generation else { return }
             state = .failed(error.localizedDescription)
         }
     }
@@ -257,17 +271,19 @@ private struct ShareCard: View {
                     note("\(sessions(split.energyUnknown).capitalizedFirst) without recorded energy aren't included.")
                 }
                 HairlineDivider()
+                let costNote = ChargingInsights.costNote(split)
                 if let currency = split.currency {
                     share(kind: "Cost", fraction: split.firstCostFraction,
                           first: VoltaFormat.money(split.first.cost, currency: currency),
                           second: VoltaFormat.money(split.second.cost, currency: currency),
                           firstDetail: priced(split.first), secondDetail: priced(split.second))
-                    if split.costUnknown > 0 || split.currencyUnknown > 0 || split.otherCurrency > 0 { note(costNote(currency)) }
+                    if let costNote { note(costNote) }
                 } else {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Cost").voltaLabelStyle()
-                        Text("Unknown: no session in this period has a recorded cost.")
-                            .font(.subheadline).foregroundStyle(ScreenKit.secondary)
+                        Text(costNote ?? "Unknown.")
+                            .font(.subheadline)
+                            .foregroundStyle(split.currencyUnknown > 0 ? ScreenKit.amber : ScreenKit.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -283,14 +299,6 @@ private struct ShareCard: View {
 
     private func priced(_ side: ChargingInsights.Side) -> String {
         "\(side.costSessions) of \(side.sessions) priced"
-    }
-
-    private func costNote(_ currency: String) -> String {
-        var parts: [String] = []
-        if split.costUnknown > 0 { parts.append("\(sessions(split.costUnknown)) without a recorded cost") }
-        if split.currencyUnknown > 0 { parts.append("\(sessions(split.currencyUnknown)) with a cost but no recorded currency") }
-        if split.otherCurrency > 0 { parts.append("\(sessions(split.otherCurrency)) priced in another currency") }
-        return "Cost shares are in \(currency) and leave out " + parts.joined(separator: " and ") + "."
     }
 
     private func note(_ text: String) -> some View {

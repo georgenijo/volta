@@ -164,6 +164,47 @@ final class InsightsMathTests: XCTestCase {
         XCTAssertEqual(decoded.startDay, day)
     }
 
+    func testLeaseStartingOn31JanuaryClampsItsEnd() {
+        // One month from 31 January is the last day of February, not 3 March.
+        let short = lease(2026, 1, 31, months: 1, allowance: 1_000, startOdometer: 0)
+        XCTAssertEqual(short.end(calendar: utc), date(2026, 2, 28))
+        XCTAssertEqual(lease(2027, 1, 31, months: 13, allowance: 1_000, startOdometer: 0).end(calendar: utc), date(2028, 2, 29))
+        XCTAssertEqual(lease(2026, 1, 31, months: 36, allowance: 1_000, startOdometer: 0).end(calendar: utc), date(2029, 1, 31))
+        let progress = LeaseProgress(terms: short, odometerKm: 100, now: date(2026, 2, 14), calendar: utc)
+        XCTAssertEqual(progress.totalDays, 28, accuracy: 0.001)
+        XCTAssertEqual(progress.phase, .active)
+    }
+
+    func testLeaseStartingOn29February() {
+        let leap = CivilDate(year: 2024, month: 2, day: 29)
+        XCTAssertTrue(leap.isValid)
+        XCTAssertEqual(leap.start(in: utc), date(2024, 2, 29))
+        let terms = LeaseTerms(startDay: leap, termMonths: 12, allowanceKm: 10_000, startOdometerKm: 0)
+        XCTAssertEqual(terms.end(calendar: utc), date(2025, 2, 28), "no 29 February in 2025: the end clamps")
+        XCTAssertEqual(LeaseTerms(startDay: leap, termMonths: 48, allowanceKm: 1, startOdometerKm: 0).end(calendar: utc),
+                       date(2028, 2, 29))
+        XCTAssertEqual(LeaseProgress(terms: terms, odometerKm: nil, now: date(2024, 6, 1), calendar: utc).totalDays, 365, accuracy: 0.001)
+    }
+
+    func testLeaseAcrossADaylightSavingChange() {
+        // Los Angeles springs forward on 8 March 2026: that day has 23 hours.
+        let la = calendar("America/Los_Angeles")
+        let terms = lease(2026, 3, 1, months: 1, allowance: 3_000, startOdometer: 0)
+        XCTAssertEqual(terms.start(calendar: la), date(2026, 3, 1, 8, in: utc), "midnight PST is 08:00 UTC")
+        XCTAssertEqual(terms.end(calendar: la), date(2026, 4, 1, 7, in: utc), "midnight PDT is 07:00 UTC")
+        let progress = LeaseProgress(terms: terms, odometerKm: 1_000, now: date(2026, 3, 16, 0, in: la), calendar: la)
+        XCTAssertEqual(progress.totalDays, 31 - 1.0 / 24, accuracy: 0.0001, "31 local days, one an hour short")
+        XCTAssertEqual(progress.elapsedDays, 15 - 1.0 / 24, accuracy: 0.0001)
+        // Days are local across the change: the 8 March drive steps up at local midnight on 9 March.
+        let drives = [drive(km: 10, kwh: nil, speedKph: nil, start: date(2026, 3, 8, 0, 30, in: la)),
+                      drive(km: 20, kwh: nil, speedKph: nil, start: date(2026, 3, 8, 23, 30, in: la)),
+                      drive(km: 5, kwh: nil, speedKph: nil, start: date(2026, 3, 9, 0, 10, in: la))]
+        let points = LeaseProgress.recorded(drives, start: terms.start(calendar: la), end: terms.end(calendar: la),
+                                            now: date(2026, 3, 16, 0, in: la), calendar: la)
+        XCTAssertEqual(points.map(\.km), [0, 30, 35])
+        XCTAssertEqual(points.map(\.date), [date(2026, 3, 8, 0, in: la), date(2026, 3, 9, 0, in: la), date(2026, 3, 10, 0, in: la)])
+    }
+
     func testLeaseRecordedDistanceUsesDrivesInsideTheLocalInterval() {
         let la = calendar("America/Los_Angeles")
         let terms = lease(2026, 7, 1, months: 12, allowance: 20_000, startOdometer: 0)
@@ -234,6 +275,42 @@ final class InsightsMathTests: XCTestCase {
         XCTAssertEqual(ChargingInsights.primaryCurrency([charge(added: 1, cost: 1, currency: "usd"),
                                                          charge(added: 1, cost: 1, currency: "USD"),
                                                          charge(added: 1, cost: 50, currency: "EUR")]), "USD")
+    }
+
+    func testMissingCurrencyIsExplainedWhenNothingIsPriced() {
+        // One session, cost 10, no currency: the cost is unknown because of the currency, not a missing cost.
+        let split = ChargingInsights.acDc([charge(added: 10, cost: 10, currency: nil)])
+        XCTAssertNil(split.currency)
+        XCTAssertEqual(ChargingInsights.costNote(split),
+                       "Unknown: 1 session with a cost but no recorded currency, so nothing can be added up.")
+        let mixed = ChargingInsights.acDc([charge(added: 10, cost: 10, currency: nil), charge(added: 1, cost: 2, currency: nil),
+                                           charge(added: 5, cost: nil)])
+        XCTAssertEqual(ChargingInsights.costNote(mixed),
+                       "Unknown: 1 session without a recorded cost and 2 sessions with a cost but no recorded currency, so nothing can be added up.")
+        XCTAssertEqual(ChargingInsights.costNote(ChargingInsights.acDc([charge(added: 1, cost: nil)])),
+                       "Unknown: no session in this period has a recorded cost.")
+        // With a currency the note lists every exclusion, and is absent when there is none.
+        let priced = ChargingInsights.acDc([charge(added: 1, cost: 1), charge(added: 1, cost: 1), charge(added: 1, cost: 1, currency: nil),
+                                            charge(added: 1, cost: 1, currency: "EUR"), charge(added: 1, cost: nil)])
+        XCTAssertEqual(ChargingInsights.costNote(priced),
+                       "Cost shares are in USD and leave out 1 session without a recorded cost, 1 session with a cost but no recorded currency and 1 session priced in another currency.")
+        XCTAssertNil(ChargingInsights.costNote(ChargingInsights.acDc([charge(added: 1, cost: 1)])))
+        // Cost per distance says the same.
+        let series = ChargingInsights.costPerDistance(charges: [charge(added: 10, cost: 10, currency: nil, start: t0)],
+                                                      drives: [drive(km: 50, kwh: 8, speedKph: 40, start: t0)],
+                                                      bucket: .month, calendar: utc)
+        XCTAssertEqual(ChargingInsights.costPerDistanceUnavailable(series, bucketNoun: "month"),
+                       "Recorded costs in this period have no currency, so cost per distance is unknown.")
+    }
+
+    func testHistoryHomeFilterAndInsightsAgreeOnHome() {
+        let charges = [charge(added: 10, cost: nil, place: "Home"), charge(added: 20, cost: nil, place: " home "),
+                       charge(added: 30, cost: nil, place: "Home Depot"), charge(added: 40, cost: nil, place: nil)]
+        let history = charges.filter(ChargeFilter.home.matches).compactMap(\.energyAddedKwh).reduce(0, +)
+        let insights = ChargingInsights.homeAway(charges).first.energyKwh
+        XCTAssertEqual(history, 30)
+        XCTAssertEqual(insights, history)
+        XCTAssertEqual(charges.map(\.isAtHome), [true, true, false, false])
     }
 
     func testHomeIsAnExactPlaceNameRegardlessOfChargerType() {
@@ -377,6 +454,98 @@ private final class DelayedSource: VoltaDataSource {
         await gate.wait()
         return try await base.drives(vehicleID: vehicleID, range: range, cursor: cursor)
     }
+    func vehicles() async throws -> [Vehicle] { try await base.vehicles() }
+    func status(vehicleID: Int) async throws -> VehicleStatus { try await base.status(vehicleID: vehicleID) }
+    func summary(vehicleID: Int, range: SummaryRange) async throws -> ActivitySummary { try await base.summary(vehicleID: vehicleID, range: range) }
+    func timeline(vehicleID: Int, hours: Int) async throws -> [TimelineSegment] { try await base.timeline(vehicleID: vehicleID, hours: hours) }
+    func drive(id: Int) async throws -> DriveDetail { try await base.drive(id: id) }
+    func charge(id: Int) async throws -> ChargeDetail { try await base.charge(id: id) }
+    func idles(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<IdleSummary> { try await base.idles(vehicleID: vehicleID, range: range, cursor: cursor) }
+    func battery(vehicleID: Int) async throws -> BatteryHealth { try await base.battery(vehicleID: vehicleID) }
+    func mileage(vehicleID: Int, bucket: MileageBucketSize) async throws -> [MileageBucket] { try await base.mileage(vehicleID: vehicleID, bucket: bucket) }
+    func firmware(vehicleID: Int) async throws -> [FirmwareUpdate] { try await base.firmware(vehicleID: vehicleID) }
+    func places(vehicleID: Int) async throws -> [Place] { try await base.places(vehicleID: vehicleID) }
+}
+
+@MainActor
+final class ChargingInsightsGenerationTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_790_000_000)
+
+    private func waitForCalls(_ n: Int, _ source: ScriptedSource) async throws {
+        for _ in 0..<400 where source.callCount < n { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(source.callCount, n, "the request is waiting on the script")
+    }
+
+    func testOlderGenerationsNeverOverwriteANewerLoad() async throws {
+        let source = ScriptedSource()
+        let model = ChargingInsightsModel()
+
+        // 1Y → 90D → 1Y while the first two requests are still out (the first is the retry that will fail).
+        let first = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(1, source)
+        model.period = .quarter
+        let second = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(2, source)
+        model.period = .year
+        let third = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(3, source)
+        XCTAssertEqual(model.generation, 3)
+
+        source.finish(2, failing: false)
+        await third.value
+        XCTAssertEqual(model.shown.value?.charges.map(\.id), [3])
+
+        // A late failure from an older 1Y request is ignored.
+        source.finish(0, failing: true)
+        await first.value
+        XCTAssertEqual(model.shown.value?.charges.map(\.id), [3])
+        // A late success from an older request is ignored too.
+        source.finish(1, failing: false)
+        await second.value
+        XCTAssertEqual(model.state.value?.charges.map(\.id), [3])
+        XCTAssertEqual(model.state.value?.period, .year)
+
+        // A newer failure is not replaced by an older request's late success.
+        let fourth = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(4, source)
+        let fifth = Task { await model.load(source: source, vehicleID: 1, now: now) }
+        try await waitForCalls(5, source)
+        source.finish(4, failing: true)
+        await fifth.value
+        guard case .failed = model.state else { return XCTFail("expected the newest load's failure") }
+        source.finish(3, failing: false)
+        await fourth.value
+        guard case .failed = model.state else { return XCTFail("an older success must not replace the newer failure") }
+    }
+}
+
+/// Charges requests wait until the test finishes them, by call order, with a
+/// failure or one charge whose id is the call number (1-based).
+private final class ScriptedSource: VoltaDataSource, @unchecked Sendable {
+    private let base = MockDataSource()
+    private let lock = NSLock()
+    private var waiting: [Int: CheckedContinuation<Int?, Never>] = [:]
+    private var calls = 0
+
+    var callCount: Int { lock.withLock { calls } }
+
+    func finish(_ index: Int, failing: Bool) {
+        let continuation = lock.withLock { waiting.removeValue(forKey: index) }
+        continuation?.resume(returning: failing ? nil : index)
+    }
+
+    func charges(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<ChargeSummary> {
+        let outcome = await withCheckedContinuation { (c: CheckedContinuation<Int?, Never>) in
+            lock.withLock { waiting[calls] = c; calls += 1 }
+        }
+        guard let index = outcome else { throw VoltaError.unreachable("late failure") }
+        let charge = ChargeSummary(id: index + 1, start: Date(timeIntervalSince1970: 1_789_000_000), end: nil, address: nil,
+                                   placeName: "Home", energyAddedKwh: 10, energyUsedKwh: nil, startBatteryLevel: nil,
+                                   endBatteryLevel: nil, durationMin: 30, maxPowerKw: nil, fastCharger: false, cost: 2,
+                                   currency: "USD", outsideTempAvgC: nil)
+        return Page(items: [charge], nextCursor: nil)
+    }
+    func drives(vehicleID: Int, range: DateRange, cursor: String?) async throws -> Page<DriveSummary> { Page(items: [], nextCursor: nil) }
     func vehicles() async throws -> [Vehicle] { try await base.vehicles() }
     func status(vehicleID: Int) async throws -> VehicleStatus { try await base.status(vehicleID: vehicleID) }
     func summary(vehicleID: Int, range: SummaryRange) async throws -> ActivitySummary { try await base.summary(vehicleID: vehicleID, range: range) }

@@ -30,6 +30,8 @@ struct LeaseMileageView: View {
     /// True once stored terms were read for the current key.
     @State private var termsLoaded = false
     @State private var editing = false
+    /// Bumped by every load (terms change or retry); only the latest may set `state`.
+    @State private var loadGeneration = 0
 
     /// UserDefaults key scoped like the warranty purchase date: per paired
     /// server (or demo) and vehicle. nil = don't persist (launch demo).
@@ -446,15 +448,16 @@ struct LeaseMileageView: View {
 
     private func load() async {
         guard termsLoaded else { return }
-        let requested = terms
+        loadGeneration += 1
+        let mine = loadGeneration
         if case .failed = state { state = .loading }
         do {
-            let snapshot = try await Self.fetch(source: dataSource, vehicleID: vehicleID, terms: requested)
-            guard !Task.isCancelled, requested == terms else { return }
+            let snapshot = try await Self.fetch(source: dataSource, vehicleID: vehicleID, terms: terms)
+            guard mine == loadGeneration else { return }
             withAnimation(.smooth) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
-            guard !Task.isCancelled, requested == terms else { return }
+            guard mine == loadGeneration else { return }
             state = .failed(error.localizedDescription)
         }
     }

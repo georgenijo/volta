@@ -38,7 +38,7 @@ extension ChargeSummary {
 
     var kind: Kind {
         if fastCharger { return .fast }
-        if (placeName ?? "").localizedCaseInsensitiveContains("home") { return .home }
+        if isAtHome { return .home }
         return .other
     }
 
