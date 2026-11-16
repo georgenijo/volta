@@ -12,9 +12,10 @@ import os
 // - conform to `LiveActivityIntent`, which the system performs in the app's
 //   process, launching it in the background if needed (vehicle commands also
 //   drive the charging Live Activity);
-// - when built with an SDK that has `IntentExecutionTargets` (AppIntents 300+,
-//   the iOS 27 SDK), also declare `allowedExecutionTargets = .main` for iOS 27
-//   devices (see the end of this file); older SDKs rely on the other two;
+// - when built with Xcode 27 (Swift 6.4, iOS 27 SDK), which has
+//   `IntentExecutionTargets`, also declare `allowedExecutionTargets = .main`
+//   for iOS 27 devices (see the end of this file); older toolchains rely on
+//   the other two;
 // - forward to `VoltaIntentHost.performer`, which only the app registers. If
 //   one ever runs in the extension anyway, it fails with a clear message and
 //   sends nothing.
@@ -201,12 +202,14 @@ struct OpenVoltaIntent: AppIntent {
 
 // MARK: - Execution target (newer SDKs only)
 
-// `IntentExecutionTargets` first appears in the AppIntents module shipped with
-// the iOS 27 SDK (module version 300+). Older SDKs (Xcode 26.x, iOS 26.x SDK)
-// don't declare the type, so the declarations compile only where it exists.
-// Without them the control intents still run in the app process through
+// `IntentExecutionTargets` first ships in the iOS 27 SDK, which comes with
+// Xcode 27 and Swift 6.4. Xcode 26.x (Swift 6.2/6.3, iOS 26.x SDK) doesn't
+// declare the type. Swift can't test for a type, and the AppIntents module
+// version doesn't separate the two (the iOS 26.5 SDK's is already 300+), so
+// the compiler version that ships with the SDK is the gate. Without these
+// declarations the control intents still run in the app process through
 // `LiveActivityIntent`, and the extension still sends nothing.
-#if canImport(AppIntents, _version: 300)
+#if compiler(>=6.4)
 extension VoltaIntentHost {
     /// True when this build tells the system to run control intents in the app only.
     static let declaresAppOnlyExecution = true
@@ -228,7 +231,7 @@ extension OpenChargePortControlIntent {
 }
 #else
 extension VoltaIntentHost {
-    /// False: this SDK has no execution targets; `LiveActivityIntent` alone
+    /// False: this toolchain's SDK has no execution targets; `LiveActivityIntent` alone
     /// places control intents in the app process.
     static let declaresAppOnlyExecution = false
 }

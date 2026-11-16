@@ -496,14 +496,14 @@ private final class RequestLog: Sendable {
         XCTAssertEqual(log.all.count, before, "no request of any kind left the process")
     }
 
-    /// Which execution path this build compiled. With an SDK that has
-    /// `IntentExecutionTargets`, the control intents name the app as their only
-    /// target on iOS 27; without it they rely on `LiveActivityIntent`.
+    /// Which execution path this build compiled. With Xcode 27 (Swift 6.4,
+    /// iOS 27 SDK) the control intents name the app as their only target on
+    /// iOS 27; with older toolchains they rely on `LiveActivityIntent`.
     func testControlIntentsRunInTheAppOnEveryToolchain() {
         XCTAssertTrue((SetVehicleLockIntent() as Any) is any LiveActivityIntent)
         XCTAssertTrue((SetVehicleClimateIntent() as Any) is any LiveActivityIntent)
         XCTAssertTrue((OpenChargePortControlIntent() as Any) is any LiveActivityIntent)
-        #if canImport(AppIntents, _version: 300)
+        #if compiler(>=6.4)
         XCTAssertTrue(VoltaIntentHost.declaresAppOnlyExecution)
         if #available(iOS 27.0, *) {
             XCTAssertEqual(SetVehicleLockIntent.allowedExecutionTargets, .main)
