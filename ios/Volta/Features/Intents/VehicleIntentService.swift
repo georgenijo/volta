@@ -91,6 +91,9 @@ final class VehicleIntentService: VehicleIntentPerforming {
         if let confirm { try await confirm(target.vehicleName) }
         let outcome = await coordinator.perform(command, label: action.label, dataSource: target.dataSource,
                                                 vehicleID: target.vehicleID)
+        // Controls show the requested state while the action runs; reload so
+        // they settle on what the snapshot observes, whatever the outcome.
+        defer { reloadControls() }
         let message = coordinator.activity(dataSource: target.dataSource, vehicleID: target.vehicleID)?.message
         switch outcome {
         case .succeeded(let simulated):
@@ -143,7 +146,6 @@ final class VehicleIntentService: VehicleIntentPerforming {
                 surfaces.publish(VehicleRefresh(status: status, issued: issued), dataSource: target.dataSource)
             }
         }
-        reloadControls()
     }
 
     nonisolated static func mapRequestError(_ error: any Error, action: VehicleIntentAction?) -> VoltaIntentError {

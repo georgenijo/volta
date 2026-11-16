@@ -45,7 +45,8 @@ struct VehicleLockControl: ControlWidget {
             ControlWidgetToggle(isOn: state.locked == true, action: SetVehicleLockIntent()) {
                 Text("Car Lock")
             } valueLabel: { isOn in
-                Label(Self.text(isOn: isOn, state: state), systemImage: Self.symbol(isOn: isOn, state: state))
+                let label = VehicleToggleLabel.lock(observed: state.locked, isOn: isOn, readout: state.readout)
+                Label(label.text, systemImage: label.symbol)
                     .controlWidgetActionHint(isOn ? "Unlock" : "Lock")
             }
             .tint(WTheme.blue)
@@ -53,38 +54,23 @@ struct VehicleLockControl: ControlWidget {
         .displayName("Car Lock")
         .description("Lock or unlock your car. Unlocking needs Face ID or your passcode.")
     }
-
-    /// `isOn` is the requested value while an action runs, otherwise observed.
-    static func text(isOn: Bool, state: VehicleControlState) -> String {
-        if state.locked == nil && !isOn { return VehicleReadoutUnknown.value }
-        return state.value { _ in isOn ? "Locked" : "Unlocked" }
-    }
-
-    static func symbol(isOn: Bool, state: VehicleControlState) -> String {
-        if state.locked == nil && !isOn { return "lock" }
-        return isOn ? "lock.fill" : "lock.open.fill"
-    }
 }
 
-/// Climate toggle.
+/// Climate toggle. Unknown state shows as off with "Unknown"; tapping it turns climate on.
 struct VehicleClimateControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: VoltaControlKind.climate, provider: SnapshotControlProvider()) { state in
             ControlWidgetToggle(isOn: state.climateOn == true, action: SetVehicleClimateIntent()) {
                 Text("Climate")
             } valueLabel: { isOn in
-                Label(Self.text(isOn: isOn, state: state), systemImage: isOn ? "fan.fill" : "fan")
+                let label = VehicleToggleLabel.climate(observed: state.climateOn, isOn: isOn, readout: state.readout)
+                Label(label.text, systemImage: label.symbol)
                     .controlWidgetActionHint(isOn ? "Turn Off" : "Turn On")
             }
             .tint(WTheme.blue)
         }
         .displayName("Car Climate")
         .description("Turn your car’s climate on or off.")
-    }
-
-    static func text(isOn: Bool, state: VehicleControlState) -> String {
-        if state.climateOn == nil && !isOn { return VehicleReadoutUnknown.value }
-        return state.value { _ in isOn ? "On" : "Off" }
     }
 }
 

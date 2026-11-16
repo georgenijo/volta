@@ -48,7 +48,7 @@ final class VehicleReadoutTests: XCTestCase {
         let charging = readout { $0.chargingState = .charging; $0.chargerPowerKw = 7.7; $0.minutesToFull = 65 }
         XCTAssertEqual(charging.chargingDialog,
                        "Friday is charging at 7.7 kilowatts, now at 72%. About 1 hour, 5 minutes left to reach 80%. Updated 4 minutes ago.")
-        XCTAssertEqual(charging.chargingText, "Charging · 1h 5m left")
+        XCTAssertEqual(charging.chargingText, "1h 5m left")
 
         let noTime = readout { $0.chargingState = .charging; $0.chargerPowerKw = nil; $0.minutesToFull = nil }
         XCTAssertEqual(noTime.chargingDialog,
@@ -103,6 +103,24 @@ final class VehicleReadoutTests: XCTestCase {
         XCTAssertEqual(readout().controlValue("Locked"), "Locked", "fresh control values carry no age")
         // A reading time in the future (clock skew) is "just now", not negative.
         XCTAssertEqual(readout { $0.updatedAt = now.addingTimeInterval(120) }.age, "just now")
+    }
+
+    func testToggleLabelsShowPendingRequestsAndUnknown() {
+        let fresh = readout()
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: nil, isOn: false, readout: nil),
+                       .init(text: "Unknown", symbol: "lock"))
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: nil, isOn: true, readout: nil).text, "Locking…",
+                       "a tap on an unknown lock shows the request, not a state")
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: true, readout: fresh),
+                       .init(text: "Locked", symbol: "lock.fill"))
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: false, readout: fresh).text, "Unlocking…")
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: false, isOn: false, readout: fresh).text, "Unlocked")
+        let stale = readout { $0.updatedAt = now.addingTimeInterval(-2 * 3600) }
+        XCTAssertEqual(VehicleToggleLabel.lock(observed: true, isOn: true, readout: stale).text, "Locked · 2h")
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: nil, isOn: false, readout: nil),
+                       .init(text: "Unknown", symbol: "fan"))
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: false, isOn: true, readout: fresh).text, "Turning On…")
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: true, isOn: true, readout: fresh).text, "On")
     }
 
     func testVehicleNameFallbackAndPossessive() {
@@ -300,9 +318,11 @@ private final class RequestLog: Sendable {
 
     func testDemoCommandsAreSimulated() async throws {
         let model = demoModel()
-        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        let reloads = Box(0)
+        let service = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: { reloads.value += 1 })
         let text = try await service.perform(.lock)
         XCTAssertEqual(text, "Simulated in demo mode: locking Friday. No vehicle was contacted.")
+        XCTAssertEqual(reloads.value, 1, "controls settle back on the observed state")
     }
 
     func testUnpairedReadsAndCommandsAskToSignIn() async {

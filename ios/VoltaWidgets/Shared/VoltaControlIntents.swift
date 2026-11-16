@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import os
 
 // Compiled into BOTH the app and the widget extension: Control Center and Lock
 // Screen controls need these types to exist in the extension, but the work
@@ -110,9 +111,16 @@ protocol VehicleIntentPerforming: AnyObject {
 @MainActor
 enum VoltaIntentHost {
     static var performer: (any VehicleIntentPerforming)?
+    /// Action names and the process only; never vehicle data or credentials.
+    static let log = Logger(subsystem: "com.georgenijo.volta", category: "intents")
 
     static func perform(_ action: VehicleIntentAction) async throws -> String {
-        guard let performer else { throw VoltaIntentError.needsApp }
+        let process = ProcessInfo.processInfo.processName
+        guard let performer else {
+            log.error("Control action \(action.rawValue, privacy: .public) reached \(process, privacy: .public) without the app; nothing sent")
+            throw VoltaIntentError.needsApp
+        }
+        log.info("Control action \(action.rawValue, privacy: .public) running in \(process, privacy: .public)")
         return try await performer.perform(action)
     }
 }
