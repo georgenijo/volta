@@ -3,7 +3,7 @@ import { liveValues } from '../src/fleet-live';
 const now = new Date('2026-01-02T12:00:00Z'), old = '2026-01-01T00:00:00Z';
 const sample = (field:string, value:any, unit='', invalid=false) => ({field,source_ts:old,source_unit:unit,invalid,quality:invalid?'invalid':'ok',...value});
 const health = {receiver_generation:'fixture',receiver_started_at:old,receiver_seen_at:now,updated_at:now,caught_up_at:now,lag_records:0};
-const fixture = (samples:any[]=[]) => ({samples,connections:[{status:'CONNECTED',source_ts:old,received_at:old}],health:{...health},lastCharge:null as {start:Date,open:boolean,observed:boolean,dc:boolean}|null});
+const fixture = (samples:any[]=[]) => ({samples,connections:[{status:'CONNECTED',source_ts:old,received_at:old}],health:{...health},lastCharge:null as {start:Date,open:boolean,observed:boolean,dc:boolean}|null,powerSign:null as string|null});
 test('change-only values stay current despite sample age',()=>{
  const r=liveValues(fixture([sample('Locked',{value_bool:true}),sample('SentryMode',{value_text:'SentryModeStateArmed'}),sample('ModuleTempMax',{value_num:38},'C')]),now)!;
  expect(r.freshness.connected).toBe(true);expect(r.values).toMatchObject({locked:true,sentryMode:true,packTempMaxC:38});
@@ -88,4 +88,73 @@ test('DC fast charging uses DC power and its counter; unknown states stay unknow
  f.samples[2]!.source_ts=now.toISOString();f.lastCharge={start:new Date('2026-01-02T11:50:00Z'),open:true,observed:true,dc:false};
  expect(liveValues(f,now)!.charge).toMatchObject({state:'charging',powerKw:150,fast:true,energyAddedKwh:12});
  f.samples[0].value_text='DetailedChargeStateMystery';expect(liveValues(f,now)!.charge.state).toBeNull();
+});
+
+// Live driving: a drive moment 2 s before `now` on a connected stream.
+const moment = new Date(+now - 2000).toISOString();
+const at = (row: any, t = moment, payload = 'p1') => ({...row, source_ts: t, payload_id: payload});
+const driving = (extra: any[] = []) => {
+  const f = fixture([at(sample('Gear',{value_text:'ShiftStateD'})), at(sample('VehicleSpeed',{value_num:40},'mph')),
+    at(sample('Location',{latitude:37.44,longitude:-122.14})), at(sample('PackVoltage',{value_num:400},'V')),
+    at(sample('PackCurrent',{value_num:105},'A')), ...extra]);
+  f.powerSign = 'discharge_positive';
+  return f;
+};
+test('a connected drive reports gear, speed in km/h and signed same-payload power as current',()=>{
+  const d = liveValues(driving(), now)!.drive;
+  expect(d.gear).toEqual({value:'D',observedAt:new Date(moment),current:true,source:'fleet_telemetry'});
+  expect(d.speedKph!.value).toBeCloseTo(64.37,2); expect(d.speedKph!.current).toBe(true);
+  expect(d.powerKw!.value).toBeCloseTo(42); expect(d.powerKw!.current).toBe(true); expect(d.stoppedSince).toBeNull();
+});
+test('regen is negative power; the sign follows the operator calibration and is unknown without it',()=>{
+  const f = driving(); f.samples.find(s => s.field === 'PackCurrent')!.value_num = -45;
+  expect(liveValues(f, now)!.drive.powerKw!.value).toBeCloseTo(-18);
+  f.powerSign = 'discharge_negative'; expect(liveValues(f, now)!.drive.powerKw!.value).toBeCloseTo(18);
+  f.powerSign = null; expect(liveValues(f, now)!.drive.powerKw).toBeNull();
+});
+test('power needs voltage and current from one payload; invalid or unknown units are unknown',()=>{
+  const f = driving(); f.samples.find(s => s.field === 'PackCurrent')!.payload_id = 'p2';
+  expect(liveValues(f, now)!.drive.powerKw).toBeNull();
+  const g = driving(); g.samples.find(s => s.field === 'VehicleSpeed')!.source_unit = 'furlongs';
+  expect(liveValues(g, now)!.drive.speedKph).toBeNull();
+  const h = driving(); Object.assign(h.samples.find(s => s.field === 'Gear')!, {invalid:true,quality:'invalid',value_text:null});
+  expect(liveValues(h, now)!.drive.gear).toBeNull();
+  const i = driving(); i.samples.find(s => s.field === 'Gear')!.value_text = 'ShiftStateSNA';
+  expect(liveValues(i, now)!.drive.gear).toBeNull();
+});
+test('gear maps P, R, N and D',()=>{
+  for (const [raw, gear] of [['ShiftStateP','P'],['ShiftStateR','R'],['ShiftStateN','N'],['ShiftStateD','D']]) {
+    const f = driving(); f.samples.find(s => s.field === 'Gear')!.value_text = raw;
+    expect(liveValues(f, now)!.drive.gear!.value).toBe(gear as any);
+  }
+});
+test('a car in gear that stops reporting position is stopped; the held speed is not current',()=>{
+  const quiet = new Date(+now - 45_000).toISOString(), f = driving();
+  for (const s of f.samples) s.source_ts = s.field === 'Gear' ? old : quiet;
+  const d = liveValues(f, now)!.drive;
+  expect(d.stoppedSince).toEqual(new Date(quiet)); expect(d.speedKph!.current).toBe(false); expect(d.powerKw!.current).toBe(false);
+  expect(d.gear!.current).toBe(true);
+  // Reported 9 s ago: still moving as far as anyone can tell.
+  const recent = new Date(+now - 9000).toISOString(), g = driving();
+  for (const s of g.samples) if (s.field !== 'Gear') s.source_ts = recent;
+  expect(liveValues(g, now)!.drive.stoppedSince).toBeNull(); expect(liveValues(g, now)!.drive.speedKph!.current).toBe(true);
+  // Shifted into Drive after the last report: stopped since the shift.
+  const later = new Date(+now - 20_000).toISOString(); f.samples.find(s => s.field === 'Gear')!.source_ts = later;
+  expect(liveValues(f, now)!.drive.stoppedSince).toEqual(new Date(later));
+});
+test('stillness needs a connected stream, a drive gear and a valid fix',()=>{
+  const quiet = new Date(+now - 45_000).toISOString(), base = () => { const f = driving(); for (const s of f.samples) if (s.field !== 'Gear') s.source_ts = quiet; return f; };
+  const parked = base(); parked.samples.find(s => s.field === 'Gear')!.value_text = 'ShiftStateP';
+  expect(liveValues(parked, now)!.drive.stoppedSince).toBeNull();
+  const tunnel = base(); Object.assign(tunnel.samples.find(s => s.field === 'Location')!, {invalid:true,quality:'invalid',latitude:null,longitude:null});
+  expect(liveValues(tunnel, now)!.drive.stoppedSince).toBeNull();
+  const away = base(); away.connections = [{status:'DISCONNECTED',source_ts:old,received_at:old}];
+  const d = liveValues(away, now)!.drive;
+  expect(d.stoppedSince).toBeNull(); expect(d.gear!.current).toBe(false); expect(d.speedKph!.current).toBe(false);
+});
+test('a disconnected stream keeps fresh-looking readings but never calls them current',()=>{
+  const f = driving(); f.connections = [{status:'DISCONNECTED',source_ts:old,received_at:old}];
+  const d = liveValues(f, now)!.drive;
+  expect(d.gear!.current).toBe(false); expect(d.speedKph!.current).toBe(false); expect(d.powerKw!.current).toBe(false);
+  expect(d.speedKph!.observedAt).toEqual(new Date(moment));
 });

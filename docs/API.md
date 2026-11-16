@@ -224,9 +224,32 @@ VehicleStatus  { vehicleId, state: online|asleep|offline|driving|charging|updati
                  chargePortLatch, tpms: { fl, fr, rl, rr }, telemetryFreshness,
                  chargeEnergyAddedKwh, chargerVoltage, chargerCurrentA, fastCharger,
                  chargeCableType, chargeStartedAt, chargeStartObserved, activeChargeId,
-                 chargeReadyAt }
+                 chargeReadyAt, liveDrive?: LiveDrive }
 TireReading    { pressureBar: number|null, updatedAt: timestamp|null }
+LiveDrive      { gear: LiveReading<P|R|N|D>|null, speedKph: LiveReading<number>|null,
+                 powerKw: LiveReading<number>|null, stoppedSince: timestamp|null }
+LiveReading    { value, observedAt, current: boolean, source: fleet_telemetry|teslamate }
 ```
+
+`liveDrive` is what the car is doing on the road; it is omitted when nothing is
+known (a parked car without telemetry). Each reading carries when it was
+observed and whether it holds now (`current`); a reading that is not current
+is the last one seen, not a live value. Gear comes from Fleet Telemetry's
+change-only `Gear` (Invalid, SNA and Unknown are null) and is current while the
+stream is connected. Speed and power come from the stream or from the open
+TeslaMate drive's newest position (`source`). The stream sends them with
+`Location`, at most every 2 s and only after the car has moved 3 m, so they
+are current for 10 s after they were observed on a connected stream; a
+TeslaMate position is current for 30 s. Per value a current reading beats a
+stale one, then the newer one wins. `powerKw` is battery power: positive
+drives, negative is regen. Stream power uses `PackVoltage` and `PackCurrent`
+from the same payload with the operator's recorded `PackCurrent` sign, and is
+null without that calibration. `stoppedSince` is set when a connected stream
+in R, N or D with a valid GPS fix has sent no position for over 10 s, which
+means the car has moved less than 3 m since then (the receiver holds the last
+speed a stopping car reported, usually 1 to 5 mph); it is null when a current
+speed reading exists, and never inferred without a fix. Gear and readings
+outlast the drive: clients decide what to show from gear and `state`.
 
 Live charging comes from Fleet Telemetry's `DetailedChargeState` while the
 stream is connected, or when that state is newer than every TeslaMate

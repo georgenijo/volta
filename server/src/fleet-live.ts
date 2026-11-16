@@ -3,10 +3,25 @@ import type { DB, Row } from './db';
 
 export const liveFields = ['BatteryLevel','Soc','RatedRange','EstBatteryRange','ChargeLimitSoc','ModuleTempMax','ModuleTempMin','Locked','SentryMode','TpmsPressureFl','TpmsPressureFr','TpmsPressureRl','TpmsPressureRr','ChargePortDoorOpen','ChargePortLatch','InsideTemp','OutsideTemp','Version','Odometer','EnergyRemaining',
   'DetailedChargeState','ACChargingPower','DCChargingPower','ChargeAmps','ChargerVoltage','TimeToFullCharge','ACChargingEnergyIn','DCChargingEnergyIn','FastChargerPresent','ChargingCableType',
-  'HvacPower','HvacLeftTemperatureRequest'];
+  'HvacPower','HvacLeftTemperatureRequest','Gear','VehicleSpeed','PackVoltage','PackCurrent','Location'];
 /** Tesla's DetailedChargeState mapped onto the API's chargingState. */
 const chargeStates: Record<string,string> = {DetailedChargeStateDisconnected:'disconnected',DetailedChargeStateNoPower:'stopped',
   DetailedChargeStateStarting:'charging',DetailedChargeStateCharging:'charging',DetailedChargeStateComplete:'complete',DetailedChargeStateStopped:'stopped'};
+/** Tesla's ShiftState mapped onto the API's gear; Invalid, SNA and Unknown are unknown. */
+const gears: Record<string,LiveGear> = {ShiftStateP:'P',ShiftStateR:'R',ShiftStateN:'N',ShiftStateD:'D'};
+export type LiveGear = 'P'|'R'|'N'|'D';
+/** One live drive value: when it was observed, and whether it still holds now. */
+export type LiveReading<T> = { value: T; observedAt: Date; current: boolean; source: 'fleet_telemetry'|'teslamate' };
+export type LiveDrive = { gear: LiveReading<LiveGear>|null; speedKph: LiveReading<number>|null; powerKw: LiveReading<number>|null; stoppedSince: Date|null };
+/** Volta's profile sends Location at most every 2 s and only once the car
+ * has moved 3 m; VehicleSpeed, PackVoltage and PackCurrent ride on it
+ * (ingestion/fleetconfig). A speed or power reading is current only this
+ * long after it was observed, and a connected stream in gear with no report
+ * for longer has moved less than 3 m since. The receiver holds the last speed
+ * a stopping car reported (often 1 to 5 mph), so it is never shown as current. */
+export const moveReportMs = 10_000;
+/** A TeslaMate position from the open drive is current this long. */
+export const teslamateCurrentMs = 30_000;
 
 /** Latest means latest observation, including invalidation; never resurrect an older valid value. */
 export class FleetLive {
@@ -26,14 +41,16 @@ export class FleetLive {
       (SELECT jsonb_build_object('start',s.start_ts,'open',s.end_reason='open','observed',s.start_reason='charge_state','dc',EXISTS(SELECT 1 FROM volta_telemetry.session_samples x
           WHERE x.vehicle_id=s.vehicle_id AND x.source_ts>=s.start_ts
             AND x.source_ts<=CASE WHEN s.end_reason='open' THEN now() ELSE LEAST(s.end_ts,now()) END AND x.dc_power_kw>0)) FROM volta_telemetry.sessions s
-        WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge
+        WHERE s.vehicle_id=b.vehicle_id AND s.kind='charge' ORDER BY s.start_ts DESC LIMIT 1) AS last_charge,
+      (SELECT sign FROM volta_telemetry.power_calibration WHERE vehicle_id=b.vehicle_id) AS power_sign
       FROM volta_telemetry.api_vehicle_bindings b JOIN public.cars c ON c.id=b.vehicle_id WHERE b.vehicle_id=${id}`;
     if (!row?.vin || !/^[A-HJ-NPR-Z0-9]{17}$/.test(row.vin)) return null;
     const digest = createHash('sha256').update('volta-telemetry-vin-binding-v1\0').update(row.vin, 'utf8').digest('hex');
     if (row.vin_digest !== digest) return null;
     return { samples: row.samples as Row[], connections: (row.connections ?? []) as Row[], health: row.health as Row | null,
       lastCharge: row.last_charge ? { start: new Date(row.last_charge.start), open: row.last_charge.open === true,
-        observed: row.last_charge.observed === true, dc: row.last_charge.dc === true } : null };
+        observed: row.last_charge.observed === true, dc: row.last_charge.dc === true } : null,
+      powerSign: (row.power_sign ?? null) as string | null };
   }
 }
 
@@ -91,6 +108,7 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     // Whether the session began at an observed charge start, not mid-charge (after a split gap or a late join).
     startObserved: session ? last!.observed : null,
     energyAddedKwh: session && counted && +counted >= +session ? num(counter,{kWh:1}) : null };
+  const drive = driveValues(live, by, valid, connected, now);
   const tire = (suffix: string) => ({ pressureBar: num(`TpmsPressure${suffix}`, {bar:1,psi:1/14.5037738,kPa:.01}), updatedAt: times[`TpmsPressure${suffix}`] ?? null });
   return { values: {
     batteryLevel:num('BatteryLevel',{'%':1}), usableBatteryLevel:num('Soc',{'%':1}),
@@ -103,5 +121,32 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
   // A recognized overheat-protection reading is current evidence, not a gap:
   // status uses it to clear an older recorded climate state.
   overheatProtect: hvac === 'HvacPowerStateOverheatProtect',
-  freshness:{connected,lastSeenAt,recordedAt:times}, charge, by };
+  freshness:{connected,lastSeenAt,recordedAt:times}, charge, drive, by };
+}
+
+/** Gear, speed and pack power from the stream. Gear is change-only, so a
+ * connected stream's gear holds now; speed and power hold only while the car
+ * keeps reporting (see moveReportMs). Power needs voltage and current from
+ * the same payload and the operator's recorded PackCurrent sign. */
+function driveValues(live: NonNullable<Awaited<ReturnType<FleetLive['read']>>>, by: Map<string, Row>,
+                     valid: (f: string) => Row | null, connected: boolean, now: Date): LiveDrive {
+  const at = (s: Row) => new Date(s.source_ts);
+  const reading = <T>(value: T | null, s: Row | null, current: boolean): LiveReading<T> | null =>
+    value == null || !s ? null : { value, observedAt: at(s), current, source: 'fleet_telemetry' };
+  const recent = (s: Row | null) => connected && s != null && +now - +at(s) <= moveReportMs;
+  const g = valid('Gear'), gear = g ? gears[g.value_text] ?? null : null;
+  const s = valid('VehicleSpeed'), mph = s?.source_unit === 'mph' ? 1.609344 : s?.source_unit === 'km/h' ? 1 : null;
+  const speed = s && mph != null && Number.isFinite(s.value_num) ? s.value_num * mph : null;
+  const v = valid('PackVoltage'), a = valid('PackCurrent');
+  const sign = live.powerSign === 'discharge_positive' ? 1 : live.powerSign === 'discharge_negative' ? -1 : null;
+  const power = v && a && sign && v.payload_id === a.payload_id && +at(v) === +at(a) && v.source_unit === 'V' && a.source_unit === 'A' &&
+    Number.isFinite(v.value_num) && v.value_num > 0 && Number.isFinite(a.value_num) ? v.value_num * a.value_num / 1000 * sign : null;
+  // The newest position report, valid or not; a car without a GPS fix (a
+  // tunnel) may stop reporting while it moves, so only a valid fix proves stillness.
+  const report = ['Location','VehicleSpeed'].map(f => by.get(f)).filter((r): r is Row => r != null && +at(r) <= +now)
+    .sort((x, y) => +at(y) - +at(x))[0] ?? null;
+  const fix = by.get('Location');
+  const stoppedSince = connected && gear != null && gear !== 'P' && report && fix && !fix.invalid && fix.quality === 'ok' &&
+    +at(fix) >= +at(report) && +now - +at(report) > moveReportMs ? new Date(Math.max(+at(report), +at(g!))) : null;
+  return { gear: reading(gear, g, connected), speedKph: reading(speed, s, recent(s)), powerKw: reading(power, power == null ? null : v, recent(v)), stoppedSince };
 }

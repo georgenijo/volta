@@ -6,7 +6,7 @@ import { summaryPeriod } from './period';
 import { FleetDrives, replacedDrive, overlappingWindows, resolveDriveSources, telemetryDriveVehicle, type Catalog, type Window } from './fleet-drives';
 import { FleetSeries } from './fleet-series';
 import { FleetCharges, chargeGroups, coveredCharge, failedCharge, limited, telemetryChargeId, telemetryChargeVehicle, type ChargeCatalog, type ChargeWindow } from './fleet-charges';
-import { FleetLive, liveValues } from './fleet-live';
+import { FleetLive, liveValues, teslamateCurrentMs, type LiveDrive, type LiveReading } from './fleet-live';
 import { applyDriveEnergy, scoreFromStats, aggregateDriveScore } from './drive-parity';
 
 export class Telemetry {
@@ -144,7 +144,8 @@ export class Telemetry {
       // Location age is independent of fresh battery/charge/state observations.
       locationUpdatedAt: row.latitude == null || row.longitude == null ? null : row.date ?? null,
       location: row.latitude == null || row.longitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
-    if (!live) return result;
+    const liveDrive = this.liveDrive(row, live?.drive ?? null);
+    if (!live) return liveDrive ? {...result, liveDrive} : result;
     const sources: Record<string,string> = {batteryLevel:'BatteryLevel',usableBatteryLevel:'Soc',ratedRangeKm:'RatedRange',estRangeKm:'EstBatteryRange',chargeLimit:'ChargeLimitSoc',insideTempC:'InsideTemp',outsideTempC:'OutsideTemp',climateOn:'HvacPower',driverTempSettingC:'HvacLeftTemperatureRequest',odometerKm:'Odometer',firmware:'Version',packTempMaxC:'ModuleTempMax',packTempMinC:'ModuleTempMin',locked:'Locked',sentryMode:'SentryMode',chargePortDoorOpen:'ChargePortDoorOpen',chargePortLatch:'ChargePortLatch',energyRemainingKwh:'EnergyRemaining'};
     for (const [key,value] of Object.entries(live.values)) {
       const field = sources[key];
@@ -185,7 +186,25 @@ export class Telemetry {
         chargeStartObserved: session && charge.startedAt ? charge.startObserved : null,
         activeChargeId: session && charge.startedAt ? telemetryChargeId(id, charge.startedAt) : charging && row.charge_id ? row.charge_id : null });
     }
-    return {...result,tpms:live.tpms,telemetryFreshness:live.freshness};
+    return {...result,tpms:live.tpms,telemetryFreshness:live.freshness,...(liveDrive ? {liveDrive} : {})};
+  }
+  /** What the car is doing on the road: the stream's gear, speed and pack
+   * power, or the open TeslaMate drive's newest position. Per value, a
+   * current reading beats a stale one, then the newer one wins. Null when
+   * nothing is known. */
+  private liveDrive(row: Row, stream: LiveDrive | null): LiveDrive | null {
+    const now = +this.clock();
+    const position = row.active_drive_id != null && row.drive_id === row.active_drive_id && row.date && +new Date(row.date) <= now ? row : null;
+    const recorded = (v: unknown): LiveReading<number> | null => position && typeof v === 'number' && Number.isFinite(v)
+      ? { value: v, observedAt: new Date(position.date), current: now - +new Date(position.date) <= teslamateCurrentMs, source: 'teslamate' } : null;
+    const pick = <T>(a: LiveReading<T> | null, b: LiveReading<T> | null) => !a || !b ? a ?? b
+      : a.current !== b.current ? (a.current ? a : b) : +b.observedAt > +a.observedAt ? b : a;
+    const speedKph = pick(stream?.speedKph ?? null, recorded(row.speed == null ? null : Number(row.speed)));
+    const powerKw = pick(stream?.powerKw ?? null, recorded(row.power == null ? null : Number(row.power)));
+    const gear = stream?.gear ?? null;
+    // A current speed from either source says more than the stream's silence.
+    const stoppedSince = speedKph?.current ? null : stream?.stoppedSince ?? null;
+    return gear || speedKph || powerKw || stoppedSince ? { gear, speedKph, powerKw, stoppedSince } : null;
   }
   private driveSelect(source = this.sql`public.drives`) {
     const s = this.sql, efficiency = s`eff.value`;
