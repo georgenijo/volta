@@ -41,6 +41,10 @@ appear in that frame.
   not start a second load; nor does it while sections are still loading.
 - Saved data never reaches widgets or Live Activities. Yesterday's saved
   "Today" totals are hidden by the existing reporting-day rule.
+- The store accepts writes only for the selected car, so a refresh that
+  outlives its dashboard after a car switch cannot replace the new car's file.
+- Each saved section mark appears once the status caption no longer says the
+  whole screen is saved, and VoiceOver reads it with the section.
 - Unpairing, demo mode and a revoked token delete the file before `remove()`
   returns, and a write queued before that cannot recreate it. A load that
   outlives its pairing cannot write it. Write, removal and backup-exclusion

@@ -261,6 +261,17 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
         XCTAssertNil(start?.saved)
     }
 
+    func testTheSavedDashboardStoreFollowsTheSelectedCar() async throws {
+        let saved = MemorySavedDashboards()
+        let settings = settings()
+        settings.selectedVehicleID = 2
+        let model = try pairedModel(settings, saved: saved) { vehiclesJSON() }
+        await model.loadVehicles()
+        XCTAssertEqual(saved.acceptedVehicleID, 2)
+        model.select(Vehicle(id: 1, name: "Tesla"))
+        XCTAssertEqual(saved.acceptedVehicleID, 1, "a refresh for the previous car can no longer save")
+    }
+
     func testUnpairAndDemoModeForgetTheSavedDashboard() throws {
         let saved = MemorySavedDashboards(savedDashboard(backend: pairedBackend))
         let model = try pairedModel(settings(), saved: saved) { vehiclesJSON() }

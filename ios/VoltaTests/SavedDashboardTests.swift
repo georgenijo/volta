@@ -245,6 +245,8 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         let task = Task { await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: saved())) }
         await waitUntil { model.status != nil }
         XCTAssertNil(model.lastLoadedAt, "saved data is not a recent load")
+        XCTAssertTrue(model.savedSections.contains(.timeline))
+        XCTAssertNil(model.savedSectionNote(.timeline), "no section marks while the caption says saved")
         XCTAssertFalse(model.foregroundRefreshDue(now: .now.addingTimeInterval(3600)),
                        "becoming active while saved data shows sends nothing more")
         await gate.open()
@@ -331,6 +333,55 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         await task.value
         XCTAssertEqual(model.vehicle?.name, "Fresh name")
         XCTAssertEqual(store.dashboard?.vehicles.map(\.name), ["Fresh name"], "saved again with the list")
+    }
+
+    /// Car A's refresh outlives its dashboard after a switch to car B: its
+    /// late second save (with the vehicle list) must not replace B's.
+    func testALateSaveForTheOldCarCannotReplaceTheSelectedCars() async {
+        let store = MemorySavedDashboards()
+        store.acceptedBackend = "backend-a"; store.acceptedVehicleID = 1
+        let carA = StubSource(), gate = SectionGate(), modelA = DashboardModel()
+        carA.vehiclesHandler = { await gate.wait(); return [Vehicle(id: 1, name: "A"), Vehicle(id: 2, name: "B")] }
+        let refreshA = Task {
+            await modelA.load(dataSource: carA, vehicleID: 1,
+                              initialVehicles: DashboardStart(store: store, backend: "backend-a"))
+        }
+        await waitUntil { store.dashboard?.vehicleID == 1 }
+
+        // The user switches to car B (AppModel moves the store with it), and B saves.
+        store.acceptedVehicleID = 2
+        let carB = StubSource(), modelB = DashboardModel()
+        carB.vehiclesHandler = { [Vehicle(id: 1, name: "A"), Vehicle(id: 2, name: "B")] }
+        var statusB = makeStatus(battery: 33); statusB.vehicleId = 2
+        let fresh = statusB
+        carB.statusHandler = { fresh }
+        await modelB.load(dataSource: carB, vehicleID: 2,
+                          initialVehicles: DashboardStart(store: store, backend: "backend-a"))
+        XCTAssertEqual(store.dashboard?.vehicleID, 2)
+
+        await gate.open()
+        await refreshA.value
+        XCTAssertEqual(store.dashboard?.vehicleID, 2, "A's late save is rejected")
+        XCTAssertEqual(store.dashboard?.status.batteryLevel, 33)
+    }
+
+    func testSavedFileRejectsAnotherCar() async {
+        let url = FileManager.default.temporaryDirectory.appending(path: "saved-car-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = SavedDashboardFile(url: url)
+        file.acceptedBackend = "backend-a"; file.acceptedVehicleID = 2
+        file.write(saved(backend: "backend-a", vehicleID: 1))
+        await file.drain()
+        XCTAssertNil(file.read(backend: "backend-a"))
+        file.write(saved(backend: "backend-a", vehicleID: 2))
+        await file.drain()
+        XCTAssertEqual(file.read(backend: "backend-a")?.vehicleID, 2)
+    }
+
+    func testSavedMarksReachVoiceOver() {
+        let strip = ActivityStrip(segments: [segment], savedNote: "Saved 2 hr. ago")
+        XCTAssertTrue(strip.accessibilitySummary.hasSuffix("Saved 2 hr. ago"))
+        XCTAssertFalse(ActivityStrip(segments: [segment]).accessibilitySummary.contains("Saved"))
     }
 
     func testAFailedLaunchFromSavedDataRetriesOnForeground() async {

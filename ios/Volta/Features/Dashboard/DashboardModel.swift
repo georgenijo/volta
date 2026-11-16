@@ -91,9 +91,10 @@ final class DashboardModel {
         return now.timeIntervalSince(lastLoadedAt) > 30
     }
 
-    /// "Saved 2 hr. ago" for a section in `savedSections`, else nil.
+    /// "Saved 2 hr. ago" for a section in `savedSections`, else nil. Not
+    /// while the status caption still says the whole screen is saved.
     func savedSectionNote(_ section: Section, now: Date = .now) -> String? {
-        guard savedSections.contains(section), let savedAt else { return nil }
+        guard !showsSavedStatus, savedSections.contains(section), let savedAt else { return nil }
         return "Saved \(VoltaFormat.relativeDate(min(savedAt, now), now: now))"
     }
 

@@ -41,6 +41,11 @@ struct SavedDashboard: Codable, Equatable, Sendable {
         SHA256.hash(data: Data(backendID.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Whether a store accepting `backend` and `vehicleID` may write it.
+    func accepted(backend: String?, vehicleID: Int?) -> Bool {
+        self.backend == backend && (vehicleID == nil || self.vehicleID == vehicleID)
+    }
+
     /// `status`, marked so screens label it as saved rather than live. It keeps
     /// no location observation time, so HomeLink can never act on it.
     var labelledStatus: VehicleStatus {
@@ -60,8 +65,13 @@ protocol SavedDashboardStoring: AnyObject {
     /// The backend whose dashboards may be written; nil accepts none. Set
     /// when pairing changes, so a load that outlives its pairing saves nothing.
     var acceptedBackend: String? { get set }
+    /// The selected car, kept current by `AppModel`, so a load for a car that
+    /// is no longer selected (one whose refresh outlived its dashboard)
+    /// cannot overwrite the selected car's. nil does not restrict (tests).
+    var acceptedVehicleID: Int? { get set }
     func read(backend: String) -> SavedDashboard?
-    /// Ignored unless `dashboard.backend` is `acceptedBackend`.
+    /// Ignored unless `dashboard.backend` is `acceptedBackend` and its car is
+    /// `acceptedVehicleID`.
     func write(_ dashboard: SavedDashboard)
     func remove()
 }
@@ -71,6 +81,7 @@ protocol SavedDashboardStoring: AnyObject {
 @MainActor
 final class SavedDashboardFile: SavedDashboardStoring {
     var acceptedBackend: String?
+    var acceptedVehicleID: Int?
     private let url: URL
     /// Writes run in order, off the main thread.
     private var lastWrite: Task<Void, Never>?
@@ -97,7 +108,7 @@ final class SavedDashboardFile: SavedDashboardStoring {
     }
 
     func write(_ dashboard: SavedDashboard) {
-        guard dashboard.backend == acceptedBackend else { return }
+        guard dashboard.accepted(backend: acceptedBackend, vehicleID: acceptedVehicleID) else { return }
         let url = url, previous = lastWrite, epoch = epoch, beforeWrite = beforeWrite
         let queuedIn = epoch.current
         lastWrite = Task.detached(priority: .utility) {
@@ -191,11 +202,12 @@ struct DashboardStart {
 @MainActor
 final class MemorySavedDashboards: SavedDashboardStoring {
     var acceptedBackend: String?
+    var acceptedVehicleID: Int?
     private(set) var dashboard: SavedDashboard?
     init(_ dashboard: SavedDashboard? = nil) { self.dashboard = dashboard }
     func read(backend: String) -> SavedDashboard? { dashboard?.backend == backend ? dashboard : nil }
     func write(_ dashboard: SavedDashboard) {
-        guard dashboard.backend == acceptedBackend else { return }
+        guard dashboard.accepted(backend: acceptedBackend, vehicleID: acceptedVehicleID) else { return }
         self.dashboard = dashboard
     }
     func remove() { dashboard = nil }

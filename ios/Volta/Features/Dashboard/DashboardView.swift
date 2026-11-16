@@ -1037,7 +1037,7 @@ struct ActivitySummarySection: View {
                 VStack(spacing: VoltaSpacing.lg) { stats(summary) }
             }
             if summary != nil, let note = savedNotes[range] {
-                SavedSectionNote(text: note)
+                SavedSectionNote(text: note, subject: "\(range.voltaLabel) activity")
             } else if summary == nil, loadingRanges.contains(range) {
                 ProgressView("Loading \(range.voltaLabel) activity…")
                     .font(.footnote)

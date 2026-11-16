@@ -233,7 +233,12 @@ final class AppModel {
                                                                vehicleID: self.selectedVehicleID)
         }
     }
-    private func updateSurfaces() { surfaces.setContext(surfaceContext) }
+    /// Every selection, pairing and vehicle-list change ends here, so the
+    /// saved-dashboard store follows the selected car too.
+    private func updateSurfaces() {
+        surfaces.setContext(surfaceContext)
+        savedDashboards.acceptedVehicleID = selectedVehicleID
+    }
     /// Retry Keychain access when protected data becomes available after prewarm.
     func restorePairing() {
         guard !isLaunchDemo, pairingState == .unpaired else { return }

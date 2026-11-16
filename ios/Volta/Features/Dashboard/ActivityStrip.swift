@@ -29,7 +29,6 @@ struct ActivityStrip: View {
         VStack(alignment: .leading, spacing: VoltaSpacing.md) {
             HStack {
                 Text("Last \(hours)h").voltaLabelStyle()
-                if let savedNote { SavedSectionNote(text: savedNote) }
                 Spacer()
                 HStack(spacing: VoltaSpacing.md) {
                     legend("Drives", .voltaRed)
@@ -37,6 +36,8 @@ struct ActivityStrip: View {
                     legend("Online", .voltaBlue)
                 }
             }
+            // Its own line: the header row has no room for it beside the legends.
+            if let savedNote { SavedSectionNote(text: savedNote, subject: "Timeline").padding(.top, -VoltaSpacing.xs) }
             strip
                 .frame(height: 34)
                 .overlay {
@@ -127,12 +128,14 @@ struct ActivityStrip: View {
             .fixedSize()
     }
 
-    private var accessibilitySummary: String {
+    /// The strip is one element, so the saved mark is read here.
+    var accessibilitySummary: String {
         if loading && segments.isEmpty { return "Last \(hours) hours: loading timeline" }
         if unavailable { return "Last \(hours) hours: timeline unavailable" }
         let drives = segments.filter { $0.kind == .drive }.count
         let charges = segments.filter { $0.kind == .charge }.count
-        return "Last \(hours) hours: \(drives) drives, \(charges) charging sessions"
+        let summary = "Last \(hours) hours: \(drives) drives, \(charges) charging sessions"
+        return savedNote.map { "\(summary). \($0)" } ?? summary
     }
 }
 
@@ -156,12 +159,16 @@ struct ActivityStrip: View {
 /// Marks one dashboard section as showing saved data, not data from now.
 struct SavedSectionNote: View {
     var text: String
+    /// What it marks, so VoiceOver reads "Today activity, Saved 2 hr. ago".
+    var subject: String
     var body: some View {
         Label(text, systemImage: "clock.arrow.circlepath")
             .font(.caption2)
             .foregroundStyle(Color.voltaTextSecondary)
             .labelStyle(.titleAndIcon)
             .lineLimit(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(subject), \(text)")
             .accessibilityIdentifier("dashboard.savedSection")
     }
 }
