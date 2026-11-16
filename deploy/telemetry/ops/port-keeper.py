@@ -75,6 +75,8 @@ def discover(bind, ssdp=("239.255.255.250", 1900)):
         except OSError:
             log("TELEMETRY_RECEIVER_BIND is not an address on this node")
             raise SystemExit(2)
+        # Send the search out of the receiver's interface, not whichever the route picks.
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(bind))
         sock.sendto(message, ssdp)
         deadline = time.monotonic() + DISCOVERY_WINDOW
         while len(found) < MAX_ANSWERS:
@@ -83,13 +85,15 @@ def discover(bind, ssdp=("239.255.255.250", 1900)):
                 break
             sock.settimeout(left)
             try:
-                data, _ = sock.recvfrom(2048)
+                data, (sender, _) = sock.recvfrom(2048)
             except socket.timeout:
                 break
             location = re.search(rb"(?im)^location:[ \t]*(\S+)", data)
             if location:
                 url = location.group(1).decode("ascii", "replace")
-                if urllib.parse.urlsplit(url).scheme == "http" and url not in found:
+                parts = urllib.parse.urlsplit(url)
+                # A device may only point at itself, so no LAN host can steer the keeper elsewhere.
+                if parts.scheme == "http" and parts.hostname == sender and url not in found:
                     found.append(url)
     return found
 

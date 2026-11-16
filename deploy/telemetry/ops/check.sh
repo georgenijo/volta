@@ -154,6 +154,15 @@ else
     && ok "role privileges and log settings as shipped" || fail "role privileges or log settings differ"
 fi
 
+# Router forward keeper, when installed: timer running and last run good.
+keeper="$(systemctl is-enabled volta-telemetry-upnp.timer 2>/dev/null)"
+if [[ -n $keeper && $keeper != not-found ]]; then
+  systemctl is-active --quiet volta-telemetry-upnp.timer 2>/dev/null \
+    && ok "forward keeper timer active" || fail "forward keeper timer not active"
+  [[ "$(systemctl show -p Result --value volta-telemetry-upnp.service 2>/dev/null)" == success ]] \
+    && ok "forward keeper last run succeeded" || fail "forward keeper last run failed (journalctl -u volta-telemetry-upnp)"
+fi
+
 # Tailscale Serve: the existing ports, plus at most the owned route.
 FUNNEL_HOST="$HOST" "$here/funnel/check.sh" >/dev/null 2>&1 && ok "serve ports as expected" || fail "serve ports differ (run funnel/check.sh)"
 

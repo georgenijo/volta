@@ -163,19 +163,19 @@ nearby private TeslaMate SRTM observations; never call third-party coordinate AP
 
 ## Router forward keeper
 
-Some routers (the Deco included) hold the 443 forward only as a UPnP mapping,
+Some mesh routers hold the 443 forward only as a UPnP mapping,
 drop it on restart and serve their UPnP description at a path that changes. A
 lost forward stops all telemetry silently: the car keeps retrying and the
 receiver sees nothing. `deploy/telemetry/ops/port-keeper.py` finds the router
 with SSDP from `TELEMETRY_RECEIVER_BIND`, checks external TCP 443 and adds it
-toward port 8448 when it is missing. It never replaces a mapping that points
-at another host or port; that exits 1 and shows as a failed unit.
+toward port 8448 when it is missing, disabled or about to expire. It adds
+nothing unless the router says no mapping exists, and never replaces one that
+points at another host or port; anything else exits 1 and shows as a failed
+unit, which `ops/check.sh` reports. The units replace any earlier keeper of
+the same name; remove that keeper's old script.
 
 ```sh
-sudo install -m 0644 deploy/telemetry/ops/volta-telemetry-upnp.service \
-  deploy/telemetry/ops/volta-telemetry-upnp.timer /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now volta-telemetry-upnp.timer
-sudo systemctl start volta-telemetry-upnp.service && journalctl -u volta-telemetry-upnp -n 3
+fleet exec --timeout 60 ubuntu -- 'cd /opt/volta/deploy/telemetry/ops && sudo install -m 0644 volta-telemetry-upnp.service volta-telemetry-upnp.timer /etc/systemd/system/ && sudo rm -f /opt/volta-telemetry/upnp-forward.py && sudo systemctl daemon-reload && sudo systemctl enable --now volta-telemetry-upnp.timer && sudo systemctl start volta-telemetry-upnp.service; journalctl -u volta-telemetry-upnp -n 3 --no-pager'
 python3 -I deploy/telemetry/ops/test-port-keeper.py   # local tests, fake router
 ```
 

@@ -4,6 +4,7 @@ import http.server
 import importlib.util
 import pathlib
 import re
+import socket
 import threading
 import unittest
 
@@ -14,7 +15,7 @@ LOGS = []
 keeper.log = LOGS.append
 
 V1 = "urn:schemas-upnp-org:service:WANIPConnection:1"
-BIND, OTHER = "192.168.1.20", "192.168.1.30"
+BIND, OTHER = "192.0.2.20", "192.0.2.30"
 
 
 def description(control="/random-path/ctl/IPConn", base=""):
@@ -181,6 +182,23 @@ class PortKeeperTest(unittest.TestCase):
     def test_main_reports_when_no_router_answers(self):
         keeper.discover = lambda bind: []
         self.assertEqual(keeper.main({"TELEMETRY_RECEIVER_BIND": BIND}), 1)
+
+    def test_discover_keeps_distinct_self_describing_answers(self):
+        keeper.DISCOVERY_WINDOW = 0.5
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as responder:
+            responder.bind(("127.0.0.1", 0))
+
+            def answer():
+                _, sender = responder.recvfrom(2048)
+                for location in ("http://127.0.0.1:5000/a.xml", "http://127.0.0.1:5000/a.xml",
+                                 "http://192.0.2.9:5000/spoofed.xml", "https://127.0.0.1/b.xml", None,
+                                 "http://127.0.0.1:5001/c.xml"):
+                    header = f"LOCATION: {location}\r\n" if location else ""
+                    responder.sendto(f"HTTP/1.1 200 OK\r\n{header}\r\n".encode(), sender)
+
+            threading.Thread(target=answer, daemon=True).start()
+            found = keeper.discover("127.0.0.1", ssdp=responder.getsockname())
+        self.assertEqual(found, ["http://127.0.0.1:5000/a.xml", "http://127.0.0.1:5001/c.xml"])
 
     def test_settings_require_a_concrete_private_lan_address(self):
         for bad in ("", "0.0.0.0", "127.0.0.1", "169.254.1.1", "8.8.8.8", "not-an-ip"):

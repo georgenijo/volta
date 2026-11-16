@@ -97,6 +97,17 @@ else
   exit "${STUB_CURL_EXIT:-35}"
 fi
 STUB
+cat >"$work/bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+# systemctl test double for the forward keeper: STUB_KEEPER unset = not installed,
+# else "enabled", "inactive" (timer stopped) or "failed" (last run failed).
+[[ -n "${STUB_KEEPER:-}" ]] || { [[ "$1" == is-enabled ]] && echo not-found; exit 1; }
+case "$1" in
+  is-enabled) echo enabled ;;
+  is-active) [[ "$STUB_KEEPER" != inactive ]] ;;
+  show) [[ "$STUB_KEEPER" == failed ]] && echo exit-code || echo success ;;
+esac
+STUB
 chmod +x "$work/bin/"*
 
 export TELEMETRY_HOST=volta-node.example.ts.net PATH="$work/bin:$PATH" TS_STATE="$work/serve.json" TS_LOG="$work/ts.log" \
@@ -105,7 +116,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 reset() {
   unset STUB_DOCKER_DOWN STUB_RUNNING STUB_UNHEALTHY STUB_NETMODE_receiver STUB_NETS_receiver STUB_DB \
-    STUB_LISTEN_8448 STUB_LISTEN_8449 STUB_LISTEN_8450 STUB_CURL_EXIT STUB_GUARD_DOWN STUB_GUARD_STATUS \
+    STUB_LISTEN_8448 STUB_LISTEN_8449 STUB_LISTEN_8450 STUB_CURL_EXIT STUB_GUARD_DOWN STUB_GUARD_STATUS STUB_KEEPER \
     TELEMETRY_RECEIVER_BIND
   cp "$tele/funnel/testdata/serve-baseline.json" "$TS_STATE"; : >"$TS_LOG"
   chmod -R u+w "$work/certs" "$work/secrets"; rm -f "$work/certs/"* "$work/secrets/"*
@@ -219,5 +230,14 @@ import json, sys
 d = json.load(open(sys.argv[1])); d["TCP"]["8448"] = {"HTTPS": True}; json.dump(d, open(sys.argv[1], "w"))
 PY
 expect 1 '^FAIL  serve ports differ'
+
+case=keeper-healthy; reset; export STUB_KEEPER=enabled
+expect 0 '^ok    forward keeper last run succeeded'
+
+case=keeper-timer-stopped; reset; export STUB_KEEPER=inactive
+expect 1 '^FAIL  forward keeper timer not active'
+
+case=keeper-run-failed; reset; export STUB_KEEPER=failed
+expect 1 '^FAIL  forward keeper last run failed'
 
 echo "check script tests: PASS"
