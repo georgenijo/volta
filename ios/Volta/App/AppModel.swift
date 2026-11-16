@@ -25,8 +25,13 @@ final class AppModel {
     @ObservationIgnored private(set) var connectionGeneration = 0
     /// Test hook passed to each API data source; see `APIDataSource`.
     private let willStartCommand: (@Sendable () -> Void)?
-    /// Set when a control asks to open the Controls screen (to unlock there).
-    var controlsRequested = false
+    /// A pending request from the lock control to open the Controls screen
+    /// (to unlock there). See `controlsRequestDecision`.
+    private(set) var controlsRequest: ControlsRequest?
+    /// True while the requested Controls screen is shown; the presenter binds
+    /// to it and its dismissal resets it.
+    var showsRequestedControls = false
+    @ObservationIgnored private var shownControlsGeneration: Int?
     /// The effective selection depends on it, so the saved-dashboard fence
     /// follows every change (the saved list restored at launch or unlock too).
     private(set) var vehicles: [Vehicle] = [] { didSet { followSelectionInSavedDashboards() } }
@@ -527,7 +532,89 @@ final class AppModel {
             let unlocked = try await appLock.unlock()
             guard generation == currentGeneration && lockGeneration == currentLock else { return }
             isLocked = !unlocked
+            // Authentication cancelled or failed: a waiting Controls request is dropped.
+            if !unlocked { controlsRequest = nil }
             if unlocked && !hasLoadedVehicles { restoreSavedDashboard(); await loadVehicles() }
-        } catch { if generation == currentGeneration && lockGeneration == currentLock { errorMessage = error.localizedDescription } }
+        } catch {
+            if generation == currentGeneration && lockGeneration == currentLock {
+                errorMessage = error.localizedDescription
+                controlsRequest = nil
+            }
+        }
+    }
+}
+
+// MARK: - Controls requested by the lock control
+
+/// One pending request to open the Controls screen, tied to the connection
+/// it was made under.
+struct ControlsRequest: Equatable, Hashable, Sendable {
+    var generation: Int
+}
+
+enum ControlsRequestDecision: Equatable, Sendable {
+    /// No request is pending.
+    case idle
+    /// Keep the request until the app is in front, unlocked and has a car.
+    case wait
+    case present
+    case drop
+}
+
+extension AppModel {
+    /// What the presenter watches; any change re-evaluates the request.
+    struct ControlsRequestInputs: Hashable {
+        var request: ControlsRequest?
+        var generation: Int
+        var isPaired: Bool
+        var isLocked: Bool
+        var hasVehicles: Bool
+    }
+
+    var controlsRequestInputs: ControlsRequestInputs {
+        ControlsRequestInputs(request: controlsRequest, generation: connectionGeneration, isPaired: isPaired,
+                              isLocked: isLocked, hasVehicles: !vehicles.isEmpty)
+    }
+
+    /// Called by the lock control (through the intent service).
+    func requestControls() {
+        controlsRequest = ControlsRequest(generation: connectionGeneration)
+    }
+
+    /// Whether to show the requested Controls screen now. Pure, so every
+    /// branch is unit tested.
+    /// - A request from another connection (disconnect, re-pair, demo switch) is dropped.
+    /// - Without a session it is dropped.
+    /// - While the app is in the background or behind the app lock, it waits;
+    ///   a cancelled or failed unlock drops it (see `unlock()`).
+    /// - Another sheet already up drops it: sheets never stack.
+    static func controlsRequestDecision(_ request: ControlsRequest?, generation: Int, isPaired: Bool,
+                                        isActive: Bool, isLocked: Bool, hasVehicles: Bool,
+                                        otherSheetUp: Bool) -> ControlsRequestDecision {
+        guard let request else { return .idle }
+        guard request.generation == generation, isPaired else { return .drop }
+        guard isActive, !isLocked, hasVehicles else { return .wait }
+        return otherSheetUp ? .drop : .present
+    }
+
+    /// The presenter calls this whenever `controlsRequestInputs` or its scene
+    /// phase change. It also closes a shown screen the app lock now covers or
+    /// whose connection ended.
+    func updateControlsRequest(isActive: Bool, otherSheetUp: Bool) {
+        if showsRequestedControls, isLocked || !isPaired || shownControlsGeneration != connectionGeneration {
+            showsRequestedControls = false
+        }
+        switch Self.controlsRequestDecision(controlsRequest, generation: connectionGeneration, isPaired: isPaired,
+                                            isActive: isActive, isLocked: isLocked, hasVehicles: !vehicles.isEmpty,
+                                            otherSheetUp: otherSheetUp || showsRequestedControls) {
+        case .present:
+            controlsRequest = nil
+            shownControlsGeneration = connectionGeneration
+            showsRequestedControls = true
+        case .drop:
+            controlsRequest = nil
+        case .idle, .wait:
+            break
+        }
     }
 }

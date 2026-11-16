@@ -183,12 +183,19 @@ step. Controls can't show a confirmation (the system cancels the request
 without showing it), so no control sends one of those actions: turning the lock
 toggle off sends nothing and opens Volta's Controls screen, and the locked state
 reads "Car Locked · Unlock in Volta". Locking from the control is immediate.
+The request to open Controls is model state (`AppModel.controlsRequest`, tied to
+the connection generation). `AppModel.controlsRequestDecision` presents it only
+while the app is active, unlocked, connected under the same generation and has
+no other sheet up. It waits behind the app lock, and a cancelled or failed
+unlock, a connection change or another open sheet drops it.
 
 A command is prepared against the app's current connection; if pairing, demo
 mode, the data source or the selected car changes during an await, nothing is
 sent. When the app replaces its data source, the old `APIDataSource` is
 invalidated and refuses to start any command, checked under the same lock that
 starts the request, so a command already past every check still sends nothing.
+The same atomic step checks Swift task cancellation: a command cancelled before
+its request starts is never resumed.
 
 "Where's my car" reads only `savedPlace`: the name of a saved place (never the
 street address widgets may show in `placeName`) and the position's own

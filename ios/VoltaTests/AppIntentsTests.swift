@@ -343,6 +343,13 @@ private final class ModelRef: @unchecked Sendable {
     weak var model: AppModel?
 }
 
+@MainActor private final class StubAuthentication: AppAuthenticating {
+    var result = true
+    var failure: Error?
+    func unlock() async throws -> Bool { if let failure { throw failure }; return result }
+    func cancel() {}
+}
+
 @MainActor private final class Box<Value> {
     var value: Value
     init(_ value: Value) { self.value = value }
@@ -403,13 +410,16 @@ private final class RequestLog: Sendable {
     /// A paired model whose server answers through `handler`.
     private func pairedModel(surfaces: IntentSurfaces = IntentSurfaces(),
                              willStartCommand: (@Sendable () -> Void)? = nil,
+                             appLock: (any AppAuthenticating)? = nil,
                              handler: @escaping @Sendable (URLRequest) throws -> (Int, Data)) throws -> AppModel {
         StubProtocol.handler.withLock { $0 = handler }
         addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
         let settings = settings(); settings.serverURL = "https://volta.example"; settings.selectedVehicleID = 42
+        if appLock != nil { settings.appLockEnabled = true }
         let store = IntentTokenStore(); try store.save("synthetic-token")
         return AppModel(settings: settings, tokenStore: store, session: URLSession(configuration: config),
+                        appLock: appLock ?? AppLock(),
                         launchArguments: ["Volta"], surfaces: surfaces,
                         commandIntentStore: VehicleCommandIntentStore(inMemory: []),
                         willStartCommand: willStartCommand)
@@ -782,7 +792,9 @@ private final class RequestLog: Sendable {
     func testLockControlUnlockOpensVoltaAndSendsNothing() async throws {
         let log = RequestLog()
         let model = try allowingModel(log: log)
-        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {}))
+        let reloads = Box(0)
+        let recorder = RecordingPerformer(VehicleIntentService(model: { model }, readSnapshot: { nil },
+                                                               reloadControls: { reloads.value += 1 }))
         let opened = Box(0)
         useControlHost(recorder) { intent in
             XCTAssertTrue(intent is SetVehicleLockIntent)
@@ -790,8 +802,10 @@ private final class RequestLog: Sendable {
         }
         _ = try await SetVehicleLockIntent(value: false).perform()
         XCTAssertEqual(opened.value, 1, "Volta was brought to the front")
+        XCTAssertEqual(reloads.value, 1, "the toggle settles back on the observed state")
         XCTAssertEqual(recorder.controlsShown, 1)
-        XCTAssertTrue(model.controlsRequested, "the Controls screen opens there")
+        XCTAssertEqual(model.controlsRequest, ControlsRequest(generation: model.connectionGeneration),
+                       "the Controls screen is requested for this connection")
         XCTAssertTrue(recorder.actions.isEmpty, "the unlock never reached the command path")
         XCTAssertTrue(log.all.isEmpty, "zero requests")
     }
@@ -834,6 +848,136 @@ private final class RequestLog: Sendable {
         XCTAssertTrue(log.all.isEmpty)
         // And the control intents only ever map to these actions.
         XCTAssertFalse([VehicleIntentAction.lock, .climateOn, .climateOff, .openChargePort].contains(where: \.requiresConfirmation))
+    }
+
+    // MARK: Opening Controls from the lock control
+
+    private func decide(_ request: ControlsRequest? = ControlsRequest(generation: 3), generation: Int = 3,
+                        isPaired: Bool = true, isActive: Bool = true, isLocked: Bool = false,
+                        hasVehicles: Bool = true, otherSheetUp: Bool = false) -> ControlsRequestDecision {
+        AppModel.controlsRequestDecision(request, generation: generation, isPaired: isPaired, isActive: isActive,
+                                         isLocked: isLocked, hasVehicles: hasVehicles, otherSheetUp: otherSheetUp)
+    }
+
+    func testControlsRequestDecisionCoversEveryBranch() {
+        XCTAssertEqual(decide(nil), .idle)
+        XCTAssertEqual(decide(), .present)
+        XCTAssertEqual(decide(generation: 4), .drop, "made under another connection")
+        XCTAssertEqual(decide(isPaired: false), .drop, "no session")
+        XCTAssertEqual(decide(isActive: false), .wait, "in the background")
+        XCTAssertEqual(decide(isLocked: true), .wait, "locked: do not present")
+        XCTAssertEqual(decide(hasVehicles: false), .wait, "vehicles still loading")
+        XCTAssertEqual(decide(otherSheetUp: true), .drop, "never stack sheets")
+        XCTAssertEqual(decide(generation: 4, isLocked: true), .drop, "a stale request never waits")
+    }
+
+    private func vehiclesModel(appLock: StubAuthentication) async throws -> AppModel {
+        let model = try pairedModel(appLock: appLock) { request in
+            if request.url?.path == "/v1/vehicles" {
+                return (200, try JSONSerialization.data(withJSONObject: [["id": 42, "name": "Friday"]]))
+            }
+            return (404, Data())
+        }
+        if model.isLocked { appLock.result = true; await model.unlock() }
+        await model.loadVehicles()
+        XCTAssertFalse(model.vehicles.isEmpty)
+        return model
+    }
+
+    func testControlsWaitWhileLockedAndShowOnceAfterUnlock() async throws {
+        let auth = StubAuthentication()
+        let model = try await vehiclesModel(appLock: auth)
+        model.didEnterBackground()
+        XCTAssertTrue(model.isLocked)
+        model.requestControls()
+        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        XCTAssertFalse(model.showsRequestedControls, "locked: do not present")
+        XCTAssertNotNil(model.controlsRequest, "the request waits")
+
+        auth.result = true
+        await model.unlock()
+        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        XCTAssertTrue(model.showsRequestedControls, "unlock succeeded: present")
+        XCTAssertNil(model.controlsRequest, "consumed")
+        model.showsRequestedControls = false  // the person closes it
+        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        XCTAssertFalse(model.showsRequestedControls, "presented once")
+    }
+
+    func testControlsRequestIsDroppedWhenAuthenticationIsCancelledOrFails() async throws {
+        let auth = StubAuthentication()
+        let model = try await vehiclesModel(appLock: auth)
+        model.didEnterBackground()
+        model.requestControls()
+        auth.result = false
+        await model.unlock()
+        XCTAssertNil(model.controlsRequest, "authentication cancelled: dropped")
+        auth.result = true
+        await model.unlock()
+        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        XCTAssertFalse(model.showsRequestedControls, "a later unlock doesn't revive it")
+
+        struct Failed: Error {}
+        model.didEnterBackground()
+        model.requestControls()
+        auth.failure = Failed()
+        await model.unlock()
+        XCTAssertNil(model.controlsRequest, "authentication failed: dropped")
+    }
+
+    func testControlsRequestIsDroppedWhenTheConnectionChanges() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        model.requestControls()
+        model.tryDemoMode()
+        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        XCTAssertNil(model.controlsRequest, "generation changed: dropped")
+        XCTAssertFalse(model.showsRequestedControls)
+
+        let other = try await vehiclesModel(appLock: StubAuthentication())
+        other.requestControls()
+        other.unpair()
+        other.updateControlsRequest(isActive: true, otherSheetUp: false)
+        XCTAssertNil(other.controlsRequest, "disconnected: dropped")
+    }
+
+    func testControlsRequestNeverStacksAndClosesWhenLocked() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        model.requestControls()
+        model.updateControlsRequest(isActive: true, otherSheetUp: true)
+        XCTAssertNil(model.controlsRequest, "another sheet is up: dropped")
+        XCTAssertFalse(model.showsRequestedControls)
+
+        model.requestControls()
+        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        XCTAssertTrue(model.showsRequestedControls)
+        model.didEnterBackground()
+        model.updateControlsRequest(isActive: false, otherSheetUp: true)
+        XCTAssertFalse(model.showsRequestedControls, "the app lock closes it rather than leaving it above the overlay")
+    }
+
+    /// A command whose Swift task is cancelled before the transport starts it
+    /// is never resumed: nothing reaches the network.
+    func testACommandCancelledBeforeItStartsIsNeverSent() async throws {
+        let log = RequestLog()
+        StubProtocol.handler.withLock { $0 = { request in
+            log.add(request)
+            return (200, Data(#"{"ok":true,"command":"lock","requestId":"request_1"}"#.utf8))
+        } }
+        addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+        let source = APIDataSource(baseURL: URL(string: "https://volta.example")!, token: "synthetic-token",
+                                   session: URLSession(configuration: config),
+                                   willStartCommand: { withUnsafeCurrentTask { $0?.cancel() } })
+        let attempt = Task { try await source.command(vehicleID: 42, command: .lock, intentID: UUID()) }
+        do {
+            _ = try await attempt.value
+            XCTFail("expected a refusal")
+        } catch let failure as VehicleCommandFailure {
+            XCTAssertEqual(failure.code, "cancelled_before_send")
+            XCTAssertFalse(failure.isUnresolved, "nothing was sent, so nothing is unresolved")
+        }
+        XCTAssertTrue(log.all.isEmpty, "zero POSTs")
+        XCTAssertTrue(source.acceptsCommands, "cancellation doesn't invalidate the source")
     }
 
     func testControlIntentWithoutTheAppFailsClosed() async {

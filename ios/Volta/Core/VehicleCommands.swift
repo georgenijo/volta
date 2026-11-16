@@ -169,6 +169,7 @@ struct VehicleCommandFailure: Error, Equatable, Sendable {
         case "command_budget_exhausted": "The monthly Fleet API command budget has been reached."
         case "command_not_sent": "The command service timed out before sending anything. Try a new deliberate request."
         case "connection_changed": "Volta’s connection changed before this was sent, so nothing was sent."
+        case "cancelled_before_send": "The request was cancelled before it was sent. Nothing was sent."
         case "authorization_required": "Connect Tesla to enable vehicle controls."
         case "reauthorization_required", "command_scope_required", "permission_denied": "Reconnect Tesla to grant vehicle command access."
         case "virtual_key_missing": "Pair Volta's virtual key in the Tesla app before using controls."

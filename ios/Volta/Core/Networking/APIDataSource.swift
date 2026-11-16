@@ -258,23 +258,30 @@ struct APIDataSource: VoltaDataSource {
         }
     }
 
-    /// Starts the POST only while the gate is open, under the same lock
-    /// `invalidateCommands()` takes: either the request was already handed to
-    /// URLSession, or it is never created.
+    /// Starts the POST only while the gate is open and the Swift task isn't
+    /// cancelled. One atomic decision under the gate's lock (which
+    /// `invalidateCommands()` takes) and the task's lock (which cancellation
+    /// takes): the request is created, registered and only then resumed, or
+    /// never created at all.
     private func startCommand(_ request: URLRequest) async throws -> (Data, URLResponse) {
         let running = RunningTask()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, URLResponse), any Error>) in
                 let started = commandGate.whileOpen {
-                    let task = commandSession.dataTask(with: request) { data, response, error in
-                        if let error { continuation.resume(throwing: error) }
-                        else if let data, let response { continuation.resume(returning: (data, response)) }
-                        else { continuation.resume(throwing: URLError(.badServerResponse)) }
+                    running.startUnlessCancelled {
+                        commandSession.dataTask(with: request) { data, response, error in
+                            if let error { continuation.resume(throwing: error) }
+                            else if let data, let response { continuation.resume(returning: (data, response)) }
+                            else { continuation.resume(throwing: URLError(.badServerResponse)) }
+                        }
                     }
-                    task.resume()
-                    running.set(task)
                 }
-                if !started {
+                switch started {
+                case true?: break
+                case false?:
+                    continuation.resume(throwing: VehicleCommandFailure(status: nil, code: "cancelled_before_send", requestID: nil,
+                                                                        retryAfter: nil, replayed: false))
+                case nil:
                     continuation.resume(throwing: VehicleCommandFailure(status: nil, code: "connection_changed", requestID: nil,
                                                                         retryAfter: nil, replayed: false))
                 }
@@ -321,23 +328,27 @@ final class CommandGate: Sendable {
     var isOpen: Bool { open.withLock { $0 } }
     func close() { open.withLock { $0 = false } }
 
-    /// Runs `body` only while open, holding the lock `close()` takes.
-    func whileOpen(_ body: () -> Void) -> Bool {
-        open.withLock { isOpen in
-            guard isOpen else { return false }
-            body()
-            return true
-        }
+    /// Runs `body` only while open, holding the lock `close()` takes; nil
+    /// when closed.
+    func whileOpen<Result: Sendable>(_ body: () -> Result) -> Result? {
+        open.withLock { isOpen in isOpen ? body() : nil }
     }
 }
 
-/// The command request in flight, so cancelling the Swift task cancels it.
+/// The command request, so cancelling the Swift task cancels it.
 private final class RunningTask: Sendable {
     private let state = Mutex<(task: URLSessionDataTask?, cancelled: Bool)>((nil, false))
 
-    func set(_ task: URLSessionDataTask) {
-        let cancelled = state.withLock { state in state.task = task; return state.cancelled }
-        if cancelled { task.cancel() }
+    /// Creates, registers and resumes the task under the lock `cancel()`
+    /// takes. Returns false, creating nothing, if already cancelled.
+    func startUnlessCancelled(_ make: () -> URLSessionDataTask) -> Bool {
+        state.withLock { state in
+            guard !state.cancelled else { return false }
+            let task = make()
+            state.task = task
+            task.resume()
+            return true
+        }
     }
 
     func cancel() {

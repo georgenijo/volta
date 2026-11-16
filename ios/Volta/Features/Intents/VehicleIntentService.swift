@@ -62,7 +62,12 @@ final class VehicleIntentService: VehicleIntentPerforming {
 
     // MARK: Commands
 
-    func showControls() { model().controlsRequested = true }
+    /// The lock control's unlock: nothing is sent, so reload the controls to
+    /// settle the toggle back on the observed state.
+    func showControls() {
+        model().requestControls()
+        reloadControls()
+    }
 
     /// Sends without a confirmation step; refused for actions that need one.
     func perform(_ action: VehicleIntentAction) async throws -> String {

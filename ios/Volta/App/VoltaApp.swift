@@ -78,8 +78,9 @@ private struct VoltaRootView: View {
             } else {
                 MainShell().id("\(model.pairingState)-\(model.selectedVehicleID)")
                     .onAppear { StartupTrace.mark(.shell) }
-                    // The lock control opens this to unlock, where it is confirmed.
-                    .sheet(isPresented: Bindable(model).controlsRequested) {
+                    // The lock control opens this to unlock, where it is
+                    // confirmed. The model decides when; see `updateControlsRequest`.
+                    .sheet(isPresented: Bindable(model).showsRequestedControls) {
                         ControlsView(initialStatus: nil, vehicleName: model.selectedVehicle?.name)
                     }
             }
@@ -134,10 +135,24 @@ private struct VoltaRootView: View {
             if model.isLocked { await model.unlock() }
             else { await model.loadVehicles() }
         }
+        .onChange(of: model.controlsRequestInputs, initial: true) { updateControlsRequest() }
         .onChange(of: scenePhase) { _, phase in
+            updateControlsRequest()
             if phase == .background { model.didEnterBackground() }
             else if phase == .active { Task { await model.becameActive(); await model.refreshTesla() } }
         }
+    }
+
+    private func updateControlsRequest() {
+        model.updateControlsRequest(isActive: scenePhase == .active, otherSheetUp: Self.isSheetPresented)
+    }
+
+    /// Whether any sheet is already up (the Dashboard's own, for example).
+    private static var isSheetPresented: Bool {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .contains { $0.isKeyWindow && $0.rootViewController?.presentedViewController != nil }
     }
 
     /// Leaving the launch demo loses nothing, so it runs at once; a real
