@@ -884,24 +884,30 @@ private final class RequestLog: Sendable {
         return model
     }
 
-    func testControlsWaitWhileLockedAndShowOnceAfterUnlock() async throws {
+    // The Dashboard hook: `controlsPresentationRequested` (the shell selects
+    // the Dashboard), then `takeControlsPresentation()` (the Dashboard opens
+    // its Controls). These go through that hook as the views do.
+
+    func testControlsWaitWhileLockedAndOpenOnceAfterUnlock() async throws {
         let auth = StubAuthentication()
         let model = try await vehiclesModel(appLock: auth)
         model.didEnterBackground()
         XCTAssertTrue(model.isLocked)
         model.requestControls()
         model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertFalse(model.showsRequestedControls, "locked: do not present")
+        XCTAssertFalse(model.controlsPresentationRequested, "locked: do not present")
+        XCTAssertFalse(model.takeControlsPresentation())
         XCTAssertNotNil(model.controlsRequest, "the request waits")
 
         auth.result = true
         await model.unlock()
         model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertTrue(model.showsRequestedControls, "unlock succeeded: present")
+        XCTAssertTrue(model.controlsPresentationRequested, "unlock succeeded: the shell selects the Dashboard")
         XCTAssertNil(model.controlsRequest, "consumed")
-        model.showsRequestedControls = false  // the person closes it
+        XCTAssertTrue(model.takeControlsPresentation(), "the Dashboard opens Controls")
+        XCTAssertFalse(model.takeControlsPresentation(), "exactly once")
         model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertFalse(model.showsRequestedControls, "presented once")
+        XCTAssertFalse(model.controlsPresentationRequested, "not again")
     }
 
     func testControlsRequestIsDroppedWhenAuthenticationIsCancelledOrFails() async throws {
@@ -915,7 +921,7 @@ private final class RequestLog: Sendable {
         auth.result = true
         await model.unlock()
         model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertFalse(model.showsRequestedControls, "a later unlock doesn't revive it")
+        XCTAssertFalse(model.takeControlsPresentation(), "a later unlock doesn't revive it")
 
         struct Failed: Error {}
         model.didEnterBackground()
@@ -931,28 +937,41 @@ private final class RequestLog: Sendable {
         model.tryDemoMode()
         model.updateControlsRequest(otherSheetUp: false)
         XCTAssertNil(model.controlsRequest, "generation changed: dropped")
-        XCTAssertFalse(model.showsRequestedControls)
+        XCTAssertFalse(model.takeControlsPresentation())
 
         let other = try await vehiclesModel(appLock: StubAuthentication())
         other.requestControls()
         other.unpair()
         other.updateControlsRequest(otherSheetUp: false)
         XCTAssertNil(other.controlsRequest, "disconnected: dropped")
+        XCTAssertFalse(other.takeControlsPresentation())
     }
 
-    func testControlsRequestNeverStacksAndClosesWhenLocked() async throws {
+    /// A presentation the Dashboard hasn't taken yet is withdrawn when the
+    /// app locks or the connection changes before it does.
+    func testAnUntakenPresentationIsWithdrawnOnLockOrConnectionChange() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        model.requestControls()
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertTrue(model.controlsPresentationRequested)
+        model.didEnterBackground()
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertFalse(model.takeControlsPresentation(), "locked before the Dashboard took it")
+
+        let other = try await vehiclesModel(appLock: StubAuthentication())
+        other.requestControls()
+        other.updateControlsRequest(otherSheetUp: false)
+        other.tryDemoMode()
+        other.updateControlsRequest(otherSheetUp: false)
+        XCTAssertFalse(other.takeControlsPresentation(), "connection changed before the Dashboard took it")
+    }
+
+    func testControlsRequestNeverStacksOnAnotherSheet() async throws {
         let model = try await vehiclesModel(appLock: StubAuthentication())
         model.requestControls()
         model.updateControlsRequest(otherSheetUp: true)
         XCTAssertNil(model.controlsRequest, "another sheet is up: dropped")
-        XCTAssertFalse(model.showsRequestedControls)
-
-        model.requestControls()
-        model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertTrue(model.showsRequestedControls)
-        model.didEnterBackground()
-        model.updateControlsRequest(otherSheetUp: true)
-        XCTAssertFalse(model.showsRequestedControls, "the app lock closes it rather than leaving it above the overlay")
+        XCTAssertFalse(model.takeControlsPresentation())
     }
 
     func testCoverFollowsTheRootsShieldAndLockOverlay() {
@@ -961,37 +980,39 @@ private final class RequestLog: Sendable {
         XCTAssertFalse(AppModel.needsPrivacy(isPaired: true, appLockEnabled: false, isActive: false),
                        "without the app lock the root shows no shield either")
         XCTAssertFalse(AppModel.needsPrivacy(isPaired: false, appLockEnabled: true, isActive: false))
-        XCTAssertFalse(AppModel.requestedControlsCovered(isLocked: false, needsPrivacy: false), "active and unlocked")
-        XCTAssertTrue(AppModel.requestedControlsCovered(isLocked: false, needsPrivacy: true), "inactive")
-        XCTAssertTrue(AppModel.requestedControlsCovered(isLocked: true, needsPrivacy: false), "locked")
-        XCTAssertTrue(AppModel.requestedControlsCovered(isLocked: true, needsPrivacy: true))
+        XCTAssertFalse(AppModel.controlsCovered(isLocked: false, needsPrivacy: false), "active and unlocked")
+        XCTAssertTrue(AppModel.controlsCovered(isLocked: false, needsPrivacy: true), "inactive")
+        XCTAssertTrue(AppModel.controlsCovered(isLocked: true, needsPrivacy: false), "locked")
+        XCTAssertTrue(AppModel.controlsCovered(isLocked: true, needsPrivacy: true))
     }
 
     /// Through the root's scene-phase handling (`sceneDidChange`), as the view
-    /// calls it: inactivity covers without closing; locking closes.
-    func testSceneChangesCoverTheRequestedControlsAndLockingClosesThem() async throws {
+    /// calls it, with the Dashboard's Controls sheet open: inactivity covers
+    /// without closing; locking closes (`closesControlsSheet`).
+    func testSceneChangesCoverTheControlsSheetAndLockingClosesIt() async throws {
         let model = try await vehiclesModel(appLock: StubAuthentication())
         XCTAssertTrue(model.appLockEnabled)
         model.sceneDidChange(to: .active, otherSheetUp: false)
         model.requestControls()
         model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertTrue(model.showsRequestedControls)
-        XCTAssertFalse(model.requestedControlsCovered, "active and unlocked: uncovered")
+        XCTAssertTrue(model.takeControlsPresentation(), "the Dashboard opened Controls")
+        XCTAssertFalse(model.controlsCovered, "active and unlocked: uncovered")
+        XCTAssertFalse(model.closesControlsSheet)
 
         model.sceneDidChange(to: .inactive, otherSheetUp: true)
         XCTAssertTrue(model.needsPrivacy, "the root shows its shield")
-        XCTAssertTrue(model.requestedControlsCovered, "inactive: covered")
-        XCTAssertTrue(model.showsRequestedControls, "inactive: still presented")
+        XCTAssertTrue(model.controlsCovered, "inactive: covered")
+        XCTAssertFalse(model.closesControlsSheet, "inactive: still presented")
 
         model.sceneDidChange(to: .active, otherSheetUp: true)
-        XCTAssertFalse(model.requestedControlsCovered, "active again: uncovered")
-        XCTAssertTrue(model.showsRequestedControls, "still presented")
+        XCTAssertFalse(model.controlsCovered, "active again: uncovered")
+        XCTAssertFalse(model.closesControlsSheet, "still presented")
 
         model.sceneDidChange(to: .inactive, otherSheetUp: true)
         model.sceneDidChange(to: .background, otherSheetUp: true)
         XCTAssertTrue(model.isLocked)
-        XCTAssertTrue(model.requestedControlsCovered, "locked: covered")
-        XCTAssertFalse(model.showsRequestedControls, "locked: dismissed")
+        XCTAssertTrue(model.controlsCovered, "locked: covered")
+        XCTAssertTrue(model.closesControlsSheet, "locked: the Dashboard closes the sheet")
     }
 
     func testARequestMadeWhileInactiveWaitsForTheSceneToBeActive() async throws {
@@ -1000,11 +1021,63 @@ private final class RequestLog: Sendable {
         model.sceneDidChange(to: .inactive, otherSheetUp: false)
         model.requestControls()
         model.updateControlsRequest(otherSheetUp: false)
-        XCTAssertFalse(model.showsRequestedControls, "not presented while inactive")
+        XCTAssertFalse(model.controlsPresentationRequested, "not presented while inactive")
         XCTAssertNotNil(model.controlsRequest)
         model.sceneDidChange(to: .active, otherSheetUp: false)
-        XCTAssertTrue(model.showsRequestedControls)
-        XCTAssertFalse(model.requestedControlsCovered)
+        XCTAssertTrue(model.takeControlsPresentation())
+        XCTAssertFalse(model.controlsCovered)
+    }
+
+    /// A retry of a saved request (the Controls screen's Retry) goes through
+    /// the same transport, so an invalidated source sends nothing and the
+    /// request stays unresolved and unanswered.
+    func testARetryOnAnInvalidatedSourceSendsNothing() async throws {
+        let log = RequestLog()
+        StubProtocol.handler.withLock { $0 = { request in
+            log.add(request)
+            if request.httpMethod == "POST" { return (502, Data()) }  // no answer: outcome unknown
+            return (200, Data(#"{"available":true,"reason":null,"commands":["lock"]}"#.utf8))
+        } }
+        addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+        let source = APIDataSource(baseURL: URL(string: "https://volta.example")!, token: "synthetic-token",
+                                   session: URLSession(configuration: config))
+        let coordinator = VehicleCommandCoordinator(store: VehicleCommandIntentStore(inMemory: []))
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 42)
+        let first = await coordinator.perform(.lock, label: "Lock", dataSource: source, vehicleID: 42)
+        XCTAssertEqual(first, .unknown)
+        let activity = try XCTUnwrap(coordinator.activity(dataSource: source, vehicleID: 42))
+        XCTAssertEqual(coordinator.pending(dataSource: source, vehicleID: 42).map(\.intentID), [activity.id])
+        let postsBefore = log.all.filter { $0.hasPrefix("POST") }.count
+
+        source.invalidateCommands()
+        let retried = await coordinator.retry(activity, log: VehicleCommandLog(), dataSource: source, vehicleID: 42)
+        XCTAssertEqual(retried, .unknown, "the original send is still unresolved")
+        XCTAssertEqual(log.all.filter { $0.hasPrefix("POST") }.count, postsBefore, "the retry sent nothing")
+        XCTAssertEqual(coordinator.pending(dataSource: source, vehicleID: 42).map(\.intentID), [activity.id])
+        XCTAssertFalse(coordinator.wasAnswered(activity.id), "a refusal on this device is not the server's answer")
+    }
+
+    /// A fresh send refused before it starts is removed but never "answered".
+    func testARefusalBeforeSendingIsNotRecordedAsAnswered() async throws {
+        let log = RequestLog()
+        StubProtocol.handler.withLock { $0 = { request in
+            log.add(request)
+            return (200, Data(#"{"available":true,"reason":null,"commands":["lock"]}"#.utf8))
+        } }
+        addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
+        let source = APIDataSource(baseURL: URL(string: "https://volta.example")!, token: "synthetic-token",
+                                   session: URLSession(configuration: config))
+        let coordinator = VehicleCommandCoordinator(store: VehicleCommandIntentStore(inMemory: []))
+        await coordinator.refreshCapabilities(dataSource: source, vehicleID: 42)
+        source.invalidateCommands()
+        let outcome = await coordinator.perform(.lock, label: "Lock", dataSource: source, vehicleID: 42)
+        XCTAssertEqual(outcome, .failed)
+        let activity = try XCTUnwrap(coordinator.activity(dataSource: source, vehicleID: 42))
+        XCTAssertFalse(coordinator.wasAnswered(activity.id))
+        XCTAssertTrue(coordinator.pending(dataSource: source, vehicleID: 42).isEmpty)
+        XCTAssertFalse(log.all.contains { $0.hasPrefix("POST") })
     }
 
     /// A command whose Swift task is cancelled before the transport starts it

@@ -159,6 +159,11 @@ struct VehicleCommandFailure: Error, Equatable, Sendable {
          "rate_limited", "tesla_rate_limited"].contains(code)
     }
 
+    /// Refused on this device before any request started (the source was
+    /// replaced, or the task was cancelled first). The server never saw it,
+    /// so it is neither answered nor unresolved.
+    var wasNeverSent: Bool { ["connection_changed", "cancelled_before_send"].contains(code) }
+
     var message: String {
         switch code {
         case "command_outcome_unknown": "The outcome is unknown. It may have completed; check the vehicle before trying again."
@@ -480,7 +485,8 @@ final class VehicleCommandCoordinator {
                 do { try saveIntent(unresolvedRecord) }
                 catch { storageUnavailable = true }
             } else {
-                answered.insert(record.intentID)
+                // A refusal before sending is not the server's answer.
+                if !failure.wasNeverSent { answered.insert(record.intentID) }
                 do { try removeIntent(record.intentID) }
                 catch { storageUnavailable = true }
             }

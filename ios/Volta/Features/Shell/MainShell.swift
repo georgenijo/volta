@@ -35,6 +35,7 @@ struct MainShell: View {
     }
 
     @State private var selection: Tab = MainShell.initialTab
+    @Environment(AppModel.self) private var app: AppModel?
 
     /// Screenshot aid (DEBUG): `-demoTab charging` opens on that tab.
     private static var initialTab: Tab {
@@ -58,6 +59,8 @@ struct MainShell: View {
             }
         }
         .tint(.voltaBlue)
+        // The lock control's request opens Controls on the Dashboard.
+        .onChange(of: app?.controlsPresentationRequested == true) { _, requested in if requested { selection = .dashboard } }
         .sensoryFeedback(.selection, trigger: selection)
         .preferredColorScheme(.dark)
     }

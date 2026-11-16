@@ -172,6 +172,15 @@ struct DashboardView: View {
         .sheet(isPresented: sheetControls, onDismiss: { controlsSheetDismissals += 1 }) {
             ControlsView(model: controls, vehicleName: model.vehicle?.name, presentation: .sheet)
                 .modifier(DebugTypeSizeOverride())
+                .privacyCovered(app?.controlsCovered ?? false)
+        }
+        // The lock control's request (gated by AppModel) opens Controls here, once.
+        .onChange(of: app?.controlsPresentationRequested == true, initial: true) {
+            if app?.takeControlsPresentation() == true { showControls = true }
+        }
+        // Locking closes the Controls sheet; inactivity only covers it.
+        .onChange(of: app?.closesControlsSheet == true) { _, closes in
+            if closes, controlsHost == .sheet { showControls = false }
         }
         .sheet(isPresented: $showLiveCharge, onDismiss: { Task { await load() } }) {
             if let status = model.status {

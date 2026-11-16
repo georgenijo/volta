@@ -78,18 +78,6 @@ private struct VoltaRootView: View {
             } else {
                 MainShell().id("\(model.pairingState)-\(model.selectedVehicleID)")
                     .onAppear { StartupTrace.mark(.shell) }
-                    // The lock control opens this to unlock, where it is
-                    // confirmed. The model decides when; see `updateControlsRequest`.
-                    .sheet(isPresented: Bindable(model).showsRequestedControls) {
-                        // A sheet sits above the root's shield, so it is
-                        // covered by the same rule (inactive or locked).
-                        let covered = model.requestedControlsCovered
-                        ControlsView(initialStatus: nil, vehicleName: model.selectedVehicle?.name)
-                            .opacity(covered ? 0 : 1)
-                            .disabled(covered)
-                            .accessibilityHidden(covered)
-                            .overlay { if covered { PrivacyShield() } }
-                    }
             }
         }
         // Keep the main screen's navigation and scroll state mounted while locked.
@@ -165,11 +153,22 @@ private struct VoltaRootView: View {
 }
 
 /// Shown over private content while the scene isn't active and the app lock is on.
-private struct PrivacyShield: View {
+struct PrivacyShield: View {
     var body: some View {
         Color.voltaBackground.ignoresSafeArea().overlay {
             Image(systemName: "bolt.shield.fill").font(.system(size: 52)).foregroundStyle(Color.voltaBlue)
         }
+    }
+}
+
+extension View {
+    /// Hides this content behind `PrivacyShield` and disables it. For a sheet,
+    /// which sits above the root's own shield (`AppModel.controlsCovered`).
+    func privacyCovered(_ covered: Bool) -> some View {
+        opacity(covered ? 0 : 1)
+            .disabled(covered)
+            .accessibilityHidden(covered)
+            .overlay { if covered { PrivacyShield() } }
     }
 }
 

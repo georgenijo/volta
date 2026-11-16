@@ -28,13 +28,14 @@ final class AppModel {
     /// A pending request from the lock control to open the Controls screen
     /// (to unlock there). See `controlsRequestDecision`.
     private(set) var controlsRequest: ControlsRequest?
-    /// True while the requested Controls screen is shown; the presenter binds
-    /// to it and its dismissal resets it.
-    var showsRequestedControls = false
-    @ObservationIgnored private var shownControlsGeneration: Int?
+    /// Set when the request may be shown now: the shell selects the Dashboard
+    /// and the Dashboard, which owns Controls, opens them and takes it
+    /// (`takeControlsPresentation`). One request opens Controls once.
+    private(set) var controlsPresentationRequested = false
+    @ObservationIgnored private var presentationGeneration: Int?
     /// The scene's phase as last reported by the root view (nil before the
-    /// first report). The privacy shield and the requested Controls cover
-    /// both read it, so they always agree.
+    /// first report). The privacy shield and the Controls sheet's cover both
+    /// read it, so they always agree.
     private(set) var scenePhase: AppScenePhase?
     /// The effective selection depends on it, so the saved-dashboard fence
     /// follows every change (the saved list restored at launch or unlock too).
@@ -616,20 +617,32 @@ extension AppModel {
         Self.needsPrivacy(isPaired: isPaired, appLockEnabled: appLockEnabled, isActive: isSceneActive)
     }
 
-    /// Whether the requested Controls screen is covered: whenever the root
-    /// shows its privacy shield or lock overlay. A sheet sits above the root,
-    /// so it carries its own cover.
-    static func requestedControlsCovered(isLocked: Bool, needsPrivacy: Bool) -> Bool {
+    /// Whether the Controls sheet is covered: whenever the root shows its
+    /// privacy shield or lock overlay. A sheet sits above the root, so it
+    /// carries its own cover. (Pushed Controls are inside the root, which
+    /// covers them.)
+    static func controlsCovered(isLocked: Bool, needsPrivacy: Bool) -> Bool {
         isLocked || needsPrivacy
     }
 
-    var requestedControlsCovered: Bool {
-        Self.requestedControlsCovered(isLocked: isLocked, needsPrivacy: needsPrivacy)
+    var controlsCovered: Bool {
+        Self.controlsCovered(isLocked: isLocked, needsPrivacy: needsPrivacy)
     }
 
-    /// The root view's scene-phase handling. Inactive only covers (pulling
-    /// down Control Center keeps Controls open); background locks, which
-    /// closes the requested Controls screen.
+    /// The Controls sheet closes when the app locks; mere inactivity only
+    /// covers it, so pulling down Control Center keeps Controls open.
+    var closesControlsSheet: Bool { isLocked }
+
+    /// The Dashboard calls this when it opens Controls for the request.
+    /// True once per request.
+    func takeControlsPresentation() -> Bool {
+        guard controlsPresentationRequested else { return false }
+        controlsPresentationRequested = false
+        return true
+    }
+
+    /// The root view's scene-phase handling. Inactive only covers; background
+    /// locks, which closes the Controls sheet.
     func sceneDidChange(to phase: AppScenePhase, otherSheetUp: Bool) {
         let previous = scenePhase
         scenePhase = phase
@@ -637,21 +650,20 @@ extension AppModel {
         updateControlsRequest(otherSheetUp: otherSheetUp)
     }
 
-    /// Called whenever `controlsRequestInputs` or the scene phase change. It
-    /// also closes a shown screen the app lock now covers or whose connection
-    /// ended; mere inactivity only covers it (`requestedControlsCovered`).
+    /// Called whenever `controlsRequestInputs` or the scene phase change. A
+    /// presentation the Dashboard hasn't taken yet is withdrawn when the app
+    /// locks or the connection ends.
     func updateControlsRequest(otherSheetUp: Bool) {
-        let isActive = isSceneActive
-        if showsRequestedControls, isLocked || !isPaired || shownControlsGeneration != connectionGeneration {
-            showsRequestedControls = false
+        if controlsPresentationRequested, isLocked || !isPaired || presentationGeneration != connectionGeneration {
+            controlsPresentationRequested = false
         }
         switch Self.controlsRequestDecision(controlsRequest, generation: connectionGeneration, isPaired: isPaired,
-                                            isActive: isActive, isLocked: isLocked, hasVehicles: !vehicles.isEmpty,
-                                            otherSheetUp: otherSheetUp || showsRequestedControls) {
+                                            isActive: isSceneActive, isLocked: isLocked, hasVehicles: !vehicles.isEmpty,
+                                            otherSheetUp: otherSheetUp) {
         case .present:
             controlsRequest = nil
-            shownControlsGeneration = connectionGeneration
-            showsRequestedControls = true
+            presentationGeneration = connectionGeneration
+            controlsPresentationRequested = true
         case .drop:
             controlsRequest = nil
         case .idle, .wait:
