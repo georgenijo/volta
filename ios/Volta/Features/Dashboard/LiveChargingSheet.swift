@@ -47,7 +47,10 @@ struct LiveChargingSheet: View {
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("screen.liveCharge")
         .sheet(isPresented: $showControls, onDismiss: { Task { await refresh() } }) {
+            // This sheet keeps the app's text size cap; Controls is built on
+            // text styles and follows the system setting from every entry.
             ControlsView(initialStatus: status, vehicleName: app?.selectedVehicle?.name)
+                .followsSystemTextSize()
         }
         .task(id: vehicleID) {
             while !Task.isCancelled {

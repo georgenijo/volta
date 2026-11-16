@@ -87,7 +87,8 @@ struct ControlRow<Trailing: View>: View {
                 Image(systemName: systemImage)
                     .font(.system(.body, weight: .regular))
                     .foregroundStyle(iconColor)
-                    .frame(minWidth: iconWidth)
+                    // A fixed column, so titles line up under wide symbols too.
+                    .frame(width: iconWidth)
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -116,7 +117,8 @@ extension ControlRow where Trailing == EmptyView {
 
 // MARK: - Button
 
-/// A 36 pt capsule ("Open", "Vent", "Flash") inside a 44 pt hit region.
+/// A 36 pt capsule ("Open", "Vent", "Flash") inside a 44 pt hit region. Short
+/// titles share one width, so a column of them lines up; it grows with the text.
 struct ControlButton: View {
     enum Style { case neutral, accent }
     var title: String
@@ -138,11 +140,12 @@ struct ControlButton: View {
                 if isBusy { ProgressView().controlSize(.small).tint(.white) }
                 Text(title).opacity(isBusy ? 0 : 1)
             }
-            .font(.system(.callout, weight: .semibold))
+            .font(.system(.callout, weight: .medium))
             .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
             .lineLimit(1)
             .padding(.horizontal, VoltaSpacing.lg)
-            .frame(minWidth: 64, minHeight: 36)
+            .padding(.vertical, 7)
+            .frame(minWidth: 80, minHeight: 36)
             .background(style == .accent ? Color.voltaBlueFill : Color.voltaControlFill, in: .capsule)
             // The visible button is 36 pt; the tap target is at least 44 pt.
             .frame(minWidth: 44, minHeight: 44)
@@ -153,21 +156,24 @@ struct ControlButton: View {
     }
 }
 
-/// A full-width 50 pt capsule action ("Stop Charging", "Start Climate").
+/// A capsule action ("Stop Charging", "Start Climate"): 50 pt and as wide as
+/// its container, or 44 pt and as wide as its title with `hugsTitle`.
 struct ControlWideButton: View {
     var title: String
     var systemImage: String?
     var style: ControlButton.Style = .neutral
     var isBusy = false
+    var hugsTitle = false
     var action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
 
     init(_ title: String, systemImage: String? = nil, style: ControlButton.Style = .neutral,
-         isBusy: Bool = false, action: @escaping () -> Void) {
+         isBusy: Bool = false, hugsTitle: Bool = false, action: @escaping () -> Void) {
         self.title = title
         self.systemImage = systemImage
         self.style = style
         self.isBusy = isBusy
+        self.hugsTitle = hugsTitle
         self.action = action
     }
 
@@ -184,9 +190,10 @@ struct ControlWideButton: View {
             .font(.system(.body, weight: .semibold))
             .foregroundStyle(style == .accent ? Color.white : Color.voltaTextPrimary)
             .multilineTextAlignment(.center)
-            .padding(.horizontal, VoltaSpacing.lg)
-            .padding(.vertical, VoltaSpacing.xs)
-            .frame(maxWidth: .infinity, minHeight: 50)
+            .padding(.horizontal, hugsTitle ? VoltaSpacing.lg + 2 : VoltaSpacing.lg)
+            // Grows with the text at large sizes instead of crowding it.
+            .padding(.vertical, VoltaSpacing.sm + 2)
+            .frame(maxWidth: hugsTitle ? nil : .infinity, minHeight: hugsTitle ? 44 : 50)
             // A capsule while the title fits on one line; wrapped text at
             // large sizes still sits inside the rounded ends.
             .background(style == .accent ? Color.voltaBlueFill : Color.voltaControlFill,
@@ -243,7 +250,7 @@ struct ValueStepper: View {
     private func segment(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(.subheadline, weight: .bold))
+                .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(Color.voltaTextPrimary.opacity(enabled ? 1 : 0.35))
                 .frame(width: plate, height: plate)
                 .background(Color.voltaControlFill.opacity(enabled ? 1 : 0.5), in: .circle)
@@ -298,6 +305,7 @@ struct HalfControl: View {
     var accessibilityLabel: String
     var action: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .body) private var iconWidth: CGFloat = 28
 
     var body: some View {
         if typeSize.isAccessibilitySize {
@@ -317,6 +325,8 @@ struct HalfControl: View {
                 Image(systemName: systemImage)
                     .font(.body)
                     .foregroundStyle(Color.voltaTextPrimary.opacity(0.85))
+                    // The same icon column as `ControlRow`.
+                    .frame(width: iconWidth)
                     .accessibilityHidden(true)
                 Text(title)
                     .font(.system(.body, weight: .medium))

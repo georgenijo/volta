@@ -1001,6 +1001,60 @@ private actor SentLimits {
         XCTAssertNil(model.pendingChargeLimit)
     }
 
+    func testSteppedChargeLimitWaitsForACommandInFlightInsteadOfBeingDropped() async {
+        let source = StubSource(), gate = SectionGate(), commands = coordinator()
+        source.commandHandler = { command, _ in
+            if command == .flash { await gate.wait() }
+            return VehicleCommandResult(command: command.name, requestID: "request-1", replayed: false)
+        }
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(chargeLimit: 80))
+        model.log = VehicleCommandLog()
+        model.settingDelay = .milliseconds(30)
+        model.stepChargeLimit(by: 5, coordinator: commands, dataSource: source, vehicleID: 1)
+        // Another command starts before the pause ends and is still in flight after it.
+        let flash = Task { await model.send(.flash, coordinator: commands, dataSource: source, vehicleID: 1) }
+        try? await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(model.pendingChargeLimit, 85, "the stepped value is kept while it cannot be sent")
+        var names = await source.commands.names
+        XCTAssertEqual(names, [VehicleCommand.flash.name])
+        await gate.open()
+        _ = await flash.value
+        await waitUntil { model.pendingChargeLimit == nil }
+        names = await source.commands.names
+        XCTAssertEqual(names, [VehicleCommand.flash.name, "set_charge_limit"], "sent once the other command finished")
+        let key = VehicleCommandLog.key(backendID: source.commandBackendID, vehicleID: 1)
+        XCTAssertEqual(model.log.entries(for: key).map(\.command), [.setChargeLimit(percent: 85), .flash])
+    }
+
+    func testSteppedSettingTheCoordinatorRefusesIsLoggedAsFailed() async {
+        let source = StubSource(), commands = coordinator()
+        // Controls are not enabled for the charge limit: nothing can be sent.
+        source.capability = VehicleCommandCapabilities(available: true, reason: nil, commands: [VehicleCommand.flash.name])
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus(chargeLimit: 80))
+        model.log = VehicleCommandLog()
+        model.settingDelay = .milliseconds(20)
+        model.stepChargeLimit(by: 5, coordinator: commands, dataSource: source, vehicleID: 1)
+        await waitUntil { model.pendingChargeLimit == nil }
+        let names = await source.commands.names
+        XCTAssertTrue(names.isEmpty)
+        let key = VehicleCommandLog.key(backendID: source.commandBackendID, vehicleID: 1)
+        XCTAssertEqual(model.log.entries(for: key).map(\.outcome), [.failed], "a dropped change leaves a trace")
+    }
+
+    func testClimateScreenAndItsEditsLiveInTheSharedModel() {
+        let model = ControlsModel(status: makeStatus())
+        XCTAssertFalse(model.climateOpen)
+        model.climateOpen = true
+        model.climateDriverDraftC = 21.5
+        // A newer status (as after a fold re-creates the views) does not reset them.
+        model.apply(makeStatus(battery: 71))
+        XCTAssertTrue(model.climateOpen)
+        XCTAssertEqual(model.climateDriverDraftC, 21.5)
+        XCTAssertNil(model.climatePassengerDraftC)
+    }
+
     func testChargeLimitStepsStayInRange() {
         let model = ControlsModel(status: makeStatus(chargeLimit: 100))
         model.settingDelay = .seconds(60)
@@ -1031,6 +1085,23 @@ private actor SentLimits {
                        "newest first")
         XCTAssertEqual(VehicleCommandLog.Outcome.unknown.text, "Outcome unknown")
         XCTAssertTrue(log.entries(for: VehicleCommandLog.key(backendID: "b", vehicleID: 2)).isEmpty)
+    }
+
+    func testRetriedRequestUpdatesItsLogEntry() {
+        let log = VehicleCommandLog(), key = VehicleCommandLog.key(backendID: "b", vehicleID: 1)
+        let sent = Date(timeIntervalSince1970: 1_800_000_000), retried = sent.addingTimeInterval(60)
+        log.finish(log.begin(.flash, label: "Flash lights", key: key, at: sent), with: .failed, at: sent)
+        log.finish(log.begin(.lock, label: "Lock", key: key, at: sent), with: .unknown, at: sent)
+        log.settleRetry(of: .unlock, key: key, with: .succeeded(simulated: false), at: retried)
+        XCTAssertEqual(log.entries(for: key).map(\.outcome), [.unknown, .failed], "no unknown entry for that command")
+        log.settleRetry(of: .lock, key: key, with: .succeeded(simulated: false), at: retried)
+        XCTAssertEqual(log.entries(for: key).map(\.outcome), [.accepted, .failed])
+        XCTAssertEqual(log.entries(for: key).first?.updatedAt, retried)
+        // Only a status from after the retry can confirm it.
+        log.observe(status(locked: true, updatedAt: sent.addingTimeInterval(30)), key: key)
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .accepted)
+        log.observe(status(locked: true, updatedAt: retried.addingTimeInterval(5)), key: key)
+        XCTAssertEqual(log.entries(for: key).first?.outcome, .confirmed)
     }
 
     func testConfirmedNeedsALaterStatusShowingTheExpectedState() {

@@ -164,7 +164,8 @@ struct IdlesHistoryView: View {
     private var selected: ParkedRoute? { split ? path.first : nil }
 
     private var summary: ParkedSummary {
-        ParkedSummary(feed.items, partial: feed.hasMore, from: range.dateRange().from)
+        let dates = range.dateRange()
+        return ParkedSummary(feed.items, partial: feed.hasMore, from: dates.from, to: dates.to)
     }
 
     var body: some View {

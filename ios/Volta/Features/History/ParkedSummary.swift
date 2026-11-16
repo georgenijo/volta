@@ -181,7 +181,10 @@ struct ParkedSummary: Equatable {
     var fastest: IdleSummary?
     var groups: [ParkedDayGroup]
 
-    init(_ items: [IdleSummary], partial: Bool, from: Date? = nil, now: Date = .now, calendar: Calendar = .current) {
+    /// `from` and `to` are the selected range (`to` exclusive, nil for a
+    /// range that runs to now).
+    init(_ items: [IdleSummary], partial: Bool, from: Date? = nil, to: Date? = nil, now: Date = .now,
+         calendar: Calendar = .current) {
         let finished = items.filter { !$0.isLive }.sorted { ($0.end ?? $0.start) > ($1.end ?? $1.start) }
         stops = finished
         open = items.filter(\.isLive).max { $0.start < $1.start }
@@ -191,7 +194,7 @@ struct ParkedSummary: Equatable {
         energyKwh = PartialSum(finished.map { $0.rangeLostKm == nil ? nil : $0.energyLostKwh })
         places = Self.places(finished, total: total)
         finding = Self.finding(places)
-        days = Self.days(finished, partial: partial, from: from, now: now, calendar: calendar)
+        days = Self.days(finished, partial: partial, from: from, to: to, now: now, calendar: calendar)
         asleep = Self.asleep(finished)
         fastest = finished
             .compactMap { stop in ParkedTally([stop]).perDayKm.map { (stop, $0) } }
@@ -246,7 +249,9 @@ struct ParkedSummary: Equatable {
     }
 
     /// The highest and lowest rates among places with enough recorded time,
-    /// when they differ by `notableRatio` or more.
+    /// when they differ by `notableRatio` or more. It compares two places
+    /// with each other, not with the car's average, so the higher place is
+    /// amber (`isNotable`) only when it also clears that rule.
     static func finding(_ places: [ParkedPlace]) -> ParkedFinding? {
         let eligible = places.filter { $0.tally.isSubstantial && $0.tally.perDayKm != nil }
         guard eligible.count >= 2,
@@ -258,14 +263,18 @@ struct ParkedSummary: Equatable {
         return ratio >= ParkedRules.notableRatio ? ParkedFinding(higher: high, lower: low, ratio: ratio) : nil
     }
 
-    private static func days(_ stops: [IdleSummary], partial: Bool, from: Date?, now: Date, calendar: Calendar) -> [ParkedDay] {
+    private static func days(_ stops: [IdleSummary], partial: Bool, from: Date?, to: Date?, now: Date,
+                             calendar: Calendar) -> [ParkedDay] {
         guard !stops.isEmpty else { return [] }
         let today = calendar.startOfDay(for: now)
         let byDay = Dictionary(grouping: stops) { calendar.startOfDay(for: $0.end ?? $0.start) }
         let earliest = byDay.keys.min() ?? today
         // Before the earliest loaded stop nothing is known while pages remain.
         let first = partial ? earliest : min(earliest, from.map { calendar.startOfDay(for: $0) } ?? earliest)
-        let last = max(today, byDay.keys.max() ?? today)
+        // A range that ended in the past stops at its own last day, not today:
+        // the days after it are outside the range, not days without loss.
+        let rangeEnd = to.map { calendar.startOfDay(for: $0.addingTimeInterval(-1)) } ?? today
+        let last = max(min(today, rangeEnd), byDay.keys.max() ?? earliest)
         var days: [ParkedDay] = []
         var day = first
         while day <= last {

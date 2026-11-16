@@ -53,9 +53,9 @@ struct DockTile: Identifiable, Equatable {
         }
 
         let lock: DockTile = switch locked {
-        case true?: tile(.lock, "lock", "Locked", "Unlock", .neutral, .unlock, label: "Doors locked. Unlock")
-        case false?: tile(.lock, "lock.open", "Unlocked", "Lock", .attention, .lock, label: "Doors unlocked. Lock")
-        case nil: tile(.lock, "lock", "Doors", "Unknown", .unknown, nil, label: "Lock state unknown. Opens Controls")
+        case true?: tile(.lock, "lock.fill", "Locked", "Unlock", .neutral, .unlock, label: "Doors locked. Unlock")
+        case false?: tile(.lock, "lock.open.fill", "Unlocked", "Lock", .attention, .lock, label: "Doors unlocked. Lock")
+        case nil: tile(.lock, "lock.fill", "Doors", "Unknown", .unknown, nil, label: "Lock state unknown. Opens Controls")
         }
         let climate: DockTile = { switch climateOn {
         case true?:
@@ -76,7 +76,7 @@ struct DockTile: Identifiable, Equatable {
             tile(.frunk, "car.side.front.open", "Frunk", "Open", .neutral, .actuateTrunk(whichTrunk: .front), label: "Open frunk"),
             tile(.trunk, "car.side.rear.open", "Trunk", "Open", .neutral, .actuateTrunk(whichTrunk: .rear), label: "Open trunk"),
             tile(.lights, "headlight.high.beam", "Lights", "Flash", .neutral, .flash, label: "Flash lights"),
-            DockTile(kind: .controls, symbol: "square.grid.2x2", title: "Controls", action: "Show all", tone: .neutral,
+            DockTile(kind: .controls, symbol: "slider.horizontal.3", title: "Controls", action: "Show all", tone: .neutral,
                      tap: .openControls, accessibilityLabel: "Controls. Show all"),
         ]
     }
@@ -121,9 +121,10 @@ private struct DockTileButton: View {
             VStack(spacing: 6) {
                 ZStack {
                     Circle().fill(plateFill)
+                    // Each tile names its own symbol variant: small glyphs
+                    // are filled, the wide car outlines are drawn smaller.
                     Image(systemName: tile.symbol)
-                        .symbolVariant(.fill)
-                        .font(.system(.title3, weight: .medium))
+                        .font(.system(wideGlyph ? .body : .title3, weight: .medium))
                         .foregroundStyle(iconColor)
                         .opacity(isSending ? 0 : 1)
                     if isSending { ProgressView().controlSize(.small).tint(tile.isOn ? .black : .white) }
@@ -131,10 +132,10 @@ private struct DockTileButton: View {
                 .frame(width: plate, height: plate)
                 VStack(spacing: 1) {
                     Text(tile.title)
-                        .font(.system(.subheadline, weight: .semibold))
+                        .font(.system(.subheadline, weight: .medium))
                         .foregroundStyle(titleColor)
                     Text(tile.action)
-                        .font(.footnote)
+                        .font(.caption)
                         .foregroundStyle(Color.voltaTextSecondary)
                 }
                 // Two columns at accessibility sizes leave room to wrap instead.
@@ -152,13 +153,15 @@ private struct DockTileButton: View {
         .accessibilityIdentifier(tile.kind == .controls ? "button.controls" : "dock.\(tile.kind.rawValue)")
     }
 
+    private var wideGlyph: Bool { tile.kind == .frunk || tile.kind == .trunk }
+
     private var plateFill: Color {
         if tile.isOn { return .voltaTextPrimary }
         switch tile.tone {
         case .attention: return .voltaAmber.opacity(0.2)
         case .armed: return .voltaRed.opacity(0.2)
-        case .unknown: return .white.opacity(0.06)
-        case .neutral: return .white.opacity(0.1)
+        case .unknown: return .white.opacity(0.05)
+        case .neutral: return .white.opacity(0.08)
         }
     }
 

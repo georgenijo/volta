@@ -172,6 +172,8 @@ struct VehicleCommandActivityBanner: View {
     let coordinator: VehicleCommandCoordinator
     let dataSource: any VoltaDataSource
     let vehicleID: Int
+    /// The session log a retried request's result is written back to.
+    var log: VehicleCommandLog = .shared
     let refreshObservedStatus: () -> Void
     private struct Confirmation: Identifiable {
         let id = UUID()
@@ -208,6 +210,9 @@ struct VehicleCommandActivityBanner: View {
                              primaryButton: .cancel(), secondaryButton: .destructive(Text("Retry \(activity.label)")) {
                     Task {
                         let result = await coordinator.retry(activity.id, dataSource: dataSource, vehicleID: vehicleID)
+                        log.settleRetry(of: activity.command,
+                                        key: VehicleCommandLog.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID),
+                                        with: result)
                         if case .succeeded(let simulated) = result, !simulated { refreshObservedStatus() }
                     }
                 })

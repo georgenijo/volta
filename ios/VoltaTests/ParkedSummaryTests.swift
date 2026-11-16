@@ -22,8 +22,8 @@ final class ParkedSummaryTests: XCTestCase {
                            sentryMinutes: nil, climateMinutes: nil, asleepMinutes: asleep, latitude: latitude, longitude: longitude)
     }
 
-    private func summary(_ stops: [IdleSummary], partial: Bool = false, from: Date? = nil) -> ParkedSummary {
-        ParkedSummary(stops, partial: partial, from: from, now: now, calendar: calendar)
+    private func summary(_ stops: [IdleSummary], partial: Bool = false, from: Date? = nil, to: Date? = nil) -> ParkedSummary {
+        ParkedSummary(stops, partial: partial, from: from, to: to, now: now, calendar: calendar)
     }
 
     // MARK: Rates
@@ -128,6 +128,37 @@ final class ParkedSummaryTests: XCTestCase {
     }
 
     // MARK: Places, amber and the finding
+
+    func testRangeThatEndedLongAgoChartsItsOwnDays() {
+        // A custom week that ended 200 days ago, with one stop on each of two days.
+        let end = calendar.startOfDay(for: now.addingTimeInterval(-200 * 86_400))
+        let from = end.addingTimeInterval(-7 * 86_400)
+        let stops = [stop(1, endingHoursAgo: 200 * 24 + 30, minutes: 300, km: 3),
+                     stop(2, endingHoursAgo: 200 * 24 + 80, minutes: 300, km: 1)]
+        let s = summary(stops, from: from, to: end)
+        XCTAssertEqual(s.days.count, 7, "the range's seven days, not every day up to today")
+        XCTAssertEqual(s.days.first?.day, from)
+        XCTAssertEqual(s.days.last?.day, end.addingTimeInterval(-86_400))
+        XCTAssertEqual(s.days.compactMap(\.lostKm).reduce(0, +), 4, accuracy: 1e-9, "the measured bars are kept")
+        XCTAssertFalse(s.days.contains(where: \.isToday))
+        // A range that runs to now still ends today.
+        XCTAssertTrue(summary(stops, from: from).days.last?.isToday ?? false)
+    }
+
+    func testFindingIsAmberOnlyWhenTheHigherPlaceClearsTheAverageRule() {
+        // Equal recorded time at 6 and 3 km a day: twice each other, but the
+        // higher is only 1.33 times the car's 4.5 km a day average.
+        let stops = (1...3).map { stop($0, endingHoursAgo: Double($0) * 24, minutes: 480, km: 1, name: "Home") }
+            + (4...6).map { stop($0, endingHoursAgo: Double($0) * 24 + 12, minutes: 480, km: 2, name: "Work") }
+        let s = summary(stops)
+        XCTAssertEqual(try XCTUnwrap(s.total.perDayKm), 4.5, accuracy: 1e-9)
+        XCTAssertEqual(s.finding?.ratio ?? 0, 2, accuracy: 1e-9, "the two places are still compared")
+        XCTAssertEqual(s.finding?.higher.isNotable, false, "so the card and the row stay neutral")
+        // Mostly parked at Home, the same rates put Work clearly above the average.
+        let mostlyHome = (1...9).map { stop($0, endingHoursAgo: Double($0) * 24, minutes: 480, km: 1, name: "Home") }
+            + (10...12).map { stop($0, endingHoursAgo: Double($0) * 24 + 12, minutes: 480, km: 2, name: "Work") }
+        XCTAssertEqual(summary(mostlyHome).finding?.higher.isNotable, true)
+    }
 
     func testSinglePlaceHasNoFindingAndNoAmber() {
         let s = summary((1...5).map { stop($0, endingHoursAgo: Double($0) * 24, minutes: 600, km: 4) })

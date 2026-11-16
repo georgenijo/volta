@@ -25,7 +25,6 @@ struct ControlsView: View {
     @State private var localCoordinator = VehicleCommandCoordinator()
     @State private var confirmation: CommandConfirmation?
     @State private var controlNotice: String?
-    @State private var showClimate = false
 
     /// A sheet with its own model (the live charging sheet's "Manage charging").
     init(initialStatus: VehicleStatus?, vehicleName: String?) {
@@ -106,6 +105,7 @@ struct ControlsView: View {
                 refreshItem
             }
             .refreshable { await load() }
+            .navigationDestination(isPresented: $model.climateOpen) { ClimateControlsView(model: model) }
         }
         .presentationDragIndicator(.visible)
         .presentationBackground(Color.voltaBackground)
@@ -164,9 +164,6 @@ struct ControlsView: View {
         .toolbarTitleDisplayMode(.inline)
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .toolbar { refreshItem }
-        .navigationDestination(isPresented: $showClimate) {
-            ControlsView(model: model, vehicleName: vehicleName, presentation: .pushed, secondPane: .climate)
-        }
     }
 
     private var refreshItem: some ToolbarContent {
@@ -235,7 +232,7 @@ struct ControlsView: View {
 
     @ViewBuilder private var readiness: some View {
         if dataSource.simulatesVehicleCommands {
-            InlineBanner(systemImage: "theatermasks", message: "Demo mode: controls are simulated on this device. No vehicle is contacted.", tint: .voltaBlue)
+            InlineBanner(systemImage: "theatermasks", message: "Demo controls are simulated. No vehicle is contacted.", tint: .voltaBlue)
         } else if let capability = coordinator.capability(dataSource: dataSource, vehicleID: vehicleID), !capability.available {
             VStack(alignment: .leading, spacing: VoltaSpacing.md) {
                 InlineBanner(systemImage: Self.readinessSymbol(capability.reason), message: Self.readinessMessage(capability.reason), tint: .voltaAmber)
@@ -411,18 +408,14 @@ struct ControlsView: View {
                 .foregroundStyle(Color.voltaTextTertiary)
         }
         .contentShape(.rect)
-        switch presentation {
-        case .sheet:
-            NavigationLink { ClimateControlsView(model: model) } label: { row }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("button.climate")
-        case .pushed:
-            Button { showClimate = true } label: { row }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("button.climate")
-                .accessibilityAddTraits(secondPane == .climate ? .isSelected : [])
-                .disabled(secondPane == .climate)
-        }
+        // The model holds "open", so the screen follows Controls between a
+        // sheet (pushed inside it) and the pushed screen (its second pane,
+        // which the owner of the navigation stack shows).
+        Button { model.climateOpen = true } label: { row }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("button.climate")
+            .accessibilityAddTraits(secondPane == .climate ? .isSelected : [])
+            .disabled(secondPane == .climate)
     }
 
     // MARK: Security and locate
@@ -528,7 +521,8 @@ struct ControlsView: View {
     }
 
     @ViewBuilder private var activityBanner: some View {
-        VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
+        VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID,
+                                     log: model.log) {
             Task { await context.refresh() }
         }
     }
@@ -566,15 +560,20 @@ struct ClimateControlsView: View {
     @Environment(\.vehicleCommandCoordinator) private var sharedCoordinator
     @Environment(\.vehicleSurfaces) private var surfaces
     @State private var localCoordinator = VehicleCommandCoordinator()
-    @State private var driverTargetC: Double
-    @State private var passengerTargetC: Double
 
     init(model: ControlsModel, embedded: Bool = false) {
         self.model = model
         self.embedded = embedded
-        let observed = model.status?.driverTempSettingC ?? 20
-        _driverTargetC = State(initialValue: observed)
-        _passengerTargetC = State(initialValue: observed)
+    }
+
+    /// The targets being edited live in the model (see `climateOpen`); until
+    /// one is edited it shows the observed driver setting.
+    private var observedTargetC: Double { model.status?.driverTempSettingC ?? 20 }
+    private var driverTarget: Binding<Double> {
+        Binding(get: { model.climateDriverDraftC ?? observedTargetC }, set: { model.climateDriverDraftC = $0 })
+    }
+    private var passengerTarget: Binding<Double> {
+        Binding(get: { model.climatePassengerDraftC ?? observedTargetC }, set: { model.climatePassengerDraftC = $0 })
     }
     private var coordinator: VehicleCommandCoordinator { sharedCoordinator ?? localCoordinator }
 
@@ -621,7 +620,8 @@ struct ClimateControlsView: View {
         .accessibilityIdentifier("scroll.climate")
         .overlay(alignment: .bottom) {
             if !embedded {
-                VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
+                VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID,
+                                     log: model.log) {
                     Task { await model.refresh(dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces) }
                 }
             }
@@ -640,10 +640,10 @@ struct ClimateControlsView: View {
 
     private var temperatureControl: some View {
         VStack(alignment: .leading, spacing: VoltaSpacing.md) {
-            temperatureRow(title: "Driver target", value: $driverTargetC)
-            temperatureRow(title: "Passenger target", value: $passengerTargetC)
-            let command = VehicleCommand.setTemperatures(driverTempC: driverTargetC,
-                                                          passengerTempC: passengerTargetC)
+            temperatureRow(title: "Driver target", value: driverTarget)
+            temperatureRow(title: "Passenger target", value: passengerTarget)
+            let command = VehicleCommand.setTemperatures(driverTempC: driverTarget.wrappedValue,
+                                                          passengerTempC: passengerTarget.wrappedValue)
             PillButton("Set cabin temperatures", size: .wide, style: .accent) {
                 send(command, label: "Set cabin temperatures")
             }

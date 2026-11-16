@@ -27,7 +27,7 @@ extension Color {
     static let voltaHairline = Color.white.opacity(0.08)
     /// Fill of a button with no outline (capsules, round plates). Translucent,
     /// so it reads one step up from whatever card or background is behind it.
-    static let voltaControlFill = Color.white.opacity(0.12)
+    static let voltaControlFill = Color.white.opacity(0.10)
 
     static let voltaTextPrimary = Color.white
     /// 6.1:1 on a card, 5.2:1 on a raised control.

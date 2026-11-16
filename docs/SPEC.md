@@ -125,12 +125,15 @@ Layouts follow the window, never a device model or screen size:
 - **Dashboard, upright inner display:** map and battery above the hinge; the
   Now card, dock and the rest below.
 - **Dashboard, compact width** (outer display, ordinary iPhones): one column
-  under a short map: battery, a compact Now card, dock, tiles, the rest.
+  under a short map: battery, a compact Now card, dock, tiles, the rest. Where
+  the bars sit on the side the map is shorter, so the first dock row is on
+  screen without scrolling.
 - **Now card** by what the car is doing: charging (power and its curve, which
-  open the live charging sheet; one charge limit stepper; Stop Charging),
-  plugged in, parked (climate, "for 1h 28m" from the timeline already loaded,
-  and the temperatures in one column, where the tiles are a screen below), driving (minimal, `NowDrivingCard`), asleep or offline
-  (last seen, Wake).
+  open the live charging sheet; one charge limit stepper with Stop Charging
+  beside it), plugged in, parked ("for 1h 28m" from the timeline already
+  loaded with the climate button beside it; in one column, where the tiles
+  are a screen below, the two temperatures as well), driving (minimal,
+  `NowDrivingCard`), asleep or offline (last seen, Wake).
 - **Dock and Now card** send through `ControlsModel`, the Controls path, with
   the same confirmations (`CommandConfirmation`). A tile whose state is
   unknown, or whose command controls aren't enabled for, opens Controls
@@ -138,21 +141,26 @@ Layouts follow the window, never a device model or screen size:
 - **Controls:** pushed two-pane screen in regular-width landscape (Back and
   Refresh in the side bar; "Seats, wheel & defrost" replaces the right pane),
   a sheet otherwise. The Dashboard owns one `ControlsModel`, so Controls keeps
-  its state when folding moves it between the two. Groups: Access (Doors
+  its state when folding moves it between the two, including an open "Seats,
+  wheel & defrost" screen and its unsent temperatures. Groups: Access (Doors
   states Locked / Unlocked / Unknown with an explicit Lock or Unlock), Charging
   (toggle disabled when not plugged in; charge port offers the action that
   changes it, both when unknown), Comfort (climate, temperature stepper,
   seats, wheel and defrost), Security & Locate, and Sent this session.
 - **Stepped settings** (charge limit, temperature) show the new value at once
-  and send one command 1.2 s after the last step.
+  and send one command 1.2 s after the last step. If another command is in
+  flight then, the value waits for it; one that cannot be sent is logged as
+  Failed, never dropped silently.
 - **Sent this session** (`VehicleCommandLog`, memory only) says what the
   evidence supports: Sending, Simulated, Accepted, Failed, Outcome unknown,
   and Confirmed only when a status recorded after the send shows the expected
   state (lock, climate, Sentry, charging, charge limit, charge port).
 - **Buttons** have no outline: round plates in the dock and steppers, capsules
   for row and full-width actions, on a translucent fill
-  (`voltaControlFill`). Sentry armed is a red plate, unlocked amber, a
-  control that is on white.
+  (`voltaControlFill`). Row capsules share a minimum width so a column of
+  them lines up, and every row's icon sits in one fixed column. Sentry armed
+  is a red plate, unlocked amber, a control that is on white. Dock symbols
+  are chosen per tile (filled for small glyphs, outlines for the cars).
 - Never show state the car doesn't report. Text uses text styles, at least
   11 pt; every action has a 44×44 pt hit region; rows are 56 pt. At
   accessibility sizes the dock drops to 2 columns, tiles and stats stack, row

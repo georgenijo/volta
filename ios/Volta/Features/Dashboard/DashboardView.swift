@@ -43,12 +43,16 @@ struct DashboardView: View {
     /// closure from an earlier body, whose size class can be stale, so the
     /// sync runs from `onChange` with current values instead.
     @State private var controlsSheetDismissals = 0
-    /// The Dashboard's navigation stack; Controls is its only destination.
-    /// A path, because `navigationDestination(isPresented:)` ignores a push
-    /// requested just after a sheet dismisses.
+    /// The Dashboard's navigation stack: Controls, then the same screen with
+    /// "Seats, wheel & defrost" in its second pane. A path, because
+    /// `navigationDestination(isPresented:)` ignores a push requested just
+    /// after a sheet dismisses.
     @State private var path: [Route] = []
+    /// Whether the climate screen was open in the Controls sheet that is
+    /// being dismissed to push Controls instead.
+    @State private var climateDuringMove: Bool?
 
-    enum Route: Hashable { case controls }
+    enum Route: Hashable { case controls, climate }
     @State private var showVehicle = false
     @State private var showNotifications = false
     @State private var showLiveCharge = false
@@ -77,8 +81,10 @@ struct DashboardView: View {
     /// than tall, and a sheet otherwise.
     private var controlsPushed: Bool { horizontalSizeClass == .regular && isLandscape }
 
-    /// Visible map height below the safe area in the single column.
-    private let mapReveal: CGFloat = 200
+    /// Visible map height below the safe area in the single column. Shorter where
+    /// the bars sit on the side (no top bar to clear), so the first row of
+    /// quick controls is on screen without scrolling.
+    private var mapReveal: CGFloat { barsOnSide ? 150 : 200 }
 
     private var coordinator: VehicleCommandCoordinator { sharedCoordinator ?? localCoordinator }
     private var context: VehicleCommandContext {
@@ -98,18 +104,32 @@ struct DashboardView: View {
             .toolbarTitleDisplayMode(.inline)
             .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
             .toolbar { toolbar }
-            .navigationDestination(for: Route.self) { _ in
-                ControlsView(model: controls, vehicleName: model.vehicle?.name, presentation: .pushed)
+            .navigationDestination(for: Route.self) { route in
+                ControlsView(model: controls, vehicleName: model.vehicle?.name, presentation: .pushed,
+                             secondPane: route == .climate ? .climate : .main)
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width > $0.size.height } action: { isLandscape = $0 }
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { safeTop = $0 }
-        .onChange(of: showControls) { syncControlsHost() }
+        .onChange(of: showControls) {
+            if !showControls {
+                // Closed by the user: the climate screen and its unsent edits go too.
+                climateDuringMove = nil
+                controls.climateOpen = false
+                controls.climateDriverDraftC = nil
+                controls.climatePassengerDraftC = nil
+            }
+            syncControlsHost()
+        }
         .onChange(of: controlsPushed) { syncControlsHost() }
         .onChange(of: controlsSheetDismissals) { syncControlsHost() }
+        .onChange(of: controls.climateOpen) { syncControlsHost() }
         .onChange(of: path) {
-            // Back from pushed Controls closes them.
-            if path.isEmpty, controlsHost == .pushed { controlsHost = nil; showControls = false }
+            // Only while Controls are pushed is a shorter path the user going
+            // back; a move to the sheet empties the path without closing anything.
+            guard controlsHost == .pushed else { return }
+            if path.isEmpty { controlsHost = nil; showControls = false }
+            else if path == [.controls] { controls.climateOpen = false }
         }
         .preferredColorScheme(.dark)
         .task(id: vehicleID) {
@@ -183,14 +203,23 @@ struct DashboardView: View {
 
     private func syncControlsHost() {
         let wanted: ControlsView.Presentation? = showControls ? (controlsPushed ? .pushed : .sheet) : nil
-        guard controlsHost != wanted else { return }
-        if controlsHost == .sheet, wanted == .pushed {
-            // Dismiss first; the sheet's onDismiss calls back here to push.
-            controlsHost = nil
-        } else {
-            controlsHost = wanted
+        if controlsHost != wanted {
+            if controlsHost == .sheet, wanted == .pushed {
+                // Dismiss first; the sheet's onDismiss calls back here to push.
+                // Its navigation stack may report the climate screen closed
+                // as it goes, so remember whether it was open.
+                climateDuringMove = controls.climateOpen
+                controlsHost = nil
+            } else {
+                controlsHost = wanted
+                if let open = climateDuringMove {
+                    climateDuringMove = nil
+                    if wanted != nil { controls.climateOpen = open }
+                }
+            }
         }
-        let wantedPath: [Route] = controlsHost == .pushed ? [.controls] : []
+        let wantedPath: [Route] = controlsHost != .pushed ? []
+            : controls.climateOpen ? [.controls, .climate] : [.controls]
         if path != wantedPath { path = wantedPath }
     }
 
@@ -274,7 +303,8 @@ struct DashboardView: View {
         if controlsHost == nil,
            let activity = coordinator.activity(dataSource: dataSource, vehicleID: vehicleID),
            activity.id == dashboardActivityID || activity.phase == .pending || activity.phase == .unknown {
-            VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID) {
+            VehicleCommandActivityBanner(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID,
+                                         log: controls.log) {
                 Task { await context.refresh() }
             }
         }
@@ -432,7 +462,7 @@ struct DashboardView: View {
         let status = displayStatus
         // The pill and marker are centered on the map, so its height puts
         // them in the visible part above the content.
-        let height = (safeTop + mapReveal) * 1.42
+        let height = (safeTop + mapReveal) * (barsOnSide ? 1.5 : 1.42)
         return DashboardMap(location: status.location,
                             sentry: status.sentryMode ?? false,
                             state: model.status?.state,
@@ -442,7 +472,7 @@ struct DashboardView: View {
             .overlay(alignment: .bottom) {
                 LinearGradient(colors: [.clear, .voltaBackground.opacity(0.85), .voltaBackground],
                                startPoint: .top, endPoint: .bottom)
-                    .frame(height: height - safeTop - mapReveal + 60)
+                    .frame(height: height - safeTop - mapReveal + (barsOnSide ? 36 : 60))
             }
             .overlay(Color.voltaBackground.opacity(progress * 0.85))
             .offset(y: -max(scrollOffset, 0) * 0.45 + max(-scrollOffset, 0) * 0.5)
@@ -481,7 +511,7 @@ struct DashboardView: View {
                     banners
                     identityRow(status)
                     hero(status).padding(.top, VoltaSpacing.xs)
-                    nowCard(.compact).padding(.top, VoltaSpacing.xl)
+                    nowCard(.compact).padding(.top, VoltaSpacing.lg + 2)
                     dock.padding(.top, VoltaSpacing.md)
                     metricTiles(status).padding(.top, VoltaSpacing.md)
                     details.padding(.top, VoltaSpacing.xl + 4)
@@ -607,19 +637,22 @@ struct DashboardView: View {
     }
 
     /// Activity strip, then Today / 7D / 30D.
-    @ViewBuilder
+    /// One block, so a parent's spacing or padding applies around it once
+    /// instead of between each of its parts.
     private var details: some View {
-        ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
-                      loading: model.loadingSections.contains(.timeline))
-            .padding(.top, VoltaSpacing.sm)
-        HairlineDivider().padding(.top, VoltaSpacing.xl)
-        // Re-render when today's reporting day ends so its totals drop.
-        TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
-            ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
-                                   failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
-                                   loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
+        VStack(alignment: .leading, spacing: 0) {
+            ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
+                          loading: model.loadingSections.contains(.timeline))
+                .padding(.top, VoltaSpacing.sm)
+            HairlineDivider().padding(.top, VoltaSpacing.lg + 4)
+            // Re-render when today's reporting day ends so its totals drop.
+            TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
+                ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
+                                       failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
+                                       loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
+            }
+            .padding(.top, VoltaSpacing.lg)
         }
-        .padding(.top, VoltaSpacing.lg)
     }
 
     private func failure(_ message: String) -> some View {

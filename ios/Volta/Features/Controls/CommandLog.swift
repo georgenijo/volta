@@ -36,7 +36,8 @@ final class VehicleCommandLog {
         let key: String
         let command: VehicleCommand
         let label: String
-        let sentAt: Date
+        /// When the request last went out (a retry moves it).
+        var sentAt: Date
         var outcome: Outcome
         var updatedAt: Date
     }
@@ -71,6 +72,17 @@ final class VehicleCommandLog {
         case .unknown: .unknown
         }
         update(id) { $0.outcome = mapped; $0.updatedAt = date }
+    }
+
+    /// A saved request was retried: its entry (the newest for `command` whose
+    /// outcome was unknown) takes the retry's result. The retry is now the
+    /// send that counts, so only a status recorded after it can confirm it.
+    func settleRetry(of command: VehicleCommand, key: String, with outcome: VehicleCommandCoordinator.Outcome,
+                     at date: Date = .now) {
+        guard let entry = entries.last(where: { $0.key == key && $0.command == command && $0.outcome == .unknown })
+        else { return }
+        update(entry.id) { $0.sentAt = date }
+        finish(entry.id, with: outcome, at: date)
     }
 
     /// Upgrades accepted commands that `status` shows took effect. A status

@@ -138,22 +138,12 @@ struct NowCard: View {
                 .accessibilityLabel(liveChargeAccessibility)
                 .accessibilityHint("Opens the live charging session")
                 .accessibilityIdentifier("button.liveCharge")
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .bottom, spacing: VoltaSpacing.md) {
-                        labelledLimit
-                        stopCharging
-                    }
-                    VStack(alignment: .leading, spacing: VoltaSpacing.md) {
-                        labelledLimit
-                        stopCharging
-                    }
-                }
+                limitAndStop
             }
         case .standard:
             VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
                 chargingReadout
-                limitRow
-                stopCharging
+                limitAndStop
             }
         case .wide:
             ViewThatFits(in: .horizontal) {
@@ -269,6 +259,21 @@ struct NowCard: View {
         commandButton("Stop Charging", .chargeStop)
     }
 
+    /// The labelled stepper with Stop Charging beside it, or under it when
+    /// they don't fit.
+    private var limitAndStop: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .bottom, spacing: VoltaSpacing.md) {
+                labelledLimit
+                stopCharging
+            }
+            VStack(alignment: .leading, spacing: VoltaSpacing.md) {
+                labelledLimit
+                stopCharging
+            }
+        }
+    }
+
     // MARK: Plugged in
 
     private var pluggedIn: some View {
@@ -292,27 +297,65 @@ struct NowCard: View {
 
     // MARK: Parked
 
-    private var parked: some View {
-        VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                header("Parked", trailing: parkedSince.map { "for \(Self.elapsed(from: $0, to: context.date))" }, green: false)
-            }
-            // In one column the metric tiles are a screen below; beside or
-            // above them the card would repeat the same two numbers.
-            if style == .compact {
+    @ViewBuilder private var parked: some View {
+        if style == .compact {
+            VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
+                parkedHeader
+                // In one column the metric tiles are a screen below, so the
+                // card carries the two temperatures itself.
                 HStack(spacing: VoltaSpacing.xl) {
                     temperature("Cabin", status.insideTempC)
                     temperature("Outside", status.outsideTempC)
                     Spacer(minLength: 0)
                 }
+                climateAction(hugsTitle: false)
             }
-            switch status.climateOn {
-            case true?: commandButton("Stop Climate", .climateOff)
-            case false?: commandButton("Start Climate", .climateOn)
-            case nil:
-                ControlWideButton("Climate controls", systemImage: "fan", action: openControls)
-                    .accessibilityHint("Climate state unknown. Opens Controls")
+        } else {
+            // Beside or above the metric tiles the card is one row: how long
+            // the car has sat, and the climate button at its own width.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: VoltaSpacing.md) {
+                    parkedDuration
+                    Spacer(minLength: VoltaSpacing.sm)
+                    climateAction(hugsTitle: true)
+                }
+                VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
+                    parkedHeader
+                    climateAction(hugsTitle: false)
+                }
             }
+        }
+    }
+
+    private var parkedHeader: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            header("Parked", trailing: parkedSince.map { "for \(Self.elapsed(from: $0, to: context.date))" }, green: false)
+        }
+    }
+
+    /// "PARKED" over "for 1h 28m".
+    private var parkedDuration: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(alignment: .leading, spacing: VoltaSpacing.xs) {
+                headerTitle("Parked", green: false)
+                if let parkedSince {
+                    Text("for \(Self.elapsed(from: parkedSince, to: context.date))")
+                        .font(.system(.title3, weight: .semibold))
+                        .foregroundStyle(Color.voltaTextPrimary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+        }
+    }
+
+    @ViewBuilder private func climateAction(hugsTitle: Bool) -> some View {
+        switch status.climateOn {
+        case true?: commandButton("Stop Climate", .climateOff, hugsTitle: hugsTitle)
+        case false?: commandButton("Start Climate", .climateOn, hugsTitle: hugsTitle)
+        case nil:
+            ControlWideButton("Climate controls", systemImage: "fan", hugsTitle: hugsTitle, action: openControls)
+                .accessibilityHint("Climate state unknown. Opens Controls")
         }
     }
 
@@ -377,9 +420,10 @@ struct NowCard: View {
     }
 
     private func commandButton(_ title: String, _ command: VehicleCommand,
-                               style: ControlButton.Style = .neutral) -> some View {
+                               style: ControlButton.Style = .neutral, hugsTitle: Bool = false) -> some View {
         let supported = context.supports(command)
-        return ControlWideButton(title, style: style, isBusy: context.isSending(command)) { perform(command) }
+        return ControlWideButton(title, style: style, isBusy: context.isSending(command),
+                                 hugsTitle: hugsTitle) { perform(command) }
             .disabled(supported && !context.canStart(command))
             .accessibilityHint(supported ? "" : "Opens Controls")
     }

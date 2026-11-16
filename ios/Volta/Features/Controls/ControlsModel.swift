@@ -21,6 +21,13 @@ final class ControlsModel {
     private(set) var pendingChargeLimit: Int?
     /// A cabin temperature stepped to but not sent yet.
     private(set) var pendingCabinTargetC: Double?
+    /// "Seats, wheel & defrost" is open. Kept here with its unsent
+    /// temperatures, so both survive Controls moving between a sheet and a
+    /// pushed screen when iPhone Duo folds.
+    var climateOpen = false
+    var climateDriverDraftC: Double?
+    var climatePassengerDraftC: Double?
+
     /// Pause after the last step before one command is sent.
     @ObservationIgnored var settingDelay: Duration = .milliseconds(1200)
     /// Where sends are recorded; the app-wide log unless a test replaces it.
@@ -196,10 +203,43 @@ final class ControlsModel {
     private func sendPendingChargeLimit(coordinator: VehicleCommandCoordinator, dataSource: any VoltaDataSource,
                                         vehicleID: Int, surfaces: (any VehicleSurfaces)?) async {
         guard let value = pendingChargeLimit else { return }
+        guard value != chargeLimit else { pendingChargeLimit = nil; return }
+        // A newer step owns the value when this returns false.
+        guard await waitForTurn(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID),
+              pendingChargeLimit == value else { return }
         defer { if pendingChargeLimit == value { pendingChargeLimit = nil } }
-        guard value != chargeLimit else { return }
-        await send(.setChargeLimit(percent: value), coordinator: coordinator, dataSource: dataSource,
-                   vehicleID: vehicleID, surfaces: surfaces)
+        await sendStepped(.setChargeLimit(percent: value), coordinator: coordinator, dataSource: dataSource,
+                          vehicleID: vehicleID, surfaces: surfaces)
+    }
+
+    /// Waits for a command already in flight to finish, so a stepped value is
+    /// sent after it instead of being refused and dropped. False when this
+    /// task was cancelled while waiting.
+    private func waitForTurn(coordinator: VehicleCommandCoordinator, dataSource: any VoltaDataSource,
+                             vehicleID: Int) async -> Bool {
+        var waited = Duration.zero
+        while coordinator.isBusy(dataSource: dataSource, vehicleID: vehicleID), waited < Self.turnTimeout {
+            do { try await Task.sleep(for: Self.turnPoll) } catch { return false }
+            waited += Self.turnPoll
+        }
+        return !Task.isCancelled
+    }
+
+    private static let turnPoll: Duration = .milliseconds(100)
+    private static let turnTimeout: Duration = .seconds(30)
+
+    /// Sends a stepped setting. One the coordinator refuses (an unresolved
+    /// request, or controls no longer available) is logged as failed, so the
+    /// change never disappears without a trace.
+    private func sendStepped(_ command: VehicleCommand, coordinator: VehicleCommandCoordinator,
+                             dataSource: any VoltaDataSource, vehicleID: Int,
+                             surfaces: (any VehicleSurfaces)?) async {
+        guard coordinator.canStart(command, dataSource: dataSource, vehicleID: vehicleID) else {
+            let key = VehicleCommandLog.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID)
+            log.finish(log.begin(command, label: command.controlLabel, key: key), with: .failed)
+            return
+        }
+        await send(command, coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
     }
 
     /// One step of the cabin temperature stepper; sent like the charge limit.
@@ -234,10 +274,12 @@ final class ControlsModel {
     private func sendPendingCabinTarget(coordinator: VehicleCommandCoordinator, dataSource: any VoltaDataSource,
                                         vehicleID: Int, surfaces: (any VehicleSurfaces)?) async {
         guard let value = pendingCabinTargetC else { return }
+        guard value != cabinTargetC else { pendingCabinTargetC = nil; return }
+        guard await waitForTurn(coordinator: coordinator, dataSource: dataSource, vehicleID: vehicleID),
+              pendingCabinTargetC == value else { return }
         defer { if pendingCabinTargetC == value { pendingCabinTargetC = nil } }
-        guard value != cabinTargetC else { return }
-        await send(.setTemperatures(driverTempC: value, passengerTempC: value), coordinator: coordinator,
-                   dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
+        await sendStepped(.setTemperatures(driverTempC: value, passengerTempC: value), coordinator: coordinator,
+                          dataSource: dataSource, vehicleID: vehicleID, surfaces: surfaces)
     }
 
     private static func clampLimit(_ value: Int) -> Int {

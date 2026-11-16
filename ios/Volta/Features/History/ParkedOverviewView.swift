@@ -221,13 +221,16 @@ struct ParkedShareBar: View {
 
 // MARK: - Finding
 
-/// One measured comparison, stated as a record of the past: no cause, no advice.
+/// One measured comparison, stated as a record of the past: no cause, no
+/// advice. Amber only when the higher place is also clearly above the car's
+/// own average (the same rule as its row); a neutral card otherwise.
 struct ParkedFindingCard: View {
     var finding: ParkedFinding
     @Environment(\.units) private var units
 
     var body: some View {
         let words = ParkedText(units: units).finding(finding)
+        let tint = finding.higher.isNotable ? HistoryTheme.amber : Color.white
         (Text(words.headline).fontWeight(.semibold).foregroundStyle(Color.voltaTextPrimary)
          + Text(" " + words.detail).foregroundStyle(HistoryTheme.secondary))
             .font(.footnote)
@@ -235,9 +238,10 @@ struct ParkedFindingCard: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(HistoryTheme.amber.opacity(0.09), in: .rect(cornerRadius: 16, style: .continuous))
+            .background(tint.opacity(finding.higher.isNotable ? 0.09 : 0.05), in: .rect(cornerRadius: 16, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(HistoryTheme.amber.opacity(0.3))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(tint.opacity(finding.higher.isNotable ? 0.3 : 0.1))
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("parked.finding")
