@@ -35,7 +35,7 @@ struct SettingsView: View {
                     trailing: model.units.distance == .miles ? "Miles" : "Km", to: .generalSettings)
                 row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places", to: .places)
                 row("lock.fill", "Security", "App Lock & privacy", trailing: model.appLockEnabled ? "On" : nil, trailingTint: ScreenKit.green, to: .security)
-                row("arrow.up.arrow.down", "Data Management", "Export drives & charges", to: .dataManagement)
+                row("arrow.up.arrow.down", "Data Management", "Export JSON, CSV & GPX", to: .dataManagement)
                 row("questionmark.bubble.fill", "Support", "About Volta & help", to: .support)
 
                 footer
