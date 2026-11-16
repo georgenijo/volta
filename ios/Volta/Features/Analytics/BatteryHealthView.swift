@@ -7,6 +7,9 @@ struct BatteryHealthView: View {
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
     @State private var state: Loadable<BatteryHealth> = .loading
+    /// Every recorded charge, for the cycle estimate. nil while loading or if it
+    /// failed: the estimate is then hidden, the rest of the screen unaffected.
+    @State private var charges: PagedResult<ChargeSummary>?
 
     var body: some View {
         // Wide: health and capacity beside the range trend and drain.
@@ -25,6 +28,7 @@ struct BatteryHealthView: View {
         }
         .screenKitPage("Battery Health", screen: "battery-health")
         .task(id: vehicleID) { await load() }
+        .task(id: vehicleID) { await loadCharges() }
     }
 
     private var hasData: Bool {
@@ -43,6 +47,10 @@ struct BatteryHealthView: View {
                 ScreenKit.Metric(label: "Idle drain",
                                  value: h.avgIdleDrainPctPerDay.map { VoltaFormat.number($0, digits: 1) } ?? "—",
                                  unit: "%/day", caption: drainCaption(h.avgIdleDrainPctPerDay), symbol: "moon.zzz")
+            }
+            if let charges, let estimate = CycleEstimate.make(charges: charges.items, usableCapacityKwh: h.capacityNowKwh,
+                                                              isComplete: charges.isComplete) {
+                cycleCard(estimate)
             }
             Text("Health is estimated from rated range at a full charge over time, the same method as TeslaMate's Battery Health dashboard. Short-term swings are normal.")
                 .font(.system(size: 12)).foregroundStyle(ScreenKit.secondary)
@@ -117,6 +125,35 @@ struct BatteryHealthView: View {
         }
     }
 
+    /// Equivalent full cycles: energy added over today's usable capacity.
+    private func cycleCard(_ e: CycleEstimate) -> some View {
+        Card(padding: 20) {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionLabel("Charge cycles", trailing: "Estimate")
+                ScreenKit.Numeral(value: (e.isComplete ? "" : "≥ ") + VoltaFormat.number(e.cycles, digits: e.cycles < 10 ? 1 : 0),
+                                  unit: "cycles", size: 40)
+                Text("\(VoltaFormat.energy(e.energyAddedKwh, fractionDigits: 0)) added over \(e.sessionsCounted) session\(e.sessionsCounted == 1 ? "" : "s"), divided by the estimated usable capacity of \(VoltaFormat.number(e.capacityKwh, digits: 1)) kWh.")
+                    .font(.footnote).foregroundStyle(ScreenKit.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(cycleQualifier(e))
+                    .font(.caption).foregroundStyle(ScreenKit.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("card.battery.cycles")
+    }
+
+    private func cycleQualifier(_ e: CycleEstimate) -> String {
+        var text = "Counts only sessions TeslaMate recorded"
+        if e.sessionsCounted < e.sessionsTotal {
+            let missing = e.sessionsTotal - e.sessionsCounted
+            text += "; \(missing) session\(missing == 1 ? "" : "s") without recorded energy \(missing == 1 ? "isn't" : "aren't") included"
+        }
+        if !e.isComplete { text += "; not every page of history loaded, so this is a lower bound" }
+        return text + ". Partial charges add up to cycles, so one cycle is a battery's worth of energy, not one session."
+    }
+
     private func healthLabel(_ pct: Double?) -> String? {
         guard let pct else { return nil }
         return pct >= 90 ? "Excellent" : pct >= 80 ? "Good" : "Fair"
@@ -130,6 +167,15 @@ struct BatteryHealthView: View {
     private func drainCaption(_ value: Double?) -> String? {
         guard let value else { return nil }
         return value <= 1 ? "Typical" : value <= 2 ? "Elevated" : "High"
+    }
+
+    private func loadCharges() async {
+        charges = nil
+        let source = dataSource, id = vehicleID
+        let all = DateRange(from: nil, to: nil)
+        guard let result = try? await fetchAllPages({ try await source.charges(vehicleID: id, range: all, cursor: $0) }),
+              !Task.isCancelled else { return }
+        withAnimation(.smooth) { charges = result }
     }
 
     private func load() async {
