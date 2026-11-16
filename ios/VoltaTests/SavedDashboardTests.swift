@@ -70,6 +70,16 @@ private func makeSummary(_ range: SummaryRange, km: Double = 10) -> ActivitySumm
 
 private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterval(-3600), end: .now)
 
+/// Records what reaches the widget snapshot, controls and Live Activities.
+@MainActor private final class RecordingSurfaces: VehicleSurfaces {
+    var published: [VehicleRefresh] = []
+    private var issued: UInt64 = 0
+    func setContext(_ context: VehicleSurfaceContext) {}
+    func nextStatusToken() -> StatusRequestToken { issued += 1; return StatusRequestToken(value: issued) }
+    func publish(_ refresh: VehicleRefresh, dataSource: any VoltaDataSource) { published.append(refresh) }
+    func drivingActivityPreferenceChanged() {}
+}
+
 @MainActor final class SavedDashboardTests: XCTestCase {
     /// A bounded wait for cooperative child tasks, not a timing assertion.
     private func waitUntil(_ condition: @MainActor () -> Bool) async {
@@ -572,6 +582,37 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(controls.chargeLimit, 90)
         await controls.adjustChargeLimit(by: 5, coordinator: coordinator, dataSource: source, vehicleID: 1)
         XCTAssertEqual(source.sentCommands.withLock { $0 }, ["set_charge_limit"])
+    }
+
+    /// Only a status the server just sent reaches the widget snapshot, so its
+    /// "as of" and location times are always a reading's, never the saved file's.
+    func testSavedStatusNeverRefreshesTheWidgetSnapshot() async throws {
+        let source = StubSource(), gate = SectionGate(), surfaces = RecordingSurfaces(), model = DashboardModel()
+        source.statusHandler = { await gate.wait(); throw VoltaError.unreachable("offline") }
+        var savedStatus = makeStatus(battery: 41)
+        savedStatus.updatedAt = .now.addingTimeInterval(-3600)
+        savedStatus.locationUpdatedAt = .now.addingTimeInterval(-3600)
+        var dashboard = saved(); dashboard.status = savedStatus
+        let load = Task {
+            await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: dashboard), surfaces: surfaces)
+        }
+        await waitUntil { model.status != nil }
+        XCTAssertTrue(model.showsSavedStatus)
+        XCTAssertTrue(surfaces.published.isEmpty, "showing the saved status publishes nothing")
+        await gate.open()
+        await load.value
+        XCTAssertTrue(model.showsSavedStatus)
+        XCTAssertTrue(surfaces.published.isEmpty, "a failed refresh publishes nothing either")
+
+        let fresh = makeStatus(battery: 90)
+        source.statusHandler = { fresh }
+        await model.load(dataSource: source, vehicleID: 1, surfaces: surfaces)
+        XCTAssertFalse(surfaces.published.isEmpty)
+        for refresh in surfaces.published {
+            XCTAssertEqual(refresh.status.batteryLevel, 90)
+            XCTAssertEqual(refresh.status.updatedAt, fresh.updatedAt, "stamped with the reading's own time")
+            XCTAssertNil(refresh.status.telemetryFreshness?.savedAt)
+        }
     }
 
     func testDashboardCaptionNamesSavedDataAndNeverSaysLive() throws {

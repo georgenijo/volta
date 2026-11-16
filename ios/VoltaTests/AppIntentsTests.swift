@@ -389,6 +389,17 @@ private final class IntentTokenStore: TokenStoring, Sendable {
     }
 }
 
+/// The dashboard file from the previous launch, read for whichever backend asks.
+private final class SavedFile: SavedDashboardStoring {
+    var acceptedBackend: String?
+    var acceptedVehicleID: Int?
+    let dashboard: SavedDashboard
+    init(_ dashboard: SavedDashboard) { self.dashboard = dashboard }
+    func read(backend: String) -> SavedDashboard? { dashboard }
+    func write(_ dashboard: SavedDashboard) {}
+    func remove() {}
+}
+
 private final class RequestLog: Sendable {
     private let entries = Mutex<[String]>([])
     func add(_ request: URLRequest) { entries.withLock { $0.append("\(request.httpMethod ?? "GET") \(request.url?.path ?? "")") } }
@@ -412,6 +423,8 @@ private final class RequestLog: Sendable {
     private func pairedModel(surfaces: IntentSurfaces = IntentSurfaces(),
                              willStartCommand: (@Sendable () -> Void)? = nil,
                              appLock: (any AppAuthenticating)? = nil,
+                             savedDashboards: (any SavedDashboardStoring)? = nil,
+                             launchRequests: Bool = false,
                              handler: @escaping @Sendable (URLRequest) throws -> (Int, Data)) throws -> AppModel {
         StubProtocol.handler.withLock { $0 = handler }
         addTeardownBlock { StubProtocol.handler.withLock { $0 = nil } }
@@ -419,11 +432,15 @@ private final class RequestLog: Sendable {
         let settings = settings(); settings.serverURL = "https://volta.example"; settings.selectedVehicleID = 42
         if appLock != nil { settings.appLockEnabled = true }
         let store = IntentTokenStore(); try store.save("synthetic-token")
+        // The launch's own requests (`/vehicles`, and a saved dashboard's
+        // prefetch) are off unless asked for, as in a prewarm: these tests
+        // count the intent's requests.
         return AppModel(settings: settings, tokenStore: store, session: URLSession(configuration: config),
                         appLock: appLock ?? AppLock(),
-                        launchArguments: ["Volta"], surfaces: surfaces,
+                        launchArguments: ["Volta"], launchEnvironment: launchRequests ? [:] : ["ActivePrewarm": "1"],
+                        surfaces: surfaces,
                         commandIntentStore: VehicleCommandIntentStore(inMemory: []),
-                        willStartCommand: willStartCommand)
+                        savedDashboards: savedDashboards, willStartCommand: willStartCommand)
     }
 
     private func json(_ text: String) -> Data { Data(text.utf8) }
@@ -473,6 +490,48 @@ private final class RequestLog: Sendable {
         let empty = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
         do { _ = try await empty.reading(); XCTFail("expected noReading") }
         catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .noReading) }
+    }
+
+    /// The dashboard saved by the last launch stands in for the vehicle list
+    /// and the Dashboard at startup, never for an intent: reads come from the
+    /// widget snapshot, and commands from the request and fresh capabilities.
+    func testTheSavedDashboardNeverAnswersOrDecidesAnIntent() async throws {
+        let savedStatus = VehicleStatus(
+            vehicleId: 42, state: .online, updatedAt: now, batteryLevel: 12, usableBatteryLevel: nil,
+            ratedRangeKm: nil, estRangeKm: 40, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil,
+            minutesToFull: nil, insideTempC: nil, outsideTempC: nil, climateOn: true, driverTempSettingC: nil,
+            locked: true, sentryMode: false, odometerKm: nil, location: nil, locationUpdatedAt: nil, firmware: nil)
+        let saved = SavedDashboard(backend: "saved-backend", vehicleID: 42, savedAt: now, vehicles: [Vehicle(id: 42, name: "Friday")],
+                                   status: savedStatus, timeline: [], summaries: [],
+                                   todayRequestedAt: nil, todayRequestedZone: nil)
+        let log = RequestLog(), surfaces = IntentSurfaces()
+        let model = try pairedModel(surfaces: surfaces, savedDashboards: SavedFile(saved)) { request in
+            log.add(request)
+            switch (request.httpMethod ?? "GET", request.url?.path ?? "") {
+            case ("GET", "/v1/vehicles/42/commands"):
+                return (200, Data(#"{"available":true,"reason":null,"commands":["lock","unlock"]}"#.utf8))
+            case ("POST", "/v1/vehicles/42/commands/lock"):
+                return (200, Data(#"{"ok":true,"command":"lock","requestId":"request_123"}"#.utf8))
+            default:
+                // The vehicle list, status and history stay offline: only the saved values exist.
+                throw URLError(.cannotConnectToHost)
+            }
+        }
+        XCTAssertEqual(model.vehicles.map(\.id), [42], "the saved dashboard was restored")
+
+        let noSnapshot = VehicleIntentService(model: { model }, readSnapshot: { nil }, reloadControls: {})
+        do { _ = try await noSnapshot.reading(); XCTFail("expected noReading, not the saved status") }
+        catch { XCTAssertEqual((error as? VoltaIntentError)?.kind, .noReading) }
+        let cached = snapshot()
+        let service = VehicleIntentService(model: { model }, readSnapshot: { cached }, reloadControls: {})
+        let reading = try await service.reading()
+        XCTAssertEqual(reading.snapshot, cached)
+
+        // Saved as already locked: the request still goes out, after a fresh capability check.
+        _ = try await service.perform(.lock)
+        let sent = log.all.filter { $0.contains("/commands") }
+        XCTAssertEqual(sent, ["GET /v1/vehicles/42/commands", "POST /v1/vehicles/42/commands/lock"])
+        XCTAssertTrue(surfaces.published.isEmpty, "the saved status is never published to widgets or controls")
     }
 
     func testPairedCommandIsRefusedWhenTeslaIsNotLinkedAndNothingIsSent() async throws {
@@ -909,6 +968,50 @@ private final class RequestLog: Sendable {
         XCTAssertFalse(model.takeControlsPresentation(), "exactly once")
         model.updateControlsRequest(otherSheetUp: false)
         XCTAssertFalse(model.controlsPresentationRequested, "not again")
+    }
+
+    /// A cold launch from the lock control with the app lock on and a saved
+    /// dashboard: nothing (saved data included) shows until unlock, then
+    /// Controls opens once over the saved dashboard, whose status refuses commands.
+    func testALockedColdLaunchWithASavedDashboardOpensControlsOnceAfterUnlock() async throws {
+        let status = VehicleStatus(
+            vehicleId: 42, state: .online, updatedAt: now, batteryLevel: 50, usableBatteryLevel: nil,
+            ratedRangeKm: nil, estRangeKm: 200, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil,
+            minutesToFull: nil, insideTempC: nil, outsideTempC: nil, climateOn: false, driverTempSettingC: nil,
+            locked: true, sentryMode: false, odometerKm: nil, location: nil, locationUpdatedAt: nil, firmware: nil)
+        let saved = SavedDashboard(backend: "saved-backend", vehicleID: 42, savedAt: now, vehicles: [Vehicle(id: 42, name: "Friday")],
+                                   status: status, timeline: [], summaries: [],
+                                   todayRequestedAt: nil, todayRequestedZone: nil)
+        let auth = StubAuthentication()
+        let model = try pairedModel(appLock: auth, savedDashboards: SavedFile(saved), launchRequests: true) { _ in
+            throw URLError(.cannotConnectToHost)
+        }
+        XCTAssertTrue(model.isLocked)
+        XCTAssertTrue(model.vehicles.isEmpty, "the saved dashboard is not restored while locked")
+        model.requestControls()
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertFalse(model.controlsPresentationRequested, "locked: do not present")
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 42), "no dashboard, saved or not, while locked")
+
+        auth.result = true
+        await model.unlock()
+        XCTAssertEqual(model.vehicles.map(\.id), [42], "unlocking restored the saved dashboard")
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertTrue(model.controlsPresentationRequested)
+        XCTAssertTrue(model.takeControlsPresentation(), "the Dashboard opens Controls")
+        XCTAssertFalse(model.takeControlsPresentation(), "exactly once")
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertFalse(model.controlsPresentationRequested, "not again")
+
+        let start = try XCTUnwrap(model.takeInitialDashboardVehicles(vehicleID: 42))
+        let controls = ControlsModel(status: try XCTUnwrap(start.saved).labelledStatus)
+        XCTAssertTrue(controls.showsSavedStatus, "Controls show the saved status, so commands wait for a refresh")
+        // The launch prefetch went out after unlock; let it end inside this test.
+        let prefetch = try XCTUnwrap(start.prefetch)
+        prefetch.cancel()
+        _ = try? await prefetch.status.value
+        _ = try? await prefetch.timeline.value
+        for summary in prefetch.summaries.values { _ = try? await summary.value }
     }
 
     func testControlsRequestIsDroppedWhenAuthenticationIsCancelledOrFails() async throws {
