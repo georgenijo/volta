@@ -105,8 +105,46 @@ struct VehicleStatus: Codable, Hashable, Sendable {
     /// When the car expects to reach its limit, dated from its own estimate
     /// (newer servers); `minutesToFull` is what remains of it at `updatedAt`.
     var chargeReadyAt: Date? = nil
+    /// Gear, speed and power on the road (newer servers); see `LiveDrive`.
+    var liveDrive: LiveDrive? = nil
 
     var isCharging: Bool { chargingState == .charging || (chargingState == nil && state == .charging) }
+}
+
+/// What the car is doing on the road (`docs/API.md`, LiveDrive). Each value
+/// says when it was seen and whether it holds now; a malformed value decodes
+/// as unknown without failing the status.
+struct LiveDrive: Codable, Hashable, Sendable {
+    enum Gear: String, Codable, Hashable, Sendable, CaseIterable { case p = "P", r = "R", n = "N", d = "D" }
+    struct Reading<Value: Codable & Hashable & Sendable>: Codable, Hashable, Sendable {
+        var value: Value
+        var observedAt: Date
+        /// Holds now: from a connected stream, or seen moments ago.
+        var current: Bool
+        var source: String? = nil
+    }
+    var gear: Reading<Gear>?
+    var speedKph: Reading<Double>?
+    /// Battery power: positive drives, negative is regen.
+    var powerKw: Reading<Double>?
+    /// The stream shows the car has not moved since then (in R, N or D).
+    var stoppedSince: Date?
+
+    init(gear: Reading<Gear>? = nil, speedKph: Reading<Double>? = nil, powerKw: Reading<Double>? = nil,
+         stoppedSince: Date? = nil) {
+        self.gear = gear
+        self.speedKph = speedKph
+        self.powerKw = powerKw
+        self.stoppedSince = stoppedSince
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try? decoder.container(keyedBy: CodingKeys.self)
+        gear = (try? c?.decodeIfPresent(Reading<Gear>.self, forKey: .gear)) ?? nil
+        speedKph = (try? c?.decodeIfPresent(Reading<Double>.self, forKey: .speedKph)) ?? nil
+        powerKw = (try? c?.decodeIfPresent(Reading<Double>.self, forKey: .powerKw)) ?? nil
+        stoppedSince = (try? c?.decodeIfPresent(Date.self, forKey: .stoppedSince)) ?? nil
+    }
 }
 
 struct TireReading: Codable, Hashable, Sendable {

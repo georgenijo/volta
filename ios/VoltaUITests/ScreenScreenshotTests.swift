@@ -187,6 +187,30 @@ final class ScreenScreenshotTests: XCTestCase {
         capture("dashboard-dock-sent")
     }
 
+    /// Demo mode's drive refreshes on its own while the Dashboard shows; Park removes the card.
+    func testLiveDrivingCardRefreshesAndLeavesWhenParked() throws {
+        defer { app.terminate() }
+        continueAfterFailure = false
+        app.launchArguments = ["-demo-mode", "YES", "-demoDriving", "city", "-VoltaDisableMotion"]
+        app.launch()
+        try waitForScreen("dashboard")
+        let card = element("card.liveDriving")
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        let first = card.label
+        XCTAssertTrue(first.hasPrefix("Driving"), first)
+        capture("dashboard-live-driving")
+        // Two refreshes later the city loop has moved on.
+        let changed = NSPredicate(format: "label != %@", first)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: changed, evaluatedWith: card)], timeout: 15), .completed,
+                       "the card refreshes by itself")
+        app.terminate()
+        app.launchArguments = ["-demo-mode", "YES", "-demoDriving", "parked", "-VoltaDisableMotion"]
+        app.launch()
+        try waitForScreen("dashboard")
+        XCTAssertTrue(element("card.now").waitForExistence(timeout: 10))
+        XCTAssertFalse(element("card.liveDriving").exists, "a parked car shows the parked card")
+    }
+
     func testClimateControlsFitAndSend() throws {
         defer { app.terminate() }
         try launchDemo()

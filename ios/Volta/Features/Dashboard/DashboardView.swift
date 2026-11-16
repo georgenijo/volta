@@ -29,8 +29,10 @@ struct DashboardView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.barsOnSide) private var barsOnSide
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isActiveTab) private var isActiveTab
 
     @State private var model = DashboardModel()
+    @State private var liveDriving = LiveDrivingRefresher()
     @State private var controls = ControlsModel(status: nil)
     @State private var localCoordinator = VehicleCommandCoordinator()
     @State private var scrollOffset: CGFloat = 0
@@ -157,6 +159,13 @@ struct DashboardView: View {
         .task(id: CurveKey(chargeID: model.status?.isCharging == true ? model.status?.activeChargeId : nil,
                            loadedAt: model.lastLoadedAt)) {
             await loadPowerCurve()
+        }
+        // While the car drives and this screen shows: refresh its status. The
+        // drive ending reloads history, so the finished drive appears.
+        .task(id: refreshesLiveDrive) {
+            guard refreshesLiveDrive else { return }
+            if await liveDriving.run(dashboard: model, dataSource: dataSource, vehicleID: vehicleID,
+                                     surfaces: surfaces) == .driveEnded { await load() }
         }
         .onChange(of: model.status != nil, initial: true) { _, hasStatus in
             if hasStatus { StartupTrace.mark(.aboveFold) }
@@ -339,6 +348,11 @@ struct DashboardView: View {
     // MARK: Layouts
 
     private var displayStatus: VehicleStatus { controls.effective(model.status ?? .skeleton) }
+    /// The Dashboard is in front (no Controls over it) and the car drives.
+    private var refreshesLiveDrive: Bool {
+        LiveDrivingRefresher.shouldRun(visible: isActiveTab && path.isEmpty && controlsHost == nil,
+                                       sceneActive: scenePhase == .active, status: model.status)
+    }
     private var isPlaceholder: Bool { model.status == nil }
 
     /// Open flat: the stage on one side of the hinge, the details on the other.
@@ -658,7 +672,7 @@ struct DashboardView: View {
 
     private func nowCard(_ style: NowCard.Style) -> some View {
         NowCard(status: displayStatus, style: style, context: context, powerCurve: powerCurve,
-                parkedSince: NowCardContent.parkedSince(model.timeline),
+                parkedSince: NowCardContent.parkedSince(model.timeline), fetchedAt: model.lastLoadedAt,
                 openLiveCharge: { if model.status?.isCharging == true { showLiveCharge = true } },
                 perform: perform, openControls: { showControls = true })
     }

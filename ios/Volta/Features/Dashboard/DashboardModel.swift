@@ -65,6 +65,8 @@ final class DashboardModel {
     }
 
     private var generation = 0
+    /// Changes when a load starts; see `showLive`.
+    var loadGeneration: Int { generation }
     /// When and in which zone the shown today total was requested.
     private var todayRequest: (at: Date, zone: String)?
     /// Where loads are saved for the next launch; from the first load's start.
@@ -315,6 +317,23 @@ final class DashboardModel {
         guard !cancelled, let surfaces, let issued else { return }
         surfaces.publish(VehicleRefresh(status: status, issued: issued, vehicleName: vehicle?.name,
                                         today: today, timeline: timeline), dataSource: dataSource)
+    }
+
+    /// A status from the live driving refresh (`LiveDrivingRefresher`): shown
+    /// at once; history and the saved dashboard are left to loads. Refused
+    /// while a load runs or when one started after this request was sent, so
+    /// an older answer never replaces a newer one.
+    @discardableResult
+    func showLive(_ newStatus: VehicleStatus, vehicleID: Int, startedGeneration: Int) -> Bool {
+        guard !isLoading, generation == startedGeneration, newStatus.vehicleId == vehicleID,
+              status?.vehicleId == vehicleID else { return false }
+        status = newStatus
+        showsSavedStatus = false
+        refreshError = nil
+        lastLoadedAt = .now
+        failedAttemptAt = nil
+        phase = .loaded
+        return true
     }
 
     /// Shows the previous launch's dashboard until fresh data replaces it.

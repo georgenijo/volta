@@ -14,8 +14,9 @@ enum NowVariant: Equatable {
 
     static func of(_ status: VehicleStatus) -> NowVariant {
         if status.isCharging { return .charging }
+        if LiveDriveDisplay.isDriving(status) { return .driving }
+        // In Park while TeslaMate still has the drive open: parked.
         switch status.state {
-        case .driving: return .driving
         case .asleep, .offline: return .unreachable(status.state)
         default: break
         }
@@ -71,6 +72,8 @@ struct NowCard: View {
     var context: VehicleCommandContext
     var powerCurve: [ChargeCurvePoint] = []
     var parkedSince: Date?
+    /// When this device received `status`; nil for saved or placeholder data.
+    var fetchedAt: Date?
     var openLiveCharge: () -> Void
     /// Sends a command (asking first where needed), or opens Controls when
     /// controls are not enabled for it.
@@ -85,7 +88,7 @@ struct NowCard: View {
             case .charging: charging
             case .pluggedIn: pluggedIn
             case .parked: parked
-            case .driving: NowDrivingCard(status: status)
+            case .driving: LiveDrivingCard(status: status, style: style, fetchedAt: fetchedAt)
             case .unreachable(let state): unreachable(state)
             }
         }
@@ -97,12 +100,13 @@ struct NowCard: View {
     }
 
     /// The card's colour says what the car is doing: green while energy goes
-    /// in, blue while it sits parked and awake. Other states stay neutral.
+    /// in, blue while it sits parked and awake or drives (as the driving Live
+    /// Activity). Other states stay neutral.
     static func accent(for variant: NowVariant) -> Color? {
         switch variant {
         case .charging: .voltaGreen
-        case .parked: .voltaBlue
-        case .pluggedIn, .driving, .unreachable: nil
+        case .parked, .driving: .voltaBlue
+        case .pluggedIn, .unreachable: nil
         }
     }
 
@@ -440,22 +444,6 @@ struct NowCard: View {
                                  hugsTitle: hugsTitle) { perform(command) }
             .disabled(supported && !context.canStart(command))
             .accessibilityHint(supported ? "" : "Opens Controls")
-    }
-}
-
-/// The driving variant. Kept separate so a fuller driving card can replace it.
-struct NowDrivingCard: View {
-    var status: VehicleStatus
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
-            Text("Driving")
-                .font(.system(.footnote, weight: .semibold)).tracking(2).textCase(.uppercase)
-                .foregroundStyle(Color.voltaTextSecondary)
-                .accessibilityAddTraits(.isHeader)
-            NowNumber(value: "\(status.batteryLevel)", unit: "% battery", size: 40, color: .voltaTextPrimary)
-        }
-        .accessibilityElement(children: .combine)
     }
 }
 

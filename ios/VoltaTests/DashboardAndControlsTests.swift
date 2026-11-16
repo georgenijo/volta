@@ -891,7 +891,7 @@ private actor SentLimits {
         XCTAssertEqual(NowCard.accent(for: .charging), .voltaGreen)
         XCTAssertEqual(NowCard.accent(for: .parked), .voltaBlue)
         XCTAssertNil(NowCard.accent(for: .pluggedIn))
-        XCTAssertNil(NowCard.accent(for: .driving))
+        XCTAssertEqual(NowCard.accent(for: .driving), .voltaBlue)
         XCTAssertNil(NowCard.accent(for: .unreachable(.asleep)))
     }
 
