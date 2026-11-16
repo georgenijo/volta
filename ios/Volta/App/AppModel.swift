@@ -11,11 +11,14 @@ final class AppModel {
             dashboardCanUseInitialVehicles = false
             tesla.setClient(dataSource as? any TeslaAccountClient)
             savedDashboards.acceptedBackend = savedDashboardBackend
+            followSelectionInSavedDashboards()
             launchVehicles?.cancel(); launchVehicles = nil
             vehiclesLoad = nil; startupLoad = nil; startupLoadUnclaimed = false
         }
     }
-    private(set) var vehicles: [Vehicle] = []
+    /// The effective selection depends on it, so the saved-dashboard fence
+    /// follows every change (the saved list restored at launch or unlock too).
+    private(set) var vehicles: [Vehicle] = [] { didSet { followSelectionInSavedDashboards() } }
     private(set) var hasLoadedVehicles = false
     private(set) var needsCredentialRetry = false
     private(set) var isConfiguringAppLock = false
@@ -237,6 +240,12 @@ final class AppModel {
     /// saved-dashboard store follows the selected car too.
     private func updateSurfaces() {
         surfaces.setContext(surfaceContext)
+        followSelectionInSavedDashboards()
+    }
+    /// Saves are accepted only for the effective selection. Called by every
+    /// path that can change it: `vehicles`, the stored choice (via
+    /// `updateSurfaces`) and pairing.
+    private func followSelectionInSavedDashboards() {
         savedDashboards.acceptedVehicleID = selectedVehicleID
     }
     /// Retry Keychain access when protected data becomes available after prewarm.

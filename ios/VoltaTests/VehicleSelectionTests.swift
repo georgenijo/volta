@@ -9,6 +9,34 @@ private final class SelectionTokenStore: TokenStoring, Sendable {
     func delete() throws { token.withLock { $0 = nil } }
 }
 
+@MainActor private final class UnlockingAuthentication: AppAuthenticating {
+    func unlock() async throws -> Bool { true }
+    func cancel() {}
+}
+
+/// Answers like `StubProtocol`, but holds `/v1/vehicles` off the loading
+/// thread until `release` signals, so the other requests keep flowing.
+private final class HeldVehiclesProtocol: URLProtocol, @unchecked Sendable {
+    static let release = Mutex<DispatchSemaphore?>(nil)
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard request.url?.path == "/v1/vehicles", let release = Self.release.withLock({ $0 }) else { return answer() }
+        DispatchQueue.global().async { release.wait(); release.signal(); self.answer() }
+    }
+    override func stopLoading() {}
+    private func answer() {
+        do {
+            let (status, data) = try XCTUnwrap(StubProtocol.handler.withLock { $0 })(request)
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
+    }
+}
+
 /// Synthetic account: car 1 has never reported a battery reading, car 2 has.
 private func vehiclesJSON(firstHasData: Bool = false) -> Data {
     try! JSONSerialization.data(withJSONObject: [
@@ -270,6 +298,60 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
         XCTAssertEqual(saved.acceptedVehicleID, 2)
         model.select(Vehicle(id: 1, name: "Tesla"))
         XCTAssertEqual(saved.acceptedVehicleID, 1, "a refresh for the previous car can no longer save")
+    }
+
+    /// Locked launch, no stored choice: the fence starts on the fallback car.
+    /// Unlocking restores the saved list, which makes car 2 the selection;
+    /// its fresh dashboard must save even though /vehicles then fails.
+    func testUnlockingMovesTheSavedDashboardFenceToTheRestoredSelection() async throws {
+        let release = DispatchSemaphore(value: 0)
+        HeldVehiclesProtocol.release.withLock { $0 = release }
+        addTeardownBlock { release.signal(); HeldVehiclesProtocol.release.withLock { $0 = nil } }
+        let status = try DecodingTests.fixture("status"), timeline = Data("[]".utf8)
+        let summary = try DecodingTests.fixture("summary")
+        StubProtocol.handler.withLock {
+            $0 = { request in
+                let path = request.url?.path ?? ""
+                if path == "/v1/vehicles" { return (503, Data(#"{"error":{"code":"unavailable","message":"Synthetic outage."}}"#.utf8)) }
+                if path.hasSuffix("/timeline") { return (200, timeline) }
+                if path.hasSuffix("/summary") { return (200, summary) }
+                return (200, status)
+            }
+        }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [HeldVehiclesProtocol.self]
+        let settings = settings()
+        settings.serverURL = "https://volta.example"
+        settings.appLockEnabled = true
+        XCTAssertNil(settings.selectedVehicleID)
+        let store = SelectionTokenStore(); try store.save("synthetic-token")
+        var dashboard = savedDashboard(backend: pairedBackend, vehicleID: 2)
+        dashboard.vehicles = [Vehicle(id: 1, name: "Tesla", hasData: false), Vehicle(id: 2, name: "Friday", hasData: true)]
+        let saved = MemorySavedDashboards(dashboard)
+        let model = AppModel(settings: settings, tokenStore: store, session: URLSession(configuration: config),
+                             appLock: UnlockingAuthentication(), launchArguments: ["Volta"], launchEnvironment: [:],
+                             surfaces: NoSurfaces(), savedDashboards: saved)
+        XCTAssertTrue(model.isLocked)
+        XCTAssertNotEqual(saved.acceptedVehicleID, 2, "the fence starts on the fallback car")
+
+        let unlock = Task { await model.unlock() }
+        await waitUntil { model.selectedVehicleID == 2 && !model.isLocked }
+        XCTAssertEqual(saved.acceptedVehicleID, 2, "set as soon as the saved list is installed")
+
+        let dashboardModel = DashboardModel()
+        let load = Task {
+            await dashboardModel.load(dataSource: model.dataSource, vehicleID: 2,
+                                      initialVehicles: model.takeInitialDashboardVehicles(vehicleID: 2))
+        }
+        await waitUntil { saved.dashboard?.savedAt ?? .distantPast > dashboard.savedAt }
+        XCTAssertGreaterThan(saved.dashboard?.savedAt ?? .distantPast, dashboard.savedAt,
+                             "status and history saved while /vehicles is held")
+        release.signal()
+        await unlock.value
+        await load.value
+        XCTAssertNotNil(model.errorMessage, "the vehicle list failed")
+        XCTAssertEqual(saved.acceptedVehicleID, 2)
+        XCTAssertEqual(saved.dashboard?.vehicleID, 2)
+        XCTAssertEqual(saved.dashboard?.summaries.count, 3)
     }
 
     func testUnpairAndDemoModeForgetTheSavedDashboard() throws {
