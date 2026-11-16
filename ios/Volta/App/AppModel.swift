@@ -10,6 +10,7 @@ final class AppModel {
         didSet {
             dashboardCanUseInitialVehicles = false
             tesla.setClient(dataSource as? any TeslaAccountClient)
+            savedDashboards.acceptedBackend = savedDashboardBackend
         }
     }
     private(set) var vehicles: [Vehicle] = []
@@ -35,6 +36,13 @@ final class AppModel {
     @ObservationIgnored private var lockGeneration = UUID()
     @ObservationIgnored private var authenticateOnActive = false
     @ObservationIgnored private var dashboardCanUseInitialVehicles = false
+    /// The vehicle request in flight, which a dashboard mounted from the saved
+    /// list awaits instead of sending its own.
+    @ObservationIgnored private var vehiclesLoad: Task<Void, Never>?
+    /// The last dashboard saved for this backend; see `SavedDashboard`.
+    @ObservationIgnored private let savedDashboards: any SavedDashboardStoring
+    /// The saved dashboard read at launch, offered once to the first dashboard.
+    @ObservationIgnored private var launchDashboard: SavedDashboard?
     /// Widget snapshot + Live Activities. Told about every pairing, demo and
     /// vehicle change; see `surfaceContext`.
     @ObservationIgnored let surfaces: any VehicleSurfaces
@@ -56,13 +64,54 @@ final class AppModel {
         }
     }
     var selectedVehicle: Vehicle? { vehicles.first { $0.id == selectedVehicleID } }
-    /// A one-time handoff from startup loading to the first dashboard. Remounts
-    /// after a vehicle switch must fetch a new list, even within this process.
-    func takeInitialDashboardVehicles(vehicleID: Int) -> [Vehicle]? {
-        defer { dashboardCanUseInitialVehicles = false }
-        guard dashboardCanUseInitialVehicles, isPaired, !isLocked,
-              vehicleID == selectedVehicleID else { return nil }
-        return vehicles
+    /// What a newly mounted dashboard starts from: where to save what it
+    /// loads, and, for the first dashboard only, the dashboard saved by the
+    /// previous launch and the startup vehicle list. That list may still be
+    /// loading when a saved dashboard mounted the shell early; the dashboard
+    /// then awaits it rather than sending a second `/vehicles`. Remounts after
+    /// a vehicle switch must fetch a new list, even within this process.
+    func takeInitialDashboardVehicles(vehicleID: Int) -> DashboardStart? {
+        let canUseVehicles = dashboardCanUseInitialVehicles
+        dashboardCanUseInitialVehicles = false
+        let saved = launchDashboard
+        launchDashboard = nil
+        guard isPaired, !isLocked else { return nil }
+        let backend = savedDashboardBackend
+        var start = DashboardStart(saved: saved?.vehicleID == vehicleID ? saved : nil,
+                                   store: backend == nil ? nil : savedDashboards, backend: backend)
+        guard vehicleID == selectedVehicleID else { return start }
+        if canUseVehicles {
+            start.vehicles = { [vehicles] in vehicles }
+        } else if !hasLoadedVehicles, let load = vehiclesLoad {
+            let currentGeneration = generation
+            start.vehicles = { [weak self] in
+                await load.value
+                guard let self, self.generation == currentGeneration, self.dashboardCanUseInitialVehicles,
+                      vehicleID == self.selectedVehicleID else { return nil }
+                self.dashboardCanUseInitialVehicles = false
+                return self.vehicles
+            }
+        }
+        return start
+    }
+    /// The saved-dashboard key of the paired server; nil in demo mode.
+    private var savedDashboardBackend: String? {
+        guard pairingState == .paired, !isLaunchDemo, let api = dataSource as? APIDataSource else { return nil }
+        return SavedDashboard.backendKey(api.commandBackendID)
+    }
+    /// Shows the previous launch's vehicles, so the shell and its saved
+    /// dashboard appear in the first frame. The vehicle request still runs and
+    /// replaces them. Never while locked: unlocking restores it.
+    private func restoreSavedDashboard() {
+        guard pairingState == .paired, !isLocked, !hasLoadedVehicles, vehicles.isEmpty,
+              let backend = savedDashboardBackend, let saved = savedDashboards.read(backend: backend),
+              saved.vehicles.contains(where: { $0.id == saved.vehicleID }) else { return }
+        vehicles = saved.vehicles
+        launchDashboard = saved
+    }
+    private func forgetSavedDashboard() {
+        launchDashboard = nil
+        savedDashboards.remove()
     }
     /// The user's choice of a car from a list newer than `vehicles` (Dashboard
     /// refreshes its own). An id missing from `vehicles` would leave the surfaces
@@ -111,7 +160,7 @@ final class AppModel {
         set { Task { await setAppLockEnabled(newValue) } }
     }
 
-    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil) {
+    init(settings: UserSettings? = nil, tokenStore: any TokenStoring = KeychainTokenStore(), session: URLSession? = nil, appLock: any AppAuthenticating = AppLock(), launchArguments: [String] = ProcessInfo.processInfo.arguments, surfaces: (any VehicleSurfaces)? = nil, teslaWebAuth: (any TeslaWebAuthenticating)? = nil, commandIntentStore: VehicleCommandIntentStore? = nil, savedDashboards: (any SavedDashboardStoring)? = nil) {
         StartupTrace.mark(.appModel)
         let demoIndex = launchArguments.firstIndex(of: "-demo-mode")
         let launchDemo = demoIndex.flatMap { index -> Bool? in
@@ -121,6 +170,9 @@ final class AppModel {
         // Resolve the override before constructing or reading the persistent domain.
         let settings = launchDemo ? UserSettings(defaults: nil) : settings ?? UserSettings()
         self.settings = settings; self.tokenStore = tokenStore; self.session = session; self.appLock = appLock
+        // The saved dashboard lives beside the stored credential; test token
+        // stores get one in memory.
+        self.savedDashboards = savedDashboards ?? (tokenStore is KeychainTokenStore ? SavedDashboardFile() : MemorySavedDashboards())
         self.surfaces = surfaces ?? WidgetSync(settings: settings)
         tesla = TeslaLinkModel(webAuth: teslaWebAuth ?? TeslaWebAuthenticator())
         commandCoordinator = VehicleCommandCoordinator(store: commandIntentStore ?? (launchDemo ? VehicleCommandIntentStore(inMemory: []) : nil))
@@ -139,6 +191,7 @@ final class AppModel {
             pairingState = .demo; dataSource = MockDataSource(empty: launchDemo ? false : settings.emptyDemo)
         } else { restorePairing() }
         isLocked = isPaired && settings.appLockEnabled
+        self.savedDashboards.acceptedBackend = savedDashboardBackend
         updateSurfaces()
         tesla.setClient(dataSource as? any TeslaAccountClient)
         tesla.onConnected = { [weak self] in
@@ -161,6 +214,7 @@ final class AppModel {
             pairingState = .paired; dataSource = makeAPI(url: url, token: token)
             needsCredentialRetry = false; errorMessage = nil
             isLocked = settings.appLockEnabled
+            restoreSavedDashboard()
         } catch let error as KeychainTokenStore.StoreError where error.status == -25308 {
             needsCredentialRetry = true
             errorMessage = "Unlock your iPhone, then retry access to the stored device token."
@@ -261,6 +315,7 @@ final class AppModel {
         if !isLaunchDemo {
             settings.emptyDemo = empty
             settings.demoMode = true; settings.selectedVehicleID = nil; settings.selectedVehicleIsExplicit = false
+            forgetSavedDashboard()
         }
         pairingState = .demo; dataSource = MockDataSource(empty: empty)
         vehicles = []; errorMessage = nil; resetSignInFallbacks()
@@ -279,6 +334,7 @@ final class AppModel {
         needsCredentialRetry = false; hasLoadedVehicles = false; authenticateOnActive = false
         pairingState = .unpaired; vehicles = []; isLocked = false; resetSignInFallbacks()
         dataSource = MockDataSource(empty: true)
+        forgetSavedDashboard()
         updateSurfaces()  // clears the widget snapshot and ends Live Activities
         do { try tokenStore.delete(); errorMessage = nil; return true }
         catch { settings.serverURL = ""; errorMessage = error.localizedDescription; return false }
@@ -292,9 +348,16 @@ final class AppModel {
     }
     func loadVehicles() async {
         guard isPaired, !isLoadingVehicles, !isLocked else { return }
-        let currentGeneration = generation; let source = dataSource
         isLoadingVehicles = true
-        defer { if generation == currentGeneration { isLoadingVehicles = false; hasLoadedVehicles = true } }
+        let load = Task { await performVehicleLoad() }
+        vehiclesLoad = load
+        await withTaskCancellationHandler { await load.value } onCancel: { load.cancel() }
+    }
+    private func performVehicleLoad() async {
+        let currentGeneration = generation; let source = dataSource
+        defer {
+            if generation == currentGeneration { isLoadingVehicles = false; hasLoadedVehicles = true; vehiclesLoad = nil }
+        }
         do {
             let vehicles = try await source.vehicles()
             guard generation == currentGeneration else { return }
@@ -378,7 +441,7 @@ final class AppModel {
             let unlocked = try await appLock.unlock()
             guard generation == currentGeneration && lockGeneration == currentLock else { return }
             isLocked = !unlocked
-            if unlocked && !hasLoadedVehicles { await loadVehicles() }
+            if unlocked && !hasLoadedVehicles { restoreSavedDashboard(); await loadVehicles() }
         } catch { if generation == currentGeneration && lockGeneration == currentLock { errorMessage = error.localizedDescription } }
     }
 }

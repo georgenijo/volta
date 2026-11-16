@@ -55,6 +55,13 @@ final class DashboardModel {
     }
 
     private var generation = 0
+    /// When and in which zone the shown today total was requested.
+    private var todayRequest: (at: Date, zone: String)?
+    /// Where loads are saved for the next launch; from the first load's start.
+    private var savedStore: (any SavedDashboardStoring)?
+    private var savedBackend: String?
+    /// The shown status came from the saved dashboard, not this process.
+    private(set) var showsSavedStatus = false
 
     /// Short message for the partial-failure banner, if any section failed.
     var partialFailureMessage: String? {
@@ -81,39 +88,44 @@ final class DashboardModel {
         deviceZone = zone
     }
 
+    /// A first load from an already-loaded vehicle list.
+    func load(dataSource: any VoltaDataSource, vehicleID: Int, initialVehicles: [Vehicle]?,
+              surfaces: (any VehicleSurfaces)? = nil) async {
+        await load(dataSource: dataSource, vehicleID: vehicleID,
+                   initialVehicles: initialVehicles.map(DashboardStart.init(vehicles:)), surfaces: surfaces)
+    }
+
     /// - Parameters:
-    ///   - initialVehicles: the app shell's already-loaded list. On a model's
-    ///     first load, a list containing `vehicleID` avoids immediately fetching
-    ///     the same account list again. Later loads always refresh it.
+    ///   - initialVehicles: what a new model starts from (the parameter keeps
+    ///     its name from when it carried only the app's vehicle list). On a
+    ///     model's first load, the saved dashboard for `vehicleID` is shown at
+    ///     once, labelled as saved, and the app's startup list, if it contains
+    ///     `vehicleID`, replaces a `/vehicles` request. Later loads always
+    ///     refresh the list, and every load with fresh status is saved.
     ///   - surfaces: receives each successful refresh (widget snapshot, Live
     ///     Activities). nil in previews and tests.
-    func load(dataSource: any VoltaDataSource, vehicleID: Int, initialVehicles: [Vehicle]? = nil,
+    func load(dataSource: any VoltaDataSource, vehicleID: Int, initialVehicles start: DashboardStart? = nil,
               surfaces: (any VehicleSurfaces)? = nil) async {
         generation += 1
         let token = generation
+        let isNewModel = status == nil && vehicles.isEmpty
+        if let store = start?.store { savedStore = store; savedBackend = start?.backend }
+        if isNewModel, let saved = start?.saved, saved.vehicleID == vehicleID { show(saved) }
         if status == nil { phase = .loading }
         loadingSections = [.timeline, .summary(.today), .summary(.sevenDays), .summary(.thirtyDays)]
         defer { if token == generation { loadingSections = [] } }
 
-        // MainShell is only mounted after AppModel has loaded this account's
-        // vehicles. Accept that list only for a genuinely new model and only
-        // when it contains the selected vehicle; an invalid seed falls back to
-        // the server request and preserves the existing missing-vehicle behavior.
-        let seededVehicles: [Vehicle]?
-        if status == nil, self.vehicles.isEmpty, let initialVehicles,
-           initialVehicles.contains(where: { $0.id == vehicleID }) {
-            seededVehicles = initialVehicles
-            vehicles = initialVehicles
-            vehicle = initialVehicles.first { $0.id == vehicleID }
-        } else {
-            seededVehicles = nil
-        }
+        // Accept the app's startup list only for a genuinely new model and
+        // only when it contains the selected vehicle; an invalid seed falls
+        // back to the server request and preserves the existing missing-vehicle behavior.
+        let seededVehicles = isNewModel ? start?.vehicles : nil
 
         let todayRequestedAt = Date.now
         let todayRequestedZone = TimeZone.current.identifier
 
         await withTaskGroup(of: SectionResponse.self) { group in
-            async let vehiclesReq = Self.vehicleResult(dataSource: dataSource, seededVehicles: seededVehicles)
+            async let vehiclesReq = Self.vehicleResult(dataSource: dataSource, vehicleID: vehicleID,
+                                                       seededVehicles: seededVehicles)
             let issued = surfaces?.nextStatusToken()  // before /status: orders widget publishes
             async let statusReq = Self.result { try await dataSource.status(vehicleID: vehicleID) }
             group.addTask { .timeline(await Self.result { try await dataSource.timeline(vehicleID: vehicleID, hours: 48) }) }
@@ -144,10 +156,12 @@ final class DashboardModel {
             // vehicle-list refresh must not hold fresh status off screen.
             withAnimation(.smooth) {
                 status = newStatus
+                showsSavedStatus = false
                 refreshError = nil
                 lastLoadedAt = .now
                 phase = .loaded
             }
+            let statusLoadedAt = lastLoadedAt ?? .now
             StartupTrace.mark(.status)
 
             let vehiclesResult = await vehiclesReq
@@ -194,6 +208,7 @@ final class DashboardModel {
                             let current = today.day.isCurrent(at: .now, deviceZone: deviceZone)
                             summaries[.today] = current ? summary : nil
                             todayDay = current ? today.day : nil
+                            todayRequest = current ? (todayRequestedAt, todayRequestedZone) : nil
                             freshToday = today
                         } else { summaries[range] = summary }
                         failedSections.remove(.summary(range))
@@ -201,7 +216,9 @@ final class DashboardModel {
                     }
                 }
             }
+            guard token == generation, !Task.isCancelled else { return }
             if failedSections.isEmpty { StartupTrace.mark(.sections) }
+            save(status: newStatus, vehicleID: vehicleID, at: statusLoadedAt)
             // One ordered publication per status request, preserving the
             // existing widget / Live Activity ordering and reporting-day rules.
             guard token == generation, !Task.isCancelled, !cancelledSection else { return }
@@ -212,15 +229,48 @@ final class DashboardModel {
         }
     }
 
+    /// Shows the previous launch's dashboard until fresh data replaces it.
+    private func show(_ saved: SavedDashboard) {
+        vehicles = saved.vehicles
+        vehicle = saved.vehicles.first { $0.id == saved.vehicleID }
+        status = saved.labelledStatus
+        showsSavedStatus = true
+        timeline = saved.timeline
+        for summary in saved.summaries where summary.range != .today { summaries[summary.range] = summary }
+        if let today = saved.today {
+            deviceZone = TimeZone.current.identifier
+            if today.day.isCurrent(at: .now, deviceZone: deviceZone) {
+                summaries[.today] = today.summary
+                todayDay = today.day
+                todayRequest = (today.requestedAt, today.requestedZone)
+            }
+        }
+        lastLoadedAt = saved.savedAt
+        phase = .loaded
+        StartupTrace.mark(.cachedStatus)
+    }
+
+    /// Saves what is on screen after a load with fresh status, for the next launch.
+    private func save(status: VehicleStatus, vehicleID: Int, at savedAt: Date) {
+        guard let savedStore, let savedBackend else { return }
+        savedStore.write(SavedDashboard(
+            backend: savedBackend, vehicleID: vehicleID, savedAt: savedAt, vehicles: vehicles, status: status,
+            timeline: timeline, summaries: SummaryRange.allCases.compactMap { summaries[$0] },
+            todayRequestedAt: summaries[.today] == nil ? nil : todayRequest?.at,
+            todayRequestedZone: summaries[.today] == nil ? nil : todayRequest?.zone))
+    }
+
     private func apply(_ result: Result<[Vehicle], any Error>, selectedVehicleID: Int) {
         guard case .success(let vehicles) = result else { return }
         self.vehicles = vehicles
         vehicle = vehicles.first { $0.id == selectedVehicleID }
     }
 
-    private static func vehicleResult(dataSource: any VoltaDataSource,
-                                      seededVehicles: [Vehicle]?) async -> Result<[Vehicle], any Error> {
-        if let seededVehicles { return .success(seededVehicles) }
+    private static func vehicleResult(dataSource: any VoltaDataSource, vehicleID: Int,
+                                      seededVehicles: (@MainActor @Sendable () async -> [Vehicle]?)?) async -> Result<[Vehicle], any Error> {
+        if let seededVehicles, let list = await seededVehicles(), list.contains(where: { $0.id == vehicleID }) {
+            return .success(list)
+        }
         return await result { try await dataSource.vehicles() }
     }
 

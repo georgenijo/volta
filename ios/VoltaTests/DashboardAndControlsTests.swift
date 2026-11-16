@@ -95,6 +95,123 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         }
     }
 
+    private func saved(battery: Int = 41, backend: String = "backend-a", vehicleID: Int = 1) -> SavedDashboard {
+        var status = makeStatus(battery: battery)
+        status.vehicleId = vehicleID
+        return SavedDashboard(backend: backend, vehicleID: vehicleID, savedAt: .now.addingTimeInterval(-600),
+                              vehicles: [Vehicle(id: vehicleID, name: "Saved")], status: status,
+                              timeline: [segment], summaries: [makeSummary(.sevenDays, km: 70), makeSummary(.thirtyDays, km: 300)],
+                              todayRequestedAt: nil, todayRequestedZone: nil)
+    }
+
+    func testSavedDashboardShowsLabelledWhileFreshStatusIsSuspended() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.statusHandler = { await gate.wait(); return makeStatus(battery: 90) }
+        let start = DashboardStart(saved: saved())
+        let task = Task { await model.load(dataSource: source, vehicleID: 1, initialVehicles: start) }
+        await waitUntil { model.status != nil }
+
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertTrue(model.showsSavedStatus)
+        XCTAssertEqual(model.status?.batteryLevel, 41)
+        XCTAssertEqual(model.vehicle?.name, "Saved")
+        XCTAssertEqual(model.summaries[.thirtyDays]?.distanceKm, 300)
+        XCTAssertEqual(model.timeline.count, 1)
+        XCTAssertTrue(model.status?.telemetryFreshness?.label.hasPrefix("Saved data from") == true,
+                      "saved status is labelled, never shown as live")
+
+        await gate.open()
+        await task.value
+        XCTAssertFalse(model.showsSavedStatus)
+        XCTAssertEqual(model.status?.batteryLevel, 90)
+        XCTAssertNil(model.status?.telemetryFreshness?.savedAt)
+        XCTAssertEqual(model.summaries[.thirtyDays]?.distanceKm, 10, "fresh history replaces saved history")
+    }
+
+    func testSavedDashboardStaysWithRefreshErrorWhenStatusFails() async {
+        let source = StubSource(), model = DashboardModel()
+        source.statusHandler = { throw VoltaError.unreachable("offline") }
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: saved()))
+        XCTAssertEqual(model.phase, .loaded)
+        XCTAssertEqual(model.status?.batteryLevel, 41)
+        XCTAssertNotNil(model.refreshError, "the banner says the shown data could not be refreshed")
+    }
+
+    func testSavedDashboardForAnotherVehicleIsNotShown() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.statusHandler = { await gate.wait(); return makeStatus() }
+        let task = Task { await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: saved(vehicleID: 2))) }
+        await Task.yield()
+        XCTAssertNil(model.status)
+        XCTAssertEqual(model.phase, .loading)
+        await gate.open()
+        await task.value
+    }
+
+    func testFreshLoadsAreSavedForTheAcceptedBackendOnly() async {
+        let source = StubSource(), store = MemorySavedDashboards(), model = DashboardModel()
+        store.acceptedBackend = "backend-a"
+        source.timelineHandler = { [segment] }
+        await model.load(dataSource: source, vehicleID: 1,
+                         initialVehicles: DashboardStart(store: store, backend: "backend-a"))
+        XCTAssertEqual(store.dashboard?.status.batteryLevel, 72)
+        XCTAssertEqual(store.dashboard?.vehicles.map(\.name), ["Friday"])
+        XCTAssertEqual(store.dashboard?.summaries.count, 3)
+        XCTAssertEqual(store.dashboard?.timeline.count, 1)
+        XCTAssertNotNil(store.dashboard?.today, "today's reporting day can be recomputed on relaunch")
+
+        // A later refresh on the same model keeps saving.
+        source.statusHandler = { makeStatus(battery: 50) }
+        await model.load(dataSource: source, vehicleID: 1)
+        XCTAssertEqual(store.dashboard?.status.batteryLevel, 50)
+
+        // After unpairing the store accepts nothing, so a late load cannot save.
+        store.remove(); store.acceptedBackend = nil
+        await model.load(dataSource: source, vehicleID: 1)
+        XCTAssertNil(store.dashboard)
+    }
+
+    func testFailedStatusIsNotSaved() async {
+        let source = StubSource(), store = MemorySavedDashboards(), model = DashboardModel()
+        store.acceptedBackend = "backend-a"
+        source.statusHandler = { throw VoltaError.unreachable("offline") }
+        await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(store: store, backend: "backend-a"))
+        XCTAssertNil(store.dashboard)
+    }
+
+    func testSavedTodayTotalIsHiddenOnceItsDayHasEnded() async {
+        let source = StubSource(), gate = SectionGate(), model = DashboardModel()
+        source.statusHandler = { await gate.wait(); return makeStatus() }
+        var old = saved()
+        var today = makeSummary(.today, km: 12)
+        today.periodStart = .now.addingTimeInterval(-3 * 86_400); today.timeZone = TimeZone.current.identifier
+        old.summaries.append(today)
+        old.todayRequestedAt = .now.addingTimeInterval(-2.5 * 86_400); old.todayRequestedZone = TimeZone.current.identifier
+        let task = Task { await model.load(dataSource: source, vehicleID: 1, initialVehicles: DashboardStart(saved: old)) }
+        await waitUntil { model.status != nil }
+        XCTAssertNil(model.visibleSummaries(at: .now)[.today], "yesterday's totals never show as Today")
+        await gate.open()
+        await task.value
+    }
+
+    func testSavedDashboardRoundTripsThroughTheFile() async throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "saved-dashboard-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = SavedDashboardFile(url: url)
+        file.write(saved(backend: "backend-a"))
+        await file.drain()
+        XCTAssertNil(file.read(backend: "backend-a"), "nothing is written until a backend is accepted")
+        file.acceptedBackend = "backend-a"
+        file.write(saved(backend: "backend-a"))
+        await file.drain()
+        XCTAssertEqual(file.read(backend: "backend-a")?.status.batteryLevel, 41)
+        XCTAssertNil(file.read(backend: "backend-b"), "another server or device token never sees it")
+        file.remove()
+        XCTAssertNil(file.read(backend: "backend-a"))
+        await file.drain()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
     func testInitialPreloadedVehiclesAvoidDuplicateVehicleRequest() async {
         let source = StubSource(), calls = Counter(), model = DashboardModel()
         source.vehiclesHandler = {

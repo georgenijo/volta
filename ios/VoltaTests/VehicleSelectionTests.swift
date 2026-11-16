@@ -24,13 +24,36 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
     }
 
     /// A restored pairing whose `/v1/vehicles` responses come from `vehicles`.
-    private func pairedModel(_ settings: UserSettings, vehicles: @escaping @Sendable () -> Data) throws -> AppModel {
+    private func pairedModel(_ settings: UserSettings, saved: MemorySavedDashboards? = nil,
+                             vehicles: @escaping @Sendable () -> Data) throws -> AppModel {
         StubProtocol.handler.withLock { $0 = { _ in (200, vehicles()) } }
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubProtocol.self]
         settings.serverURL = "https://volta.example"
         let store = SelectionTokenStore(); try store.save("synthetic-token")
         return AppModel(settings: settings, tokenStore: store, session: URLSession(configuration: config),
-                        launchArguments: ["Volta"], surfaces: NoSurfaces())
+                        launchArguments: ["Volta"], surfaces: NoSurfaces(), savedDashboards: saved)
+    }
+
+    /// What the first dashboard would receive as the startup vehicle list.
+    private func handedOff(_ model: AppModel, vehicleID: Int) async -> [Int]? {
+        await model.takeInitialDashboardVehicles(vehicleID: vehicleID)?.vehicles?()?.map(\.id)
+    }
+
+    /// The saved-dashboard key `pairedModel` restores.
+    private var pairedBackend: String {
+        SavedDashboard.backendKey(APIDataSource(baseURL: URL(string: "https://volta.example")!,
+                                                token: "synthetic-token").commandBackendID)
+    }
+
+    private func savedDashboard(backend: String, vehicleID: Int = 2) -> SavedDashboard {
+        SavedDashboard(backend: backend, vehicleID: vehicleID, savedAt: .now.addingTimeInterval(-300),
+                       vehicles: [Vehicle(id: 1, name: "Tesla"), Vehicle(id: 2, name: "Saved Friday")],
+                       status: VehicleStatus(vehicleId: vehicleID, state: .asleep, updatedAt: .now.addingTimeInterval(-600),
+                                             batteryLevel: 64, usableBatteryLevel: nil, ratedRangeKm: 300, estRangeKm: nil,
+                                             chargeLimit: 80, chargingState: nil, chargerPowerKw: nil, minutesToFull: nil,
+                                             insideTempC: nil, outsideTempC: nil, climateOn: nil, driverTempSettingC: nil,
+                                             locked: true, sentryMode: nil, odometerKm: nil, location: nil, firmware: nil),
+                       timeline: [], summaries: [], todayRequestedAt: nil, todayRequestedZone: nil)
     }
 
     func testHasDataDecodesAndOlderServersAreUnknown() throws {
@@ -60,28 +83,95 @@ private func vehiclesJSON(firstHasData: Bool = false) -> Data {
     func testStartupVehicleListIsHandedToDashboardOnlyOnce() async throws {
         let model = try pairedModel(settings()) { vehiclesJSON() }
         await model.loadVehicles()
-        XCTAssertEqual(model.takeInitialDashboardVehicles(vehicleID: 2)?.map(\.id), [1, 2])
-        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2))
+        let first = await handedOff(model, vehicleID: 2)
+        XCTAssertEqual(first, [1, 2])
+        let second = await handedOff(model, vehicleID: 2)
+        XCTAssertNil(second)
         await model.loadVehicles()
-        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2), "later account refreshes must not seed a future remount")
+        let later = await handedOff(model, vehicleID: 2)
+        XCTAssertNil(later, "later account refreshes must not seed a future remount")
     }
 
     func testVehicleSwitchDiscardsUnusedStartupHandoff() async throws {
         let model = try pairedModel(settings()) { vehiclesJSON() }
         await model.loadVehicles()
         model.select(model.vehicles[0])
-        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 1), "a new dashboard after switching fetches current metadata")
+        let afterSwitch = await handedOff(model, vehicleID: 1)
+        XCTAssertNil(afterSwitch, "a new dashboard after switching fetches current metadata")
     }
 
     func testStartupHandoffCannotSurviveAccountChangeOrBackground() async throws {
         let model = try pairedModel(settings()) { vehiclesJSON() }
         await model.loadVehicles()
         model.didEnterBackground()
-        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2))
+        let afterBackground = await handedOff(model, vehicleID: 2)
+        XCTAssertNil(afterBackground)
         let other = try pairedModel(settings()) { vehiclesJSON() }
         await other.loadVehicles()
         other.tryDemoMode()
-        XCTAssertNil(other.takeInitialDashboardVehicles(vehicleID: 2))
+        let afterDemo = await handedOff(other, vehicleID: 2)
+        XCTAssertNil(afterDemo)
+    }
+
+    func testSavedDashboardMountsTheShellBeforeTheVehicleListLoads() async throws {
+        let saved = MemorySavedDashboards(savedDashboard(backend: pairedBackend))
+        let settings = settings()
+        settings.selectedVehicleID = 2
+        let model = try pairedModel(settings, saved: saved) { vehiclesJSON() }
+        XCTAssertEqual(model.vehicles.map(\.name), ["Tesla", "Saved Friday"], "the shell can mount in the first frame")
+        XCTAssertFalse(model.hasLoadedVehicles)
+        XCTAssertEqual(model.surfaceContext, .vehicle(id: 2, name: "Saved Friday"))
+        let start = model.takeInitialDashboardVehicles(vehicleID: 2)
+        XCTAssertEqual(start?.saved?.status.batteryLevel, 64)
+        XCTAssertNotNil(start?.store)
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2)?.saved, "only the first dashboard shows it")
+        await model.loadVehicles()
+        XCTAssertEqual(model.vehicles.map(\.name), ["Tesla", "Friday"], "the fresh list replaces the saved one")
+    }
+
+    func testDashboardMountedEarlyAwaitsTheStartupVehicleRequest() async throws {
+        let saved = MemorySavedDashboards(savedDashboard(backend: pairedBackend))
+        let settings = settings()
+        settings.selectedVehicleID = 2
+        let model = try pairedModel(settings, saved: saved) { vehiclesJSON() }
+        let load = Task { await model.loadVehicles() }
+        await Task.yield()
+        XCTAssertTrue(model.isLoadingVehicles)
+        let handoff = model.takeInitialDashboardVehicles(vehicleID: 2)?.vehicles
+        XCTAssertNotNil(handoff, "a dashboard mounted from saved vehicles reuses the request in flight")
+        let ids = await handoff?()?.map(\.id)
+        XCTAssertEqual(ids, [1, 2])
+        await load.value
+        let again = await handedOff(model, vehicleID: 2)
+        XCTAssertNil(again)
+    }
+
+    func testSavedDashboardIsIgnoredForAnotherBackendOrWhileLocked() throws {
+        let other = MemorySavedDashboards(savedDashboard(backend: SavedDashboard.backendKey("another-server")))
+        let model = try pairedModel(settings(), saved: other) { vehiclesJSON() }
+        XCTAssertTrue(model.vehicles.isEmpty)
+        XCTAssertNil(model.takeInitialDashboardVehicles(vehicleID: 2)?.saved)
+
+        let locked = settings()
+        locked.appLockEnabled = true
+        let lockedModel = try pairedModel(locked, saved: MemorySavedDashboards(savedDashboard(backend: pairedBackend))) { vehiclesJSON() }
+        XCTAssertTrue(lockedModel.isLocked)
+        XCTAssertTrue(lockedModel.vehicles.isEmpty, "nothing loads behind the lock screen")
+    }
+
+    func testUnpairAndDemoModeForgetTheSavedDashboard() throws {
+        let saved = MemorySavedDashboards(savedDashboard(backend: pairedBackend))
+        let model = try pairedModel(settings(), saved: saved) { vehiclesJSON() }
+        XCTAssertEqual(saved.acceptedBackend, pairedBackend)
+        model.unpair()
+        XCTAssertNil(saved.dashboard)
+        XCTAssertNil(saved.acceptedBackend, "a load that outlives the pairing saves nothing")
+
+        let demoSaved = MemorySavedDashboards(savedDashboard(backend: pairedBackend))
+        let demo = try pairedModel(settings(), saved: demoSaved) { vehiclesJSON() }
+        demo.tryDemoMode()
+        XCTAssertNil(demoSaved.dashboard)
+        XCTAssertNil(demoSaved.acceptedBackend)
     }
 
     /// Settings as an earlier build left them: an id without the explicit flag.
