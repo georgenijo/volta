@@ -890,17 +890,17 @@ private final class RequestLog: Sendable {
         model.didEnterBackground()
         XCTAssertTrue(model.isLocked)
         model.requestControls()
-        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        model.updateControlsRequest(otherSheetUp: false)
         XCTAssertFalse(model.showsRequestedControls, "locked: do not present")
         XCTAssertNotNil(model.controlsRequest, "the request waits")
 
         auth.result = true
         await model.unlock()
-        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        model.updateControlsRequest(otherSheetUp: false)
         XCTAssertTrue(model.showsRequestedControls, "unlock succeeded: present")
         XCTAssertNil(model.controlsRequest, "consumed")
         model.showsRequestedControls = false  // the person closes it
-        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        model.updateControlsRequest(otherSheetUp: false)
         XCTAssertFalse(model.showsRequestedControls, "presented once")
     }
 
@@ -914,7 +914,7 @@ private final class RequestLog: Sendable {
         XCTAssertNil(model.controlsRequest, "authentication cancelled: dropped")
         auth.result = true
         await model.unlock()
-        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        model.updateControlsRequest(otherSheetUp: false)
         XCTAssertFalse(model.showsRequestedControls, "a later unlock doesn't revive it")
 
         struct Failed: Error {}
@@ -929,30 +929,82 @@ private final class RequestLog: Sendable {
         let model = try await vehiclesModel(appLock: StubAuthentication())
         model.requestControls()
         model.tryDemoMode()
-        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        model.updateControlsRequest(otherSheetUp: false)
         XCTAssertNil(model.controlsRequest, "generation changed: dropped")
         XCTAssertFalse(model.showsRequestedControls)
 
         let other = try await vehiclesModel(appLock: StubAuthentication())
         other.requestControls()
         other.unpair()
-        other.updateControlsRequest(isActive: true, otherSheetUp: false)
+        other.updateControlsRequest(otherSheetUp: false)
         XCTAssertNil(other.controlsRequest, "disconnected: dropped")
     }
 
     func testControlsRequestNeverStacksAndClosesWhenLocked() async throws {
         let model = try await vehiclesModel(appLock: StubAuthentication())
         model.requestControls()
-        model.updateControlsRequest(isActive: true, otherSheetUp: true)
+        model.updateControlsRequest(otherSheetUp: true)
         XCTAssertNil(model.controlsRequest, "another sheet is up: dropped")
         XCTAssertFalse(model.showsRequestedControls)
 
         model.requestControls()
-        model.updateControlsRequest(isActive: true, otherSheetUp: false)
+        model.updateControlsRequest(otherSheetUp: false)
         XCTAssertTrue(model.showsRequestedControls)
         model.didEnterBackground()
-        model.updateControlsRequest(isActive: false, otherSheetUp: true)
+        model.updateControlsRequest(otherSheetUp: true)
         XCTAssertFalse(model.showsRequestedControls, "the app lock closes it rather than leaving it above the overlay")
+    }
+
+    func testCoverFollowsTheRootsShieldAndLockOverlay() {
+        XCTAssertFalse(AppModel.needsPrivacy(isPaired: true, appLockEnabled: true, isActive: true))
+        XCTAssertTrue(AppModel.needsPrivacy(isPaired: true, appLockEnabled: true, isActive: false))
+        XCTAssertFalse(AppModel.needsPrivacy(isPaired: true, appLockEnabled: false, isActive: false),
+                       "without the app lock the root shows no shield either")
+        XCTAssertFalse(AppModel.needsPrivacy(isPaired: false, appLockEnabled: true, isActive: false))
+        XCTAssertFalse(AppModel.requestedControlsCovered(isLocked: false, needsPrivacy: false), "active and unlocked")
+        XCTAssertTrue(AppModel.requestedControlsCovered(isLocked: false, needsPrivacy: true), "inactive")
+        XCTAssertTrue(AppModel.requestedControlsCovered(isLocked: true, needsPrivacy: false), "locked")
+        XCTAssertTrue(AppModel.requestedControlsCovered(isLocked: true, needsPrivacy: true))
+    }
+
+    /// Through the root's scene-phase handling (`sceneDidChange`), as the view
+    /// calls it: inactivity covers without closing; locking closes.
+    func testSceneChangesCoverTheRequestedControlsAndLockingClosesThem() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        XCTAssertTrue(model.appLockEnabled)
+        model.sceneDidChange(to: .active, otherSheetUp: false)
+        model.requestControls()
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertTrue(model.showsRequestedControls)
+        XCTAssertFalse(model.requestedControlsCovered, "active and unlocked: uncovered")
+
+        model.sceneDidChange(to: .inactive, otherSheetUp: true)
+        XCTAssertTrue(model.needsPrivacy, "the root shows its shield")
+        XCTAssertTrue(model.requestedControlsCovered, "inactive: covered")
+        XCTAssertTrue(model.showsRequestedControls, "inactive: still presented")
+
+        model.sceneDidChange(to: .active, otherSheetUp: true)
+        XCTAssertFalse(model.requestedControlsCovered, "active again: uncovered")
+        XCTAssertTrue(model.showsRequestedControls, "still presented")
+
+        model.sceneDidChange(to: .inactive, otherSheetUp: true)
+        model.sceneDidChange(to: .background, otherSheetUp: true)
+        XCTAssertTrue(model.isLocked)
+        XCTAssertTrue(model.requestedControlsCovered, "locked: covered")
+        XCTAssertFalse(model.showsRequestedControls, "locked: dismissed")
+    }
+
+    func testARequestMadeWhileInactiveWaitsForTheSceneToBeActive() async throws {
+        let model = try await vehiclesModel(appLock: StubAuthentication())
+        model.sceneDidChange(to: .active, otherSheetUp: false)
+        model.sceneDidChange(to: .inactive, otherSheetUp: false)
+        model.requestControls()
+        model.updateControlsRequest(otherSheetUp: false)
+        XCTAssertFalse(model.showsRequestedControls, "not presented while inactive")
+        XCTAssertNotNil(model.controlsRequest)
+        model.sceneDidChange(to: .active, otherSheetUp: false)
+        XCTAssertTrue(model.showsRequestedControls)
+        XCTAssertFalse(model.requestedControlsCovered)
     }
 
     /// A command whose Swift task is cancelled before the transport starts it

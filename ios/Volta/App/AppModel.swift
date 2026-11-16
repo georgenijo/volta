@@ -32,6 +32,10 @@ final class AppModel {
     /// to it and its dismissal resets it.
     var showsRequestedControls = false
     @ObservationIgnored private var shownControlsGeneration: Int?
+    /// The scene's phase as last reported by the root view (nil before the
+    /// first report). The privacy shield and the requested Controls cover
+    /// both read it, so they always agree.
+    private(set) var scenePhase: AppScenePhase?
     /// The effective selection depends on it, so the saved-dashboard fence
     /// follows every change (the saved list restored at launch or unlock too).
     private(set) var vehicles: [Vehicle] = [] { didSet { followSelectionInSavedDashboards() } }
@@ -597,10 +601,47 @@ extension AppModel {
         return otherSheetUp ? .drop : .present
     }
 
-    /// The presenter calls this whenever `controlsRequestInputs` or its scene
-    /// phase change. It also closes a shown screen the app lock now covers or
-    /// whose connection ended.
-    func updateControlsRequest(isActive: Bool, otherSheetUp: Bool) {
+    /// The scene is in front and taking input. Before the first report it
+    /// counts as active, as at launch.
+    var isSceneActive: Bool { scenePhase.map { $0 == .active } ?? true }
+
+    /// Whether the root shows its privacy shield: paired with the app lock on
+    /// and the scene not active (Control Center, the app switcher, a system
+    /// alert, the background).
+    static func needsPrivacy(isPaired: Bool, appLockEnabled: Bool, isActive: Bool) -> Bool {
+        isPaired && appLockEnabled && !isActive
+    }
+
+    var needsPrivacy: Bool {
+        Self.needsPrivacy(isPaired: isPaired, appLockEnabled: appLockEnabled, isActive: isSceneActive)
+    }
+
+    /// Whether the requested Controls screen is covered: whenever the root
+    /// shows its privacy shield or lock overlay. A sheet sits above the root,
+    /// so it carries its own cover.
+    static func requestedControlsCovered(isLocked: Bool, needsPrivacy: Bool) -> Bool {
+        isLocked || needsPrivacy
+    }
+
+    var requestedControlsCovered: Bool {
+        Self.requestedControlsCovered(isLocked: isLocked, needsPrivacy: needsPrivacy)
+    }
+
+    /// The root view's scene-phase handling. Inactive only covers (pulling
+    /// down Control Center keeps Controls open); background locks, which
+    /// closes the requested Controls screen.
+    func sceneDidChange(to phase: AppScenePhase, otherSheetUp: Bool) {
+        let previous = scenePhase
+        scenePhase = phase
+        if phase == .background, previous != nil, previous != .background { didEnterBackground() }
+        updateControlsRequest(otherSheetUp: otherSheetUp)
+    }
+
+    /// Called whenever `controlsRequestInputs` or the scene phase change. It
+    /// also closes a shown screen the app lock now covers or whose connection
+    /// ended; mere inactivity only covers it (`requestedControlsCovered`).
+    func updateControlsRequest(otherSheetUp: Bool) {
+        let isActive = isSceneActive
         if showsRequestedControls, isLocked || !isPaired || shownControlsGeneration != connectionGeneration {
             showsRequestedControls = false
         }
@@ -618,3 +659,6 @@ extension AppModel {
         }
     }
 }
+
+/// The scene phases the model distinguishes (mirrors SwiftUI's `ScenePhase`).
+enum AppScenePhase: Equatable, Sendable { case active, inactive, background }

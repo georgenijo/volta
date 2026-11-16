@@ -187,7 +187,12 @@ The request to open Controls is model state (`AppModel.controlsRequest`, tied to
 the connection generation). `AppModel.controlsRequestDecision` presents it only
 while the app is active, unlocked, connected under the same generation and has
 no other sheet up. It waits behind the app lock, and a cancelled or failed
-unlock, a connection change or another open sheet drops it.
+unlock, a connection change or another open sheet drops it. A sheet sits above
+the root's privacy shield, so the requested Controls screen carries its own
+cover. That cover follows the same model state as the shield and lock overlay
+(`AppModel.requestedControlsCovered`). When the scene is merely inactive
+(Control Center, the app switcher) the screen is covered but stays open;
+locking closes it.
 
 A command is prepared against the app's current connection; if pairing, demo
 mode, the data source or the selected car changes during an await, nothing is

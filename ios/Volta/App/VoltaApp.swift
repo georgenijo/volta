@@ -32,7 +32,7 @@ private struct VoltaRootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @State private var confirmsDisconnect = false
-    private var needsPrivacy: Bool { model.isPaired && model.appLockEnabled && scenePhase != .active }
+    private var needsPrivacy: Bool { model.needsPrivacy }
     var body: some View {
         Group {
             if model.needsCredentialRetry {
@@ -81,7 +81,14 @@ private struct VoltaRootView: View {
                     // The lock control opens this to unlock, where it is
                     // confirmed. The model decides when; see `updateControlsRequest`.
                     .sheet(isPresented: Bindable(model).showsRequestedControls) {
+                        // A sheet sits above the root's shield, so it is
+                        // covered by the same rule (inactive or locked).
+                        let covered = model.requestedControlsCovered
                         ControlsView(initialStatus: nil, vehicleName: model.selectedVehicle?.name)
+                            .opacity(covered ? 0 : 1)
+                            .disabled(covered)
+                            .accessibilityHidden(covered)
+                            .overlay { if covered { PrivacyShield() } }
                     }
             }
         }
@@ -91,9 +98,7 @@ private struct VoltaRootView: View {
         .accessibilityHidden(model.isLocked || needsPrivacy)
         .overlay {
             if needsPrivacy {
-                Color.voltaBackground.ignoresSafeArea().overlay {
-                    Image(systemName: "bolt.shield.fill").font(.system(size: 52)).foregroundStyle(Color.voltaBlue)
-                }
+                PrivacyShield()
             } else if model.isLocked {
                 ZStack {
                     Color.voltaBackground.ignoresSafeArea()
@@ -135,16 +140,13 @@ private struct VoltaRootView: View {
             if model.isLocked { await model.unlock() }
             else { await model.loadVehicles() }
         }
-        .onChange(of: model.controlsRequestInputs, initial: true) { updateControlsRequest() }
-        .onChange(of: scenePhase) { _, phase in
-            updateControlsRequest()
-            if phase == .background { model.didEnterBackground() }
-            else if phase == .active { Task { await model.becameActive(); await model.refreshTesla() } }
+        .onChange(of: model.controlsRequestInputs, initial: true) {
+            model.updateControlsRequest(otherSheetUp: Self.isSheetPresented)
         }
-    }
-
-    private func updateControlsRequest() {
-        model.updateControlsRequest(isActive: scenePhase == .active, otherSheetUp: Self.isSheetPresented)
+        .onChange(of: scenePhase, initial: true) { old, phase in
+            model.sceneDidChange(to: AppScenePhase(phase), otherSheetUp: Self.isSheetPresented)
+            if phase == .active, old != phase { Task { await model.becameActive(); await model.refreshTesla() } }
+        }
     }
 
     /// Whether any sheet is already up (the Dashboard's own, for example).
@@ -159,5 +161,24 @@ private struct VoltaRootView: View {
     /// disconnect asks first.
     private func disconnect(_ exitDemo: () -> Void) {
         if model.isLaunchDemo { exitDemo() } else { confirmsDisconnect = true }
+    }
+}
+
+/// Shown over private content while the scene isn't active and the app lock is on.
+private struct PrivacyShield: View {
+    var body: some View {
+        Color.voltaBackground.ignoresSafeArea().overlay {
+            Image(systemName: "bolt.shield.fill").font(.system(size: 52)).foregroundStyle(Color.voltaBlue)
+        }
+    }
+}
+
+private extension AppScenePhase {
+    init(_ phase: ScenePhase) {
+        switch phase {
+        case .active: self = .active
+        case .background: self = .background
+        default: self = .inactive
+        }
     }
 }
