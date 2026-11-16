@@ -67,6 +67,8 @@ struct DashboardView: View {
     /// The command activity the Dashboard itself started, shown in its banner.
     @State private var dashboardActivityID: UUID?
     @State private var awaitingActivity = false
+    /// The single column's below-fold sections wait for the launch's first frame.
+    private var launchFrame = LaunchFrame.shared
 
     enum Layout { case stage, upright, column }
 
@@ -148,6 +150,9 @@ struct DashboardView: View {
         .task(id: CurveKey(chargeID: model.status?.isCharging == true ? model.status?.activeChargeId : nil,
                            loadedAt: model.lastLoadedAt)) {
             await loadPowerCurve()
+        }
+        .onChange(of: model.status != nil, initial: true) { _, hasStatus in
+            if hasStatus { StartupTrace.mark(.aboveFold) }
         }
         .onChange(of: model.status) { _, status in
             if let status { controls.observe(status, dataSource: dataSource, vehicleID: vehicleID) }
@@ -529,9 +534,18 @@ struct DashboardView: View {
                     hero(status).padding(.top, VoltaSpacing.xs)
                     nowCard(.compact).padding(.top, VoltaSpacing.lg + 2)
                     dock.padding(.top, VoltaSpacing.md)
-                    metricGrid(status).padding(.top, VoltaSpacing.md)
-                    details.padding(.top, VoltaSpacing.xl + 4)
+                    // Below the fold in one column: at launch these wait for
+                    // the first frame, like the map, and fade in with it.
+                    if launchFrame.isShown {
+                        Group {
+                            metricGrid(status).padding(.top, VoltaSpacing.md)
+                            details.padding(.top, VoltaSpacing.xl + 4)
+                        }
+                        .transition(.opacity)
+                        .onAppear { StartupTrace.mark(.belowFold) }
+                    }
                 }
+                .animation(.easeOut(duration: 0.25), value: launchFrame.isShown)
                 .padding(.horizontal, VoltaSpacing.screen)
                 .voltaReadableWidth(720)
                 .redacted(reason: isPlaceholder ? .placeholder : [])
@@ -540,6 +554,10 @@ struct DashboardView: View {
             .padding(.bottom, VoltaSpacing.tabBarClearance)
         }
         .scrollIndicators(.hidden)
+        .onAppear {
+            // History drawn below the fold is on screen only once that part is.
+            if !launchFrame.isShown { StartupTrace.hold(.sections, until: .belowFold) }
+        }
         .scrollPosition($scrollPosition)
         .accessibilityIdentifier("scroll.dashboard")
         .onScrollGeometryChange(for: CGFloat.self) { geo in

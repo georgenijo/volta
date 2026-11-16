@@ -15,7 +15,7 @@ import statistics
 import sys
 from pathlib import Path
 
-MILESTONES = ("appModel", "firstFrame", "shell", "vehicles", "cachedStatus", "status", "sections")
+MILESTONES = ("appModel", "firstFrame", "shell", "vehicles", "cachedStatus", "status", "aboveFold", "belowFold", "sections")
 PATTERN = re.compile(r"startup milestone=(\w+) ms=(-?\d+)")
 
 

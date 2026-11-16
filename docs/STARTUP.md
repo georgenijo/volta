@@ -105,6 +105,54 @@ that status and faster sections become usable while slower work remains pending.
 It also covers overlapping loads, cancellation and partial failures. Widget
 publication remains once per completed refresh, ordered by its status token.
 
+## First frame: below-fold sections wait
+
+A Time Profiler pass over `main` showed the first frame's cost is SwiftUI
+and CoreText, not app code: on the benchmark simulator about 860 ms of
+main-thread time sits in the first Core Animation commit. About 40% of that is
+CoreText loading fonts for the first time (mostly `getattrlist`/`lstat` on
+the simulator's font files). Text layout and Swift conformance scans for
+SwiftUI's property reflection make up most of the rest. Most of those fonts
+belong to the sections below the fold.
+
+In the single-column layout (every iPhone, and iPhone Duo's outer display),
+the metric cards, the 48-hour activity strip and the Today / 7D / 30D summary
+now mount after the first frame (`LaunchFrame.isShown`, as the map already
+does) and fade in with the map. Nothing above the fold changes or moves.
+Content is only appended below the dock, and every colour, icon, gauge and
+animation is kept. Later mounts, and the two-pane layouts on the inner display
+(where those sections are on screen), draw everything at once.
+
+New milestones: `aboveFold` is the first frame with the dashboard's top filled
+in (saved or fresh status). `belowFold` is the frame with the deferred
+sections. `sections` is held until `belowFold`, so it still means every
+history section is on screen.
+
+### November 2026 results, first-frame gate
+
+Release build on the dedicated simulator, ms after `AppModel`, median
+(range). Each run is one warm-up plus five measured launches, host load
+average 7–9.
+
+| HTTP/2, server timings (5 runs) | first frame (= above fold) | fresh status visible | below fold | all sections visible |
+|---|---|---|---|---|
+| `main` | 1455 (1281–1511) | 1455 | — | 1694 (1320–2036) |
+| branch | 852 (813–877) | 852 | 1501 (1314–1661) | 1501 (1406–1661) |
+
+An earlier set of ten interleaved launches per build (two rounds of five)
+on an intermediate revision of the branch agreed: HTTP/2 server timings
+1311–1380 → 725–787 ms (round medians); HTTP/2 +150 ms RTT 1404–1432 →
+766–884 ms; HTTP/1.1 +150 ms RTT 1397–1402 → 806–851 ms, with the saved
+dashboard first and fresh status at the same time as `main`.
+
+The deferred frame lands about 650 ms after the first. It shares that frame
+with the map's MapKit setup, so the map appears no later than on `main`. The
+target of 0.5–0.7 s is not reached on the simulator. What remains is mostly
+first-use framework work: tab and navigation bars, SwiftUI's conformance
+scans, and font loading for the visible text. Much of that cost is specific to
+the simulator. These runs were not repeated on a physical iPhone, because the
+paired phones carry the owner's live pairing.
+
 ## Repeatable simulator measurement
 
 Use a dedicated simulator with synthetic pairing. Never run these benchmarks
@@ -161,7 +209,7 @@ Use `https://127.0.0.1:9443`, including that IP in the test certificate's SAN.
 `scripts/startup-bench.sh <simulator-id> <derived-data> <profile> <out-dir> <ca-cert>`
 runs the readiness test while streaming the app's `startup` log milestones
 (`StartupTrace`: `appModel`, `firstFrame`, `shell`, `vehicles`, `cachedStatus`,
-`status`, `sections`, in milliseconds since process start), then prints each
+`status`, `aboveFold`, `belowFold`, `sections`, in milliseconds since process start), then prints each
 launch and the medians. It also reports each milestone relative to `appModel`:
 the time before it is mostly the simulator's dyld and Swift conformance setup,
 which swings with host load. Every milestone after `appModel` is logged at the

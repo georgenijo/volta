@@ -40,6 +40,12 @@ enum StartupTrace {
         case status
         /// Every dashboard history section finished its first load and was committed.
         case sections
+        /// A frame with the dashboard's above-fold content filled in
+        /// (status, battery, Now card, dock), saved or fresh, was committed.
+        case aboveFold
+        /// The single-column dashboard's below-fold sections (metric cards,
+        /// activity strip, summaries), which wait for the first frame, were committed.
+        case belowFold
     }
 
     static let logger = Logger(subsystem: "com.georgenijo.volta", category: "startup")
@@ -54,6 +60,11 @@ enum StartupTrace {
         return Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000)
     }()
     @MainActor private static var reached: Set<Milestone> = []
+    @MainActor private static var logged: Set<Milestone> = []
+    /// Milestones that may not be logged before another one: key waits for value.
+    @MainActor private static var holds: [Milestone: Milestone] = [:]
+    /// Milestones reached while held, by the milestone they wait for.
+    @MainActor private static var heldBack: [Milestone: [Milestone]] = [:]
 
     /// Marks `.firstFrame`. Call when the root view appears.
     @MainActor static func markFirstFrameAtNextRefresh() { mark(.firstFrame) }
@@ -65,6 +76,14 @@ enum StartupTrace {
         if milestone == .appModel { log(milestone) } else { NextRefresh.shared.add(milestone) }
     }
 
+    /// Logs `milestone` no earlier than `prerequisite`: a frame that shows
+    /// sections the screen has not mounted yet does not show them. Call
+    /// before `milestone` is logged; a prerequisite already logged is no hold.
+    @MainActor static func hold(_ milestone: Milestone, until prerequisite: Milestone) {
+        guard !logged.contains(milestone), !logged.contains(prerequisite) else { return }
+        holds[milestone] = prerequisite
+    }
+
     /// Drops `milestone` if it is still waiting for a display refresh: a
     /// saved status replaced before any frame showed it was never visible.
     @MainActor static func supersede(_ milestone: Milestone) {
@@ -72,9 +91,16 @@ enum StartupTrace {
     }
 
     @MainActor fileprivate static func log(_ milestone: Milestone) {
+        if let prerequisite = holds[milestone], !logged.contains(prerequisite) {
+            heldBack[prerequisite, default: []].append(milestone)
+            return
+        }
+        logged.insert(milestone)
         let elapsed = processStart.map { Int((Date.now.timeIntervalSince($0) * 1_000).rounded()) } ?? -1
         signposter.emitEvent("milestone", "\(milestone.rawValue, privacy: .public)")
         logger.notice("startup milestone=\(milestone.rawValue, privacy: .public) ms=\(elapsed, privacy: .public)")
+        // Reached earlier, so already in the frame this milestone committed.
+        heldBack.removeValue(forKey: milestone)?.forEach(log)
     }
 }
 
