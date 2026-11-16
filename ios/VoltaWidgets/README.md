@@ -6,6 +6,7 @@ WidgetKit extension (`com.georgenijo.volta.widgets`) with:
 |---|---|---|
 | Home Screen | `VoltaHomeWidget` | `systemSmall` (battery, range, state), `systemMedium` (+ doors, climate, inside/outside temp, last updated), `systemLarge` (+ today's activity, 48h strip) |
 | Lock Screen | `VoltaAccessoryWidget` | `accessoryCircular` (battery gauge), `accessoryRectangular` (battery + range + bar), `accessoryInline` |
+| Lock Screen (transparent) | `VoltaStatusWidget`, `VoltaGlance.{battery,range,charging,climate,security,today}` | Status: `accessoryRectangular` (state, doors, cabin, battery). Glances: `accessoryCircular` + `accessoryInline`, one value each with no ring or backdrop |
 | Live Activity | `ChargingActivityAttributes` | Lock Screen banner, Dynamic Island expanded / compact / minimal: SOC toward the charge limit, kW, countdown to the limit, energy added, range |
 | Live Activity | `DrivingActivityAttributes` (optional) | distance this drive, battery, range, elapsed time, energy used |
 | Controls | `VehicleLockControl`, `VehicleClimateControl`, `VehicleChargePortControl`, `VehicleBatteryControl` | Control Center, Lock Screen and Action button: lock toggle, climate toggle, open-charge-port button, battery and range (opens Volta) |
