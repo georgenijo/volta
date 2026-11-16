@@ -46,13 +46,22 @@ struct ControlRow<Trailing: View>: View {
     var title: String
     var subtitle: String?
     var subtitleColor: Color = .voltaTextSecondary
+    /// Keeps the trailing view beside the text at every size: for a
+    /// disclosure chevron, which is not a control to move under the label.
+    var trailingStaysInline = false
     @ViewBuilder var trailing: Trailing
     @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .body) private var iconWidth: CGFloat = 28
 
     var body: some View {
         Group {
-            if typeSize.isAccessibilitySize {
+            if trailingStaysInline {
+                HStack(spacing: VoltaSpacing.sm) {
+                    label
+                    Spacer(minLength: 0)
+                    trailing
+                }
+            } else if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
                     label
                     // Side by side, or one above another when they don't fit.

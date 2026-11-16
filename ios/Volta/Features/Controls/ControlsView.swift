@@ -402,7 +402,8 @@ struct ControlsView: View {
     }
 
     @ViewBuilder private var climateLink: some View {
-        let row = ControlRow(systemImage: "carseat.left.and.heat.waves", title: "Seats, wheel & defrost") {
+        let row = ControlRow(systemImage: "carseat.left.and.heat.waves", title: "Seats, wheel & defrost",
+                             trailingStaysInline: true) {
             Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Color.voltaTextTertiary)

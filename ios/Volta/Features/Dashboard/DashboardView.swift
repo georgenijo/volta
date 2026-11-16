@@ -321,7 +321,9 @@ struct DashboardView: View {
             stagePane
         } secondary: {
             ScrollView {
-                VStack(alignment: .leading, spacing: VoltaSpacing.xl - 4) {
+                // Tight enough that Activity and its captions are on screen
+                // under the charging card without scrolling.
+                VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
                     banners
                     nowCard(.standard)
                     metricTiles(displayStatus)
@@ -644,14 +646,14 @@ struct DashboardView: View {
             ActivityStrip(segments: model.timeline, failed: model.timelineFailed,
                           loading: model.loadingSections.contains(.timeline))
                 .padding(.top, VoltaSpacing.sm)
-            HairlineDivider().padding(.top, VoltaSpacing.lg + 4)
+            HairlineDivider().padding(.top, VoltaSpacing.lg)
             // Re-render when today's reporting day ends so its totals drop.
             TimelineView(.explicit(model.todayDay.map { [$0.interval.end] } ?? [])) { _ in
                 ActivitySummarySection(summaries: model.visibleSummaries(at: .now),
                                        failedRanges: Set(SummaryRange.allCases.filter(model.summaryFailed)),
                                        loadingRanges: Set(SummaryRange.allCases.filter { model.loadingSections.contains(.summary($0)) }))
             }
-            .padding(.top, VoltaSpacing.lg)
+            .padding(.top, VoltaSpacing.md)
         }
     }
 
@@ -939,7 +941,7 @@ struct ActivitySummarySection: View {
 
     var body: some View {
         let summary = summaries[range]
-        VStack(alignment: .leading, spacing: VoltaSpacing.xl) {
+        VStack(alignment: .leading, spacing: VoltaSpacing.lg) {
             ViewThatFits(in: .horizontal) {
                 HStack {
                     activityLabel

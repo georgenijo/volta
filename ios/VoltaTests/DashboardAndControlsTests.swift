@@ -1104,6 +1104,40 @@ private actor SentLimits {
         XCTAssertEqual(log.entries(for: key).first?.outcome, .confirmed)
     }
 
+    func testRetryThatCannotStartLeavesTheOutcomeUnknown() async throws {
+        let source = StubSource(), commands = coordinator()
+        source.commandHandler = { _, _ in throw Boom() }
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let model = ControlsModel(status: makeStatus())
+        model.log = VehicleCommandLog()
+        let key = VehicleCommandLog.key(backendID: source.commandBackendID, vehicleID: 1)
+        await model.send(.flash, coordinator: commands, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(model.log.entries(for: key).map(\.outcome), [.unknown])
+
+        // Controls become unavailable: the retry is refused before anything is sent.
+        source.capability = VehicleCommandCapabilities(available: true, reason: nil, commands: [])
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let refused = try XCTUnwrap(commands.activity(dataSource: source, vehicleID: 1))
+        let first = await commands.retry(refused, log: model.log, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(first, .failed)
+        XCTAssertEqual(model.log.entries(for: key).map(\.outcome), [.unknown],
+                       "the original request may still have run")
+        XCTAssertEqual(commands.pending(dataSource: source, vehicleID: 1).count, 1)
+
+        // Available again and the server accepts the replay: now it is settled.
+        source.capability = VehicleCommandCapabilities(available: true, reason: nil,
+                                                       commands: Array(VehicleCommand.supportedNames))
+        source.commandHandler = { command, _ in
+            VehicleCommandResult(command: command.name, requestID: "request-2", replayed: true)
+        }
+        await commands.refreshCapabilities(dataSource: source, vehicleID: 1)
+        let saved = try XCTUnwrap(commands.activity(dataSource: source, vehicleID: 1))
+        let second = await commands.retry(saved, log: model.log, dataSource: source, vehicleID: 1)
+        XCTAssertEqual(second, .succeeded(simulated: false))
+        XCTAssertEqual(model.log.entries(for: key).map(\.outcome), [.accepted])
+        XCTAssertTrue(commands.pending(dataSource: source, vehicleID: 1).isEmpty)
+    }
+
     func testConfirmedNeedsALaterStatusShowingTheExpectedState() {
         let log = VehicleCommandLog(), key = VehicleCommandLog.key(backendID: "b", vehicleID: 1)
         let sent = Date(timeIntervalSince1970: 1_800_000_000)

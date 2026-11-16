@@ -164,6 +164,31 @@ struct CommandLogList: View {
     }
 }
 
+// MARK: - Retry
+
+extension VehicleCommandCoordinator {
+    /// Retries a saved request and writes the result to its session log
+    /// entry, but only when the retry settled the request (the coordinator
+    /// no longer holds it). A retry that could not start, or that came back
+    /// unresolved again, says nothing about the original send, so its entry
+    /// stays "Outcome unknown".
+    @discardableResult
+    func retry(_ activity: Activity, log: VehicleCommandLog, dataSource: any VoltaDataSource,
+               vehicleID: Int) async -> Outcome {
+        func isSaved() -> Bool {
+            pending(dataSource: dataSource, vehicleID: vehicleID).contains { $0.intentID == activity.id }
+        }
+        let wasSaved = isSaved()
+        let result = await retry(activity.id, dataSource: dataSource, vehicleID: vehicleID)
+        if wasSaved, !isSaved() {
+            log.settleRetry(of: activity.command,
+                            key: VehicleCommandLog.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID),
+                            with: result)
+        }
+        return result
+    }
+}
+
 // MARK: - Activity banner
 
 /// The coordinator's latest command activity (sending, accepted, simulated,
@@ -209,10 +234,7 @@ struct VehicleCommandActivityBanner: View {
                              message: Text("If the original request was not accepted, this can execute it now. " + activity.command.retryCaution),
                              primaryButton: .cancel(), secondaryButton: .destructive(Text("Retry \(activity.label)")) {
                     Task {
-                        let result = await coordinator.retry(activity.id, dataSource: dataSource, vehicleID: vehicleID)
-                        log.settleRetry(of: activity.command,
-                                        key: VehicleCommandLog.key(backendID: dataSource.commandBackendID, vehicleID: vehicleID),
-                                        with: result)
+                        let result = await coordinator.retry(activity, log: log, dataSource: dataSource, vehicleID: vehicleID)
                         if case .succeeded(let simulated) = result, !simulated { refreshObservedStatus() }
                     }
                 })
