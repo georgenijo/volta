@@ -61,6 +61,8 @@ struct WidgetSnapshot: Codable, Hashable, Sendable {
     var insideTempC: Double?
     var outsideTempC: Double?
     var climateOn: Bool?
+    /// Driver set point in Celsius; absent in snapshots from earlier builds.
+    var driverTempSettingC: Double? = nil
     var locked: Bool?
     var sentryMode: Bool?
     /// Shown by widgets: the saved place name, or else the street address.

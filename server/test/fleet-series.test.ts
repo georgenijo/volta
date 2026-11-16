@@ -339,6 +339,18 @@ test('live overlapping metrics prefer connected change-only data, otherwise comp
   expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(38);
   await owner`UPDATE volta_telemetry.latest_samples SET invalid=true,quality='invalid',value_num=NULL`;
   expect((await get('/v1/vehicles/1/status')).insideTempC).toBe(fallback.insideTempC);
+  // Live HVAC replaces TeslaMate's climate reading the same way.
+  await owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_text,invalid,quality,payload_id)
+    VALUES(1,'HvacPower',${now},${now},'HvacPowerStateOff',false,'ok','live-hvac')`;
+  await owner`INSERT INTO volta_telemetry.latest_samples(vehicle_id,field,source_ts,received_at,value_num,source_unit,invalid,quality,payload_id)
+    VALUES(1,'HvacLeftTemperatureRequest',${now},${now},20.5,'C',false,'ok','live-hvac')`;
+  let status=await get('/v1/vehicles/1/status');
+  expect(status.climateOn).toBe(false);expect(status.driverTempSettingC).toBe(20.5);
+  await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateOn' WHERE field='HvacPower'`;
+  expect((await get('/v1/vehicles/1/status')).climateOn).toBe(true);
+  await owner`UPDATE volta_telemetry.latest_samples SET value_text='HvacPowerStateUnknown' WHERE field='HvacPower'`;
+  status=await get('/v1/vehicles/1/status');
+  expect(status.climateOn).toBe(fallback.climateOn);
 });
 
 

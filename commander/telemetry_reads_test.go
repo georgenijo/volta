@@ -395,6 +395,35 @@ func TestTelemetryUnsupportedTemplateFields(t *testing.T) {
 	}
 }
 
+func TestTelemetryClimateMapped(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		state       string
+		on, precond any
+	}{
+		{"HvacPowerStateOff", false, false}, {"HvacPowerStateOn", true, false},
+		{"HvacPowerStatePrecondition", true, true}, {"HvacPowerStateOverheatProtect", true, false},
+		{"HvacPowerStateUnknown", nil, nil},
+	} {
+		s := readSnapshot(now)
+		s.Samples = append(s.Samples, telemetrySample{Field: "HvacPower", At: now, Text: textPtr(tc.state), Quality: "ok"},
+			telemetrySample{Field: "HvacLeftTemperatureRequest", At: now, Num: floatPtr(21), Unit: "C", Quality: "ok"},
+			telemetrySample{Field: "HvacRightTemperatureRequest", At: now, Num: floatPtr(70), Unit: "F", Quality: "ok"})
+		c := overlayFixture(t, s, now)["climate_state"].(map[string]any)
+		if c["is_climate_on"] != tc.on || c["is_preconditioning"] != tc.precond {
+			t.Fatal("climate power not mapped", tc.state, c["is_climate_on"], c["is_preconditioning"])
+		}
+		if c["driver_temp_setting"] != 21.0 || math.Abs(c["passenger_temp_setting"].(float64)-21.111) > 0.01 {
+			t.Fatal("set temperatures not mapped", c["driver_temp_setting"], c["passenger_temp_setting"])
+		}
+	}
+	s := readSnapshot(now)
+	s.Samples = append(s.Samples, telemetrySample{Field: "HvacLeftTemperatureRequest", At: now, Num: floatPtr(21), Unit: "", Quality: "ok"})
+	if c := overlayFixture(t, s, now)["climate_state"].(map[string]any); c["is_climate_on"] != nil || c["driver_temp_setting"] != nil {
+		t.Fatal("absent or unitless climate served")
+	}
+}
+
 func TestTelemetryCollectorTimestampNeverRegresses(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, scenario := range []string{"disconnect", "older overlay", "exhausted budget"} {

@@ -26,6 +26,9 @@ send one startup snapshot of every top-level field. The normal profile sends:
 - AC charging power, AC/DC energy-in, charge amps, charger voltage and
   time-to-full at 60 seconds when changed. DC charging power remains at 10
   seconds for fast-charge power shape; discrete charge state remains event-like.
+- Climate power every 15 seconds and the driver/passenger set temperatures
+  every 30 seconds when changed, so the app and TeslaMate know whether climate
+  is on and what it is set to.
 
 Fleet Telemetry sends only after both the interval has elapsed and the value
 has changed. The estimate below deliberately treats continuous fields as if
@@ -61,6 +64,9 @@ and every include, even when the same include appears under another parent.
 | TimeToFullCharge | 60 | 0 | 124 | 7,440 | 600 | 8,040 | $0.05360 |
 | Locked | 5 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
 | SentryMode | 5 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
+| HvacPower | 15 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
+| HvacLeftTemperatureRequest | 30 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
+| HvacRightTemperatureRequest | 30 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
 | TpmsPressureFl | 1,800 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
 | TpmsPressureFr | 1,800 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
 | TpmsPressureRl | 1,800 | 0 | 300 | 600 | 600 | 1,200 | $0.00800 |
@@ -76,10 +82,10 @@ and every include, even when the same include appears under another parent.
 
 | Case | Signals/month | Gross telemetry cost |
 |---|---:|---:|
-| Normal planning model | 636,003 | $4.2400 |
-| Startup snapshots, included above | 27,000 | $0.18 |
-| Normal theoretical maximum | 1,875,900 | $12.5060 |
-| One full resend of that theoretical month | 3,751,800 | $25.0120 |
+| Normal planning model | 639,603 | $4.2640 |
+| Startup snapshots, included above | 28,800 | $0.19 |
+| Normal theoretical maximum | 2,021,700 | $13.4780 |
+| One full resend of that theoretical month | 4,043,400 | $26.9560 |
 | Economy warning line | 3,000,000 | $20.00 |
 | Delete line | 3,450,000 | $23.00 |
 | Telemetry ceiling | 3,750,000 | $25.00 |
@@ -101,8 +107,8 @@ $25 ceiling leaves a further $2 response margin. Tesla's real signal ledger,
 including rejected VINs and resends, controls the state; the estimate never
 overrides measured usage.
 
-A hypothetical full resend of every theoretical-maximum signal is slightly
-above the telemetry ceiling. The measured ledger switches profiles at `$20`
+A hypothetical full resend of every theoretical-maximum signal is above the
+telemetry ceiling. The measured ledger switches profiles at `$20`
 and deletes at `$23`, so the estimate is a stress case rather than permission
 to spend through `$25`.
 
@@ -123,7 +129,8 @@ outcome can never leave an unguarded config on the car.
 
 At `$20` or the meter's `warn` state, commander replaces the normal profile
 with an economy profile: 10-second location with speed/current/voltage,
-120-second core battery fields and 300-second temperature/energy fields. At
+120-second core battery fields, 300-second temperature/energy fields and
+30/60-second climate power/set temperature. At
 `$23`, `stop`, or the shared operating line, commander durably latches stopped
 and sends `DELETE /api/1/vehicles/{vin}/fleet_telemetry_config`. An unknown,
 stale or unreachable meter permits at most five minutes of grace, only with
@@ -269,4 +276,4 @@ The planning model omits parked-awake GPS jitter and receiver rate-limit or
 retention drops. Jitter can increase signals; drops do not establish billing
 completeness or permission to subtract spend. Conservative receipts, unknown
 coverage handling, bounded outage grace and the cost guard contain these cases;
-the `$4.2400` planning estimate is not a spend guarantee.
+the `$4.2640` planning estimate is not a spend guarantee.

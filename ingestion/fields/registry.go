@@ -108,6 +108,9 @@ var registry = []Spec{
 	// Climate.
 	{Name: "InsideTemp", Field: protos.Field_InsideTemp, Kind: KindNumber, SourceUnit: "C", UnitStatus: UnitDoc, MetricUnit: "C", Class: ClassAwake},
 	{Name: "OutsideTemp", Field: protos.Field_OutsideTemp, Kind: KindNumber, SourceUnit: "C", UnitStatus: UnitLegacyMap, MetricUnit: "C", Class: ClassAwake, Note: "maps to climate_state.outside_temp"},
+	{Name: "HvacPower", Field: protos.Field_HvacPower, Kind: KindEnum, EnumOneof: "hvac_power_value", UnitStatus: UnitNone, Class: ClassAwake, Note: "HvacPowerState enum; maps to climate_state.is_climate_on"},
+	{Name: "HvacLeftTemperatureRequest", Field: protos.Field_HvacLeftTemperatureRequest, Kind: KindNumber, SourceUnit: "C", UnitStatus: UnitInferred, MetricUnit: "C", Class: ClassAwake, Note: "driver set point; maps to climate_state.driver_temp_setting"},
+	{Name: "HvacRightTemperatureRequest", Field: protos.Field_HvacRightTemperatureRequest, Kind: KindNumber, SourceUnit: "C", UnitStatus: UnitInferred, MetricUnit: "C", Class: ClassAwake, Note: "passenger set point; maps to climate_state.passenger_temp_setting"},
 
 	// Charging.
 	{Name: "DetailedChargeState", Field: protos.Field_DetailedChargeState, Kind: KindEnum, EnumOneof: "detailed_charge_state_value", UnitStatus: UnitNone, Class: ClassAwake, Note: "DetailedChargeStateValue enum, fw 2024.38+"},

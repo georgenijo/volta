@@ -157,6 +157,24 @@ final class VehicleReadoutTests: XCTestCase {
         XCTAssertEqual(answer.locationTitle, "Unknown")
     }
 
+    /// The set point reaches the snapshot, and snapshots without it still decode.
+    func testSnapshotCarriesTheClimateSetPoint() throws {
+        let status = VehicleStatus(
+            vehicleId: 42, state: .online, updatedAt: now, batteryLevel: 72, usableBatteryLevel: nil,
+            ratedRangeKm: nil, estRangeKm: 328, chargeLimit: 80, chargingState: .disconnected, chargerPowerKw: nil,
+            minutesToFull: nil, insideTempC: 20, outsideTempC: nil, climateOn: true, driverTempSettingC: 21.5,
+            locked: true, sentryMode: true, odometerKm: nil, location: nil, locationUpdatedAt: nil, firmware: nil)
+        let bridged = WidgetSnapshot(status: status, vehicleName: "Friday", summary: nil, timeline: nil, now: now)
+        XCTAssertEqual(bridged.driverTempSettingC, 21.5)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(bridged)) as? [String: Any])
+        fields["driverTempSettingC"] = nil
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let earlier = try decoder.decode(WidgetSnapshot.self, from: JSONSerialization.data(withJSONObject: fields))
+        XCTAssertNil(earlier.driverTempSettingC)
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: true, isOn: true, readout: VehicleReadout(earlier, now: now)).text, "On")
+    }
+
     func testSecurityAnswerCoversUnknowns() {
         XCTAssertEqual(readout().securityDialog, "Friday is locked, and Sentry Mode is on. Updated 4 minutes ago.")
         XCTAssertEqual(readout { $0.locked = false; $0.sentryMode = false }.securityDialog,
@@ -197,6 +215,13 @@ final class VehicleReadoutTests: XCTestCase {
                        .init(text: "Unknown", symbol: "fan"))
         XCTAssertEqual(VehicleToggleLabel.climate(observed: false, isOn: true, readout: fresh).text, "Turning On…")
         XCTAssertEqual(VehicleToggleLabel.climate(observed: true, isOn: true, readout: fresh).text, "On")
+        let set = readout { $0.climateOn = true; $0.driverTempSettingC = 21.1 }
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: true, isOn: true, readout: set).text, "On · 70°")
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: false, isOn: false, readout: set).text, "Off")
+        let celsius = readout { $0.climateOn = true; $0.driverTempSettingC = 21.1; $0.temperatureUnit = .celsius }
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: true, isOn: true, readout: celsius).text, "On · 21°")
+        let staleSet = readout { $0.driverTempSettingC = 21.1; $0.updatedAt = now.addingTimeInterval(-2 * 3600) }
+        XCTAssertEqual(VehicleToggleLabel.climate(observed: true, isOn: true, readout: staleSet).text, "On · 70° · 2h")
     }
 
     func testVehicleNameFallbackAndPossessive() {

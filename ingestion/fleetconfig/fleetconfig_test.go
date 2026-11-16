@@ -59,7 +59,7 @@ func TestPlanningBudgetWithinReservation(t *testing.T) {
 	if cheap.PlanningUSD >= b.PlanningUSD || cheap.PlanningUSD >= stopUSD {
 		t.Fatalf("economy $%.2f must be cheaper than normal $%.2f and below stop", cheap.PlanningUSD, b.PlanningUSD)
 	}
-	if math.Round(b.PlanningSignals) != 636003 || math.Round(b.TheoreticalMaxSignals) != 1875900 || b.StartupSignals != 27000 {
+	if math.Round(b.PlanningSignals) != 639603 || math.Round(b.TheoreticalMaxSignals) != 2021700 || b.StartupSignals != 28800 {
 		t.Fatalf("documented cost table drifted: planning=%.0f max=%.0f startup=%.0f", b.PlanningSignals, b.TheoreticalMaxSignals, b.StartupSignals)
 	}
 	t.Logf("planning %.0f signals ($%.2f), theoretical max %.0f signals ($%.2f), startup %.0f",

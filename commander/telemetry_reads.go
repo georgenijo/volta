@@ -222,6 +222,8 @@ var telemetryMappings = []telemetryMapping{
 	{"TpmsPressureRl", "vehicle_state", "tpms_pressure_rl", "bar", false},
 	{"TpmsPressureRr", "vehicle_state", "tpms_pressure_rr", "bar", false},
 	{"InsideTemp", "climate_state", "inside_temp", "C", false}, {"OutsideTemp", "climate_state", "outside_temp", "C", false},
+	{"HvacLeftTemperatureRequest", "climate_state", "driver_temp_setting", "C", false},
+	{"HvacRightTemperatureRequest", "climate_state", "passenger_temp_setting", "C", false},
 }
 
 func telemetryNumber(v telemetrySample, unit string) (float64, bool) {
@@ -385,6 +387,19 @@ func overlayTelemetry(envelope map[string]any, fields map[string]telemetrySample
 			vehicleState["sentry_mode"] = false
 		case "SentryModeStateIdle", "SentryModeStateArmed", "SentryModeStateAware", "SentryModeStatePanic", "SentryModeStateQuiet":
 			vehicleState["sentry_mode"] = true
+		}
+	}
+	// HVAC running for any reason is legacy is_climate_on; only a departure
+	// precondition is is_preconditioning. Unknown states stay null.
+	if hvac := fields["HvacPower"]; hvac.Text != nil {
+		climate := r["climate_state"].(map[string]any)
+		switch *hvac.Text {
+		case "HvacPowerStateOff":
+			climate["is_climate_on"], climate["is_preconditioning"] = false, false
+		case "HvacPowerStateOn", "HvacPowerStateOverheatProtect":
+			climate["is_climate_on"], climate["is_preconditioning"] = true, false
+		case "HvacPowerStatePrecondition":
+			climate["is_climate_on"], climate["is_preconditioning"] = true, true
 		}
 	}
 	if charging == "Starting" || charging == "Charging" {

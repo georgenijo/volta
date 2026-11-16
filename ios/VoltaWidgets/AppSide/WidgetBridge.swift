@@ -72,6 +72,7 @@ extension WidgetSnapshot {
             insideTempC: status.insideTempC,
             outsideTempC: status.outsideTempC,
             climateOn: status.climateOn,
+            driverTempSettingC: status.driverTempSettingC,
             locked: status.locked,
             sentryMode: status.sentryMode,
             placeName: status.location?.placeName ?? status.location?.address,

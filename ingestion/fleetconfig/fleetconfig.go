@@ -94,6 +94,9 @@ func Profile() []Planned {
 		{Name: "ModuleTempMax", FieldConfig: FieldConfig{IntervalSeconds: 60, MinimumDelta: f(0.5)}},
 		{Name: "InsideTemp", FieldConfig: FieldConfig{IntervalSeconds: 60, MinimumDelta: f(0.5)}},
 		{Name: "OutsideTemp", FieldConfig: FieldConfig{IntervalSeconds: 60, MinimumDelta: f(0.5)}},
+		{Name: "HvacPower", FieldConfig: FieldConfig{IntervalSeconds: 15}, ChangesPerHour: 2},
+		{Name: "HvacLeftTemperatureRequest", FieldConfig: FieldConfig{IntervalSeconds: 30}, ChangesPerHour: 2},
+		{Name: "HvacRightTemperatureRequest", FieldConfig: FieldConfig{IntervalSeconds: 30}, ChangesPerHour: 2},
 
 		{Name: "DetailedChargeState", FieldConfig: FieldConfig{IntervalSeconds: 5}, ChangesPerHour: 1},
 		{Name: "ACChargingPower", FieldConfig: FieldConfig{IntervalSeconds: 60, IncludeFields: []string{"PackVoltage", "PackCurrent"}}},
@@ -134,6 +137,8 @@ func EconomyProfile() []Planned {
 		{Name: "ModuleTempMax", FieldConfig: FieldConfig{IntervalSeconds: 300, MinimumDelta: f(1)}},
 		{Name: "InsideTemp", FieldConfig: FieldConfig{IntervalSeconds: 300, MinimumDelta: f(1)}},
 		{Name: "OutsideTemp", FieldConfig: FieldConfig{IntervalSeconds: 300, MinimumDelta: f(1)}},
+		{Name: "HvacPower", FieldConfig: FieldConfig{IntervalSeconds: 30}, ChangesPerHour: 2},
+		{Name: "HvacLeftTemperatureRequest", FieldConfig: FieldConfig{IntervalSeconds: 60}, ChangesPerHour: 2},
 		{Name: "DetailedChargeState", FieldConfig: FieldConfig{IntervalSeconds: 10}, ChangesPerHour: 1},
 		{Name: "ACChargingPower", FieldConfig: FieldConfig{IntervalSeconds: 120}},
 		{Name: "DCChargingPower", FieldConfig: FieldConfig{IntervalSeconds: 30}},

@@ -202,7 +202,7 @@ so no D row is `native-verified` or `source-verified`.
 | B3 | Charge cycles (05) | need-data | none (`BatteryHealth` has no cycle field) | Derivable only as a rough sum of energy added divided by capacity; any figure would be an estimate. Wattly's method is unknown. | Optional: add a clearly labelled estimate from `energyAddedKwh` / capacity once WS3 history is trustworthy. |
 | B4 | Thermal / battery temperature history (05) | need-data | none | Same signals as L5. | After the telemetry capture. |
 | B5 | Range estimates at 100% and at the charge limit (05) | implemented | `ratedRangeAt100Km`, dashboard range bar | Rated range is not measured range. | None. |
-| B6 | Climate read display: on/off, inside, outside, driver setting (09) | implemented (read-only) | Dashboard `climateCard`, `Features/Analytics/BatteryClimateView.swift` | Last-recorded values. Controls are K4. | None. |
+| B6 | Climate read display: on/off, inside, outside, driver setting (09) | implemented (read-only) | Dashboard `climateCard`, `Features/Analytics/BatteryClimateView.swift` | Live Fleet Telemetry `HvacPower` / `HvacLeftTemperatureRequest` when streaming (also fed to TeslaMate's climate columns), else last-recorded values; the Control Center climate tile shows "On · 70°". Controls are K4. | None. |
 | B7 | Tires: pressure, history, rotation reminders (01, 13) | current pressures implemented | More → Tires shows bound TPMS data with per-tire timestamps | History and rotation reminders are not implemented. | See L3; maintenance history remains separate. |
 
 ### Maintenance, firmware, mileage, warranty (areas 13, 14, 15)

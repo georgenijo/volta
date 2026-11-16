@@ -145,7 +145,7 @@ export class Telemetry {
       locationUpdatedAt: row.latitude == null || row.longitude == null ? null : row.date ?? null,
       location: row.latitude == null || row.longitude == null ? null : { latitude: row.latitude, longitude: row.longitude, heading: null, address: row.address ?? null, placeName: row.place_name ?? null }, firmware: row.firmware ?? null };
     if (!live) return result;
-    const sources: Record<string,string> = {batteryLevel:'BatteryLevel',usableBatteryLevel:'Soc',ratedRangeKm:'RatedRange',estRangeKm:'EstBatteryRange',chargeLimit:'ChargeLimitSoc',insideTempC:'InsideTemp',outsideTempC:'OutsideTemp',odometerKm:'Odometer',firmware:'Version',packTempMaxC:'ModuleTempMax',packTempMinC:'ModuleTempMin',locked:'Locked',sentryMode:'SentryMode',chargePortDoorOpen:'ChargePortDoorOpen',chargePortLatch:'ChargePortLatch',energyRemainingKwh:'EnergyRemaining'};
+    const sources: Record<string,string> = {batteryLevel:'BatteryLevel',usableBatteryLevel:'Soc',ratedRangeKm:'RatedRange',estRangeKm:'EstBatteryRange',chargeLimit:'ChargeLimitSoc',insideTempC:'InsideTemp',outsideTempC:'OutsideTemp',climateOn:'HvacPower',driverTempSettingC:'HvacLeftTemperatureRequest',odometerKm:'Odometer',firmware:'Version',packTempMaxC:'ModuleTempMax',packTempMinC:'ModuleTempMin',locked:'Locked',sentryMode:'SentryMode',chargePortDoorOpen:'ChargePortDoorOpen',chargePortLatch:'ChargePortLatch',energyRemainingKwh:'EnergyRemaining'};
     for (const [key,value] of Object.entries(live.values)) {
       const field = sources[key];
       if (field && value == null) {

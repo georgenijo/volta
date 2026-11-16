@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import type { DB, Row } from './db';
 
 export const liveFields = ['BatteryLevel','Soc','RatedRange','EstBatteryRange','ChargeLimitSoc','ModuleTempMax','ModuleTempMin','Locked','SentryMode','TpmsPressureFl','TpmsPressureFr','TpmsPressureRl','TpmsPressureRr','ChargePortDoorOpen','ChargePortLatch','InsideTemp','OutsideTemp','Version','Odometer','EnergyRemaining',
-  'DetailedChargeState','ACChargingPower','DCChargingPower','ChargeAmps','ChargerVoltage','TimeToFullCharge','ACChargingEnergyIn','DCChargingEnergyIn','FastChargerPresent','ChargingCableType'];
+  'DetailedChargeState','ACChargingPower','DCChargingPower','ChargeAmps','ChargerVoltage','TimeToFullCharge','ACChargingEnergyIn','DCChargingEnergyIn','FastChargerPresent','ChargingCableType',
+  'HvacPower','HvacLeftTemperatureRequest'];
 /** Tesla's DetailedChargeState mapped onto the API's chargingState. */
 const chargeStates: Record<string,string> = {DetailedChargeStateDisconnected:'disconnected',DetailedChargeStateNoPower:'stopped',
   DetailedChargeStateStarting:'charging',DetailedChargeStateCharging:'charging',DetailedChargeStateComplete:'complete',DetailedChargeStateStopped:'stopped'};
@@ -56,6 +57,11 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     +new Date(c.received_at) >= +new Date(h!.receiver_started_at) && +new Date(c.source_ts) <= +now);
   const lastSeenAt = [...live.samples.map(s => s.source_ts), ...live.connections.map(c => c.source_ts)]
     .filter(t => t && +new Date(t) <= +now).sort((a,b) => +new Date(b)-+new Date(a))[0] ?? null;
+  // Any running HVAC (including precondition and cabin overheat protection) is
+  // climate on, as legacy is_climate_on reports it. Unknown stays unknown.
+  const hvac = text('HvacPower');
+  const climateOn = hvac === 'HvacPowerStateOff' ? false :
+    ['HvacPowerStateOn','HvacPowerStatePrecondition','HvacPowerStateOverheatProtect'].includes(hvac) ? true : null;
   const sentry = text('SentryMode');
   const sentryMode = sentry === 'SentryModeStateOff' ? false :
     ['SentryModeStateIdle','SentryModeStateArmed','SentryModeStateAware','SentryModeStatePanic','SentryModeStateQuiet'].includes(sentry) ? true : null;
@@ -90,7 +96,7 @@ export function liveValues(live: Awaited<ReturnType<FleetLive['read']>>, now: Da
     ratedRangeKm:num('RatedRange',{mi:1.609344,km:1}),estRangeKm:num('EstBatteryRange',{mi:1.609344,km:1}),chargeLimit:num('ChargeLimitSoc',{'%':1}),
     packTempMaxC:num('ModuleTempMax',{C:1}),packTempMinC:num('ModuleTempMin',{C:1}), locked:bool('Locked'),sentryMode,
     chargePortDoorOpen:bool('ChargePortDoorOpen'),chargePortLatch:text('ChargePortLatch'),
-    insideTempC:num('InsideTemp',{C:1}),outsideTempC:num('OutsideTemp',{C:1}),firmware:text('Version'),
+    insideTempC:num('InsideTemp',{C:1}),outsideTempC:num('OutsideTemp',{C:1}),climateOn,driverTempSettingC:num('HvacLeftTemperatureRequest',{C:1}),firmware:text('Version'),
     odometerKm:num('Odometer',{mi:1.609344,km:1}),energyRemainingKwh:num('EnergyRemaining',{kWh:1}),
   }, tpms:{fl:tire('Fl'),fr:tire('Fr'),rl:tire('Rl'),rr:tire('Rr')},
   freshness:{connected,lastSeenAt,recordedAt:times}, charge, by };

@@ -244,6 +244,13 @@ struct VehicleReadout: Sendable {
         }
     }
 
+    /// The driver set point in the owner's unit, "70°"; nil when unknown.
+    var setTemperatureText: String? {
+        guard let c = snapshot.driverTempSettingC, c.isFinite else { return nil }
+        let value = snapshot.temperatureUnit == .fahrenheit ? c * 9 / 5 + 32 : c
+        return "\(Int(value.rounded()))°"
+    }
+
     var chargingText: String {
         switch charging {
         // Controls pair this with a bolt icon, so the time alone fits the width.
@@ -317,7 +324,10 @@ enum VehicleToggleLabel {
             return Content(text: isOn ? "Turning On…" : "Turning Off…", symbol: isOn ? "fan.fill" : "fan")
         }
         switch observed {
-        case true?: return Content(text: settled("On", readout), symbol: "fan.fill")
+        // Running climate carries its set point: "On · 70°".
+        case true?:
+            let on = readout?.setTemperatureText.map { "On · \($0)" } ?? "On"
+            return Content(text: settled(on, readout), symbol: "fan.fill")
         case false?: return Content(text: settled("Off", readout), symbol: "fan")
         case nil: return Content(text: VehicleReadoutUnknown.value, symbol: "fan")
         }
