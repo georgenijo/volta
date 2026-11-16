@@ -8,3 +8,6 @@ f2ecfd43033f23d5ba1baf519323d5a4254d5898 docs/brand/icon-concepts/concept-c.png
 c37ed9cb365e8e6d41ced750ff982080ce44bb49 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Dark.png
 090c46b834dd2731cde739d910cf71274b25bc09 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Tinted.png
 8f29f02da68a3c644b4ce4e3fd944bd64a51f335 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+ad44ac8bf01e2243a4efb56801f47d14ea380ed5 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Dark.png
+a3b38a7e19042396e89ab685e9ce20f0bb959224 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Tinted.png
+45eacc4b584a4b25d09dbedb605f2011f0728e39 ios/Volta/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png

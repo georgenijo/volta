@@ -1,20 +1,20 @@
 {
   "fill" : {
     "linear-gradient" : [
-      "display-p3:0.16471,0.17647,0.19608,1.00000",
-      "display-p3:0.04314,0.04706,0.05490,1.00000"
+      "display-p3:0.08627,0.13725,0.24706,1.00000",
+      "display-p3:0.02353,0.03529,0.07059,1.00000"
     ]
   },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "v.svg",
-          "name" : "V"
+          "image-name" : "crossing.svg",
+          "name" : "Crossing"
         }
       ],
       "shadow" : {
-        "kind" : "neutral",
+        "kind" : "none",
         "opacity" : 0.5
       },
       "translucency" : {
@@ -25,16 +25,16 @@
     {
       "layers" : [
         {
-          "image-name" : "bar-fill.svg",
-          "name" : "Charge"
+          "image-name" : "current-right.svg",
+          "name" : "Right current"
         },
         {
-          "image-name" : "bar-track.svg",
-          "name" : "Track"
+          "image-name" : "current-left.svg",
+          "name" : "Left current"
         }
       ],
       "shadow" : {
-        "kind" : "none",
+        "kind" : "neutral",
         "opacity" : 0.5
       },
       "translucency" : {
