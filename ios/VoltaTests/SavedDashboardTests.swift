@@ -456,15 +456,6 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(source.sentCommands.withLock { $0 }, ["set_charge_limit"])
     }
 
-    func testSavedLockAndSentryStatesAreDrawnNeutral() {
-        let saved = DockTile.tiles(locked: false, climateOn: nil, sentry: true, saved: true) { _ in true }
-        XCTAssertEqual(saved.first { $0.kind == .lock }?.tone, .neutral)
-        XCTAssertEqual(saved.first { $0.kind == .sentry }?.tone, .neutral)
-        let live = DockTile.tiles(locked: false, climateOn: nil, sentry: true) { _ in true }
-        XCTAssertEqual(live.first { $0.kind == .lock }?.tone, .attention)
-        XCTAssertEqual(live.first { $0.kind == .sentry }?.tone, .armed)
-    }
-
     func testLiveChargingNamesSavedDataAndAFailedRefresh() {
         var status = makeStatus()
         status.chargingState = .charging; status.chargerPowerKw = 11

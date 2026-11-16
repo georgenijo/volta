@@ -31,9 +31,9 @@ appear in that frame.
   than unlabelled old data.
 - No command is based on saved status: while `ControlsModel` holds it, no
   control is enabled and `send` refuses. Saved status also keeps no location
-  time, so HomeLink never offers itself. The dock and map draw saved lock and
-  Sentry states without the unlocked or armed colour. The live charging sheet
-  says "SAVED DATA", and names a failed refresh.
+  time, so HomeLink never offers itself. Colours stay as they are; the
+  caption and a small refreshing indicator carry the provenance. The live
+  charging sheet says "SAVED DATA", and names a failed refresh.
 - Saved data leaves `lastLoadedAt` nil, so becoming active while it shows does
   not start a second load; nor does it while sections are still loading.
 - Saved data never reaches widgets or Live Activities. Yesterday's saved

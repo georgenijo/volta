@@ -33,13 +33,11 @@ struct DockTile: Identifiable, Equatable {
     /// The eight tiles for the observed state. A tile whose command the
     /// server cannot run (controls not enabled, or the capability missing),
     /// and a lock, climate or Sentry tile whose state is unknown, opens
-    /// Controls instead of sending. `saved` states (from the last launch,
-    /// while fresh status loads) are drawn without the unlocked or armed colour.
-    static func tiles(locked: Bool?, climateOn: Bool?, sentry: Bool?, saved: Bool = false,
+    /// Controls instead of sending.
+    static func tiles(locked: Bool?, climateOn: Bool?, sentry: Bool?,
                       supports: (VehicleCommand) -> Bool) -> [DockTile] {
         func tile(_ kind: Kind, _ symbol: String, _ title: String, _ action: String, _ tone: Tone,
                   _ command: VehicleCommand?, label: String) -> DockTile {
-            let tone = saved && (tone == .attention || tone == .armed) ? .neutral : tone
             guard let command else {
                 // Unknown state: say so, and let Controls show the choices.
                 return DockTile(kind: kind, symbol: symbol, title: title, action: action, tone: tone,

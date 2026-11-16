@@ -386,7 +386,7 @@ struct DashboardView: View {
     /// the side, pill and marker centered, a fade into the background.
     private func stageMap(_ status: VehicleStatus, runsUnder: CGFloat = 0) -> some View {
         DashboardMap(location: status.location,
-                     sentry: status.sentryMode == true && !model.showsSavedStatus,
+                     sentry: status.sentryMode ?? false,
                      state: model.status?.state,
                      charging: status.isCharging,
                      chargerPowerKw: status.chargerPowerKw)
@@ -467,7 +467,7 @@ struct DashboardView: View {
         // them in the visible part above the content.
         let height = (safeTop + mapReveal) * (barsOnSide ? 1.5 : 1.42)
         return DashboardMap(location: status.location,
-                            sentry: status.sentryMode == true && !model.showsSavedStatus,
+                            sentry: status.sentryMode ?? false,
                             state: model.status?.state,
                             charging: status.isCharging,
                             chargerPowerKw: status.chargerPowerKw)
@@ -627,7 +627,7 @@ struct DashboardView: View {
             tiles: DockTile.tiles(locked: controls.status == nil ? model.status?.locked : controls.locked,
                                   climateOn: controls.status == nil ? model.status?.climateOn : controls.climateOn,
                                   sentry: controls.status == nil ? model.status?.sentryMode : controls.sentry,
-                                  saved: model.showsSavedStatus, supports: context.supports),
+                                  supports: context.supports),
             sending: { tile in
                 if case .send(let command) = tile.tap { return context.isSending(command) }
                 return false
