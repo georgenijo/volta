@@ -366,8 +366,9 @@ struct ParkedLossChart: View {
         return parts.joined(separator: "; ")
     }
 
-    /// Three round ticks: a step of 1, 2, 2.5 or 5 times a power of ten, so
-    /// the top (three steps) clears the highest value. 2.6 gives 1, 2, 3.
+    /// Round ticks from the baseline: a step of 1, 2, 2.5 or 5 times a power
+    /// of ten, so the top (three steps) clears the highest value. A highest
+    /// day of 4.4 gives 0, 2, 4, 6.
     static func axisTop(_ value: Double) -> Double { step(value) * 3 }
 
     static func step(_ value: Double) -> Double {
@@ -378,10 +379,12 @@ struct ParkedLossChart: View {
         return step
     }
 
-    static func ticks(_ top: Double) -> [Double] { [top / 3, top * 2 / 3, top] }
+    static func ticks(_ top: Double) -> [Double] { (0...3).map { top * Double($0) / 3 } }
 
+    /// As few decimals as the tick needs: "6", "7.5", "0.25".
     static func tickLabel(_ value: Double) -> String {
-        VoltaFormat.number(value, digits: value.rounded() == value ? 0 : 1)
+        let digits = (0...2).first { abs((value * pow(10, Double($0))).rounded() - value * pow(10, Double($0))) < 1e-6 } ?? 2
+        return VoltaFormat.number(value, digits: digits)
     }
 }
 

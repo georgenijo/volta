@@ -149,7 +149,7 @@ struct IdleDetailView: View {
             .init(label: "Per day", value: rate, unit: units.distanceUnit, systemImage: "calendar"),
             .init(label: "Battery", value: idle.drain.map { $0 > 0 ? "−\($0)" : "\($0)" } ?? "—", unit: "%", systemImage: "battery.50percent"),
             .init(label: "Energy", value: idle.isLive ? "—" : idle.energyLostKwh.map { "~" + VoltaFormat.number($0, digits: 2) } ?? "—",
-                  unit: "kWh est.", systemImage: "bolt"),
+                  unit: "kWh", systemImage: "bolt"),
         ])
     }
 

@@ -247,7 +247,10 @@ final class ParkedSummaryTests: XCTestCase {
         XCTAssertEqual(ParkedLossChart.axisTop(4.4), 6)
         XCTAssertEqual(ParkedLossChart.axisTop(6.5), 7.5)
         XCTAssertEqual(ParkedLossChart.axisTop(0), 3)
-        XCTAssertEqual(ParkedLossChart.ticks(6), [2, 4, 6])
+        XCTAssertEqual(ParkedLossChart.ticks(6), [0, 2, 4, 6])
+        XCTAssertEqual(ParkedLossChart.ticks(ParkedLossChart.axisTop(4.4)), [0, 2, 4, 6])
+        XCTAssertEqual(ParkedLossChart.ticks(7.5).map { ParkedLossChart.tickLabel($0) }, ["0", "2.5", "5", "7.5"])
+        XCTAssertEqual(ParkedLossChart.ticks(ParkedLossChart.axisTop(0.7)).map { ParkedLossChart.tickLabel($0) }, ["0", "0.25", "0.5", "0.75"])
     }
 
     // MARK: Demo data

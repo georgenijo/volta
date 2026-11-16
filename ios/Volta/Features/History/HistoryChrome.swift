@@ -195,6 +195,9 @@ struct HistoryWindow: Equatable {
     var isWide: Bool { size.width > size.height }
     /// Half the window, bars included: where the inner display folds.
     var half: CGFloat { (size.width + safeArea.leading + safeArea.trailing) / 2 }
+    /// From the fold to the trailing side bar: the detail column beside a
+    /// list that ends at `half`.
+    var detailWidth: CGFloat { size.width + safeArea.leading - half }
     /// Height left between the top and bottom bars (`size` is already inside the safe area).
     var contentHeight: CGFloat { size.height }
 
@@ -261,7 +264,8 @@ struct HistoryNavigation<Route: Hashable, Root: View, Destination: View, Placeho
     @Binding var path: [Route]
     var split: Bool
     /// The tab's window; the list column ends at its middle, where the inner
-    /// display folds, so it keeps its width as the device folds and unfolds.
+    /// display folds, so it keeps its width as the device folds and unfolds
+    /// (opened flat or partly folded, only the system's gap at the fold changes).
     var window: HistoryWindow
     @ViewBuilder var root: Root
     @ViewBuilder var destination: (Route) -> Destination
@@ -295,6 +299,10 @@ struct HistoryNavigation<Route: Hashable, Root: View, Destination: View, Placeho
             .environment(\.historySideBars, split
                          ? EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: window.safeArea.trailing) : sideBars)
             .environment(\.horizontalSizeClass, sizeClass)
+            // The detail column gets a width too. Without one the system
+            // keeps its own, wider minimum for it and narrows the list to
+            // make room, so the list stops short of the fold when flat.
+            .navigationSplitViewColumnWidth(min: 320, ideal: max(320, window.detailWidth))
         }
         .navigationSplitViewStyle(.balanced)
         // The split view collapses whenever it is told the width is compact.
