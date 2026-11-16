@@ -163,11 +163,35 @@ class PortKeeperTest(unittest.TestCase):
         self.assertEqual(keeper.keep(self.service(), BIND), 0)
         self.assertIn("<NewLeaseDuration>3600</NewLeaseDuration>", self.adds()[-1][2])
 
-    def test_a_conflict_is_reported_and_not_retried(self):
+    def test_a_conflict_on_add_is_refused_and_not_retried(self):
         self.state["refuse_add"] = 718
-        self.assertEqual(keeper.keep(self.service(), BIND), 1)
+        with self.assertRaisesRegex(keeper.Refused, "error 718"):
+            keeper.keep(self.service(), BIND)
         self.assertEqual(len(self.adds()), 1)
-        self.assertTrue(any("error 718" in line for line in LOGS))
+
+    def test_main_moves_past_a_router_that_refuses_the_add(self):
+        refusing = fresh(refuse_add=501)
+        first = start(refusing)
+        try:
+            keeper.discover = lambda bind: [f"http://127.0.0.1:{first.server_port}/random-path/rootDesc.xml", self.location]
+            self.assertEqual(keeper.main({"TELEMETRY_RECEIVER_BIND": BIND}), 0)
+            self.assertEqual(refusing["mappings"], {})
+            self.assertIn(("443", "TCP"), self.state["mappings"])
+        finally:
+            first.shutdown()
+            first.server_close()
+
+    def test_main_stops_at_a_mapping_that_points_elsewhere(self):
+        self.state["mappings"][("443", "TCP")] = {"client": OTHER, "port": "8448", "enabled": "1", "lease": "0"}
+        later = fresh()
+        second = start(later)
+        try:
+            keeper.discover = lambda bind: [self.location, f"http://127.0.0.1:{second.server_port}/random-path/rootDesc.xml"]
+            self.assertEqual(keeper.main({"TELEMETRY_RECEIVER_BIND": BIND}), 1)
+            self.assertEqual(later["calls"], [])
+        finally:
+            second.shutdown()
+            second.server_close()
 
     def test_main_skips_a_stale_responder_and_uses_the_working_router(self):
         stale = start(fresh(description_path="/old/rootDesc.xml"))

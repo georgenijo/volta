@@ -111,13 +111,20 @@ def child_text(element, name):
 
 
 def fetch(request):
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        return response.status, response.read(MAX_BODY)
+    """Returns (HTTP status, at most MAX_BODY bytes), error statuses included."""
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            return response.status, response.read(MAX_BODY)
+    except urllib.error.HTTPError as error:
+        with error:
+            return error.code, error.read(MAX_BODY)
 
 
 def control(location):
     """Returns (service type, absolute control URL) of the router's WAN connection, or None."""
-    _, body = fetch(location)
+    status, body = fetch(location)
+    if status != 200:
+        raise ValueError(f"description returned HTTP {status}")
     root = ElementTree.fromstring(body)
     base = child_text(root, "URLBase") or location
     services = {}
@@ -141,11 +148,7 @@ def soap(service, action, arguments):
             f'<u:{action} xmlns:u="{kind}">{fields}</u:{action}></s:Body></s:Envelope>').encode()
     request = urllib.request.Request(url, data=body, headers={"Content-Type": 'text/xml; charset="utf-8"',
                                                               "SOAPAction": f'"{kind}#{action}"'})
-    try:
-        status, reply = fetch(request)
-    except urllib.error.HTTPError as error:
-        with error:
-            status, reply = error.code, error.read(MAX_BODY)
+    status, reply = fetch(request)
     values = {}
     try:
         for element in ElementTree.fromstring(reply).iter():
@@ -180,8 +183,7 @@ def keep(service, bind):
         if status == 200:
             log(f"renewed: TCP {PUBLIC_PORT} -> receiver port {RECEIVER_PORT}")
             return 0
-        log(f"router refused the renewal (error {reply.get('errorCode', status)})")
-        return 1
+        raise Refused(f"renewal refused (error {reply.get('errorCode', status)})")
     if found.get("errorCode") != "714":  # only "no such entry" allows an add
         raise Refused(f"lookup failed (error {found.get('errorCode', status)})")
     # Permanent first; some routers accept only timed leases, renewed above.
@@ -192,8 +194,7 @@ def keep(service, bind):
             return 0
         if reply.get("errorCode") == "718":  # conflicting mapping: never retried
             break
-    log(f"router refused the mapping (error {reply.get('errorCode', status)})")
-    return 1
+    raise Refused(f"mapping refused (error {reply.get('errorCode', status)})")
 
 
 def main(env=os.environ):
@@ -202,7 +203,8 @@ def main(env=os.environ):
     if not locations:
         log("no UPnP router answered; is UPnP enabled on the router?")
         return 1
-    # Mesh satellites may answer too; use the first that offers a working WAN service.
+    # Mesh satellites may answer too. A refusal moves on to the next responder;
+    # a mapping that points elsewhere (exit 1) stops here, since it is the owner's.
     for location in locations:
         try:
             service = control(location)
