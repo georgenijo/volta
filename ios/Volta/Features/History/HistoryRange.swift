@@ -7,13 +7,14 @@ enum HistoryRange: Hashable, Sendable {
 
     static let presets: [HistoryRange] = [.today, .sevenDays, .thirtyDays, .ninetyDays, .all]
 
+    /// The range on the toolbar button, spelled out but short: "30 days".
     var label: String {
         switch self {
         case .today: "Today"
-        case .sevenDays: "7D"
-        case .thirtyDays: "30D"
-        case .ninetyDays: "90D"
-        case .all: "All"
+        case .sevenDays: "7 days"
+        case .thirtyDays: "30 days"
+        case .ninetyDays: "90 days"
+        case .all: "All time"
         case .custom(let from, let to):
             from.formatted(.dateTime.month(.abbreviated).day()) + "–" + to.formatted(.dateTime.month(.abbreviated).day())
         }
@@ -53,6 +54,21 @@ enum HistoryRange: Hashable, Sendable {
         case .custom: label
         }
     }
+
+    /// The next wider preset, offered when a range has nothing to show;
+    /// nil for all time.
+    var wider: HistoryRange? {
+        switch self {
+        case .today: .sevenDays
+        case .sevenDays: .thirtyDays
+        case .thirtyDays: .ninetyDays
+        case .ninetyDays, .custom: .all
+        case .all: nil
+        }
+    }
+
+    /// "Show last 90 days", "Show all time": the button that widens the range.
+    var showTitle: String { "Show " + (self == .all ? "all time" : menuTitle.prefix(1).lowercased() + menuTitle.dropFirst()) }
 
     func dateRange(now: Date = .now, calendar: Calendar = .current) -> DateRange {
         switch self {

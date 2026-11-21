@@ -32,6 +32,9 @@ struct TripSignalChart: View {
     var tooltip: ((Double) -> String?)? = nil
     @Binding var scrub: Double?
     var focusMinute: Double?
+    /// False until the chart appears: traces rise from the floor and settle.
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var totalMinutes: Double { max(end.timeIntervalSince(start) / 60, 1) }
     private func minute(_ t: Date) -> Double { t.timeIntervalSince(start) / 60 }
@@ -48,9 +51,11 @@ struct TripSignalChart: View {
     }
 
     var body: some View {
+        let rise = settled || reduceMotion
+        let floor = domain.lowerBound
         let plotted = traces.map { trace in
             var trace = trace
-            trace.points = Self.plotPoints(trace.points)
+            trace.points = Self.plotPoints(trace.points).map { rise ? $0 : DriveCharts.Point(t: $0.t, v: floor) }
             return trace
         }
         Chart {
@@ -122,6 +127,10 @@ struct TripSignalChart: View {
             plot.overlay(alignment: .bottom) { Rectangle().fill(Color.voltaInk.opacity(0.12)).frame(height: 1) }
         }
         .frame(height: height)
+        .onAppear {
+            guard !settled else { return }
+            withAnimation(VoltaMotion.animation(VoltaMotion.settle.delay(0.1), reduceMotion: reduceMotion)) { settled = true }
+        }
     }
 
     /// 0m, then every stride: starting at zero so the first label is always "0m".
@@ -192,7 +201,7 @@ private struct TripChartTooltip: View {
     }
 }
 
-/// Legend row under a chart: "● INSIDE  ● OUTSIDE", or a dash for a dashed trace.
+/// Legend row under a chart: "● Inside  ● Outside", or a dash for a dashed trace.
 struct TripChartLegend: View {
     struct Item: Identifiable {
         var id: String { label }

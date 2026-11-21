@@ -29,9 +29,9 @@ struct ParkedOverview: View {
                         .foregroundStyle(Color.voltaTextPrimary)
                         .accessibilityAddTraits(.isHeader)
                 }
-                places
+                places.voltaFocusIn(0)
                 if let finding = summary.finding {
-                    ParkedFindingCard(finding: finding)
+                    ParkedFindingCard(finding: finding).voltaFocusIn(1)
                 }
                 if !summary.days.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -201,20 +201,45 @@ struct ParkedPlaceRow: View {
     }
 }
 
-/// A neutral share bar on a faint track.
+/// A neutral share bar on a faint track: 0 at the start, the whole at the
+/// end, filled from the start. In the places table every row's bar shares that
+/// one scale (each place's share of parked time) and the row speaks its
+/// percentage, so the bars carry no end labels of their own; `endLabels`
+/// adds "0%" and "100%" where a bar stands alone (Asleep). It settles to its
+/// value as it appears.
 struct ParkedShareBar: View {
     var share: Double
     var tint: Color = ParkedPalette.bar
+    var endLabels = false
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(ParkedPalette.track)
-                Capsule().fill(tint)
-                    .frame(width: max(share > 0 ? 6 : 0, proxy.size.width * min(1, max(0, share))))
+        VStack(spacing: 4) {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(ParkedPalette.track)
+                    Capsule().fill(tint)
+                        .frame(width: max(share > 0 ? 6 : 0, proxy.size.width * min(1, max(0, share)) * (settled || reduceMotion ? 1 : 0)))
+                }
+            }
+            .frame(height: 8)
+            if endLabels {
+                HStack {
+                    Text("0%")
+                    Spacer(minLength: 8)
+                    Text("100%")
+                }
+                .font(.caption2)
+                .monospacedDigit()
+                .foregroundStyle(HistoryTheme.tertiary)
             }
         }
-        .frame(height: 8)
+        .animation(VoltaMotion.animation(VoltaMotion.settle, reduceMotion: reduceMotion), value: share)
+        .onAppear {
+            guard !settled else { return }
+            withAnimation(VoltaMotion.animation(VoltaMotion.settle.delay(0.1), reduceMotion: reduceMotion)) { settled = true }
+        }
         .accessibilityHidden(true)
     }
 }
@@ -222,8 +247,9 @@ struct ParkedShareBar: View {
 // MARK: - Finding
 
 /// One measured comparison, stated as a record of the past: no cause, no
-/// advice. Amber only when the higher place is also clearly above the car's
-/// own average (the same rule as its row); a neutral card otherwise.
+/// advice. Its border turns amber only when the higher place is also clearly
+/// above the car's own average (the same rule as its row); the fill stays
+/// the card's, with no tinted wash.
 struct ParkedFindingCard: View {
     var finding: ParkedFinding
     @Environment(\.units) private var units
@@ -238,10 +264,12 @@ struct ParkedFindingCard: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(tint.opacity(finding.higher.isNotable ? 0.09 : 0.05), in: .rect(cornerRadius: 16, style: .continuous))
+            .voltaCardBackground(radius: 16)
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(tint.opacity(finding.higher.isNotable ? 0.3 : 0.1))
+                if finding.higher.isNotable {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(tint.opacity(0.6), lineWidth: 1)
+                }
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("parked.finding")
@@ -256,6 +284,9 @@ struct ParkedFindingCard: View {
 struct ParkedLossChart: View {
     var days: [ParkedDay]
     @Environment(\.units) private var units
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// False until the chart appears, so the bars grow from the baseline.
+    @State private var grown = false
     @ScaledMetric(relativeTo: .caption2) private var axisWidth: CGFloat = 24
     @ScaledMetric(relativeTo: .caption2) private var labelHeight: CGFloat = 18
 
@@ -306,10 +337,14 @@ struct ParkedLossChart: View {
         .accessibilityLabel("Range lost by day")
         .accessibilityValue(summaryText)
         .accessibilityChartDescriptor(ParkedLossChartDescriptor(days: days, units: units))
+        .onAppear {
+            guard !grown else { return }
+            withAnimation(VoltaMotion.animation(VoltaMotion.settle.delay(0.1), reduceMotion: reduceMotion)) { grown = true }
+        }
     }
 
     @ViewBuilder private func bar(_ day: ParkedDay, value: Double?, top: Double, width: CGFloat) -> some View {
-        let height = max(value.map { $0 > 0 ? 2 : 0 } ?? 0, plotHeight * CGFloat((value ?? 0) / top))
+        let height = max(value.map { $0 > 0 ? 2 : 0 } ?? 0, plotHeight * CGFloat((value ?? 0) / top)) * (grown || reduceMotion ? 1 : 0)
         if day.isToday {
             RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                 .strokeBorder(Color.voltaTextPrimary, lineWidth: 1.5)
@@ -432,7 +467,7 @@ struct ParkedAsleepView: View {
                     .font(.caption)
                     .foregroundStyle(HistoryTheme.secondary)
             }
-            ParkedShareBar(share: asleep.share)
+            ParkedShareBar(share: asleep.share, endLabels: true)
             (Text("Asleep ") + Text("\(percent)%").fontWeight(.semibold)
              + Text(" of that time · \(ParkedText.span(asleep.asleepMinutes)) of \(ParkedText.span(asleep.coveredMinutes))")
                 .foregroundStyle(HistoryTheme.secondary))

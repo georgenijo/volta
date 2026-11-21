@@ -503,11 +503,14 @@ struct RouteEndpointMarker: View {
 // MARK: - Score
 
 /// The drive score band, for every score ring (header, cards, detail).
+/// A score's band colour, one rule for every score ring and bar: green for a
+/// high (efficient, smooth) score, ink for an ordinary one, amber for a low
+/// one that deserves attention. Red is kept for problems, and a low score
+/// isn't one.
 enum DriveScoreTint {
     static let good = Color.voltaGreen
-    /// Light: 5.1:1 and 5.4:1 on a card.
-    static let fair = Color(light: 0x9A6200, dark: 0xF5BE62)
-    static let poor = Color(light: 0xC4372A, dark: 0xFF8178)
+    static let fair = Color.voltaTextPrimary
+    static let poor = Color.voltaAmber
 
     static func color(_ score: Int?) -> Color {
         guard let score else { return HistoryTheme.secondary }

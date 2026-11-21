@@ -131,9 +131,8 @@ struct HistorySessionsMap: View {
                     Text(pin.title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.voltaTextPrimary)
-                    Text(pin.subtitle.uppercased())
-                        .scaledFont(11, weight: .semibold)
-                        .tracking(0.8)
+                    Text(pin.subtitle)
+                        .scaledFont(11, weight: .medium)
                         .foregroundStyle(HistoryTheme.secondary)
                 }
                 .padding(.horizontal, 10)
@@ -173,7 +172,7 @@ struct HistorySessionsMap: View {
                     .foregroundStyle(HistoryTheme.secondary)
                     .multilineTextAlignment(.center)
                 if summary.placesFailed {
-                    Button("Retry", action: retryPlaces)
+                    Button("Try again", action: retryPlaces)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(HistoryTheme.blue)
                         .buttonStyle(.plain)
@@ -295,9 +294,8 @@ struct HistoryMapScopeBar<Item: Codable & Hashable & Sendable & Identifiable>: V
                         .foregroundStyle(HistoryTheme.secondary)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(HistoryTotalsScope.title(period: period, hasMore: feed.hasMore, noun: noun).uppercased())
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(1)
+                    Text(HistoryTotalsScope.title(period: period, hasMore: feed.hasMore, noun: noun))
+                        .font(.voltaLabel)
                         .foregroundStyle(HistoryTheme.secondary)
                     Text(feed.hasMore ? "\(count) loaded so far" : "\(count) in range")
                         .font(.system(size: 13))
@@ -322,7 +320,7 @@ struct HistoryMapScopeBar<Item: Codable & Hashable & Sendable & Identifiable>: V
 
     @ViewBuilder private var trailing: some View {
         if feed.footerError != nil {
-            Button("Retry") {
+            Button("Try again") {
                 Task { if feed.refreshError != nil { await retryRefresh() } else { await feed.retryLoadMore() } }
             }
             .font(.system(size: 14, weight: .semibold))
@@ -406,7 +404,7 @@ struct HistoryLocationCard: View {
                             .foregroundStyle(HistoryTheme.tertiary)
                     }
                     Spacer(minLength: 8)
-                    Button("Retry", action: retryPlaces)
+                    Button("Try again", action: retryPlaces)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(HistoryTheme.blue)
                         .buttonStyle(.plain)
@@ -446,7 +444,6 @@ struct HistoryLocationCard: View {
                         ZStack {
                             Circle().fill(tint.opacity(0.22)).frame(width: 46, height: 46)
                             Circle().fill(tint).frame(width: 24, height: 24)
-                                .shadow(color: tint.opacity(0.6), radius: 8)
                             Image(systemName: systemImage)
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(Color.voltaOnState)

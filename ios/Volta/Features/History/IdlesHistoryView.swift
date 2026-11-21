@@ -104,10 +104,13 @@ struct IdleStateSlice: Identifiable, Hashable {
     }
 }
 
-/// Segmented proportion bar of the recorded states.
+/// Segmented proportion bar of the recorded states; it grows out from the
+/// start as it appears.
 struct IdleBreakdownBar: View {
     var slices: [IdleStateSlice]
     var height: CGFloat = 8
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { proxy in
@@ -125,6 +128,11 @@ struct IdleBreakdownBar: View {
             }
         }
         .frame(height: height)
+        .scaleEffect(x: settled || reduceMotion ? 1 : 0.001, anchor: .leading)
+        .onAppear {
+            guard !settled else { return }
+            withAnimation(VoltaMotion.animation(VoltaMotion.settle.delay(0.1), reduceMotion: reduceMotion)) { settled = true }
+        }
         .accessibilityHidden(true)
     }
 }
@@ -158,6 +166,9 @@ struct IdlesHistoryView: View {
     @State private var showingCustomRange = false
     /// The whole tab, which decides between a stack and a split.
     @State private var window = HistoryWindow()
+    /// Counts refreshes that brought data, for the `.refreshed` haptic.
+    @State private var refreshes = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(range: HistoryRange = .thirtyDays) {
         _range = State(initialValue: range)
@@ -183,6 +194,9 @@ struct IdlesHistoryView: View {
         .readsHistoryWindow($window)
         .task(id: loadKey) { await load() }
         .followsSystemTextSize()
+        .voltaFeedback(.selection, trigger: range)
+        .voltaFeedback(.selection, trigger: showMap)
+        .voltaFeedback(.refreshed, trigger: refreshes)
     }
 
     @ViewBuilder private func destination(_ route: ParkedRoute, summary: ParkedSummary) -> some View {
@@ -246,17 +260,17 @@ struct IdlesHistoryView: View {
         ToolbarItemGroup(placement: .topBarTrailing) {
             HistoryToolbarButton(title: showMap ? "List" : "Map", systemImage: showMap ? "list.bullet" : "mappin.and.ellipse",
                                  isOn: showMap, identifier: "button.history.map") {
-                withAnimation(.snappy) { showMap.toggle() }
+                withAnimation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion)) { showMap.toggle() }
             }
             Button {
                 Task {
                     refreshing = true
-                    await reload()
+                    await refresh()
                     refreshing = false
                 }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
-                    .symbolEffect(.rotate, isActive: refreshing)
+                    .symbolEffect(.rotate, isActive: refreshing && !reduceMotion)
             }
             .tint(Color.voltaTextPrimary)
             .disabled(refreshing)
@@ -281,6 +295,12 @@ struct IdlesHistoryView: View {
 
     private func reload(skeleton: Bool = false) async {
         await feed.reload(key: loadKey, range: range.dateRange(), fetch: fetch, showSkeleton: skeleton)
+    }
+
+    /// A refresh the person asked for: a soft tap once new data is in.
+    private func refresh() async {
+        await reload()
+        if feed.phase == .loaded, feed.refreshError == nil { refreshes += 1 }
     }
 
     /// Title and range menu in the content while the bars are on the side.
@@ -312,16 +332,21 @@ struct IdlesHistoryView: View {
     @ViewBuilder private func content(_ summary: ParkedSummary) -> some View {
         switch feed.phase {
         case .loading:
-            HistorySkeletonList().safeAreaInset(edge: .top, spacing: 0) { header }
+            ParkedSkeleton().safeAreaInset(edge: .top, spacing: 0) { header }
         case .failed(let message):
             HistoryErrorState(title: "Couldn't load stops", message: message) {
-                Task { await reload(skeleton: true) }
+                await reload(skeleton: true)
             }
             .safeAreaInset(edge: .top, spacing: 0) { header }
         case .loaded:
             if feed.items.isEmpty {
-                HistoryEmptyState(systemImage: "parkingsign", title: "No Stops",
-                                  message: "Stops show here once the car has been parked for more than 10 minutes.")
+                HistoryEmptyState(systemImage: "parkingsign", title: "No stops \(range.emptyPhrase ?? "yet")",
+                                  message: range.wider == nil
+                                    ? "Stops show here once the car has been parked for more than 10 minutes."
+                                    : "The car wasn't parked for more than 10 minutes \(range.emptyPhrase ?? "in this range"). Earlier stops are in a wider range.",
+                                  actionTitle: range.wider?.showTitle,
+                                  action: range.wider.map { wider in { range = wider } },
+                                  actionSystemImage: "calendar")
                     .safeAreaInset(edge: .top, spacing: 0) { header }
             } else if showMap {
                 mapView
@@ -333,22 +358,26 @@ struct IdlesHistoryView: View {
 
     private func list(_ summary: ParkedSummary) -> some View {
         let text = ParkedText(units: units)
+        let order = Dictionary(summary.groups.flatMap(\.stops).enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
                 VStack(alignment: .leading, spacing: 12) {
                     ParkedHero(summary: summary, period: range.periodLabel)
+                        .voltaFocusIn(0)
                     if let live = summary.open {
                         Button { open(live) } label: {
                             ParkedNowCard(idle: live).parkedSelected(selected == .stop(live.id), radius: VoltaRadius.card)
                         }
                         .buttonStyle(VoltaPressStyle())
                         .accessibilityIdentifier("row.idle.live")
+                        .voltaFocusIn(1)
                     }
                     if !split, !summary.places.isEmpty {
                         Button { path.append(.summary) } label: { ParkedPlacesCard(summary: summary) }
                             .buttonStyle(VoltaPressStyle())
                             .accessibilityIdentifier("button.parked.summary")
+                            .voltaFocusIn(2)
                     }
                 }
                 .padding(.horizontal, VoltaSpacing.screen)
@@ -365,6 +394,8 @@ struct IdlesHistoryView: View {
                         .buttonStyle(VoltaPressStyle())
                         .accessibilityIdentifier("row.idle.\(idle.id)")
                         .padding(.horizontal, VoltaSpacing.screen - ParkedRow.inset)
+                        // After the hero and its cards.
+                        .historyFocusIn((order[idle.id] ?? 99) + 3)
                     }
                 }
                 HistoryPageFooter(feed: feed) { await reload() }
@@ -376,7 +407,7 @@ struct IdlesHistoryView: View {
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.idles")
-        .refreshable { await reload() }
+        .refreshable { await refresh() }
     }
 
     private var mapView: some View {
@@ -420,6 +451,40 @@ struct IdlesHistoryView: View {
         .task(id: needsPlaces) {
             if needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) }
         }
+    }
+}
+
+// MARK: - Loading
+
+/// The Parked list while its first page loads: the hero and a day of stops,
+/// drawn from sample values as a skeleton (`.voltaSkeleton`).
+struct ParkedSkeleton: View {
+    static let samples: [IdleSummary] = (0..<5).map { i in
+        let start = Date(timeIntervalSince1970: 1_800_000_000 + Double(i) * 7_200)
+        return IdleSummary(id: -1 - i, start: start, end: start.addingTimeInterval(5_400), address: nil,
+                           placeName: "Home", durationMin: 90, startBatteryLevel: 74, endBatteryLevel: 73,
+                           rangeLostKm: 1.6, energyLostKwh: 0.3, sentryMinutes: nil, climateMinutes: nil, asleepMinutes: 60)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ParkedHero(summary: ParkedSummary(Self.samples, partial: false), period: "Last 30 days")
+                    .padding(.horizontal, VoltaSpacing.screen)
+                    .padding(.top, 12)
+                ParkedDayHeader(title: "Today", trailing: "5 stops · 7h 30m")
+                    .padding(.horizontal, VoltaSpacing.screen)
+                    .padding(.top, 26)
+                ForEach(Self.samples) { idle in
+                    ParkedRow(idle: idle).padding(.horizontal, VoltaSpacing.screen - ParkedRow.inset)
+                }
+            }
+            .voltaReadableWidth()
+            .voltaSkeleton(true)
+        }
+        .scrollDisabled(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading stops")
     }
 }
 
@@ -513,10 +578,9 @@ struct ParkedHero: View {
             : AnyLayout(HStackLayout(alignment: .lastTextBaseline, spacing: 6))
         layout {
             if let lost {
-                Text(text.number(lost) + more)
+                RollingNumber(value: lost) { text.number($0) + more }
                     .font(.system(size: numberSize, weight: .heavy))
                     .tracking(-1)
-                    .monospacedDigit()
                     .foregroundStyle(Color.voltaTextPrimary)
                     .lineLimit(1).minimumScaleFactor(0.5)
                 Text("\(units.distanceUnit) of range")

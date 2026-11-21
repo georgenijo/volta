@@ -184,7 +184,9 @@ extension HistoryChartCard where Accessory == EmptyView {
     }
 }
 
-/// Placeholder shown in chart cards while the detail request is in flight.
+/// A chart that isn't drawn yet. While the detail request is in flight it is
+/// a skeleton of a chart (gridlines and a trace); with a message it says why
+/// there is no chart, with Try again when `retry` is set.
 struct HistoryChartPlaceholder: View {
     var height: CGFloat = 150
     var message: String? = nil
@@ -192,23 +194,58 @@ struct HistoryChartPlaceholder: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12).fill(HistoryTheme.track.opacity(0.5))
             if let message {
+                RoundedRectangle(cornerRadius: 12).fill(HistoryTheme.track.opacity(0.5))
                 VStack(spacing: 10) {
                     Text(message)
                         .font(.system(size: 13))
                         .foregroundStyle(HistoryTheme.secondary)
                         .multilineTextAlignment(.center)
                     if let retry {
-                        PillButton("Retry", systemImage: "arrow.clockwise", action: retry)
+                        PillButton("Try again", systemImage: "arrow.clockwise", action: retry)
                     }
                 }
                 .padding()
             } else {
-                ProgressView().tint(HistoryTheme.secondary)
+                HistoryChartSkeleton()
+                    .voltaSkeleton(true)
             }
         }
         .frame(height: height)
+    }
+}
+
+/// The outline of a time-series chart: three gridlines, a gentle trace and
+/// axis-label blocks, for `.voltaSkeleton`.
+struct HistoryChartSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { geo in
+                let w = geo.size.width, h = geo.size.height
+                ZStack(alignment: .topLeading) {
+                    ForEach(0..<3, id: \.self) { i in
+                        Rectangle().fill(HistoryTheme.track)
+                            .frame(height: 1)
+                            .offset(y: h * CGFloat(i) / 2)
+                    }
+                    Path { p in
+                        p.move(to: CGPoint(x: 0, y: h * 0.7))
+                        p.addCurve(to: CGPoint(x: w * 0.5, y: h * 0.35),
+                                   control1: CGPoint(x: w * 0.2, y: h * 0.7), control2: CGPoint(x: w * 0.3, y: h * 0.3))
+                        p.addCurve(to: CGPoint(x: w, y: h * 0.5),
+                                   control1: CGPoint(x: w * 0.7, y: h * 0.4), control2: CGPoint(x: w * 0.85, y: h * 0.6))
+                    }
+                    .stroke(HistoryTheme.track, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                }
+            }
+            HStack {
+                ForEach(0..<4, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 3).fill(HistoryTheme.track).frame(width: 26, height: 8)
+                    if i < 3 { Spacer(minLength: 8) }
+                }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -240,7 +277,6 @@ struct HistoryStatGrid: View {
                                     Image(systemName: item.systemImage)
                                         .font(.system(size: 10, weight: .semibold))
                                     Text(item.label).voltaLabelStyle()
-                                        .tracking(1.1)
                                         .lineLimit(1)
                                         // Three columns on the 382 pt outer display: shrink, don't truncate.
                                         .minimumScaleFactor(0.65)
@@ -447,8 +483,8 @@ struct SegmentDial: View {
             VStack(spacing: size * 0.02) {
                 Text(center).font(.system(size: size * 0.3, weight: .semibold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(.voltaTextPrimary).lineLimit(1).minimumScaleFactor(0.6)
-                Text(caption).font(.system(size: max(8, size * 0.1), weight: .semibold)).tracking(1.2)
-                    .textCase(.uppercase).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+                Text(caption).font(.system(size: max(11, size * 0.12), weight: .medium))
+                    .foregroundStyle(HistoryTheme.secondary).lineLimit(1)
             }
             .padding(.horizontal, line * 2)
         }

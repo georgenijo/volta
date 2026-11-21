@@ -9,8 +9,7 @@ import SwiftUI
 /// Date range menu for a toolbar item: presets and a custom range.
 struct HistoryRangeMenu: View {
     @Binding var range: HistoryRange
-    /// In a horizontal bar the range shows as "30D" next to the calendar, as
-    /// before. In the side strip only the symbol fits, so the content shows the range.
+    /// In a horizontal bar the range shows as "30 days" next to the calendar. In the side strip only the symbol fits, so the content shows the range.
     var showsValue: Bool
     var customRange: () -> Void
 
@@ -105,14 +104,16 @@ struct HistoryInlineTitle: View {
                 .foregroundStyle(Color.voltaTextPrimary)
                 .accessibilityAddTraits(.isHeader)
             if let subtitle {
-                Text(subtitle.uppercased())
-                    .font(.system(size: 10, weight: .semibold)).tracking(1.6)
+                Text(subtitle)
+                    .font(.voltaLabel)
                     .foregroundStyle(HistoryTheme.secondary)
             }
             Spacer(minLength: 0)
         }
         .lineLimit(1).minimumScaleFactor(0.8)
-        // A halo in the page's own colour: black on the dark map, white on the light one.
+        // A halo in the page's own colour: black on the dark map, white on the
+        // light one. Kept against the design rules' "no glow" on purpose: this
+        // title sits on a route map and the halo is what keeps it legible there.
         .shadow(color: Color.voltaMapWash.opacity(0.5), radius: 6, y: 1)
     }
 }
@@ -455,21 +456,43 @@ struct HistorySearchField: View {
 // MARK: - States
 
 /// Empty state placed like the references: left-aligned, a little above
-/// center, with an optional action underneath.
+/// center, with the next step as a button underneath when there is one.
 struct HistoryEmptyState: View {
     var systemImage: String
     var title: String
     var message: String
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
+    /// The action button's symbol.
+    var actionSystemImage: String = "arrow.clockwise"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 0) {
             Spacer(minLength: 0)
-            EmptyState(systemImage: systemImage, title: title, message: message)
-            if let actionTitle, let action {
-                PillButton(actionTitle, systemImage: "arrow.clockwise", action: action)
-                    .padding(.horizontal, VoltaSpacing.xl + VoltaSpacing.xs)
+            EmptyState(systemImage: systemImage, title: title, message: message,
+                       action: actionTitle.flatMap { title in action.map { EmptyState.Action(title, systemImage: actionSystemImage, handler: $0) } })
+            Spacer(minLength: 0)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(.bottom, 40)
+    }
+}
+
+/// A list that failed to load: what went wrong and Try again, placed like
+/// `HistoryEmptyState`.
+struct HistoryErrorState: View {
+    var title: String
+    var message: String
+    var retry: () -> Void
+    /// Set to await the reload, so the button reads "Trying…" until it ends.
+    var asyncRetry: (() async -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 0)
+            ErrorState(title: title, message: message) {
+                if let asyncRetry { await asyncRetry() } else { retry() }
             }
             Spacer(minLength: 0)
             Spacer(minLength: 0)
@@ -479,21 +502,17 @@ struct HistoryEmptyState: View {
     }
 }
 
-struct HistoryErrorState: View {
-    var title: String
-    var message: String
-    var retry: () -> Void
-
-    var body: some View {
-        HistoryEmptyState(systemImage: "wifi.exclamationmark", title: title, message: message,
-                          actionTitle: "Try again", action: retry)
+extension HistoryErrorState {
+    /// Awaits the reload, so Try again shows "Trying…" while it runs.
+    init(title: String, message: String, reload: @escaping () async -> Void) {
+        self.init(title: title, message: message, retry: {}, asyncRetry: reload)
     }
 }
 
-/// Pulsing placeholder blocks shown while the first page loads.
+/// Placeholder blocks shown while the first page loads, drawn as a skeleton
+/// (`.voltaSkeleton`): a totals row, a section label and list cards.
 struct HistorySkeletonList: View {
     var rows: Int = 5
-    @State private var pulse = false
 
     var body: some View {
         ScrollView {
@@ -532,14 +551,10 @@ struct HistorySkeletonList: View {
                 }
             }
             .padding(.horizontal, HistoryTheme.gutter)
+            .voltaSkeleton(true)
         }
         .scrollDisabled(true)
-        // Only brightness pulses. Animating the whole ScrollView also animates
-        // its initial layout and safe-area adjustments as the tab is mounted.
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { content in
-            content.opacity(pulse ? 0.45 : 1)
-        }
-        .onAppear { pulse = true }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading")
     }
 
@@ -568,7 +583,7 @@ struct HistoryPageFooter<Item: Codable & Hashable & Sendable & Identifiable>: Vi
                     .font(.system(size: 13))
                     .foregroundStyle(HistoryTheme.secondary)
                     .multilineTextAlignment(.center)
-                Button("Retry") {
+                Button("Try again") {
                     Task {
                         if feed.refreshError != nil { await retryRefresh() } else { await feed.retryLoadMore() }
                     }
@@ -582,9 +597,7 @@ struct HistoryPageFooter<Item: Codable & Hashable & Sendable & Identifiable>: Vi
                     .accessibilityLabel("Loading more")
             } else {
                 Text("That's everything")
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.3)
-                    .textCase(.uppercase)
+                    .font(.footnote)
                     .foregroundStyle(HistoryTheme.tertiary)
             }
         }
