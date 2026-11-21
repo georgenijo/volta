@@ -116,6 +116,14 @@ struct DrivesHistoryView: View {
         split ? EdgeInsets() : EdgeInsets(top: 0, leading: window.safeArea.leading, bottom: 0, trailing: window.safeArea.trailing)
     }
 
+    /// Pages arrive newest first, so a day is whole once any loaded drive
+    /// started before it; only the oldest loaded day can still be missing drives.
+    static func dayMayBePartial(_ day: Date, loaded: [DriveSummary], hasMore: Bool, calendar: Calendar = .current) -> Bool {
+        guard hasMore else { return false }
+        let start = calendar.startOfDay(for: day)
+        return !loaded.contains { $0.start < start }
+    }
+
     private var visible: [DriveSummary] { Self.visible(feed.items, filter: filter, query: query, sort: sort) }
 
     /// The rows the list shows, and the set the hero totals: filter and search applied.
@@ -154,7 +162,7 @@ struct DrivesHistoryView: View {
                 }
             case .heatmapDay(let day):
                 HeatmapDayView(date: day, drives: visible.filter { Calendar.current.isDate($0.start, inSameDayAs: day) },
-                               partial: feed.hasMore)
+                               partial: Self.dayMayBePartial(day, loaded: feed.items, hasMore: feed.hasMore))
             }
         } placeholder: {
             HistorySelectionPlaceholder(systemImage: "steeringwheel", title: "No drive selected",

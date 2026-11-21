@@ -31,32 +31,21 @@ struct DashboardMap: View {
     }
 
     private func map(for location: Location) -> some View {
-        let coordinate = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
-        let camera = MapCamera(centerCoordinate: coordinate, distance: 800, heading: 0, pitch: 55)
-        // The camera centers the car, so the marker and pill are drawn as a
-        // centered overlay (kept out of the map so they stay in color).
-        return Map(initialPosition: .camera(camera), interactionModes: [])
-            .mapStyle(.standard(elevation: .realistic, emphasis: .muted,
-                                pointsOfInterest: .excludingAll, showsTraffic: false))
-            .mapControlVisibility(.hidden)
-            // Wattly's map is near-monochrome charcoal; the light map is its pale twin.
-            .voltaBackdropMapTone()
-            .overlay {
-                ZStack {
-                    if charging {
-                        ChargingMarker()
-                    } else {
-                        CarMarker(heading: location.heading, tint: sentry ? .voltaRed : .voltaBlue)
-                    }
-                    AddressPill(location: location, sentry: sentry, state: state,
-                                charging: charging, chargerPowerKw: chargerPowerKw)
-                        // A map label: the map's own accessibility label reads the
-                        // place at any size, so the pill keeps clear of the wordmark.
-                        .dynamicTypeSize(...DynamicTypeSize.xLarge)
-                        .alignmentGuide(VerticalAlignment.center) { d in d[.bottom] + 16 }
+        BackdropMap(location: location) {
+            ZStack {
+                if charging {
+                    ChargingMarker()
+                } else {
+                    CarMarker(heading: location.heading, tint: sentry ? .voltaRed : .voltaBlue)
                 }
+                AddressPill(location: location, sentry: sentry, state: state,
+                            charging: charging, chargerPowerKw: chargerPowerKw)
+                    // A map label: the map's own accessibility label reads the
+                    // place at any size, so the pill keeps clear of the wordmark.
+                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                    .alignmentGuide(VerticalAlignment.center) { d in d[.bottom] + 16 }
             }
-        .id("\(location.latitude),\(location.longitude)")
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Map: car at \(AddressPill.title(for: location))")
     }
@@ -73,6 +62,47 @@ struct DashboardMap: View {
             .foregroundStyle(Color.voltaTextTertiary)
             .padding(.top, 40)
         }
+    }
+}
+
+/// One map for the life of the dashboard. A new fix (every refresh and live
+/// poll moves the car a little) glides the camera there instead of rebuilding
+/// the map, which reloaded its tiles and snapped them in.
+private struct BackdropMap<Overlay: View>: View {
+    var location: Location
+    @ViewBuilder var overlay: Overlay
+    @State private var position: MapCameraPosition
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(location: Location, @ViewBuilder overlay: () -> Overlay) {
+        self.location = location
+        self.overlay = overlay()
+        _position = State(initialValue: .camera(Self.camera(for: location)))
+    }
+
+    static func camera(for location: Location) -> MapCamera {
+        MapCamera(centerCoordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude),
+                  distance: 800, heading: 0, pitch: 55)
+    }
+
+    var body: some View {
+        // The camera centers the car, so the marker and pill are drawn as a
+        // centered overlay (kept out of the map so they stay in color).
+        Map(position: $position, interactionModes: [])
+            .mapStyle(.standard(elevation: .realistic, emphasis: .muted,
+                                pointsOfInterest: .excludingAll, showsTraffic: false))
+            .mapControlVisibility(.hidden)
+            // Wattly's map is near-monochrome charcoal; the light map is its pale twin.
+            .voltaBackdropMapTone()
+            .overlay { overlay }
+            .onChange(of: [location.latitude, location.longitude]) {
+                let camera = Self.camera(for: location)
+                if reduceMotion {
+                    position = .camera(camera)
+                } else {
+                    withAnimation(.smooth(duration: 1.2)) { position = .camera(camera) }
+                }
+            }
     }
 }
 

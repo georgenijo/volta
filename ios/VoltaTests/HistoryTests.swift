@@ -729,6 +729,18 @@ final class HistoryDayWindowTests: XCTestCase {
         return drive
     }
 
+    @MainActor func testOnlyTheOldestLoadedDayIsPartial() {
+        let loaded = [drive(1, start: day(0, hour: 18), km: 7), drive(2, start: day(-3, hour: 9), km: 5)]
+        // A newer page already reaches before these days, so they are whole.
+        XCTAssertFalse(DrivesHistoryView.dayMayBePartial(day(0), loaded: loaded, hasMore: true, calendar: calendar))
+        XCTAssertFalse(DrivesHistoryView.dayMayBePartial(day(-2), loaded: loaded, hasMore: true, calendar: calendar))
+        // The oldest loaded day can still have unloaded drives.
+        XCTAssertTrue(DrivesHistoryView.dayMayBePartial(day(-3), loaded: loaded, hasMore: true, calendar: calendar))
+        XCTAssertTrue(DrivesHistoryView.dayMayBePartial(day(-5), loaded: loaded, hasMore: true, calendar: calendar))
+        // Everything loaded: nothing is partial.
+        XCTAssertFalse(DrivesHistoryView.dayMayBePartial(day(-5), loaded: loaded, hasMore: false, calendar: calendar))
+    }
+
     func testTodayScopeIsOneDayAndNotDrawable() {
         let today = window(.today)
         XCTAssertEqual(today.days, [day(0)])
