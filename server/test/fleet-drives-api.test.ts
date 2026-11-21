@@ -177,6 +177,39 @@ test('an endpoint without a geofence or nearby address takes the city of the nea
   await owner`UPDATE addresses SET latitude=37.7006 WHERE id=1`;
   drive=(await get('/v1/vehicles/1/drives')).items[0];expect(drive.startAddress).toBe('1 Synthetic Street');expect(drive.startCity).toBe('Synthetic Bay City');
 });
+test('an unlabelled endpoint parked at a telemetry DC fast charge reads as the charger, never a guessed address',async()=>{
+  await owner`UPDATE geofences SET latitude=37.8 WHERE id=1`;await owner`UPDATE addresses SET latitude=37.74 WHERE id=1`;
+  const charge=async(start:number,end:number,fast:boolean)=>{
+    await owner`INSERT INTO volta_telemetry.sessions(vehicle_id,kind,start_ts,end_ts,start_reason,end_reason,membership,payloads) VALUES (1,'charge',${at(start)},${at(end)},'charge_state','charge_state','complete',10)`;
+    await owner`INSERT INTO volta_telemetry.samples(vehicle_id,field,source_ts,received_at,value_num,invalid,quality,payload_id,source_unit)
+      VALUES (1,${fast ? 'DCChargingPower' : 'ACChargingPower'},${at(start+5)},${at(start+5)},${fast ? 120 : 11},false,'ok',${'power-'+start},'kW')`;
+  };
+  await charge(-900,-23,true);await trip(0,600);
+  let drive=(await get('/v1/vehicles/1/drives')).items[0];
+  expect(drive.startAddress).toBe('DC fast charger');expect(drive.startCity).toBe('DC fast charger');
+  expect(drive.endAddress).toBeNull();expect(drive.endCity).toBeNull();
+  // TeslaMate logged the same charge at a Tesla charger.
+  await owner`INSERT INTO charging_processes(id,car_id,position_id,start_date,end_date) SELECT 90,1,id,${at(-900)},${at(-23)} FROM positions LIMIT 1`;
+  await owner`INSERT INTO charges(id,charging_process_id,date,battery_level,charge_energy_added,charger_actual_current,charger_phases,charger_pilot_current,charger_power,charger_voltage,fast_charger_present,fast_charger_brand,ideal_battery_range_km,rated_battery_range_km,usable_battery_level)
+    VALUES (900,90,${at(-600)},50,10,0,null,0,120,400,true,'Tesla',200,200,50)`;
+  drive=(await get('/v1/vehicles/1/drives')).items[0];expect(drive.startAddress).toBe('Supercharger');
+  // A nearby city still names the city; the charger stays the address.
+  await owner`UPDATE addresses SET latitude=37.71 WHERE id=1`;
+  drive=(await get('/v1/vehicles/1/drives')).items[0];expect(drive.startCity).toBe('Synthetic Bay City');expect(drive.startAddress).toBe('Supercharger');
+  // A recognised place wins over the charger label.
+  await owner`UPDATE addresses SET latitude=37.7 WHERE id=1`;
+  drive=(await get('/v1/vehicles/1/drives')).items[0];expect(drive.startAddress).toBe('1 Synthetic Street');
+  await owner`UPDATE addresses SET latitude=37.74 WHERE id=1`;
+  // An AC charge, or a fast charge separated by another drive, labels nothing.
+  await owner`DELETE FROM charges`;await owner`UPDATE volta_telemetry.samples SET field='ACChargingPower',value_num=11 WHERE field='DCChargingPower'`;
+  drive=(await get('/v1/vehicles/1/drives')).items[0];expect(drive.startAddress).toBeNull();expect(drive.startCity).toBeNull();
+  await owner`UPDATE volta_telemetry.samples SET field='DCChargingPower',value_num=120 WHERE field='ACChargingPower'`;
+  await owner`UPDATE volta_telemetry.sessions SET end_ts=${at(-2000)},start_ts=${at(-2600)} WHERE kind='charge'`;
+  drive=(await get('/v1/vehicles/1/drives')).items[0];expect(drive.startAddress).toBeNull();
+  // The end: a fast charge starting shortly after the drive ends.
+  await charge(700,1500,true);
+  drive=(await get('/v1/vehicles/1/drives')).items[0];expect(drive.endAddress).toBe('DC fast charger');expect(drive.startAddress).toBeNull();
+});
 test('drive detail adds forward-filled charts and DEM elevation for telemetry drives, charts null for TeslaMate',async()=>{
   // Synthetic 3-arc-second tile: terrain rises 10 m per post northwards.
   const dir=mkdtempSync(join(tmpdir(),'volta-dem-')),tile=Buffer.alloc(1201*1201*2);

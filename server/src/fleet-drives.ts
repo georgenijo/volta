@@ -26,6 +26,8 @@ export const odometerLookbackMs = 1800000, odometerTailMs = 120000;
 export const routeToleranceM = 5, routeMaxPoints = 300;
 /** Fallback endpoint city: nearest local address within this many metres. */
 export const nearestCityM = 3000;
+/** A drive endpoint this close to a DC fast charge session is parked at it. */
+export const fastChargeLinkMs = 900000;
 
 /** Collision-free signed JS/Swift integer: 32-bit epoch seconds, 21-bit car ID.
  * Distinct trips start in distinct seconds. Valid through 2106; never hash/truncate IDs. */
@@ -459,6 +461,33 @@ export class FleetDrives {
       elevationMinM:profile.points.length ? profile.points.reduce((min,p)=>Math.min(min,p.v),Infinity) : null,
       elevationMaxM:profile.points.length ? profile.points.reduce((max,p)=>Math.max(max,p.v),-Infinity) : null};
   }
+  /** "DC fast charger" when the drive starts (or ends) parked at a DC fast
+   * charge: a telemetry charge session ending within 15 minutes before the
+   * start (or beginning within 15 minutes after the end), with no other drive
+   * between, that reported DC charging power (the charges list's
+   * fastCharger signal; "Supercharger"
+   * when TeslaMate logged a Tesla charger for it). TeslaMate only
+   * geocodes its own drive and charge endpoints, so a stop it merged into one
+   * drive has no address; telemetry streams no site name, so this is the
+   * most specific honest label. Null otherwise. */
+  private async fastChargeAt(vehicle: number, w: Window, start: boolean): Promise<string | null> {
+    const edge=start ? w.start : w.end, before=new Date(+edge-(start ? fastChargeLinkMs : 60000)), after=new Date(+edge+(start ? 60000 : fastChargeLinkMs));
+    const [charge]=start
+      ? await this.sql`SELECT c.start_ts,c.end_ts FROM volta_telemetry.sessions c WHERE c.vehicle_id=${vehicle} AND c.kind='charge' AND c.end_ts BETWEEN ${before} AND ${after}
+          AND NOT EXISTS (SELECT 1 FROM volta_telemetry.sessions d WHERE d.vehicle_id=${vehicle} AND d.kind='drive' AND d.start_ts>c.end_ts AND d.start_ts<${edge})
+          ORDER BY c.end_ts DESC LIMIT 1`
+      : await this.sql`SELECT c.start_ts,c.end_ts FROM volta_telemetry.sessions c WHERE c.vehicle_id=${vehicle} AND c.kind='charge' AND c.start_ts BETWEEN ${before} AND ${after}
+          AND NOT EXISTS (SELECT 1 FROM volta_telemetry.sessions d WHERE d.vehicle_id=${vehicle} AND d.kind='drive' AND d.start_ts>${edge} AND d.start_ts<c.start_ts)
+          ORDER BY c.start_ts LIMIT 1`;
+    if (!charge) return null;
+    const [fast]=await this.sql`SELECT 1 FROM volta_telemetry.session_samples WHERE vehicle_id=${vehicle}
+      AND source_ts BETWEEN ${charge.start_ts} AND ${charge.end_ts} AND dc_power_kw>0 LIMIT 1`;
+    if (!fast) return null;
+    // TeslaMate's own charger report, when it logged the same charge.
+    const [brand]=await this.sql`SELECT max(fast_charger_brand) AS brand FROM public.charges WHERE fast_charger_present
+      AND fast_charger_brand ILIKE 'tesla%' AND date BETWEEN ${charge.start_ts} AND ${charge.end_ts}`;
+    return brand?.brand ? 'Supercharger' : 'DC fast charger';
+  }
   /** City only (never an address) of the nearest local TeslaMate address
    * within 3 km, for endpoints no geofence/150 m address labels. */
   private async nearestCity(p: Row): Promise<string | null> {
@@ -517,7 +546,8 @@ export class FleetDrives {
           UNION ALL SELECT display_name,COALESCE(NULLIF(city,''),NULLIF(neighbourhood,''),NULLIF(name,'')),1,
             6371000*2*asin(least(1.0,sqrt(power(sin(radians((latitude-${p.latitude})/2)),2)+cos(radians(${p.latitude}))*cos(radians(latitude))*power(sin(radians((longitude-${p.longitude})/2)),2)))),150,id FROM public.addresses
         ) SELECT address,city FROM nearby WHERE meters<=radius_m ORDER BY priority,meters,id LIMIT 1`;
-        row[i===0?'startAddress':'endAddress']=label?.address ?? null; row[i===0?'startCity':'endCity']=label?.city ?? await this.nearestCity(p);
+        const charger=label ? null : await this.fastChargeAt(vehicle,w,i===0);
+        row[i===0?'startAddress':'endAddress']=label?.address ?? charger; row[i===0?'startCity':'endCity']=label?.city ?? await this.nearestCity(p) ?? charger;
       }
       rows.push(row);
     }

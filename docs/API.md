@@ -354,7 +354,13 @@ simplified separately, endpoints are kept and the first point after a break
 keeps `routeBreakBefore`, so a parked stop without positions is a break.
 `startCity`/`endCity` fall back to the city of the nearest local TeslaMate
 address within 3 km when no geofence or address within 150 m matches (the
-address stays null). `regenKwh` (number|null, positive kWh) integrates the
+address stays null). An endpoint with no such match, parked at a telemetry DC
+fast charge (a charge session ending within 15 minutes before the start or
+beginning within 15 minutes after the end, no drive between, reporting DC
+charging power), reads `"DC fast charger"` (`"Supercharger"`
+when TeslaMate logged a Tesla charger during it) as its address, and
+as its city when no city is within 3 km; telemetry streams no charger site
+name. `regenKwh` (number|null, positive kWh) integrates the
 negative part of calibrated pack power (positive = discharge) between
 consecutive samples at most 30s apart, clipped to the joined sessions (a parked
 stop, where the car may even charge, never counts; clipped edges are linearly
