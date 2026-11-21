@@ -185,7 +185,7 @@ struct LevelBar: View {
     }
 }
 
-/// Small centered stat: numeral over a small-caps caption ("0 / MI").
+/// Small centered stat: numeral over a caption ("12 / mi").
 ///
 ///     StatColumn(value: "12", caption: "mi")
 struct StatColumn: View {
@@ -196,7 +196,6 @@ struct StatColumn: View {
             BigNumber(value, size: 34, weight: .bold)
             Text(caption)
                 .font(.caption)
-                .tracking(1.5)
                 .foregroundStyle(Color.voltaTextSecondary)
         }
         .frame(maxWidth: .infinity)

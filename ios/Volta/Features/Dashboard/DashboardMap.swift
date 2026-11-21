@@ -224,9 +224,7 @@ struct AddressPill: View {
                     .lineLimit(1)
                 if let locality = Self.locality(for: location) {
                     Text(locality)
-                        .font(.system(.caption, weight: .semibold))
-                        .tracking(2)
-                        .textCase(.uppercase)
+                        .font(.caption)
                         .foregroundStyle(Color.voltaTextSecondary)
                         .lineLimit(1)
                 }

@@ -112,10 +112,10 @@ struct ActivityStrip: View {
         GeometryReader { geo in
             let w = geo.size.width
             ZStack(alignment: .topLeading) {
-                axisLabel("-\(hours)H").position(x: 0, y: 8).offset(x: 18)
-                axisLabel("-\(hours / 2)H").position(x: w * 0.5, y: 8)
-                axisLabel("-\(hours / 4)H").position(x: w * 0.75, y: 8)
-                axisLabel("NOW").position(x: w, y: 8).offset(x: -16)
+                axisLabel("−\(hours)h").position(x: 0, y: 8).offset(x: 18)
+                axisLabel("−\(hours / 2)h").position(x: w * 0.5, y: 8)
+                axisLabel("−\(hours / 4)h").position(x: w * 0.75, y: 8)
+                axisLabel("Now").position(x: w, y: 8).offset(x: -16)
             }
         }
         .frame(height: 16)
@@ -127,7 +127,6 @@ struct ActivityStrip: View {
     private func axisLabel(_ text: String) -> some View {
         Text(text)
             .font(.caption2.weight(.medium))
-            .tracking(1.2)
             .foregroundStyle(Color.voltaTextSecondary)
             .fixedSize()
     }

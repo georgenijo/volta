@@ -631,12 +631,12 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
     func testLiveChargingNamesSavedDataAndAFailedRefresh() {
         var status = makeStatus()
         status.chargingState = .charging; status.chargerPowerKw = 11
-        XCTAssertEqual(LiveChargingSheet.stateText(status), "CHARGING")
+        XCTAssertEqual(LiveChargingSheet.stateText(status), "Charging")
         XCTAssertNil(LiveChargingSheet.provenance(status, refreshFailed: true))
 
         var dashboard = saved(); dashboard.status = status
         let savedCharging = dashboard.labelledStatus
-        XCTAssertEqual(LiveChargingSheet.stateText(savedCharging), "SAVED DATA", "a saved session never reads as live")
+        XCTAssertEqual(LiveChargingSheet.stateText(savedCharging), "Saved data", "a saved session never reads as live")
         XCTAssertEqual(LiveChargingSheet.provenance(savedCharging, refreshFailed: false)?.hasPrefix("Saved data from"), true)
         let failed = LiveChargingSheet.provenance(savedCharging, refreshFailed: true)
         XCTAssertEqual(failed?.hasPrefix("Couldn't refresh · saved data from"), true)

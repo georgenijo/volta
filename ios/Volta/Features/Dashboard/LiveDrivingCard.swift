@@ -75,9 +75,7 @@ struct LiveDrivingCard: View {
     private func header(_ display: LiveDriveDisplay, now: Date) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text("Driving")
-                .font(.system(.footnote, weight: .semibold))
-                .tracking(2)
-                .textCase(.uppercase)
+                .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(LiveDrivingCard.blueText)
             Spacer(minLength: VoltaSpacing.sm)
             FreshnessBadge(text: LiveDriveText.freshness(display.freshness, now: now), tone: FreshnessBadge.Tone(display.freshness))
@@ -148,8 +146,6 @@ struct LiveDrivingCard: View {
             HStack(alignment: .firstTextBaseline, spacing: VoltaSpacing.sm) {
                 Text(LiveDriveText.powerTitle(display.power))
                     .font(.system(.footnote, weight: .semibold))
-                    .tracking(1.2)
-                    .textCase(.uppercase)
                     .foregroundStyle(reading?.live == true && kind == .regen ? Color.voltaGreen : Color.voltaTextSecondary)
                 Spacer(minLength: VoltaSpacing.sm)
                 switch display.power {

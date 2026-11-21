@@ -115,8 +115,7 @@ struct LiveChargingSheet: View {
                 HStack(spacing: 6) {
                     StatusDot(color: stateColor, size: 7)
                     Text(stateText)
-                        .font(.system(.caption, weight: .bold))
-                        .tracking(1.6)
+                        .font(.system(.footnote, weight: .semibold))
                         .foregroundStyle(stateColor)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 7)
@@ -136,12 +135,12 @@ struct LiveChargingSheet: View {
 
     /// Saved status never reads as a live session.
     static func stateText(_ status: VehicleStatus) -> String {
-        if status.telemetryFreshness?.savedAt != nil { return "SAVED DATA" }
+        if status.telemetryFreshness?.savedAt != nil { return "Saved data" }
         switch status.chargingState {
-        case .complete: return "COMPLETE"
-        case .stopped: return "STOPPED"
-        case .disconnected: return "UNPLUGGED"
-        default: return status.isCharging ? "CHARGING" : "NOT CHARGING"
+        case .complete: return "Complete"
+        case .stopped: return "Stopped"
+        case .disconnected: return "Unplugged"
+        default: return status.isCharging ? "Charging" : "Not charging"
         }
     }
 

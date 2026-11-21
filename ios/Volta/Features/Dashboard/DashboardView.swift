@@ -1120,8 +1120,8 @@ struct ActivitySummarySection: View {
     @ViewBuilder
     private func stats(_ summary: ActivitySummary?) -> some View {
         StatColumn(value: summary.map { VoltaFormat.number(units.distanceValue(km: $0.distanceKm), digits: 0) } ?? "—",
-                   caption: units.distanceUnit.uppercased())
-        StatColumn(value: summary.map { "\($0.chargeCount)" } ?? "—", caption: "CHARGES")
+                   caption: units.distanceUnit)
+        StatColumn(value: summary.map { "\($0.chargeCount)" } ?? "—", caption: "Charges")
         StatColumn(value: summary?.efficiencyWhPerKm.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—",
                    caption: units.efficiencyUnit)
     }
