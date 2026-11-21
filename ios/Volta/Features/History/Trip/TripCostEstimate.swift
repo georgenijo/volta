@@ -13,14 +13,14 @@ enum TripCostRateSource: Equatable, Sendable {
     /// Nothing known: `TripCostEstimate.defaultRatePerKwh`.
     case estimated
 
-    /// Small uppercase label under the cost bars.
+    /// Small label under the cost bars: where the rate came from.
     var label: String {
         switch self {
-        case .server: "FROM CHARGE HISTORY"
-        case .previousCharge: "FROM PREVIOUS CHARGE"
-        case .home: "HOME RATE"
-        case .dcFast: "DC FAST RATE"
-        case .estimated: "ESTIMATED"
+        case .server: "From charge history"
+        case .previousCharge: "From the previous charge"
+        case .home: "Home rate"
+        case .dcFast: "DC fast-charging rate"
+        case .estimated: "Estimated rate"
         }
     }
 }

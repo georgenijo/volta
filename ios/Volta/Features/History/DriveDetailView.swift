@@ -22,6 +22,9 @@ struct DriveDetailView: View {
     @State private var replayTask: Task<Void, Never>?
     @State private var shareImage: Image?
     @State private var editingRate = false
+    /// Counts chart scrubs as they begin, for one `.selection` tap per scrub.
+    @State private var scrubs = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Identity of what's on screen. A change drops the old state and any in-flight result.
     struct LoadKey: Hashable {
@@ -69,7 +72,11 @@ struct DriveDetailView: View {
         // The list refreshed this drive (one that was still in progress):
         // fetch its detail again in place, keeping the page.
         .onChange(of: drive) { reload() }
+        .onChange(of: scrub == nil) { _, ended in if !ended { scrubs += 1 } }
         .onDisappear { stopReplay() }
+        // A new colour mode and the start of a scrub are selections.
+        .voltaFeedback(.selection, trigger: mode)
+        .voltaFeedback(.selection, trigger: scrubs)
     }
 
     private func scroll(showsMap: Bool) -> some View {
@@ -87,13 +94,17 @@ struct DriveDetailView: View {
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     TripHero(summary: summary, units: units)
+                        .voltaFocusIn(0)
                     Rectangle().fill(HistoryTheme.hairline).frame(height: 1).padding(.top, 22)
                     TripStatsRow(summary: summary, units: units, regen: snapshot?.regen, maxSpeed: snapshot?.maxSpeed)
                         .padding(.top, 46).padding(.bottom, 46)
+                        .voltaFocusIn(1)
                     TripCostCard(estimate: costEstimate, editable: model != nil) { editingRate = true }
+                        .voltaFocusIn(2)
                     TripScoreCard(score: summary.efficiencyScore,
                                   breakdown: .resolved(server: summary.scoreBreakdown, local: snapshot?.score),
                                   result: snapshot?.score)
+                        .voltaFocusIn(3)
                     signalSections
                     TripSection(icon: "list.bullet", title: "Details") {
                         TripDetailsList(rows: detailRows)
@@ -340,6 +351,9 @@ struct DriveDetailView: View {
     private var routeMap: some View {
         let state = RouteMapState(detail: loader.detail, error: loader.error,
                                   preferredPath: snapshot?.usesFleetTelemetry == true ? snapshot?.timeline.points : nil)
+        let caption = snapshot.flatMap { snapshot in
+            if case .route = state { return mapCaption(snapshot) } else { return nil }
+        }
         return ZStack(alignment: .bottom) {
             Group {
                 switch state {
@@ -366,14 +380,18 @@ struct DriveDetailView: View {
                            startPoint: .top, endPoint: .bottom)
                 .frame(height: Self.mapFade)
                 .allowsHitTesting(false)
-            if let snapshot, case .route = state, let text = mapCaption(snapshot) {
-                Text(text)
-                    .scaledFont(11, weight: .medium)
-                    .foregroundStyle(Color.voltaInk.opacity(0.6))
+            if let caption {
+                Text(caption)
+                    .scaledFont(12, weight: .medium)
+                    .monospacedDigit()
+                    .foregroundStyle(Color.voltaInk.opacity(0.7))
+                    .contentTransition(reduceMotion ? .identity : .numericText())
                     .padding(.bottom, 8)
                     .accessibilityIdentifier("trip.map.caption")
+                    .transition(.opacity)
             }
         }
+        .animation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion), value: caption == nil)
         .overlay(alignment: .top) {
             // Keeps the bar's buttons legible over the route.
             LinearGradient(colors: [HistoryTheme.background.opacity(0.7), HistoryTheme.background.opacity(0)],
@@ -387,15 +405,16 @@ struct DriveDetailView: View {
     private func mapPlaceholder(_ message: String?, loading: Bool = false, retry: Bool = false) -> some View {
         ZStack {
             HistoryTheme.background
-            RouteWatermark(points: summary.drawableRoute, opacity: 0.3)
+            RouteWatermark(points: summary.drawableRoute, opacity: loading ? 0.45 : 0.3)
                 .padding(.horizontal, 60).padding(.top, 110).padding(.bottom, 80)
+                // The list's sketch of the route, with the skeleton's sweep along it while the detail loads.
+                .voltaSkeleton(loading)
             VStack(spacing: 10) {
-                if loading { ProgressView().tint(HistoryTheme.secondary) }
                 if let message {
                     Text(message).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                         .multilineTextAlignment(.center).padding(.horizontal, 40)
                 }
-                if retry { PillButton("Retry", systemImage: "arrow.clockwise") { reload() } }
+                if retry { PillButton("Try again", systemImage: "arrow.clockwise") { reload() } }
             }
             .padding(.bottom, 40)
         }
@@ -443,9 +462,19 @@ struct DriveDetailView: View {
                 HistoryChartPlaceholder(height: 120, message: error) { reload() }
             }
         } else {
-            TripSection(icon: "waveform.path.ecg", title: "Charts") {
-                HistoryChartPlaceholder(height: 120)
+            // Shaped like the sections that are coming: header, value, chart.
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach([("battery.75percent", "Battery"), ("bolt.fill", "Energy remaining"),
+                         ("gauge.with.dots.needle.33percent", "Speed")], id: \.1) { icon, title in
+                    TripSection(icon: icon, title: title) {
+                        TripHeaderValue(text: "80% → 72%")
+                    } content: {
+                        HistoryChartSkeleton().frame(height: 132)
+                    }
+                }
             }
+            .voltaSkeleton(true)
+            .accessibilityLabel("Loading charts")
         }
     }
 
@@ -469,7 +498,7 @@ struct DriveDetailView: View {
             let to = summary.endBatteryLevel ?? Int(points.last!.v.rounded())
             TripSection(icon: "battery.75percent", title: "Battery") {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("\(to - from > 0 ? "+" : "")\(to - from)%").font(.system(size: 12, weight: .regular))
+                    Text("\(to - from > 0 ? "+" : "")\(to - from)%").font(.footnote)
                         .monospacedDigit().foregroundStyle(HistoryTheme.tertiary)
                     TripHeaderValue(text: "\(from)% → \(to)%", color: HistoryTheme.blue)
                 }
@@ -485,20 +514,21 @@ struct DriveDetailView: View {
         let points = s.series(.energyRemainingKwh)
         if let first = points.first?.v, let last = points.last?.v {
             TripSection(icon: "bolt.fill", title: "Energy remaining") {
-                TripHeaderValue(text: "\(number(first, 1)) → \(number(last, 1)) kWh", color: HistoryTheme.green)
+                TripHeaderValue(text: "\(number(first, 1)) → \(number(last, 1)) kWh", color: HistoryTheme.blue)
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
                     let domain = TripSignalDomain.padded(points.map(\.v), minSpan: 1)
                     // Small spans tick in fractions of a kWh; whole numbers would repeat.
                     let digits = domain.upperBound - domain.lowerBound < 6 ? 1 : 0
-                    chart([TripTrace(label: "Energy", color: HistoryTheme.green, points: points, fill: true)],
+                    // The battery's content: blue, as the battery reads everywhere at rest.
+                    chart([TripTrace(label: "Energy", color: HistoryTheme.blue, points: points, fill: true)],
                           start: start, end: end, domain: domain,
                           axis: { number($0, digits) }, id: "trip.telemetry.energy-remaining") { m in at(points, start, m).map { "\(number($0, 1)) kWh" } }
                     // Only the server's figure; the chart's ends are not the energy used.
                     if let used = summary.energyUsedKwh {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Image(systemName: "battery.25percent").font(.system(size: 15)).foregroundStyle(HistoryTheme.secondary)
-                            Text("Used").tripLabel(HistoryTheme.tertiary, size: 8.5)
+                            Text("Used").tripLabel(HistoryTheme.tertiary)
                             Text("\(number(used, 1)) kWh")
                                 .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                         }
@@ -517,12 +547,13 @@ struct DriveDetailView: View {
                 ?? TripStatsRow.avgSpeedKph(summary).map { units.distanceValue(km: $0) }
             TripSection(icon: "gauge.with.dots.needle.33percent", title: "Speed") {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("Max \(maxText)").tripLabel(HistoryTheme.tertiary, size: 8.5)
+                    Text("Top \(maxText)").tripLabel(HistoryTheme.tertiary)
                     TripHeaderValue(text: current.map { "\(number($0)) \(speedUnit)" } ?? "—")
                 }
             } content: {
-                chart([TripTrace(label: "Speed", color: Self.speedTeal, points: points,
-                                 gradient: [Self.speedTeal, HistoryTheme.blue, Self.speedOrange, Self.speedViolet],
+                // Drives are ink, as on the Dashboard's 48-hour strip; the map
+                // carries the speed colours.
+                chart([TripTrace(label: "Speed", color: Color.voltaTextPrimary, points: points,
                                  fill: true, endDot: Color.voltaTextPrimary)],
                       start: start, end: end, domain: TripSignalDomain.zeroBased(points.map(\.v)),
                       axis: { number($0) }, id: "trip.chart.coverage.speed") { m in at(points, start, m).map { "\(number($0)) \(speedUnit)" } }
@@ -535,17 +566,17 @@ struct DriveDetailView: View {
         if let lo = points.map(\.v).min(), let hi = points.map(\.v).max() {
             TripSection(icon: "mountain.2.fill", title: "Elevation") {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Min").tripLabel(size: 8)
-                    TripHeaderValue(text: "\(number(loader.detail?.elevationMinM.flatMap { $0.isFinite ? height($0) : nil } ?? lo)) \(heightUnit)", color: HistoryTheme.amber)
-                    Text("Max").tripLabel(size: 8).padding(.leading, 8)
-                    TripHeaderValue(text: "\(number(loader.detail?.elevationMaxM.flatMap { $0.isFinite ? height($0) : nil } ?? hi)) \(heightUnit)", color: HistoryTheme.amber)
+                    Text("Low").tripLabel()
+                    TripHeaderValue(text: "\(number(loader.detail?.elevationMinM.flatMap { $0.isFinite ? height($0) : nil } ?? lo)) \(heightUnit)")
+                    Text("High").tripLabel().padding(.leading, 8)
+                    TripHeaderValue(text: "\(number(loader.detail?.elevationMaxM.flatMap { $0.isFinite ? height($0) : nil } ?? hi)) \(heightUnit)")
                 }
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
-                    chart([TripTrace(label: "Elevation", color: HistoryTheme.amber, points: points, fill: true)],
+                    chart([TripTrace(label: "Elevation", color: HistoryTheme.secondary, points: points, fill: true)],
                           start: start, end: end, domain: TripSignalDomain.padded(points.map(\.v), minSpan: 10),
                           axis: { number($0) }, id: "trip.chart.coverage.elevation") { m in at(points, start, m).map { "\(number($0)) \(heightUnit)" } }
-                    Text("↑ \(climbText) · ↓ \(descentText)")
+                    Text("Climbed \(climbText) · descended \(descentText)")
                         .font(.system(size: 15, weight: .medium)).monospacedDigit().foregroundStyle(HistoryTheme.secondary)
                 }
             }
@@ -572,17 +603,20 @@ struct DriveDetailView: View {
             let values = (maxPoints + minPoints).map(\.v)
             let headline = (minPoints.last ?? maxPoints.last).map { degrees($0.v) } ?? "—"
             TripSection(icon: "thermometer.medium", title: "Battery temperature") {
-                TripHeaderValue(text: headline, color: HistoryTheme.blue)
+                TripHeaderValue(text: headline)
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
-                    chart([TripTrace(label: "Max", color: Self.cellMax, points: maxPoints),
-                           TripTrace(label: "Min", color: HistoryTheme.blue, points: minPoints)].filter { !$0.points.isEmpty },
+                    // Ink and grey: red means a problem and the blue-to-red
+                    // ramp belongs to temperature scales, not chart series.
+                    chart([TripTrace(label: "Warmest cell", color: Color.voltaTextPrimary, points: maxPoints),
+                           TripTrace(label: "Coolest cell", color: Self.outside, points: minPoints)].filter { !$0.points.isEmpty },
                           start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 2),
                           axis: { degrees($0) }, id: "trip.telemetry.battery-temperature") { m in
                         let hi = at(maxPoints, start, m), lo = at(minPoints, start, m)
-                        return [hi.map { "max \(degrees($0))" }, lo.map { "min \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
+                        return [hi.map { "warmest \(degrees($0))" }, lo.map { "coolest \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
                     }
-                    TripChartLegend(items: [.init(label: "Max", color: Self.cellMax), .init(label: "Min", color: HistoryTheme.blue)])
+                    TripChartLegend(items: [.init(label: "Warmest cell", color: Color.voltaTextPrimary),
+                                            .init(label: "Coolest cell", color: Self.outside)])
                 }
             }
         }
@@ -594,17 +628,17 @@ struct DriveDetailView: View {
             let values = (inside + outside).map(\.v)
             let headline = [inside.last, outside.last].compactMap { $0.map { degrees($0.v) } }.joined(separator: " · ")
             TripSection(icon: "thermometer.sun.fill", title: "Temperatures") {
-                TripHeaderValue(text: headline, color: HistoryTheme.amber)
+                TripHeaderValue(text: headline)
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
-                    chart([TripTrace(label: "Inside", color: HistoryTheme.amber, points: inside),
+                    chart([TripTrace(label: "Inside", color: Color.voltaTextPrimary, points: inside),
                            TripTrace(label: "Outside", color: Self.outside, points: outside)].filter { !$0.points.isEmpty },
                           start: start, end: end, domain: TripSignalDomain.padded(values, minSpan: 4),
                           axis: { degrees($0) }, id: "trip.telemetry.cabin-&-outside") { m in
                         let a = at(inside, start, m), b = at(outside, start, m)
-                        return [a.map { "in \(degrees($0))" }, b.map { "out \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
+                        return [a.map { "inside \(degrees($0))" }, b.map { "outside \(degrees($0))" }].compactMap { $0 }.joined(separator: " · ")
                     }
-                    TripChartLegend(items: [.init(label: "Inside", color: HistoryTheme.amber), .init(label: "Outside", color: Self.outside)])
+                    TripChartLegend(items: [.init(label: "Inside", color: Color.voltaTextPrimary), .init(label: "Outside", color: Self.outside)])
                 }
             }
         }
@@ -615,8 +649,10 @@ struct DriveDetailView: View {
             let actual = efficiency.points.map { DriveCharts.Point(t: $0.t, v: units.distanceValue(km: $0.actualKm)) }
             let ideal = efficiency.points.map { DriveCharts.Point(t: $0.t, v: units.distanceValue(km: $0.idealKm)) }
             TripSection(icon: "gauge.with.dots.needle.67percent", title: "Range efficiency") {
+                // Green at or above rated, amber only when clearly short of it.
                 TripHeaderValue(text: efficiency.percent.map { "\(number($0))%" } ?? "—",
-                                color: (efficiency.percent ?? 0) >= 100 ? HistoryTheme.green : HistoryTheme.amber)
+                                color: efficiency.percent.map { $0 >= 100 ? HistoryTheme.green : $0 < 85 ? HistoryTheme.amber : Color.voltaTextPrimary }
+                                    ?? HistoryTheme.secondary)
             } content: {
                 VStack(alignment: .leading, spacing: 22) {
                     chart([TripTrace(label: "Actual", color: HistoryTheme.green, points: actual),
@@ -637,18 +673,18 @@ struct DriveDetailView: View {
     private var detailRows: [(String, String)] {
         let regenKwh = TripStatsRow.regenKwh(server: summary.regenKwh, estimate: snapshot?.regen)
         var rows: [(String, String)] = [
-            ("Avg speed", TripStatsRow.avgSpeedKph(summary).map { "\(number(units.distanceValue(km: $0))) \(speedUnit)" } ?? "—"),
+            ("Average speed", TripStatsRow.avgSpeedKph(summary).map { "\(number(units.distanceValue(km: $0))) \(speedUnit)" } ?? "—"),
         ]
         switch snapshot?.maxSpeed {
-        case .value(let v): rows.append(("Max speed", "\(number(units.distanceValue(km: v))) \(speedUnit)"))
-        case .atLeast(let v): rows.append(("Max speed", "≥ \(number(units.distanceValue(km: v))) \(speedUnit)"))
-        default: rows.append(("Max speed", summary.maxSpeedKph.map { "\(number(units.distanceValue(km: $0))) \(speedUnit)" } ?? "—"))
+        case .value(let v): rows.append(("Top speed", "\(number(units.distanceValue(km: v))) \(speedUnit)"))
+        case .atLeast(let v): rows.append(("Top speed", "≥ \(number(units.distanceValue(km: v))) \(speedUnit)"))
+        default: rows.append(("Top speed", summary.maxSpeedKph.map { "\(number(units.distanceValue(km: $0))) \(speedUnit)" } ?? "—"))
         }
-        if let regenKwh { rows.append(("Regen", "\(number(regenKwh, 2)) kWh")) }
-        if hasElevation { rows.append(("Elevation", "↑ \(climbText)  ↓ \(descentText)")) }
+        if let regenKwh { rows.append(("Regenerated", "\(number(regenKwh, 2)) kWh")) }
+        if hasElevation { rows.append(("Climbed, descended", "\(climbText), \(descentText)")) }
         rows.append(("Energy used", summary.energyUsedKwh.map { "\(number($0, 2)) kWh" } ?? "—"))
         rows.append(("Efficiency", summary.displayEfficiencyWhPerKm.map { "\(number(units.efficiencyValue(whPerKm: $0))) \(units.efficiencyUnit)" } ?? "—"))
-        rows.append(("Outside temp", summary.outsideTempAvgC.map { degrees(temp($0)) } ?? "—"))
+        rows.append(("Outside temperature", summary.outsideTempAvgC.map { degrees(temp($0)) } ?? "—"))
         if let from = summary.startBatteryLevel, let to = summary.endBatteryLevel {
             rows.append(("Battery", "\(from)% → \(to)%"))
         }
@@ -664,12 +700,8 @@ struct DriveDetailView: View {
 
 /// What the drive detail's map area shows.
 extension DriveDetailView {
-    // Chart series. Light values keep each hue, deepened to read on a white
-    // card (each at least 3:1; see docs/APPEARANCE.md).
-    static let speedTeal = Color(light: 0x0D7F77, dark: 0x4FD1C5)
-    static let speedOrange = Color(light: 0xC2610C, dark: 0xF5A35B)
-    static let speedViolet = Color(light: 0x9333EA, dark: 0xC084FC)
-    static let cellMax = Color(light: 0xC4372A, dark: 0xE5695F)
+    /// The second, quieter series beside an ink one (outside air, the coolest
+    /// cell): grey, at least 3:1 on a white card (see docs/APPEARANCE.md).
     static let outside = Color(light: 0x6E6E73, dark: 0x8E8E8E)
 }
 

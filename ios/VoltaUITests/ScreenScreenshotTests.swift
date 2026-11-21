@@ -347,7 +347,7 @@ final class ScreenScreenshotTests: XCTestCase {
         capture("roadtrips-top")
         try scroll("roadtrips", screenshot: "roadtrips-scrolled")
         // Trip cards combine into one button whose label carries the stop count.
-        try tapFirstHittable(in: "roadtrips", where: NSPredicate(format: "label CONTAINS 'STOP'"))
+        try tapFirstHittable(in: "roadtrips", where: NSPredicate(format: "label CONTAINS[c] 'stop'"))
         try waitForScreen("roadtrip")
         _ = element("roadtrip.never").waitForExistence(timeout: 3)
         capture("roadtrip-detail")

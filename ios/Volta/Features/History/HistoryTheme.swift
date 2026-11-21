@@ -29,11 +29,20 @@ enum HistoryTheme {
 
 struct HistoryCard<Content: View>: View {
     var padding: CGFloat = 16
+    /// A state colour for the card's border. Cards carry no tinted glow
+    /// (DesignSystem/README.md "Design rules"); the border may take the state.
     var tint: Color? = nil
     @ViewBuilder var content: Content
 
     var body: some View {
-        Card(padding: padding, tint: tint) { content }
+        Card(padding: padding) { content }
+            .overlay {
+                if let tint {
+                    RoundedRectangle(cornerRadius: VoltaRadius.card, style: .continuous)
+                        .strokeBorder(tint.opacity(0.5), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
     }
 }
 
@@ -53,9 +62,8 @@ struct HistorySectionLabel: View {
             Text(title).voltaLabelStyle()
             Spacer(minLength: 8)
             if let trailing {
-                Text(trailing.uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.2)
+                Text(trailing)
+                    .font(.caption)
                     .monospacedDigit()
             }
         }
@@ -88,7 +96,7 @@ struct HistoryValue: View {
     }
 }
 
-/// Labeled stat: small-caps caption over a value.
+/// Labeled stat: a value over its sentence-case label.
 struct HistoryStat: View {
     var label: String
     var value: String
@@ -99,10 +107,8 @@ struct HistoryStat: View {
     var body: some View {
         VStack(alignment: alignment, spacing: 6) {
             HistoryValue(value: value, unit: unit, size: size)
-            Text(label.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.3)
-                .foregroundStyle(HistoryTheme.secondary)
+            Text(label)
+                .voltaLabelStyle()
                 .lineLimit(1)
         }
     }
@@ -131,49 +137,71 @@ struct HistoryTotalsRow: View {
 
 // MARK: - Battery range bar
 
-/// Thin track with a filled segment between two battery levels.
+/// Thin 0–100 % track with a filled segment between two battery levels.
+/// No glow; the segment settles into place as it appears.
 struct BatteryRangeBar: View {
     var from: Int?
     var to: Int?
     var tint: Color = HistoryTheme.blue
     var height: CGFloat = 6
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { proxy in
             let lo = Double(min(from ?? 0, to ?? 0)) / 100
             let hi = Double(max(from ?? 0, to ?? 0)) / 100
+            let shown = settled || reduceMotion
             ZStack(alignment: .leading) {
                 Capsule().fill(HistoryTheme.track)
                 if from != nil, to != nil {
                     Capsule()
-                        .fill(LinearGradient(colors: [tint.opacity(0.55), tint], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: max(height, proxy.size.width * (hi - lo)))
+                        .fill(tint)
+                        .frame(width: max(height, proxy.size.width * (hi - lo) * (shown ? 1 : 0)))
                         .offset(x: proxy.size.width * lo)
-                        .shadow(color: tint.opacity(0.45), radius: 4)
                 }
             }
         }
         .frame(height: height)
+        .onAppear {
+            guard !settled else { return }
+            withAnimation(VoltaMotion.animation(VoltaMotion.settle.delay(0.1), reduceMotion: reduceMotion)) { settled = true }
+        }
     }
 }
 
-/// "49% → 80%" with the bar underneath.
+/// "74% → 72%" over a 0–100 % track with the segment between them, and the
+/// track's own ends labelled, so the bar's position reads as the battery level.
 struct BatteryRangeView: View {
     var from: Int?
     var to: Int?
     var tint: Color = HistoryTheme.blue
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(from.map { "\($0)%" } ?? "—")
-                .frame(width: 34, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(reading)
+                .font(.system(.subheadline, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(from == nil && to == nil ? HistoryTheme.secondary : Color.voltaTextPrimary)
             BatteryRangeBar(from: from, to: to, tint: tint)
-            Text(to.map { "\($0)%" } ?? "—")
-                .frame(width: 34, alignment: .trailing)
+            HStack {
+                Text("0%")
+                Spacer(minLength: 8)
+                Text("100%")
+            }
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(HistoryTheme.tertiary)
         }
-        .font(.system(size: 12, weight: .semibold))
-        .monospacedDigit()
-        .foregroundStyle(HistoryTheme.secondary)
+    }
+
+    private var reading: String {
+        switch (from, to) {
+        case let (f?, t?): "\(f)% → \(t)%"
+        case let (f?, nil): "\(f)% → —"
+        case let (nil, t?): "— → \(t)%"
+        default: "Battery not recorded"
+        }
     }
 }
 
@@ -187,9 +215,9 @@ struct HistoryBadge: View {
     var body: some View {
         HStack(spacing: 3) {
             if let systemImage { Image(systemName: systemImage) }
-            Text(title.uppercased()).tracking(0.8)
+            Text(title)
         }
-        .font(.system(size: 9, weight: .bold))
+        .font(.caption2.weight(.semibold))
         .foregroundStyle(tint)
         .padding(.horizontal, 7)
         .padding(.vertical, 4)
@@ -240,4 +268,30 @@ struct HistoryIconTile: View {
 
 extension View {
     func historyScreenBackground() -> some View { voltaScreenBackground() }
+
+    /// `.voltaFocusIn(index)` for the first screenful of a list; rows past it
+    /// appear as they are, so scrolling a long list never waits on them.
+    @ViewBuilder func historyFocusIn(_ index: Int) -> some View {
+        if index <= VoltaMotion.maxStaggered { voltaFocusIn(index) } else { self }
+    }
+}
+
+// MARK: - Headline figures
+
+/// A headline number that rolls up as it appears (`RollingNumber`), or an
+/// em dash when unknown. Style it with `.font` and `.foregroundStyle`.
+///
+///     HistoryRollingFigure(value: 231) { VoltaFormat.number($0, digits: 0) }
+///         .font(.system(size: 60, weight: .bold))
+struct HistoryRollingFigure: View {
+    var value: Double?
+    var format: (Double) -> String
+
+    var body: some View {
+        if let value, value.isFinite {
+            RollingNumber(value: value, format: format)
+        } else {
+            Text("—")
+        }
+    }
 }

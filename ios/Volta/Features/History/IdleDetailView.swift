@@ -22,12 +22,15 @@ struct IdleDetailView: View {
         Group {
             if usesPanes {
                 VoltaPanes {
-                    column { hero; location }
+                    column { hero.voltaFocusIn(0); location.voltaFocusIn(1) }
                 } secondary: {
-                    column(titled: false) { stats; breakdownCard; timesCard }
+                    column(titled: false) { stats.voltaFocusIn(1); breakdownCard.voltaFocusIn(2); timesCard.voltaFocusIn(3) }
                 }
             } else {
-                column { hero; location; stats; breakdownCard; timesCard }
+                column {
+                    hero.voltaFocusIn(0); location.voltaFocusIn(1); stats.voltaFocusIn(2)
+                    breakdownCard.voltaFocusIn(3); timesCard.voltaFocusIn(4)
+                }
             }
         }
         .readsHistoryWindow($page)
@@ -94,10 +97,9 @@ struct IdleDetailView: View {
                 switch loss {
                 case .lost(let km, _):
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text("−" + VoltaFormat.number(text.rowValue(km), digits: 1))
+                        RollingNumber(value: text.rowValue(km)) { "−" + VoltaFormat.number($0, digits: 1) }
                             .font(.system(size: numberSize, weight: .heavy))
                             .tracking(-1)
-                            .monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.5)
                         Text(units.distanceUnit).font(.body).foregroundStyle(HistoryTheme.secondary)
                     }
@@ -146,9 +148,9 @@ struct IdleDetailView: View {
         default: rate = "—"
         }
         return HistoryStatGrid(items: [
-            .init(label: "Per day", value: rate, unit: units.distanceUnit, systemImage: "calendar"),
-            .init(label: "Battery", value: idle.drain.map { $0 > 0 ? "−\($0)" : "\($0)" } ?? "—", unit: "%", systemImage: "battery.50percent"),
-            .init(label: "Energy", value: idle.isLive ? "—" : idle.energyLostKwh.map { "~" + VoltaFormat.number($0, digits: 2) } ?? "—",
+            .init(label: "Lost per day", value: rate, unit: units.distanceUnit, systemImage: "calendar"),
+            .init(label: "Battery used", value: idle.drain.map { $0 > 0 ? "−\($0)" : "\($0)" } ?? "—", unit: "%", systemImage: "battery.50percent"),
+            .init(label: "Energy lost", value: idle.isLive ? "—" : idle.energyLostKwh.map { "≈" + VoltaFormat.number($0, digits: 2) } ?? "—",
                   unit: "kWh", systemImage: "bolt"),
         ])
     }

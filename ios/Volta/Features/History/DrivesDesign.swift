@@ -27,38 +27,72 @@ extension View {
 
 // MARK: - Score
 
-/// Open 270° dial with the score inside, tinted by band (`DriveScoreTint`)
-/// everywhere: the Drives header and every card.
+/// Open 270° dial of the drive score (0–100), filled from its start, with the
+/// score inside, tinted by band (`DriveScoreTint`: green high, ink middle,
+/// amber low) everywhere: the Drives header and every card. The arc settles
+/// to its value as it appears.
+///
+/// `endLabels` writes 0 and 100 at the arc's ends. Card dials (27 pt) are too
+/// small to carry them, so cards label the dial "Score" beside it instead and
+/// the larger dials (Drives header, drive detail) carry the ends.
 struct ScoreDial: View {
     var score: Int?
     var size: CGFloat = 40
     var caption: String? = nil
+    var endLabels = false
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var value: Int? { score.flatMap { (0...100).contains($0) ? $0 : nil } }
     private var line: CGFloat { max(2.5, size * 0.06) }
 
     var body: some View {
         let tint = DriveScoreBand.tint(value)
+        let shown = settled || reduceMotion
         ZStack {
             Circle().trim(from: 0, to: 0.75)
                 .stroke(Color.voltaInk.opacity(0.1), style: StrokeStyle(lineWidth: line, lineCap: .round))
                 .rotationEffect(.degrees(135))
             if let value {
                 let fraction = Double(value) / 100
-                Circle().trim(from: 0, to: 0.75 * fraction)
+                Circle().trim(from: 0, to: 0.75 * fraction * (shown ? 1 : 0))
                     .stroke(tint, style: StrokeStyle(lineWidth: line, lineCap: .round))
                     .rotationEffect(.degrees(135))
             }
             VStack(spacing: size * 0.02) {
-                Text(value.map(String.init) ?? "–")
-                    .font(.system(size: size * (caption == nil ? 0.36 : 0.32), weight: .semibold))
-                    .monospacedDigit().foregroundStyle(.voltaTextPrimary)
-                if let caption {
-                    Text(caption).font(.system(size: max(8, size * 0.1), weight: .semibold)).tracking(1.2)
-                        .textCase(.uppercase).foregroundStyle(HistoryTheme.secondary)
+                Group {
+                    if size >= 50, let value {
+                        RollingNumber(value: Double(value)) { String(Int($0.rounded())) }
+                    } else {
+                        Text(value.map(String.init) ?? "—")
+                    }
                 }
+                .font(.system(size: size * (caption == nil ? 0.36 : 0.32), weight: .semibold))
+                .monospacedDigit().foregroundStyle(.voltaTextPrimary)
+                if let caption {
+                    Text(caption).font(.system(size: max(11, size * 0.12), weight: .medium))
+                        .foregroundStyle(HistoryTheme.secondary)
+                }
+            }
+            if endLabels {
+                // Under the arc's two ends, in the dial's open gap.
+                HStack {
+                    Text("0")
+                    Spacer(minLength: 0)
+                    Text("100")
+                }
+                .font(.system(size: max(9, size * 0.15), weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(HistoryTheme.tertiary)
+                .frame(width: size * 0.9)
+                .offset(y: size * 0.42)
             }
         }
         .frame(width: size, height: size)
+        .animation(VoltaMotion.animation(VoltaMotion.settle, reduceMotion: reduceMotion), value: value)
+        .onAppear {
+            guard !settled else { return }
+            withAnimation(VoltaMotion.animation(VoltaMotion.settle.delay(0.1), reduceMotion: reduceMotion)) { settled = true }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(value.map { "Drive score \($0) of 100" } ?? "Drive score unavailable")
     }
@@ -163,14 +197,14 @@ struct DrivesHero: View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .center, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(VoltaFormat.number(units.distanceValue(km: totals.distanceKm), digits: 0))
+                    RollingNumber(value: units.distanceValue(km: totals.distanceKm)) { VoltaFormat.number($0, digits: 0) }
                         .font(.system(size: 60, weight: .bold)).tracking(-1)
-                        .foregroundStyle(.voltaTextPrimary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.5)
+                        .foregroundStyle(.voltaTextPrimary).lineLimit(1).minimumScaleFactor(0.5)
                     Text(units.distanceUnit).font(.system(size: 17, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 Spacer(minLength: 0)
-                VStack(spacing: 4) {
-                    ScoreDial(score: totals.score, size: 61)
+                VStack(spacing: 10) {
+                    ScoreDial(score: totals.score, size: 61, endLabels: true)
                     Text("Drive score").scaledFont(11, weight: .medium).foregroundStyle(HistoryTheme.secondary)
                         .lineLimit(1).fixedSize()
                         .accessibilityHidden(true)
@@ -348,7 +382,7 @@ struct DriveCard: View {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: drive.distanceKm)))
                             .font(.system(size: 21, weight: .bold)).monospacedDigit()
-                        Text(units.distanceUnit.uppercased()).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+                        Text(units.distanceUnit).scaledFont(13, weight: .regular).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.voltaTextPrimary)
                     HStack(spacing: 5) {
@@ -372,7 +406,12 @@ struct DriveCard: View {
                     metrics(compact: true)
                 }
                 Spacer(minLength: 8)
-                ScoreDial(score: drive.efficiencyScore, size: 27)
+                HStack(spacing: 6) {
+                    Text("Score").scaledFont(11, weight: .medium).foregroundStyle(HistoryTheme.tertiary)
+                        .accessibilityHidden(true)
+                    ScoreDial(score: drive.efficiencyScore, size: 27)
+                }
+                .fixedSize()
             }
             .padding(.leading, 18).padding(.trailing, 16)
             .padding(.top, 14)

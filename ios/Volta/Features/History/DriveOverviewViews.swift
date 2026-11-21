@@ -452,16 +452,18 @@ struct RoadtripsView: View {
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 6)
             }
             if trips.isEmpty {
-                HistoryEmptyState(systemImage: "road.lanes", title: "No roadtrips in loaded drives",
-                                  message: "Long drives and multi-stop chains covering at least \(units.formatDistance(100)) appear here.")
+                EmptyState(systemImage: "point.topleft.down.to.point.bottomright.curvepath", title: "No roadtrips yet",
+                           message: "None of the drives shown cover \(units.formatDistance(100)) in one chain. Choose a wider range on the Drives list to look further back.")
+                    .padding(.horizontal, -(VoltaSpacing.xl + VoltaSpacing.xs))
                     .padding(.top, 30)
             } else {
                 OverviewSectionHeader(title: "Trips", trailing: trips.count == 1 ? "1 trip" : "\(trips.count) trips")
                     .padding(.top, 30)
                 OverviewCards(wide: wide) {
-                    ForEach(trips) { trip in
+                    ForEach(Array(trips.enumerated()), id: \.element.id) { index, trip in
                         NavigationLink(value: DriveRoute.roadtrip(containing: trip.id)) { RoadtripCard(trip: trip) }
                             .buttonStyle(VoltaPressStyle())
+                            .historyFocusIn(index + 1)
                     }
                 }
                 // Cards sit 16 pt from the screen edge, as on Drives; text keeps the page margin.
@@ -475,7 +477,7 @@ struct RoadtripsView: View {
         let longest = trips.map(\.distanceKm).max()
         return VStack(alignment: .leading, spacing: 20) {
             OverviewHero(eyebrow: partial ? "Roadtrip distance in loaded drives" : "Roadtrip distance",
-                         value: VoltaFormat.number(units.distanceValue(km: distance), digits: 0),
+                         value: units.distanceValue(km: distance), format: { VoltaFormat.number($0, digits: 0) },
                          unit: units.distanceUnit, identifier: "screen.roadtrips")
             HistoryFlowStats(items: [
                 ("point.topleft.down.to.point.bottomright.curvepath", "\(trips.count) \(trips.count == 1 ? "trip" : "trips")"),
@@ -517,7 +519,7 @@ private struct RoadtripCard: View {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(VoltaFormat.number(units.distanceValue(km: trip.distanceKm), digits: 0))
                             .font(.system(size: 30, weight: .bold)).monospacedDigit()
-                        Text(units.distanceUnit.uppercased()).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.secondary)
+                        Text(units.distanceUnit).scaledFont(13, weight: .regular).foregroundStyle(HistoryTheme.secondary)
                     }
                     .foregroundStyle(.voltaTextPrimary)
                     // One line, as a Drives card's times: "Nov 11 · 21:14".
@@ -557,8 +559,8 @@ private struct RoadtripCard: View {
             // Both names at one size; a long name wraps, never shrinks or truncates.
             VStack(alignment: .leading, spacing: 6) {
                 CardPlaceName(name: start, oneLine: oneLine)
-                Text(trip.stops == 0 ? "NONSTOP" : trip.stops == 1 ? "1 STOP" : "\(trip.stops) STOPS")
-                    .scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.tertiary)
+                Text(trip.stops == 0 ? "Nonstop" : trip.stops == 1 ? "1 stop" : "\(trip.stops) stops")
+                    .scaledFont(12, weight: .medium).foregroundStyle(HistoryTheme.tertiary)
                     .fixedSize()
                 CardPlaceName(name: end, oneLine: oneLine)
             }
@@ -612,7 +614,7 @@ struct RoadtripDetailView: View {
     @ViewBuilder private var summary: some View {
         let first = trip.drives[0], last = trip.drives[trip.drives.count - 1]
         OverviewHero(eyebrow: "\(first.startPlace) → \(last.endPlace)",
-                     value: VoltaFormat.number(units.distanceValue(km: trip.distanceKm)),
+                     value: units.distanceValue(km: trip.distanceKm), format: { VoltaFormat.number($0) },
                      unit: units.distanceUnit, size: 72, identifier: "screen.roadtrip")
             .padding(.top, 4)
         VStack(alignment: .leading, spacing: 14) {
@@ -633,9 +635,10 @@ struct RoadtripDetailView: View {
         OverviewSectionHeader(title: "Legs", trailing: first.start.formatted(.dateTime.month(.abbreviated).day().year()))
             .padding(.top, 30)
         LazyVStack(spacing: 14) {
-            ForEach(trip.drives) { drive in
+            ForEach(Array(trip.drives.enumerated()), id: \.element.id) { index, drive in
                 NavigationLink(value: DriveRoute.drive(drive.id)) { DriveCard(drive: drive, showsDate: true) }
                     .buttonStyle(VoltaPressStyle())
+                    .historyFocusIn(index + 1)
             }
         }
     }
@@ -710,10 +713,12 @@ private struct OverviewCards<Content: View>: View {
     }
 }
 
-/// Eyebrow over a big white numeral, carrying the screen's `screen.<name>` identifier.
+/// Eyebrow over a big numeral that rolls up as it appears, carrying the
+/// screen's `screen.<name>` identifier.
 private struct OverviewHero: View {
     var eyebrow: String
-    var value: String
+    var value: Double?
+    var format: (Double) -> String
     var unit: String?
     var size: CGFloat = 84
     var identifier: String
@@ -722,8 +727,9 @@ private struct OverviewHero: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(eyebrow).voltaLabelStyle().lineLimit(1)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(value).font(.system(size: size, weight: .bold)).fontWidth(.expanded).tracking(-size / 42)
-                    .foregroundStyle(.voltaTextPrimary).monospacedDigit().lineLimit(1).minimumScaleFactor(0.4)
+                HistoryRollingFigure(value: value, format: format)
+                    .font(.system(size: size, weight: .bold)).fontWidth(.expanded).tracking(-size / 42)
+                    .foregroundStyle(.voltaTextPrimary).lineLimit(1).minimumScaleFactor(0.4)
                 if let unit {
                     Text(unit).font(.system(size: max(15, size * 0.24))).foregroundStyle(HistoryTheme.secondary).fixedSize()
                 }
@@ -796,6 +802,7 @@ struct DrivesHeatmapView: View {
                 .pickerStyle(.segmented)
                 .padding(.top, 18)
                 .accessibilityIdentifier("heatmap.mode")
+                .voltaFeedback(.selection, trigger: mode)
                 let reference = EfficiencyReference(drives: drives)
                 // The same legend strip as the trip map, on the page, between
                 // the switch and the map; its labels line up with the switch.
@@ -809,12 +816,20 @@ struct DrivesHeatmapView: View {
             }
             OverviewSectionHeader(title: "Calendar", trailing: "Distance per day")
                 .padding(.top, 30)
+            if !days.isEmpty {
+                HeatmapScaleLegend(maxText: units.formatDistance(max(days.map(\.distanceKm).max() ?? 1, 1), fractionDigits: 0))
+                    .padding(.bottom, 14)
+            }
             // Two months side by side on a wide page, so no month straddles the fold.
             OverviewCards(wide: wide) {
-                ForEach(months, id: \.self) { month in monthGrid(month, days: days) }
+                ForEach(Array(months.enumerated()), id: \.element) { index, month in
+                    monthGrid(month, days: days).historyFocusIn(index + 1)
+                }
             }
             if days.isEmpty {
-                Text("No drives to show in this selection").font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
+                EmptyState(systemImage: "calendar", title: "No driving days",
+                           message: "None of the drives shown fall on a calendar day yet. Choose a wider range on the Drives list.")
+                    .padding(.horizontal, -(VoltaSpacing.xl + VoltaSpacing.xs))
             }
             OverviewFootnote(partial ? "Loaded drives only · blank dates may have unloaded history" : "Distance per day · blank dates have no drives in this selection")
                 .padding(.top, 14)
@@ -826,7 +841,8 @@ struct DrivesHeatmapView: View {
         let busiest = days.map(\.distanceKm).max()
         return VStack(alignment: .leading, spacing: 20) {
             OverviewHero(eyebrow: partial ? "Driving days in loaded drives" : "Driving days",
-                         value: "\(days.count)", unit: days.count == 1 ? "day" : "days", identifier: "screen.heatmap")
+                         value: Double(days.count), format: { VoltaFormat.number($0, digits: 0) },
+                         unit: days.count == 1 ? "day" : "days", identifier: "screen.heatmap")
             HistoryFlowStats(items: [
                 ("road.lanes", DrivesHero.countText(drives.count, partial: partial)),
                 ("point.topleft.down.to.point.bottomright.curvepath", units.formatDistance(distance, fractionDigits: 0)),
@@ -858,7 +874,7 @@ struct DrivesHeatmapView: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
                 ForEach(0..<7) { index in
                     Text(symbols[(calendar.firstWeekday - 1 + index) % 7])
-                        .scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.tertiary)
+                        .scaledFont(11, weight: .medium).foregroundStyle(HistoryTheme.tertiary)
                 }
                 ForEach(0..<(offset + count), id: \.self) { index in
                     if index < offset { Color.clear.frame(height: 38) } else {
@@ -876,18 +892,49 @@ struct DrivesHeatmapView: View {
         .voltaCardBackground()
     }
 
-    /// Driven days fill green in proportion to distance.
+    /// Driven days fill in ink in proportion to distance: drives are ink, as
+    /// on the Dashboard's 48-hour strip (green means energy in or efficiency).
+    /// The scale's ends are labelled above the months (`HeatmapScaleLegend`).
     private func cell(number: Int, ratio: Double?) -> some View {
         let weight: Font.Weight = ratio == nil ? .medium : .semibold
-        let text: Color = ratio == nil ? HistoryTheme.tertiary : .voltaTextPrimary
         let fill: Color
-        if let ratio { fill = HistoryTheme.green.opacity(0.15 + 0.6 * ratio) } else { fill = Color.voltaInk.opacity(0.03) }
+        if let ratio { fill = HeatmapScaleLegend.fill(ratio) } else { fill = Color.voltaInk.opacity(0.03) }
+        // Text flips to the page colour on the darkest cells so it stays legible.
+        let text: Color = ratio == nil ? HistoryTheme.tertiary : (ratio! > 0.6 ? Color.voltaInkInverse : .voltaTextPrimary)
         return Text("\(number)")
             .font(.system(size: 13, weight: weight)).monospacedDigit()
             .foregroundStyle(text)
             .frame(maxWidth: .infinity).frame(height: 38)
             .background(fill, in: .rect(cornerRadius: 10, style: .continuous))
             .contentShape(Rectangle())
+    }
+}
+
+/// The calendar's scale: a day's fill from a short drive to the busiest day,
+/// with both ends labelled.
+struct HeatmapScaleLegend: View {
+    var maxText: String
+
+    /// Ink at 12 % for the shortest drive, rising to 85 % for the busiest day.
+    static func fill(_ ratio: Double) -> Color { Color.voltaInk.opacity(0.12 + 0.73 * min(max(ratio, 0), 1)) }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Shorter")
+            HStack(spacing: 3) {
+                ForEach([0.0, 0.25, 0.5, 0.75, 1.0], id: \.self) { r in
+                    RoundedRectangle(cornerRadius: 3, style: .continuous).fill(Self.fill(r)).frame(width: 14, height: 14)
+                }
+            }
+            Text("\(maxText) busiest day")
+            Spacer(minLength: 0)
+        }
+        .scaledFont(12, weight: .medium)
+        .monospacedDigit()
+        .foregroundStyle(HistoryTheme.secondary)
+        .lineLimit(1).minimumScaleFactor(0.8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Darker days drove further, up to \(maxText) on the busiest day")
     }
 }
 
@@ -900,21 +947,25 @@ struct HeatmapDayView: View {
     var body: some View {
         OverviewScroll(title: date.formatted(date: .abbreviated, time: .omitted), identifier: "scroll.heatmap-day") { wide in
             OverviewHero(eyebrow: date.formatted(.dateTime.weekday(.wide)) + (partial ? " · loaded drives" : ""),
-                         value: VoltaFormat.number(units.distanceValue(km: drives.reduce(0) { $0 + $1.distanceKm })),
+                         value: units.distanceValue(km: drives.reduce(0) { $0 + $1.distanceKm }), format: { VoltaFormat.number($0) },
                          unit: units.distanceUnit, identifier: "screen.heatmap-day")
             if partial {
                 Text("Loaded history only").font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.amber).padding(.top, 10)
             }
             if drives.isEmpty {
-                Text("No drives loaded for this day in the current selection")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary).padding(.top, 18)
+                EmptyState(systemImage: "car", title: "No drives this day",
+                           message: partial ? "None of the drives loaded so far fall on this day. Older history loads as the Drives list scrolls."
+                                            : "The car didn't drive on this day in the current selection.")
+                    .padding(.horizontal, -(VoltaSpacing.xl + VoltaSpacing.xs))
+                    .padding(.top, 30)
             } else {
                 OverviewSectionHeader(title: "Drives", trailing: drives.count == 1 ? "1 drive" : "\(drives.count) drives")
                     .padding(.top, 30)
                 OverviewCards(wide: wide) {
-                    ForEach(drives) { drive in
+                    ForEach(Array(drives.enumerated()), id: \.element.id) { index, drive in
                         NavigationLink(value: DriveRoute.drive(drive.id)) { DriveCard(drive: drive) }
                             .buttonStyle(VoltaPressStyle())
+                            .historyFocusIn(index + 1)
                     }
                 }
             }

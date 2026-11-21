@@ -9,14 +9,12 @@ struct TripShareCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text("VOLTA")
-                    .font(.system(size: 13, weight: .heavy))
-                    .tracking(3)
+                Text("Volta")
+                    .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(HistoryTheme.secondary)
                 Spacer()
-                Text(summary.start.formatted(.dateTime.weekday(.wide).month(.wide).day()).uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.2)
+                Text(summary.start.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(HistoryTheme.secondary)
             }
             HStack(alignment: .lastTextBaseline) {
@@ -27,9 +25,9 @@ struct TripShareCard: View {
                 }
             }
             HStack(spacing: 0) {
-                stat("DURATION", VoltaFormat.duration(summary.durationMin))
-                stat("ENERGY", summary.energyUsedKwh.map { "\(VoltaFormat.number($0)) kWh" } ?? "—")
-                stat("BATTERY", summary.batteryUsed.map { "−\($0)%" } ?? "—")
+                stat("Duration", VoltaFormat.duration(summary.durationMin))
+                stat("Energy used", summary.energyUsedKwh.map { "\(VoltaFormat.number($0)) kWh" } ?? "—")
+                stat("Battery used", summary.batteryUsed.map { "\($0)%" } ?? "—")
             }
         }
         .padding(24)
@@ -42,7 +40,7 @@ struct TripShareCard: View {
 
     private func stat(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 10, weight: .semibold)).tracking(1.2).foregroundStyle(HistoryTheme.secondary)
+            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
             Text(value).font(.system(size: 18, weight: .bold)).foregroundStyle(.voltaTextPrimary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
