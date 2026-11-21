@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "LAST 48H" strip: hourly ticks with drives (red), charging (green) and
+/// "Last 48h" strip: hourly ticks with drives (primary ink), charging (green) and
 /// online/idle (blue) segments, plus a -48H … NOW axis. Each mark is drawn
 /// at full strength, which keeps at least 3:1 contrast with the empty cells.
 struct ActivityStrip: View {
@@ -18,7 +18,8 @@ struct ActivityStrip: View {
 
     static func color(for kind: TimelineKind) -> Color? {
         switch kind {
-        case .drive: .voltaRed
+        // Ink, not red: red is kept for problems and Sentry.
+        case .drive: .voltaTextPrimary
         case .charge: .voltaGreen
         case .idle: .voltaBlue
         case .asleep, .offline: nil
@@ -28,10 +29,13 @@ struct ActivityStrip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: VoltaSpacing.md) {
             HStack {
-                Text("Last \(hours)h").voltaLabelStyle()
+                Text("Last \(hours) hours")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Color.voltaTextPrimary)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 HStack(spacing: VoltaSpacing.md) {
-                    legend("Drives", .voltaRed)
+                    legend("Drives", .voltaTextPrimary)
                     legend("Charging", .voltaGreen)
                     legend("Online", .voltaBlue)
                 }

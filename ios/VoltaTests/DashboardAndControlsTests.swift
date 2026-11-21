@@ -1007,7 +1007,7 @@ private actor SentLimits {
     }
 
     func testStripColoursDrivesChargingAndOnlineAndLeavesSleepEmpty() {
-        XCTAssertEqual(ActivityStrip.color(for: .drive), .voltaRed)
+        XCTAssertEqual(ActivityStrip.color(for: .drive), .voltaTextPrimary)
         XCTAssertEqual(ActivityStrip.color(for: .charge), .voltaGreen)
         XCTAssertEqual(ActivityStrip.color(for: .idle), .voltaBlue)
         XCTAssertNil(ActivityStrip.color(for: .asleep))

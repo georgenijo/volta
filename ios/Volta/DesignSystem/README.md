@@ -41,8 +41,8 @@ All tokens also work as `ShapeStyle` shorthands: `.foregroundStyle(.voltaTextSec
 | `EmptyState` | `EmptyState(systemImage: "bolt.slash", title: "No charges in 30 days", message: "Try a different range…")` |
 | `InlineBanner` | `InlineBanner(systemImage: "lock.slash", message: "…", tint: .voltaAmber, onDismiss: { … })` |
 | `BigNumber` | `BigNumber("78", unit: "%", size: 84)`; `weight:` and `color:` optional; scales with Dynamic Type |
-| `GradientGauge` | `GradientGauge(value: 0.68)`; `value: nil` draws an empty track; `colors: GradientGauge.daylight`, `knob: .ring / .filled(color) / .none`, `secondaryValue:` |
-| `MetricCard` | `MetricCard(systemImage:, title:, value:, unit:, badge: .init(text: "WARM", color: .voltaAmber), gauge: GradientGauge(value: 0.6), tint: .voltaAmber) { optional accessory }` |
+| `TemperatureScale` | `TemperatureScale(markers: [.init(id: "C", fraction: 0.4)], lowLabel: "23°F", highLabel: "113°F")` — one cold-to-hot track, a lettered tag per reading, labelled ends |
+| `LevelBar` | `LevelBar(value: 0.3, color: .voltaGreen, lowLabel: "160 efficient", highLabel: "400 heavy")` — capacity fill with labelled ends; `value: nil` draws an empty track |
 | `StatColumn` | `StatColumn(value: "12", caption: "MI")` — centered numeral + caption for summary rows |
 | `ListRow` | `ListRow(systemImage: "bolt", title: "Home", subtitle: "Today · 42 kWh", showsChevron: true) { Text("$4.10") }` — plain view; wrap in `NavigationLink`/`Button` (use `.buttonStyle(.plain)`) |
 | `ToggleRow` | `ToggleRow(systemImage: "lock.fill", title: "Doors", subtitle: "Lock & unlock", status: "Locked", isOn: $locked, isEnabled: true)` |

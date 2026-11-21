@@ -130,6 +130,16 @@ private struct DockTileButton: View {
                     if isSending { ProgressView().controlSize(.small).tint(tile.isOn ? Color.voltaInkInverse : Color.voltaTextPrimary) }
                 }
                 .frame(width: plate, height: plate)
+                .overlay(alignment: .topTrailing) {
+                    if tile.tone == .armed && !tile.isOn {
+                        Circle().fill(Color.voltaRed)
+                            .frame(width: 10, height: 10)
+                            .padding(2)
+                            .background(Circle().fill(Color.voltaBackground))
+                            .offset(x: 2, y: -2)
+                            .accessibilityHidden(true)
+                    }
+                }
                 VStack(spacing: 1) {
                     Text(tile.title)
                         .font(.system(.subheadline, weight: .medium))
@@ -159,7 +169,8 @@ private struct DockTileButton: View {
         if tile.isOn { return .voltaTextPrimary }
         switch tile.tone {
         case .attention: return .voltaAmber.opacity(0.2)
-        case .armed: return .voltaRed.opacity(0.2)
+        // Armed is routine: a red glyph and dot, not a red disc.
+        case .armed: return Color.voltaInk.opacity(0.08)
         case .unknown: return Color.voltaInk.opacity(0.05)
         case .neutral: return Color.voltaInk.opacity(0.08)
         }

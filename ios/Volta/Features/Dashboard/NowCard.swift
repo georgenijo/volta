@@ -70,7 +70,6 @@ struct NowCard: View {
     var status: VehicleStatus
     var style: Style
     var context: VehicleCommandContext
-    var powerCurve: [ChargeCurvePoint] = []
     var parkedSince: Date?
     /// When this device received `status`; nil for saved or placeholder data.
     var fetchedAt: Date?
@@ -191,22 +190,18 @@ struct NowCard: View {
         VStack(alignment: .leading, spacing: VoltaSpacing.md) {
             header("Charging", trailing: NowCardContent.timeToLimit(status), green: true)
             Button(action: openLiveCharge) {
-                VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
-                    // The sparkline drops under the reading when both don't fit.
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .bottom, spacing: VoltaSpacing.lg) {
-                            powerReading(size: 52).fixedSize()
-                            Spacer(minLength: 0)
-                            sparkline.frame(minWidth: 80, maxWidth: 150)
-                        }
-                        VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
-                            powerReading(size: 52)
-                            sparkline.frame(maxWidth: .infinity)
-                        }
+                // Labelled readings beside the power, or under it when they
+                // don't fit. No sparkline: AC power holds flat for hours, and
+                // the live sheet this opens draws the real curve.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .bottom, spacing: VoltaSpacing.lg) {
+                        powerReading(size: 52).fixedSize()
+                        Spacer(minLength: 0)
+                        electricalReadings
                     }
-                    if let line = NowCardContent.electrical(status) {
-                        Text(line).font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: VoltaSpacing.sm) {
+                        powerReading(size: 52)
+                        electricalReadings
                     }
                 }
                 .contentShape(.rect)
@@ -219,10 +214,27 @@ struct NowCard: View {
         }
     }
 
-    private var sparkline: some View {
-        PowerSparkline(points: powerCurve)
-            .frame(height: 50)
-            .accessibilityHidden(true)
+    /// Current, voltage and energy added, each value over its name.
+    private var electricalReadings: some View {
+        let readings: [(String, String)] = [
+            status.chargerCurrentA.map { ("\(VoltaFormat.number($0, digits: 0)) A", "Current") },
+            status.chargerVoltage.map { ("\(VoltaFormat.number($0, digits: 0)) V", "Voltage") },
+            status.chargeEnergyAddedKwh.map { ("+\(VoltaFormat.number($0, digits: 1))", "kWh added") },
+        ].compactMap { $0 }
+        return HStack(alignment: .top, spacing: VoltaSpacing.lg) {
+            ForEach(readings, id: \.1) { value, name in
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(value)
+                        .font(.system(.body, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.voltaTextPrimary)
+                    Text(name)
+                        .font(.caption)
+                        .foregroundStyle(Color.voltaTextSecondary)
+                }
+                .fixedSize()
+            }
+        }
     }
 
     private var liveChargeAccessibility: String {
@@ -429,10 +441,8 @@ struct NowCard: View {
 
     private func headerTitle(_ title: String, green: Bool, color: Color? = nil) -> some View {
         Text(title)
-            .font(.system(.footnote, weight: .semibold))
-            .tracking(2)
-            .textCase(.uppercase)
-            .foregroundStyle(color ?? (green ? Color.voltaGreen : Color.voltaTextSecondary))
+            .font(.system(.subheadline, weight: .semibold))
+            .foregroundStyle(color ?? (green ? Color.voltaGreen : Color.voltaTextPrimary))
     }
 
     private func headerTrailing(_ text: String) -> some View {
@@ -479,42 +489,5 @@ struct NowNumber: View {
         .lineLimit(1)
         .minimumScaleFactor(0.6)
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// The session's charging power as a small line with a soft fill, ending in a dot.
-struct PowerSparkline: View {
-    var points: [ChargeCurvePoint]
-
-    var body: some View {
-        Canvas { context, size in
-            guard points.count >= 2, let first = points.first?.t, let last = points.last?.t,
-                  last > first else { return }
-            let span = last.timeIntervalSince(first)
-            let peak = max(points.map(\.value).max() ?? 1, 0.1) * 1.1
-            func point(_ p: ChargeCurvePoint) -> CGPoint {
-                CGPoint(x: CGFloat(p.t.timeIntervalSince(first) / span) * (size.width - 6) + 1,
-                        y: size.height - CGFloat(p.value / peak) * (size.height - 6) - 1)
-            }
-            for segment in Dictionary(grouping: points, by: \.segment).values {
-                let ordered = segment.sorted { $0.t < $1.t }
-                guard ordered.count >= 2 else { continue }
-                var line = Path()
-                line.addLines(ordered.map(point))
-                var fill = line
-                fill.addLine(to: CGPoint(x: point(ordered.last!).x, y: size.height))
-                fill.addLine(to: CGPoint(x: point(ordered.first!).x, y: size.height))
-                fill.closeSubpath()
-                context.fill(fill, with: .linearGradient(
-                    Gradient(colors: [Color.voltaGreen.opacity(0.28), Color.voltaGreen.opacity(0)]),
-                    startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
-                context.stroke(line, with: .color(.voltaGreen),
-                               style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-            }
-            if let end = points.max(by: { $0.t < $1.t }) {
-                let p = point(end)
-                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.voltaInk))
-            }
-        }
     }
 }

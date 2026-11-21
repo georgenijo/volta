@@ -65,7 +65,6 @@ struct DashboardView: View {
     /// Top safe area, for sizing the compact map under the status bar.
     @State private var safeTop: CGFloat = 0
     @State private var confirmation: CommandConfirmation?
-    @State private var powerCurve: [ChargeCurvePoint] = []
     /// The command activity the Dashboard itself started, shown in its banner.
     @State private var dashboardActivityID: UUID?
     @State private var awaitingActivity = false
@@ -154,10 +153,6 @@ struct DashboardView: View {
             // `-dashboardOpenLiveCharge YES` opens the live charging sheet on launch.
             if UserDefaults.standard.bool(forKey: "dashboardOpenLiveCharge"), model.status?.isCharging == true { showLiveCharge = true }
             #endif
-        }
-        .task(id: CurveKey(chargeID: model.status?.isCharging == true ? model.status?.activeChargeId : nil,
-                           loadedAt: model.lastLoadedAt)) {
-            await loadPowerCurve()
         }
         // While the car drives and this screen shows: refresh its status.
         .task(id: refreshesLiveDrive) {
@@ -282,26 +277,6 @@ struct DashboardView: View {
                          initialVehicles: app?.takeInitialDashboardVehicles(vehicleID: vehicleID), surfaces: surfaces)
     }
 
-    private struct CurveKey: Equatable {
-        var chargeID: Int?
-        var loadedAt: Date?
-    }
-
-    /// The live session's power, for the Now card's sparkline: the same
-    /// session detail and curve the live charging sheet draws.
-    private func loadPowerCurve() async {
-        guard let status = model.status, status.isCharging, let id = status.activeChargeId else {
-            powerCurve = []
-            return
-        }
-        guard let detail = try? await dataSource.charge(id: id), !Task.isCancelled else { return }
-        let start = min(status.chargeStartedAt ?? detail.summary.start, detail.summary.start)
-        let curve = ChargeCurve.curve(telemetry: detail.telemetry, samples: detail.samples, field: "Power",
-                                      start: start, end: detail.summary.end ?? .now,
-                                      telemetryValue: { $0.powerKw }, sampleValue: { $0.powerKw })
-        powerCurve = ChargeCurve.reduced(curve.points, maxPoints: 120)
-    }
-
     // MARK: Commands
 
     /// Sends a command from the dock or the Now card through the Controls
@@ -424,8 +399,8 @@ struct DashboardView: View {
         .disabled(isPlaceholder)
     }
 
-    /// The map as a pane's backdrop: wordmark over it while the bars are on
-    /// the side, pill and marker centered, a fade into the background.
+    /// The map as a pane's backdrop: pill and marker centered, a fade into
+    /// the background. No logo over it: the address says where the car is.
     private func stageMap(_ status: VehicleStatus, runsUnder: CGFloat = 0) -> some View {
         DashboardMap(location: status.location,
                      sentry: status.sentryMode ?? false,
@@ -449,9 +424,6 @@ struct DashboardView: View {
             .accessibilityAddTraits(status.isCharging ? .isButton : [])
             .accessibilityIdentifier("button.liveCharge.map")
             .redacted(reason: isPlaceholder ? .placeholder : [])
-            .overlay(alignment: .top) {
-                if barsOnSide { wordmark(height: 26).padding(.top, VoltaSpacing.lg) }
-            }
     }
 
     /// Upright: map and battery above the hinge; Now card, dock and the rest below.
@@ -492,12 +464,6 @@ struct DashboardView: View {
             mapLayer
             columnContent
             topScrim
-            if barsOnSide {
-                wordmark(height: 18)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, VoltaSpacing.screen)
-                    .padding(.top, VoltaSpacing.sm)
-            }
         }
         .overlay(alignment: .bottom) { activityBanner }
     }
@@ -615,11 +581,6 @@ struct DashboardView: View {
     /// the tabs. Each has a title and a symbol for the overflow menu.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        // A title keeps a horizontal bar alive, so with side bars the wordmark
-        // is drawn over the map instead.
-        if !barsOnSide {
-            ToolbarItem(placement: .principal) { wordmark(height: 20) }
-        }
         ToolbarItem(placement: .topBarLeading) {
             Button { showVehicle = true } label: {
                 Label(selectVehicle == nil ? "Vehicle" : "Vehicle and switch vehicles", systemImage: "car.fill")
@@ -642,19 +603,6 @@ struct DashboardView: View {
         }
     }
 
-    private func wordmark(height: CGFloat) -> some View {
-        Image("Wordmark")
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(height: height)
-            .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
-            // A halo that lifts it off the map: dark on the dark map, light on the light one.
-            .shadow(color: Color.voltaMapWash.opacity(0.4), radius: 8, y: 2)
-            .accessibilityLabel("Volta")
-            .accessibilityAddTraits(.isHeader)
-    }
-
     // MARK: Sections
 
     @ViewBuilder
@@ -675,7 +623,7 @@ struct DashboardView: View {
     }
 
     private func nowCard(_ style: NowCard.Style) -> some View {
-        NowCard(status: displayStatus, style: style, context: context, powerCurve: powerCurve,
+        NowCard(status: displayStatus, style: style, context: context,
                 parkedSince: NowCardContent.parkedSince(model.timeline), fetchedAt: model.lastLoadedAt,
                 openLiveCharge: { if model.status?.isCharging == true { showLiveCharge = true } },
                 perform: perform, openControls: { showControls = true })
@@ -766,10 +714,8 @@ struct DashboardView: View {
             Button { showVehicle = true } label: {
                 HStack(spacing: VoltaSpacing.sm) {
                     Text(model.vehicle?.name ?? "Vehicle")
-                        .font(.system(.subheadline, weight: .semibold))
-                        .tracking(2.5)
-                        .textCase(.uppercase)
-                        .foregroundStyle(Color.voltaTextPrimary.opacity(0.92))
+                        .font(.headline)
+                        .foregroundStyle(Color.voltaTextPrimary)
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Color.voltaTextSecondary)
@@ -789,7 +735,8 @@ struct DashboardView: View {
                 }
                 // The driving card says how fresh it is; saying it here too repeats it.
                 if NowVariant.of(status) != .driving {
-                    if freshness.isLive { StatusDot(color: .voltaGreen, size: 6) }
+                    // Blue, as "Online" on the activity strip; green is for charging.
+                    if freshness.isLive { StatusDot(color: .voltaBlue, size: 6) }
                     Text(freshness.text)
                         .font(.footnote)
                         .foregroundStyle(Color.voltaTextSecondary)
@@ -836,14 +783,13 @@ struct DashboardView: View {
             HStack(alignment: .bottom) {
                 BigNumber("\(status.batteryLevel)", unit: "%", size: 66,
                           color: status.isCharging ? .voltaGreen : .voltaTextPrimary)
-                    .shadow(color: Color.voltaMapWash.opacity(0.5), radius: 10, y: 4)
                 Spacer()
-                VStack(alignment: .trailing, spacing: VoltaSpacing.xs) {
-                    Text(range.label).voltaLabelStyle()
+                VStack(alignment: .trailing, spacing: 0) {
                     BigNumber(range.km.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—",
                               unit: units.distanceUnit, size: 26, weight: .semibold)
+                    Text(range.label).font(.footnote).foregroundStyle(Color.voltaTextSecondary)
                 }
-                .padding(.bottom, 10)
+                .padding(.bottom, 8)
             }
             .accessibilityElement(children: .combine)
             RangeBar(level: status.batteryLevel, limit: controls.displayedChargeLimit ?? status.chargeLimit,
@@ -851,38 +797,81 @@ struct DashboardView: View {
         }
     }
 
-    /// Pack temperature, 30-day efficiency, climate and weather: each card has
-    /// its icon, a reading and a coloured gauge (one column at accessibility sizes).
+    /// Temperatures on one shared scale, then 30-day efficiency.
     private func metricGrid(_ status: VehicleStatus) -> some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                VStack(spacing: VoltaSpacing.md) {
-                    packCard(status)
-                    efficiencyCard
-                    climateCard(status)
-                    weatherCard(status)
-                }
-            } else {
-                Grid(horizontalSpacing: VoltaSpacing.md, verticalSpacing: VoltaSpacing.md) {
-                    GridRow { packCard(status); efficiencyCard }
-                    GridRow { climateCard(status); weatherCard(status) }
-                }
-            }
+        VStack(spacing: VoltaSpacing.md) {
+            temperaturesCard(status)
+            efficiencyCard
         }
     }
 
-    private func packCard(_ status: VehicleStatus) -> some View {
-        let tone = Self.packTone(status.packTempMaxC)
-        return MetricCard(systemImage: "minus.plus.batteryblock", iconColor: tone ?? .voltaTextSecondary,
-                          title: "Pack Temp",
-                          value: temperatureNumber(status.packTempMaxC), unit: units.temperatureUnit,
-                          gauge: GradientGauge(value: status.packTempMaxC.map(Self.tempFraction),
-                                               knob: .filled(tone ?? .voltaAmber)),
-                          tint: tone) {
-            Text(status.packTempMaxC == nil ? "Streams when awake"
-                 : status.packTempMinC.map { "Min \(units.formatTemperature($0))" } ?? "Maximum cell")
-                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
+    /// Cabin, outside and battery pack: three readings, one thermometer.
+    /// The car's outside sensor appears once, here, not as a separate
+    /// "weather" card.
+    private func temperaturesCard(_ status: VehicleStatus) -> some View {
+        let on = status.climateOn ?? false
+        let pack = status.packTempMaxC
+        let markers: [TemperatureScale.Marker] = [
+            status.outsideTempC.map { .init(id: "O", fraction: Self.tempFraction($0)) },
+            status.insideTempC.map { .init(id: "C", fraction: Self.tempFraction($0)) },
+            pack.map { .init(id: "B", fraction: Self.tempFraction($0)) },
+        ].compactMap { $0 }
+        return VStack(alignment: .leading, spacing: VoltaSpacing.md) {
+            HStack(spacing: VoltaSpacing.sm) {
+                Text("Temperatures")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(Color.voltaTextPrimary)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: VoltaSpacing.sm)
+                if status.climateOn != nil {
+                    Label(on ? "Climate on" : "Climate off", systemImage: on ? "fan.fill" : "fan")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(on ? Color.voltaTeal : Color.voltaTextSecondary)
+                        .symbolEffect(.rotate, options: .repeat(.continuous), isActive: on && !reduceMotion)
+                }
+            }
+            let columns = Group {
+                temperatureColumn("Cabin", letter: "C", status.insideTempC,
+                                  note: status.insideTempC == nil ? "Streams when awake" : (on ? "Climate running" : "Climate off"))
+                temperatureColumn("Outside", letter: "O", status.outsideTempC,
+                                  note: Self.outsideNote(status.outsideTempC), noteColor: Self.outsideNoteColor(status.outsideTempC))
+                temperatureColumn("Battery", letter: "B", pack,
+                                  note: Self.packWord(pack) ?? "Streams when awake",
+                                  noteColor: Self.packTone(pack) ?? .voltaTextSecondary)
+            }
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: VoltaSpacing.md) { columns }
+            } else {
+                HStack(alignment: .top, spacing: VoltaSpacing.md) { columns }
+            }
+            if !markers.isEmpty {
+                TemperatureScale(markers: markers,
+                                 lowLabel: units.formatTemperature(-5), highLabel: units.formatTemperature(45))
+            }
         }
+        .padding(VoltaSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .voltaCardBackground()
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("card.temperatures")
+    }
+
+    private func temperatureColumn(_ title: String, letter: String, _ celsius: Double?,
+                                   note: String, noteColor: Color = .voltaTextSecondary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Color.voltaTextPrimary.opacity(0.85))
+                .accessibilityLabel(title)
+            BigNumber(temperatureNumber(celsius), unit: units.temperatureUnit, size: 32, weight: .bold)
+            Text(note)
+                .font(.caption)
+                .foregroundStyle(noteColor)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     /// The pack reading's colour: blue when cold, green in its working range,
@@ -897,83 +886,79 @@ struct DashboardView: View {
         }
     }
 
+    /// The pack reading in a word, matching `packTone`.
+    static func packWord(_ celsius: Double?) -> String? {
+        guard let celsius else { return nil }
+        switch celsius {
+        case ..<10: return "Cold"
+        case ..<35: return "Normal range"
+        case ..<50: return "Warm"
+        default: return "Hot"
+        }
+    }
+
+    /// "Freezing" or "Very hot" when the outside reading is extreme; otherwise
+    /// just where it was measured.
+    static func outsideNote(_ celsius: Double?) -> String {
+        guard let celsius else { return "Streams when awake" }
+        if celsius <= 0 { return "Freezing" }
+        if celsius >= 35 { return "Very hot" }
+        return "Car sensor"
+    }
+
+    static func outsideNoteColor(_ celsius: Double?) -> Color {
+        guard let celsius, celsius <= 0 || celsius >= 35 else { return .voltaTextSecondary }
+        return .voltaAmber
+    }
+
+    /// 100 Wh/km (efficient) … 250 Wh/km (heavy).
+    static let efficiencyRange: ClosedRange<Double> = 100...250
+
     private var efficiencyCard: some View {
         let eff = model.summaries[.thirtyDays]?.efficiencyWhPerKm
         let value = eff.map { VoltaFormat.number(units.efficiencyValue(whPerKm: $0), digits: 0) } ?? "—"
-        // 100 Wh/km (great) … 250 Wh/km (heavy).
-        let fraction = eff.map { ($0 - 100) / 150 }
-        return MetricCard(systemImage: "leaf.fill", iconColor: eff == nil ? .voltaTextSecondary : .voltaGreen,
-                          title: "30D Eff", value: value, unit: units.efficiencyUnit,
-                          gauge: GradientGauge(value: fraction,
-                                               colors: [.voltaGreen, .voltaGreen, .voltaAmber, .voltaRed],
-                                               knob: .filled(.voltaGreen)),
-                          tint: nil) {
-            Text(Self.efficiencyDetail(model.summaries[.thirtyDays],
-                                       loading: model.loadingSections.contains(.summary(.thirtyDays))))
-                .font(.caption).foregroundStyle(Color.voltaTextSecondary)
-        }
-    }
-
-    private func climateCard(_ status: VehicleStatus) -> some View {
-        let on = status.climateOn ?? false
-        return MetricCard(systemImage: "fan.fill", iconColor: on ? .voltaGreen : .voltaTeal, iconSpins: on,
-                          title: "Climate",
-                          value: temperatureNumber(status.insideTempC), unit: units.temperatureUnit,
-                          badge: .init(text: status.climateOn == nil ? "—" : (on ? "On" : "Off"),
-                                       color: on ? .voltaGreen : .voltaTextSecondary, inHeader: true),
-                          gauge: GradientGauge(value: status.insideTempC.map(Self.tempFraction), knob: .ring,
-                                               secondaryValue: status.outsideTempC.map(Self.tempFraction)),
-                          tint: on ? .voltaGreen : .voltaTeal) {
-            if let outside = status.outsideTempC {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("OUT").font(.caption2.weight(.medium)).tracking(1.2)
-                        .foregroundStyle(Color.voltaTextSecondary)
-                    Text("\(VoltaFormat.number(units.temperatureValue(celsius: outside), digits: 0))°")
-                        .font(.system(.title3, weight: .medium))
-                        .foregroundStyle(Color.voltaTextPrimary.opacity(0.85))
-                }
-                .fixedSize()
+        let range = Self.efficiencyRange
+        let fraction = eff.map { ($0 - range.lowerBound) / (range.upperBound - range.lowerBound) }
+        let end = { (whPerKm: Double) in VoltaFormat.number(units.efficiencyValue(whPerKm: whPerKm), digits: 0) }
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: VoltaSpacing.lg) {
+                efficiencyReading(value)
+                LevelBar(value: fraction, color: (fraction ?? 0) > 0.7 ? .voltaAmber : .voltaGreen,
+                         lowLabel: "\(end(range.lowerBound)) efficient", highLabel: "\(end(range.upperBound)) heavy")
+                    .frame(minWidth: 140)
+            }
+            VStack(alignment: .leading, spacing: VoltaSpacing.md) {
+                efficiencyReading(value)
+                LevelBar(value: fraction, color: (fraction ?? 0) > 0.7 ? .voltaAmber : .voltaGreen,
+                         lowLabel: "\(end(range.lowerBound)) efficient", highLabel: "\(end(range.upperBound)) heavy")
             }
         }
+        .padding(VoltaSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .voltaCardBackground()
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("card.efficiency")
     }
 
-    private func weatherCard(_ status: VehicleStatus) -> some View {
-        let hour = Calendar.current.component(.hour, from: .now)
-        let night = hour < 6 || hour >= 19
-        let t = status.outsideTempC
-        let extreme = t.map { $0 <= 0 || $0 >= 35 } ?? false
-        let symbol: String = {
-            guard let t else { return "cloud.fill" }
-            if t <= 0 { return "snowflake" }
-            return night ? "moon.stars.fill" : (t >= 24 ? "sun.max.fill" : "cloud.sun.fill")
-        }()
-        let dayFraction = (Double(hour) + Double(Calendar.current.component(.minute, from: .now)) / 60) / 24
-        return MetricCard(systemImage: night ? "moon.fill" : "sun.max.fill",
-                          iconColor: night ? Self.moon : .voltaAmber,
-                          title: "Weather",
-                          value: temperatureNumber(t), unit: units.temperatureUnit,
-                          headerAccessory: extreme
-                            ? AnyView(Image(systemName: "exclamationmark.triangle.fill")
-                                .symbolRenderingMode(.multicolor)
-                                .foregroundStyle(Color.voltaAmber)
-                                .accessibilityLabel(t.map { $0 <= 0 ? "Freezing" : "Very hot" } ?? ""))
-                            : nil,
-                          gauge: GradientGauge(value: dayFraction, colors: GradientGauge.daylight, knob: .ring),
-                          tint: .voltaBlue) {
-            Image(systemName: symbol)
-                // Moon and stars take two colours; the other symbols bring their own.
-                .symbolRenderingMode(symbol == "moon.stars.fill" ? .palette : .multicolor)
-                .font(.system(size: 30))
-                .foregroundStyle(Self.stars, Color.voltaAmber)
-                .symbolEffect(.breathe, options: .repeat(.continuous), isActive: !reduceMotion)
+    private func efficiencyReading(_ value: String) -> some View {
+        HStack(spacing: VoltaSpacing.md) {
+            let known = model.summaries[.thirtyDays]?.efficiencyWhPerKm != nil
+            Image(systemName: "leaf.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(known ? Color.voltaGreen : .voltaTextSecondary)
+                .frame(width: 36, height: 36)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill((known ? Color.voltaGreen : .voltaTextSecondary).opacity(0.16)))
                 .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                BigNumber(value, unit: units.efficiencyUnit, size: 24, weight: .bold)
+                Text(Self.efficiencyDetail(model.summaries[.thirtyDays],
+                                           loading: model.loadingSections.contains(.summary(.thirtyDays))))
+                    .font(.caption).foregroundStyle(Color.voltaTextSecondary)
+            }
+            .fixedSize()
         }
     }
-
-    /// Night's moon (header icon) and the moon-and-stars symbol: pale indigo
-    /// on dark cards, deep indigo on light ones (6.3:1 and 4.5:1 on white).
-    private static let moon = Color(light: 0x4F46E5, dark: 0xA5B4FC)
-    private static let stars = Color(light: 0x6366F1, dark: 0xC7D2FE)
 
     private func temperatureNumber(_ celsius: Double?) -> String {
         celsius.map { VoltaFormat.number(units.temperatureValue(celsius: $0), digits: 0) } ?? "—"
@@ -1008,45 +993,105 @@ extension ControlsModel {
 
 // MARK: - Range bar
 
-/// Thin blue bar with glow (green while charging); a tick marks the charge limit.
+/// The battery: a blue fill at rest, green while charging, with the charge
+/// limit as a labelled tick. While charging, the stretch still to fill is
+/// hatched and a band of light runs along the fill toward it: the one moving
+/// thing on the Dashboard, and it means energy is going in.
 struct RangeBar: View {
     var level: Int
     var limit: Int?
     var charging: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private let height: CGFloat = 10
+
     var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.voltaTrack)
-                let fill = w * CGFloat(min(max(level, 0), 100)) / 100
-                Capsule()
-                    .fill(LinearGradient(colors: charging ? VoltaGradient.charge : VoltaGradient.range,
-                                         startPoint: .leading, endPoint: .trailing))
-                    .frame(width: fill)
-                    .shadow(color: (charging ? Color.voltaGreen : .voltaBlue).opacity(0.7), radius: 6)
-                    .phaseAnimator(charging && !reduceMotion ? [0.6, 1] : [1]) { view, phase in
-                        view.opacity(phase)
-                    } animation: { _ in .easeInOut(duration: 1.2) }
-                if let limit, limit < 100 {
-                    Rectangle()
-                        .fill(Color.voltaInk.opacity(0.6))  // 3:1 or better on the background
-                        .frame(width: 2, height: 10)
-                        .offset(x: w * CGFloat(limit) / 100 - 1)
+        VStack(spacing: VoltaSpacing.xs) {
+            GeometryReader { geo in
+                let w = geo.size.width
+                let fill = w * Self.fraction(level)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.voltaTrack)
+                    if charging, let limit, limit > level {
+                        // What is left to charge, up to the limit.
+                        HatchFill()
+                            .fill(Color.voltaGreen.opacity(0.45))
+                            .frame(width: w * (Self.fraction(limit) - Self.fraction(level)), height: height)
+                            .offset(x: fill)
+                    }
+                    Capsule()
+                        .fill(LinearGradient(colors: charging ? VoltaGradient.charge : VoltaGradient.range,
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: fill)
+                        .overlay {
+                            if charging && !reduceMotion && fill > 0 { ChargeFlow() }
+                        }
+                        .clipShape(Capsule())
+                    if let limit, limit < 100 {
+                        Capsule()
+                            .fill(Color.voltaInk.opacity(0.75))  // 3:1 or better on the background
+                            .frame(width: 2, height: height + 8)
+                            .offset(x: w * Self.fraction(limit) - 1)
+                    }
                 }
-                if charging, fill > 0 {
-                    // Bright leading edge where energy is going in.
-                    Circle()
-                        .fill(Color.white)  // appearance: fixed (a bright point on the green fill)
-                        .frame(width: 8, height: 8)
-                        .shadow(color: .voltaGreen, radius: 6)
-                        .offset(x: fill - 4)
+                .frame(height: height)
+                .frame(maxHeight: .infinity)
+            }
+            .frame(height: height + 8)
+            if let limit, limit < 100 {
+                GeometryReader { geo in
+                    let x = min(max(geo.size.width * Self.fraction(limit), 30), geo.size.width - 30)
+                    Text("Limit \(limit)%")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color.voltaTextSecondary)
+                        .fixedSize()
+                        .position(x: x, y: geo.size.height / 2)
                 }
+                .frame(height: 16)
+                .accessibilityHidden(true)
             }
         }
-        .frame(height: 6)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery \(level) percent\(limit.map { ", limit \($0) percent" } ?? "")")
+    }
+
+    static func fraction(_ percent: Int) -> CGFloat { CGFloat(min(max(percent, 0), 100)) / 100 }
+}
+
+/// Diagonal stripes, for the part of the battery still to charge.
+private struct HatchFill: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let step: CGFloat = 5
+        var x = rect.minX - rect.height
+        while x < rect.maxX {
+            path.move(to: CGPoint(x: x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
+            path.addLine(to: CGPoint(x: x + rect.height + 2, y: rect.minY))
+            path.addLine(to: CGPoint(x: x + 2, y: rect.maxY))
+            path.closeSubpath()
+            x += step
+        }
+        return path.intersection(Path(rect))
+    }
+}
+
+/// A soft band of light that runs along the charging fill, left to right.
+private struct ChargeFlow: View {
+    @State private var running = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let band = max(geo.size.width * 0.35, 40)
+            LinearGradient(colors: [.white.opacity(0), .white.opacity(0.5), .white.opacity(0)],  // appearance: fixed (light on the fill)
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(width: band)
+                .offset(x: running ? geo.size.width : -band)
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) { running = true }
+        }
     }
 }
 
