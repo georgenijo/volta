@@ -731,3 +731,80 @@ private struct TripRouteCanvas: View {
         Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
     }
 }
+
+/// The whole route full screen, opened by a tap on the drive page's map:
+/// framed end to end, free to pan and zoom, with the legend under it.
+struct TripRouteFullMap: View {
+    var timeline: TripTimeline
+    var route: TripRoute
+    var style: TripRouteStyle
+    var legend: RouteLegendModel?
+    var title: String
+    var subtitle: String?
+
+    @Environment(\.dismiss) private var dismiss
+
+    /// The close button and title capsule.
+    private static let bar: CGFloat = 48
+    /// Room kept for the legend card above the bottom edge.
+    private static let legendSpace: CGFloat = 84
+
+    /// "Union City → Home", or the one name known.
+    static func title(_ summary: DriveSummary) -> String {
+        // The hero's names: the city first, then the address.
+        let start = summary.startCity ?? summary.startAddress, end = summary.endCity ?? summary.endAddress
+        let from = TripPlace(start).primary, to = TripPlace(end).primary
+        switch (start, end) {
+        case (nil, nil): return "Trip route"
+        case (_, nil): return from
+        case (nil, _): return to
+        default: return from == to ? from : "\(from) → \(to)"
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let safe = geo.safeAreaInsets
+            // MapKit's logo and Legal link sit just above the legend card.
+            let bottom = safe.bottom + (legend == nil ? 8 : Self.legendSpace)
+            let top = safe.top + Self.bar + 12
+            TripMapView(timeline: timeline, route: route, style: style, highlight: nil,
+                        bottomInset: bottom,
+                        frameInsets: EdgeInsets(top: top + 24, leading: safe.leading + 32,
+                                                bottom: bottom + VoltaMapChrome.attribution + 24, trailing: safe.trailing + 32),
+                        hardInsets: EdgeInsets(top: top, leading: safe.leading, bottom: bottom + VoltaMapChrome.attribution,
+                                               trailing: safe.trailing))
+                .overlay(alignment: .top) { header.padding(.top, safe.top) }
+                .overlay(alignment: .bottom) {
+                    if let legend {
+                        RouteLegendStrip(model: legend)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                            .padding(.horizontal, HistoryTheme.gutter)
+                            .padding(.bottom, safe.bottom + 8)
+                            .voltaReadableWidth()
+                    }
+                }
+                .ignoresSafeArea()
+        }
+        .background(HistoryTheme.background.ignoresSafeArea())
+        .accessibilityIdentifier("trip.map.full")
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            GlassCircleButton(systemImage: "xmark", size: Self.bar, accessibilityLabel: "Close map") { dismiss() }
+                .accessibilityIdentifier("trip.map.close")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).lineLimit(1)
+                if let subtitle {
+                    Text(subtitle).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 16).frame(height: Self.bar)
+            .glassEffect(.regular, in: .capsule)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, HistoryTheme.gutter)
+    }
+}

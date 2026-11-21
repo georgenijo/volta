@@ -126,6 +126,12 @@ final class ScreenScreenshotTests: XCTestCase {
         try tapFirstRow(prefix: "row.drive.")
         try waitForScreen("drive-detail")
         capture("drive-detail")
+        // A tap on the route preview opens it full screen; close returns to the page.
+        try tap("trip.map.expand")
+        XCTAssertTrue(element("trip.map.close").waitForExistence(timeout: 10), "Tapping the drive map must open the full-screen route")
+        capture("drive-map-full")
+        try tap("trip.map.close")
+        try waitForScreen("drive-detail")
         try scroll("drive-detail", screenshot: "drive-detail-scrolled")
         let elevation = element("trip.chart.coverage.elevation")
         // Slow swipes; step back if a swipe carries the section past the top.

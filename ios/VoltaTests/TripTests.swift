@@ -304,6 +304,18 @@ final class TripTests: XCTestCase {
         XCTAssertNil(TripPlace("Home").secondary)
     }
 
+    func testFullMapTitleNamesBothEnds() {
+        var drive = summary(minutes: 10)
+        drive.startAddress = "Union City, CA"; drive.endAddress = "Home"
+        XCTAssertEqual(TripRouteFullMap.title(drive), "Union City → Home")
+        drive.endAddress = "Union City, CA"
+        XCTAssertEqual(TripRouteFullMap.title(drive), "Union City")
+        drive.endAddress = nil
+        XCTAssertEqual(TripRouteFullMap.title(drive), "Union City")
+        drive.startAddress = nil
+        XCTAssertEqual(TripRouteFullMap.title(drive), "Trip route")
+    }
+
     // MARK: R1 regressions
 
     /// R1-1: an hour of positions every 3 s with speed only in the first 6

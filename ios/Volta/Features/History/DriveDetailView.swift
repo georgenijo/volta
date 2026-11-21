@@ -22,6 +22,7 @@ struct DriveDetailView: View {
     @State private var replayTask: Task<Void, Never>?
     @State private var shareImage: Image?
     @State private var editingRate = false
+    @State private var showingMap = false
     /// Counts chart scrubs as they begin, for one `.selection` tap per scrub.
     @State private var scrubs = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -66,6 +67,13 @@ struct DriveDetailView: View {
         .historyPage(nil, clearBar: true)
         .toolbar { toolbar }
         .electricityRateSheet(isPresented: $editingRate, settings: model?.settings)
+        .fullScreenCover(isPresented: $showingMap) {
+            if let snapshot, let route = snapshot.routes[mode] {
+                TripRouteFullMap(timeline: snapshot.timeline, route: route, style: routeStyle(route),
+                                 legend: routeStyle(route).legend(units: units),
+                                 title: TripRouteFullMap.title(summary), subtitle: TripHero.dateLine(summary))
+            }
+        }
         .task(id: key) { await load(key) }
         .task(id: key) { await lookUpRate(key) }
         .onChange(of: units) { rebuild() }
@@ -86,6 +94,7 @@ struct DriveDetailView: View {
                     // Under the status bar and system bar, then about two fifths of the page.
                     routeMap
                         .frame(height: page.safeArea.top + page.reveal(0.4, 200...300))
+                        .overlay { expandTarget }
                     // The legend sits under the map, never over the route.
                     legendStrip
                         .padding(.horizontal, Self.margin - 16)
@@ -399,6 +408,22 @@ struct DriveDetailView: View {
                 .frame(height: page.safeArea.top + 30)
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
+        }
+    }
+
+    /// The inline map is a preview: a tap anywhere on it opens the whole
+    /// route full screen, and a drag on it scrolls the page.
+    @ViewBuilder private var expandTarget: some View {
+        if let snapshot, snapshot.routes[mode] != nil, !snapshot.timeline.points.isEmpty {
+            Color.clear
+                .contentShape(.rect)
+                .onTapGesture { showingMap = true }
+                .accessibilityElement()
+                .accessibilityLabel("Trip route map")
+                .accessibilityHint("Opens the route full screen")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { showingMap = true }
+                .accessibilityIdentifier("trip.map.expand")
         }
     }
 
