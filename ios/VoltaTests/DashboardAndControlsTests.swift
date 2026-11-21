@@ -431,7 +431,7 @@ private let segment = TimelineSegment(kind: .drive, start: .now.addingTimeInterv
         XCTAssertEqual(model.failedSections, [.timeline, .summary(.sevenDays)])
         XCTAssertTrue(model.timelineFailed)
         XCTAssertTrue(model.summaryFailed(.sevenDays))
-        XCTAssertEqual(model.partialFailureMessage, "Couldn't load 48h timeline, 7D activity.")
+        XCTAssertEqual(model.partialFailureMessage, "Couldn't load 48h timeline, 7 days activity.")
         XCTAssertNil(model.refreshError)
 
         source.timelineHandler = { [] }
