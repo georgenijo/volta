@@ -998,6 +998,30 @@ private actor SentLimits {
         XCTAssertEqual(DashboardView.packTone(50), .voltaRed)
     }
 
+    func testPackWordMatchesItsTone() {
+        XCTAssertNil(DashboardView.packWord(nil))
+        XCTAssertEqual(DashboardView.packWord(-5), "Cold")
+        XCTAssertEqual(DashboardView.packWord(18), "Normal range")
+        XCTAssertEqual(DashboardView.packWord(40), "Warm")
+        XCTAssertEqual(DashboardView.packWord(55), "Hot")
+    }
+
+    func testTemperatureTagsSpreadApartButStayInTheTrack() {
+        // Far apart: each tag sits on its value.
+        XCTAssertEqual(TemperatureScale.spread([50, 150], width: 200, tag: 18), [50, 150])
+        // Two close readings push apart by a tag and a gap; input order is kept.
+        let close = TemperatureScale.spread([102, 100], width: 200, tag: 18)
+        XCTAssertEqual(close[1], 100)
+        XCTAssertEqual(close[0], 121)
+        // Crowded at the hot end: pulled back inside the track, still apart.
+        let end = TemperatureScale.spread([199, 200, 198], width: 200, tag: 18)
+        XCTAssertEqual(end.max(), 191)
+        let sorted = end.sorted()
+        XCTAssertGreaterThanOrEqual(sorted[1] - sorted[0], 21)
+        XCTAssertGreaterThanOrEqual(sorted[2] - sorted[1], 21)
+        XCTAssertGreaterThanOrEqual(sorted[0], 9)
+    }
+
     func testNowCardIsTintedOnlyWhileChargingOrParked() {
         XCTAssertEqual(NowCard.accent(for: .charging), .voltaGreen)
         XCTAssertEqual(NowCard.accent(for: .parked), .voltaBlue)
