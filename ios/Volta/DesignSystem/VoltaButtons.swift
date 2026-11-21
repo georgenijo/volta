@@ -65,7 +65,7 @@ struct VoltaPressStyle: ButtonStyle {
 
 // MARK: - SegmentedRangePicker
 
-/// Text segments where the selected one sits in a dark capsule ("TODAY  7D  30D").
+/// Text segments where the selected one sits in a capsule ("Today  7 days  30 days").
 ///
 ///     SegmentedRangePicker(selection: $range)                       // SummaryRange
 ///     SegmentedRangePicker(selection: $bucket, options: MileageBucketSize.allCases) { $0.rawValue }
@@ -90,11 +90,10 @@ struct SegmentedRangePicker<Option: Hashable>: View {
             ForEach(options, id: \.self) { option in
                 let selected = option == selection
                 Button {
-                    withAnimation(.snappy(duration: 0.25)) { selection = option }
+                    withAnimation(VoltaMotion.snappy) { selection = option }
                 } label: {
-                    Text(label(option).uppercased())
+                    Text(label(option))
                         .font(.system(.footnote, weight: .semibold))
-                        .tracking(1.2)
                         .foregroundStyle(selected ? Color.voltaTextPrimary : Color.voltaTextSecondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
@@ -121,12 +120,12 @@ extension SegmentedRangePicker where Option == SummaryRange {
 }
 
 extension SummaryRange {
-    /// "Today", "7D", "30D".
+    /// "Today", "7 days", "30 days".
     var voltaLabel: String {
         switch self {
         case .today: "Today"
-        case .sevenDays: "7D"
-        case .thirtyDays: "30D"
+        case .sevenDays: "7 days"
+        case .thirtyDays: "30 days"
         }
     }
 }
@@ -233,7 +232,7 @@ extension VoltaHeader where Leading == EmptyView {
     VStack(spacing: 24) {
         VoltaHeader("Charging") {
             GlassPill {
-                Label("30D", systemImage: "calendar").labelStyle(.titleAndIcon)
+                Label("30 days", systemImage: "calendar").labelStyle(.titleAndIcon)
                 Image(systemName: "line.3.horizontal.decrease")
             }
         } trailing: {
