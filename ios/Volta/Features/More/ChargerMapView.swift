@@ -10,10 +10,22 @@ struct ChargerMapView: View {
     @State private var loadedVehicle: Int?
     /// Each place's kind, from all of its recorded sessions.
     @State private var kinds: [String: ChargerKind] = [:]
+    /// Bumped by a pull to refresh that brought data, for its haptic.
+    @State private var refreshes = 0
+
     var body: some View {
         // Wide: the map fills one pane beside the list of places.
         ScreenKit.Page(splits: !(state.value ?? []).isEmpty) {
-            LoadableContent(state: state, retry: load) { locations in
+            switch state {
+            case .loading:
+                // The map's shape, sweeping, while the places load.
+                RoundedRectangle(cornerRadius: 22).fill(Color.voltaInk.opacity(0.06))
+                    .modifier(ScreenKit.MapHeight())
+                    .voltaSkeleton(true)
+            case .failed(let message):
+                ErrorState(title: "Couldn't load charging places", message: message, retry: load)
+                    .padding(.top, 40)
+            case .loaded(let locations):
                 Text("Your recorded charging places · TeslaMate history").font(.caption).foregroundStyle(ScreenKit.secondary)
                     // Kinds for every place: its pin and its card.
                     .task(id: locations.map(\.id)) { await loadKinds(locations) }
@@ -35,52 +47,78 @@ struct ChargerMapView: View {
                         }
                         .modifier(ScreenKit.MapHeight())
                         .clipShape(.rect(cornerRadius: 22))
+                        .voltaFocusIn(0)
                     } else {
                         Text("TeslaMate has not recorded coordinates for these places. Their sessions are available below.").foregroundStyle(ScreenKit.secondary)
                     }
                 }
             }
         } secondary: {
-            if let locations = state.value, !locations.isEmpty {
-                ForEach(locations) { location in
-                    Button { push?(.chargerPlace(location)) } label: {
-                        Card {
-                            VStack(alignment: .leading, spacing: 12) {
-                                // The same badge, and kind, as the place's pin.
-                                HStack(spacing: 10) {
-                                    ChargerBadge(kind: kinds[location.id] ?? .unknown)
-                                    Text(location.name).font(.headline)
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                }
-                                Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                if let energy = location.energyAddedKwh {
-                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                        Text(VoltaFormat.number(energy)).font(.system(size: 22, weight: .semibold, design: .rounded))
-                                        Text("kWh added").foregroundStyle(ScreenKit.secondary)
-                                    }
-                                    .accessibilityElement(children: .combine)
-                                } else {
-                                    Text("Total energy unknown — some sessions lack readings")
-                                }
-                                Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.caption).foregroundStyle(ScreenKit.secondary)
-                                // A real figure reads as one; an unknown cost stays quiet.
-                                Text(ChargerPresentation.cost(location.cost, currency: location.currency))
-                                    .font(location.cost != nil ? .subheadline : .caption)
-                                    .foregroundStyle(location.cost != nil ? Color.voltaTextPrimary : ScreenKit.secondary)
-                                if !location.hasCoordinate { Text("Coordinates not recorded").font(.caption).foregroundStyle(ScreenKit.secondary) }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }.buttonStyle(.plain)
+            switch state {
+            case .loading:
+                ForEach(0..<3, id: \.self) { i in
+                    placeCard(Self.placeholder(i), kind: .unknown).voltaSkeleton(true)
                 }
+            case .loaded(let locations):
+                ForEach(Array(locations.enumerated()), id: \.element.id) { index, location in
+                    Button { push?(.chargerPlace(location)) } label: {
+                        placeCard(location, kind: kinds[location.id] ?? .unknown)
+                    }
+                    .buttonStyle(.plain)
+                    .chargeRowFocusIn(index + 1)
+                }
+            case .failed:
+                EmptyView()
             }
         }
-        .screenKitPage("Charger Map", screen: "charger-map")
+        .screenKitPage("Charger map", screen: "charger-map")
         // The task starts again when the page moves, as when iPhone Duo folds;
         // only another vehicle reloads.
         .task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load() } }
-        .refreshable { await load() }
+        .refreshable {
+            await load()
+            if state.value != nil { refreshes += 1 }
+        }
+        .voltaFeedback(.refreshed, trigger: refreshes)
     }
+
+    /// One place: its badge (the same kind as its pin), visits, energy, power and cost.
+    private func placeCard(_ location: ChargerLocation, kind: ChargerKind) -> some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    ChargerBadge(kind: kind)
+                    Text(location.name).font(.headline)
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(ScreenKit.secondary)
+                }
+                Text("\(location.sessionCount) sessions · Last visit \(location.lastVisit.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary)
+                if let energy = location.energyAddedKwh {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        RollingNumber(value: energy) { VoltaFormat.number($0) }
+                            .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        Text("kWh added").foregroundStyle(ScreenKit.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                } else {
+                    Text("Total energy unknown — some sessions lack readings").foregroundStyle(ScreenKit.secondary)
+                }
+                Text(location.avgPowerKw.map { "\(VoltaFormat.number($0)) kW average input · \(location.powerSessionCount) measured sessions" } ?? "Average power not recorded").font(.caption).foregroundStyle(ScreenKit.secondary)
+                // A real figure reads as one; an unknown cost stays quiet.
+                Text(ChargerPresentation.cost(location.cost, currency: location.currency))
+                    .font(location.cost != nil ? .subheadline : .caption)
+                    .foregroundStyle(location.cost != nil ? Color.voltaTextPrimary : ScreenKit.secondary)
+                if !location.hasCoordinate { Text("Coordinates not recorded").font(.caption).foregroundStyle(ScreenKit.secondary) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// A synthetic place for the loading skeleton.
+    static func placeholder(_ index: Int) -> ChargerLocation {
+        ChargerLocation(id: "placeholder-\(index)", name: "Charging place", latitude: nil, longitude: nil, sessionCount: 12,
+                        lastVisit: .now, energyAddedKwh: 240, avgPowerKw: 7.2, powerSessionCount: 12, cost: 40, currency: "USD")
+    }
+
     /// A place's kind comes from every one of its recorded sessions
     /// (`ChargerKind(agreeing:)`): a place whose sessions disagree, have none,
     /// or can't all be loaded stays the neutral unknown badge.
@@ -108,7 +146,9 @@ struct ChargerMapView: View {
     }
 
     @MainActor private func load() async {
-        let id = vehicleID, token = UUID(); generation = token; state = .loading
+        let id = vehicleID, token = UUID(); generation = token
+        // A refresh keeps the places on screen; a first load or another vehicle shows the skeleton.
+        if state.value == nil || loadedVehicle != id { state = .loading }
         do {
             let locations = try await dataSource.chargerLocations(vehicleID: id)
             guard !Task.isCancelled, generation == token, vehicleID == id else { return }
@@ -135,24 +175,39 @@ struct ChargerLocationSessionsView: View {
     @Environment(\.pushMoreRoute) private var push
     var body: some View {
         ScreenKit.Page(spacing: 16) {
-            LoadableContent(state: state, retry: { await load(reset: true) }) { sessions in
-                if sessions.isEmpty { Text("No sessions remain at this recorded location.").foregroundStyle(ScreenKit.secondary) }
-                ForEach(sessions) { session in
-                    Button { push?(.chargerSession(session)) } label: {
-                        Card {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(VoltaFormat.dateTime(session.start)).font(.headline)
-                                Text(session.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Energy not recorded")
-                                Text(ChargerPresentation.cost(session.cost, currency: session.currency)).font(.caption).foregroundStyle(ScreenKit.secondary)
-                                if session.end == nil { Text("Session in progress").font(.caption).foregroundStyle(ScreenKit.blue) }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }.buttonStyle(.plain)
+            switch state {
+            case .loading:
+                ForEach(0..<4, id: \.self) { i in
+                    sessionCard(ChargeSummary.skeleton(i)).voltaSkeleton(true)
+                }
+            case .failed(let message):
+                ErrorState(title: "Couldn't load sessions", message: message) { await load(reset: true) }
+                    .padding(.top, 40)
+            case .loaded(let sessions):
+                if sessions.isEmpty {
+                    EmptyState(systemImage: "bolt.slash", title: "No sessions here",
+                               message: "TeslaMate no longer holds any session at this recorded place.")
+                        .padding(.top, 40)
+                }
+                ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                    Button { push?(.chargerSession(session)) } label: { sessionCard(session) }
+                        .buttonStyle(.plain)
+                        .chargeRowFocusIn(index)
                 }
                 if let pageError { Text(pageError).foregroundStyle(ScreenKit.red) }
                 if cursor != nil { Button(paging ? "Loading…" : "Load more sessions") { Task { await load(reset: false) } }.disabled(paging) }
             }
         }.screenKitPage(location.name).task(id: vehicleID) { if loadedVehicle != vehicleID || state.value == nil { await load(reset: true) } }
+    }
+    private func sessionCard(_ session: ChargeSummary) -> some View {
+        Card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(VoltaFormat.dateTime(session.start)).font(.headline)
+                Text(session.energyAddedKwh.map { VoltaFormat.energy($0) + " added" } ?? "Energy not recorded")
+                Text(ChargerPresentation.cost(session.cost, currency: session.currency)).font(.caption).foregroundStyle(ScreenKit.secondary)
+                if session.end == nil { Text("Session in progress").font(.caption).foregroundStyle(ScreenKit.blue) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
     @MainActor private func load(reset: Bool) async {
         if !reset && paging { return }

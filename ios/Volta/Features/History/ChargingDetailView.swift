@@ -232,14 +232,17 @@ struct ChargingDetailView: View {
     private func mapPlaceholder(_ message: String?, loading: Bool = false, retry: Bool = false) -> some View {
         ZStack {
             HistoryTheme.background
+            if loading {
+                // The tiles' shape, sweeping, while saved places load.
+                Rectangle().fill(HistoryTheme.track.opacity(0.5)).voltaSkeleton(true)
+            }
             VStack(spacing: 10) {
-                if loading { ProgressView().tint(HistoryTheme.secondary) }
                 if let message {
                     Text(message).font(.system(size: 13, weight: .medium)).foregroundStyle(HistoryTheme.secondary)
                         .multilineTextAlignment(.center).padding(.horizontal, 40)
                 }
                 if retry {
-                    PillButton("Retry", systemImage: "arrow.clockwise") {
+                    PillButton("Try again", systemImage: "arrow.clockwise") {
                         Task { await places.retry(dataSource: dataSource, vehicleID: vehicleID) }
                     }
                 }
@@ -269,11 +272,15 @@ struct ChargingDetailView: View {
 
             HStack(alignment: .top, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(summary.energyAddedKwh.map { "+" + VoltaFormat.number($0) } ?? "—")
-                        .font(.system(size: 47, weight: .bold)).tracking(-0.5)
-                        .monospacedDigit().foregroundStyle(.voltaTextPrimary)
-                        .lineLimit(1).minimumScaleFactor(0.6)
-                    Text("kWh").font(.system(size: 15, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                    if let added = summary.energyAddedKwh {
+                        RollingNumber(value: added) { "+" + VoltaFormat.number($0) }
+                            .font(.system(size: 47, weight: .bold))
+                            .foregroundStyle(.voltaTextPrimary)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                    } else {
+                        Text("—").font(.system(size: 47, weight: .bold)).foregroundStyle(HistoryTheme.secondary)
+                    }
+                    Text("kWh added").font(.system(size: 15, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
                 .accessibilityElement(children: .combine)
                 Spacer(minLength: 0)
@@ -301,11 +308,11 @@ struct ChargingDetailView: View {
     @ViewBuilder private var costBlock: some View {
         if let cost = costEstimate {
             VStack(alignment: .trailing, spacing: 1.7) {
-                Text(VoltaFormat.money(cost.amount, currency: cost.currency))
-                    .font(.system(size: 27, weight: .bold)).monospacedDigit().foregroundStyle(.voltaTextPrimary)
+                RollingNumber(value: cost.amount) { VoltaFormat.money($0, currency: cost.currency) }
+                    .font(.system(size: 27, weight: .bold)).foregroundStyle(.voltaTextPrimary)
                     .accessibilityIdentifier("charge.cost")
                 HStack(spacing: 5) {
-                    if cost.isEstimated { Text("Est.").foregroundStyle(HistoryTheme.amber) }
+                    if cost.isEstimated { Text("Estimated").foregroundStyle(HistoryTheme.amber) }
                     if let rate = cost.pricePerKwh {
                         Text(Self.rateText(rate, currency: cost.currency) + "/kWh").foregroundStyle(HistoryTheme.secondary)
                     }
@@ -375,7 +382,7 @@ struct ChargingDetailView: View {
     @ViewBuilder private var energySection: some View {
         if let flow = ChargeEnergyFlow.resolve(summary) {
             VStack(alignment: .leading, spacing: 0) {
-                DetailSectionHeader(title: Text("ENERGY FLOW")) {
+                DetailSectionHeader(title: Text("Energy flow")) {
                     if flow.isEstimated {
                         Text("Estimated")
                             .scaledFont(11, weight: .medium).foregroundStyle(HistoryTheme.amber)
@@ -430,7 +437,7 @@ struct ChargingDetailView: View {
         let average: String = averagePowerKw.map { kw($0) + " kW" } ?? "—"
         var efficiency = "—"
         if let flow, let value = flow.efficiency {
-            efficiency = VoltaFormat.number(value * 100, digits: 0) + "%" + (flow.isEstimated ? " est." : "")
+            efficiency = VoltaFormat.number(value * 100, digits: 0) + "%" + (flow.isEstimated ? " (estimated)" : "")
         }
         var rows: [(String, String)] = [
             ("Duration", VoltaFormat.duration(summary.durationMin)),
@@ -441,7 +448,7 @@ struct ChargingDetailView: View {
         ]
         if let perDistance { rows.append(("Cost per distance", perDistance)) }
         return VStack(alignment: .leading, spacing: 0) {
-            DetailSectionHeader(title: Text("DETAILS")) { EmptyView() }
+            DetailSectionHeader(title: Text("Details")) { EmptyView() }
                 .padding(.bottom, 8)
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 HStack {
@@ -498,9 +505,11 @@ struct ChargingDetailView: View {
                 }
             }
             if let error = loader.error {
-                HistoryChartPlaceholder(message: error) { Task { await load() } }
+                HistoryChartPlaceholder(height: 230, message: "Couldn't load the curve. \(error)") { Task { await load() } }
             } else if loader.detail == nil {
-                HistoryChartPlaceholder()
+                RoundedRectangle(cornerRadius: 12).fill(HistoryTheme.track.opacity(0.5))
+                    .frame(height: 230)
+                    .voltaSkeleton(true)
             } else if power.points.count < 2 {
                 HistoryChartPlaceholder(message: "Power wasn't recorded for this session.")
             } else {
@@ -520,8 +529,8 @@ struct ChargingDetailView: View {
 
     /// "Charge curve · kW · %": the section name, then each unit in its series color.
     private func unitTitle(_ title: String, _ parts: [(unit: String, color: Color)]) -> Text {
-        parts.reduce(Text(title.uppercased())) { text, part in
-            Text("\(text)\(Text("  ·  ").foregroundStyle(HistoryTheme.tertiary))\(Text(part.unit).foregroundStyle(part.color).tracking(0))")
+        parts.reduce(Text(title)) { text, part in
+            Text("\(text)\(Text("  ·  ").foregroundStyle(HistoryTheme.tertiary))\(Text(part.unit).foregroundStyle(part.color))")
         }
     }
 
@@ -535,7 +544,7 @@ struct ChargingDetailView: View {
     private func legend(_ title: String, color: Color) -> some View {
         HStack(spacing: 5) {
             Capsule().fill(color).frame(width: 12, height: 2)
-            Text(title).scaledFont(11, weight: .semibold).tracking(0.8).foregroundStyle(HistoryTheme.tertiary)
+            Text(title).font(.voltaLabel).foregroundStyle(HistoryTheme.secondary)
         }
     }
 
@@ -564,7 +573,7 @@ struct ChargingDetailView: View {
                 DetailSectionHeader(title: title) {
                     if let peak {
                         Text("Peak \(VoltaFormat.number(peak, digits: 0))°")
-                            .font(.system(size: 14, weight: .semibold)).tracking(2.4).textCase(.uppercase).monospacedDigit()
+                            .font(.system(size: 15, weight: .semibold)).monospacedDigit()
                             .foregroundStyle(HistoryTheme.amber)
                     }
                 }
@@ -573,8 +582,8 @@ struct ChargingDetailView: View {
                     .accessibilityIdentifier("charge.battery-temperature")
                 if minimum.count >= 2 && maximum.count >= 2 {
                     HStack(spacing: 12) {
-                        legend("WARMEST MODULE", color: HistoryTheme.amber)
-                        legend("COOLEST", color: HistoryTheme.amber.opacity(0.45))
+                        legend("Warmest module", color: HistoryTheme.amber)
+                        legend("Coolest module", color: HistoryTheme.amber.opacity(0.45))
                     }
                 }
             }
@@ -593,9 +602,10 @@ struct ChargingDetailView: View {
         let inside = clippedTelemetry("InsideTemp") { $0.insideTempC.map { units.temperatureValue(celsius: $0) } }
         let outside = clippedTelemetry("OutsideTemp") { $0.outsideTempC.map { units.temperatureValue(celsius: $0) } }
         if inside.points.count >= 2 || outside.points.count >= 2 {
-            traceSection("Cabin & outside", unit: units.temperatureUnit, digits: 0, minPad: 2,
-                         traces: [.init(label: "Inside", color: HistoryTheme.amber, points: ChargeCurve.reduced(inside.points)),
-                                  .init(label: "Outside", color: HistoryTheme.blue, points: ChargeCurve.reduced(outside.points))]
+            // Ink and grey: amber means a warning and blue the battery, not "warm" and "cool".
+            traceSection("Cabin and outside", unit: units.temperatureUnit, digits: 0, minPad: 2,
+                         traces: [.init(label: "Inside", color: Color.voltaTextPrimary, points: ChargeCurve.reduced(inside.points)),
+                                  .init(label: "Outside", color: HistoryTheme.secondary, points: ChargeCurve.reduced(outside.points))]
                              .filter { $0.points.count >= 2 },
                          telemetry: [inside.series, outside.series], legend: true)
         }
@@ -614,7 +624,7 @@ struct ChargingDetailView: View {
             DetailSectionHeader(title: unitTitle(title, [(unit, traces.first?.color ?? HistoryTheme.secondary)])) {
                 if showsLegend {
                     HStack(spacing: 12) {
-                        ForEach(traces) { legend($0.label.uppercased(), color: $0.color) }
+                        ForEach(traces) { legend($0.label, color: $0.color) }
                     }
                 }
             }
@@ -638,7 +648,8 @@ struct ChargingDetailView: View {
         if let first = available.first {
             let shown = available.contains(electrical) ? electrical : first
             let curve = shown == .voltage ? voltage : current
-            let tint = shown == .voltage ? HistoryTheme.blue : HistoryTheme.amber
+            // Ink: voltage and current are readings, not a state or a warning.
+            let tint = Color.voltaTextPrimary
             VStack(alignment: .leading, spacing: 14) {
                 DetailSectionHeader(title: unitTitle("Charger", [(shown == .voltage ? "V" : "A", tint)])) { EmptyView() }
                 if available.count > 1 {
@@ -672,8 +683,7 @@ struct ChargingDetailView: View {
 
 // MARK: - Pieces
 
-/// Tracked section title with an optional trailing accessory. Callers pass the
-/// name uppercased so units like "kW" keep their case.
+/// Section title in sentence case, with an optional trailing accessory.
 private struct DetailSectionHeader<Trailing: View>: View {
     var title: Text
     @ViewBuilder var trailing: Trailing
@@ -681,8 +691,8 @@ private struct DetailSectionHeader<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .center) {
             title
-                .scaledFont(11, weight: .semibold).tracking(0.8)
-                .foregroundStyle(Color.voltaInk.opacity(0.88))
+                .font(.system(.subheadline, weight: .semibold))
+                .foregroundStyle(Color.voltaTextPrimary)
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
@@ -695,28 +705,36 @@ private struct DetailSectionHeader<Trailing: View>: View {
 /// its percentage, then the loss as a grey remainder.
 private struct ChargeEnergyBar: View {
     var flow: ChargeEnergyFlow
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let share = min(1, max(0, flow.efficiency ?? 1))
+        let actual = min(1, max(0, flow.efficiency ?? 1))
+        // Glides from the start to its value as it appears.
+        let share = settled ? actual : 0
         GeometryReader { geo in
-            let gap: CGFloat = share < 1 ? 6 : 0
+            let gap: CGFloat = actual < 1 ? 6 : 0
             let filled = max(44, (geo.size.width - gap) * share)
             HStack(spacing: gap) {
                 RoundedRectangle(cornerRadius: 4, style: .continuous).fill(HistoryTheme.green)
                     .frame(width: filled)
                     .overlay(alignment: .leading) {
-                        Text("\(Int((share * 100).rounded()))%")
+                        Text("\(Int((actual * 100).rounded()))%")
                             .font(.system(size: 11, weight: .semibold)).monospacedDigit()
                             // Dark ink on the bright dark-mode green, white on the deep light-mode green (5.4:1).
                             .foregroundStyle(Color(light: .white, dark: .black.opacity(0.8)))
                             .padding(.leading, 8)
                     }
-                if share < 1 {
+                if actual < 1 {
                     RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.voltaInk.opacity(0.2))
                 }
             }
         }
         .frame(height: 16)
+        .onAppear {
+            guard !settled else { return }
+            if reduceMotion { settled = true } else { withAnimation(VoltaMotion.settle.delay(0.15)) { settled = true } }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(VoltaFormat.energy(flow.gridKwh)) from the grid, \(VoltaFormat.energy(flow.addedKwh)) added to the battery")
     }

@@ -11,6 +11,14 @@ struct ChargingInsightsView: View {
         var days: Int? { switch self { case .quarter: 90; case .year: 365; case .all: nil } }
         var bucket: Calendar.Component { self == .quarter ? .weekOfYear : .month }
         var bucketNoun: String { self == .quarter ? "week" : "month" }
+        /// The segment's words, spelled out.
+        var label: String {
+            switch self {
+            case .quarter: "90 days"
+            case .year: "12 months"
+            case .all: "All time"
+            }
+        }
         var title: String {
             switch self {
             case .quarter: "Last 90 days"
@@ -29,12 +37,13 @@ struct ChargingInsightsView: View {
         var isComplete: Bool
     }
 
-    /// Series colours: green stays for energy going in, not a generic series.
-    static let homeColor = Color.voltaBlue
+    /// Share colours. Energy: green (energy going in) for the first side
+    /// against grey. Money isn't energy, so cost shares are ink against grey.
+    /// Amber (a warning) and blue (the battery at rest) aren't series colours.
+    static let energyColors = (Color.voltaGreen, otherColor)
+    static let costColors = (Color.voltaTextPrimary, otherColor)
     /// Pale grey on the dark card, mid grey on the light one (3.8:1).
-    static let awayColor = Color(light: 0x7D838C, dark: 0xC9CED6)
-    static let acColor = Color.voltaGreen
-    static let dcColor = Color.voltaAmber
+    static let otherColor = Color(light: 0x7D838C, dark: 0xC9CED6)
 
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
@@ -54,8 +63,17 @@ struct ChargingInsightsView: View {
 
     var body: some View {
         ScreenKit.Page(scroll: "charging-insights", splits: hasCharges) {
-            ScreenKit.Segmented(options: Period.allCases.map { ($0, $0.rawValue) }, selection: $model.period)
-            LoadableContent(state: shownState, retry: load) { snapshot in
+            ScreenKit.Segmented(options: Period.allCases.map { ($0, $0.label) }, selection: $model.period)
+                .voltaFeedback(.selection, trigger: model.period)
+            switch shownState {
+            case .loading:
+                // The cards' own shape while the period loads.
+                shares(Self.placeholder(period))
+                    .voltaSkeleton(true)
+            case .failed(let message):
+                ErrorState(title: "Couldn't load charging insights", message: message, retry: load)
+                    .padding(.top, 40)
+            case .loaded(let snapshot):
                 if !snapshot.isComplete {
                     InlineBanner(systemImage: "exclamationmark.triangle",
                                  message: "Partial history: not every session could be loaded, so these figures cover only what did.",
@@ -68,13 +86,13 @@ struct ChargingInsightsView: View {
                         .padding(.top, 40)
                 } else {
                     shares(snapshot)
-                    ChargeCurveShortcuts(charges: snapshot.charges)
+                    ChargeCurveShortcuts(charges: snapshot.charges).voltaFocusIn(2)
                 }
             }
         } secondary: {
             if hasCharges, let snapshot = shownState.value { costOverTime(snapshot) }
         }
-        .screenKitPage("Charging Insights", screen: "charging-insights")
+        .screenKitPage("Charging insights", screen: "charging-insights")
         .task(id: TaskKey(vehicleID: vehicleID, period: period)) { await load() }
     }
 
@@ -87,10 +105,10 @@ struct ChargingInsightsView: View {
         let location = ChargingInsights.homeAway(s.charges)
         let current = ChargingInsights.acDc(s.charges)
         ShareCard(title: "Home and away", period: s.period.title, split: location,
-                  colors: (Self.homeColor, Self.awayColor),
                   footnote: "Home is a charging place your TeslaMate geofence names exactly Home, whatever the charger type.")
-        ShareCard(title: "AC and DC fast", period: s.period.title, split: current,
-                  colors: (Self.acColor, Self.dcColor), footnote: nil)
+            .voltaFocusIn(0)
+        ShareCard(title: "AC and DC fast", period: s.period.title, split: current, footnote: nil)
+            .voltaFocusIn(1)
     }
 
     // MARK: Cost per distance
@@ -112,7 +130,8 @@ struct ChargingInsightsView: View {
                     Chart(series.points) { point in
                         BarMark(x: .value("Period", point.start, unit: period.bucket),
                                 y: .value("Cost", per100(point.costPerKm)), width: .ratio(0.7))
-                            .foregroundStyle(ScreenKit.amber.gradient)
+                            // Ink: a cost is neither energy nor a warning.
+                            .foregroundStyle(Color.voltaTextPrimary.opacity(0.85))
                             .clipShape(.rect(cornerRadius: 3))
                             .accessibilityLabel(bucketTitle(point.start, period: period))
                             .accessibilityValue("\(VoltaFormat.money(per100(point.costPerKm), currency: currency)) per \(per), \(units.formatDistance(point.distanceKm, fractionDigits: 0)) driven, \(point.sessions) session\(point.sessions == 1 ? "" : "s")")
@@ -219,6 +238,16 @@ struct ChargingInsightsView: View {
     }
 
     private func load() async { await model.load(source: dataSource, vehicleID: vehicleID) }
+
+    /// Synthetic sessions that give the loading skeleton the cards' shape.
+    static func placeholder(_ period: Period) -> Snapshot {
+        let charges = (0..<4).map { i in
+            ChargeSummary(id: -200 - i, start: .now, end: nil, address: nil, placeName: i < 2 ? "Home" : nil,
+                          energyAddedKwh: 30, energyUsedKwh: nil, startBatteryLevel: nil, endBatteryLevel: nil,
+                          durationMin: 60, maxPowerKw: nil, fastCharger: i == 3, cost: 6, currency: "USD", outsideTempAvgC: nil)
+        }
+        return Snapshot(period: period, charges: charges, drives: [], isComplete: true)
+    }
 }
 
 /// The selected period and what loaded for it. Every `load` (a period change
@@ -243,7 +272,7 @@ final class ChargingInsightsModel {
                                                                 now: now, calendar: calendar)
             // Cancelled or superseded: a source that ignores cancellation still must not land here.
             guard !Task.isCancelled, mine == generation else { return }
-            withAnimation(.smooth) { state = .loaded(snapshot) }
+            state = .loaded(snapshot)
         } catch is CancellationError {
         } catch {
             // Cancelled or superseded: a source that ignores cancellation still must not land here.
@@ -259,14 +288,13 @@ private struct ShareCard: View {
     var title: String
     var period: String
     var split: ChargingInsights.Split
-    var colors: (Color, Color)
     var footnote: String?
 
     var body: some View {
         Card(padding: 20) {
             VStack(alignment: .leading, spacing: 16) {
                 SectionLabel(title, trailing: "\(split.sessions) session\(split.sessions == 1 ? "" : "s")")
-                share(kind: "Energy added", fraction: split.firstEnergyFraction,
+                share(kind: "Energy added", fraction: split.firstEnergyFraction, colors: ChargingInsightsView.energyColors,
                       first: VoltaFormat.energy(split.first.energySessions > 0 ? split.first.energyKwh : nil, fractionDigits: 0),
                       second: VoltaFormat.energy(split.second.energySessions > 0 ? split.second.energyKwh : nil, fractionDigits: 0),
                       firstDetail: sessions(split.first.energySessions),
@@ -277,7 +305,7 @@ private struct ShareCard: View {
                 HairlineDivider()
                 let costNote = ChargingInsights.costNote(split)
                 if let currency = split.currency {
-                    share(kind: "Cost", fraction: split.firstCostFraction,
+                    share(kind: "Cost", fraction: split.firstCostFraction, colors: ChargingInsightsView.costColors,
                           first: VoltaFormat.money(split.first.cost, currency: currency),
                           second: VoltaFormat.money(split.second.cost, currency: currency),
                           firstDetail: priced(split.first), secondDetail: priced(split.second))
@@ -310,7 +338,7 @@ private struct ShareCard: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func share(kind: String, fraction: Double?, first: String, second: String,
+    private func share(kind: String, fraction: Double?, colors: (Color, Color), first: String, second: String,
                        firstDetail: String, secondDetail: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(kind).voltaLabelStyle()
@@ -352,10 +380,13 @@ private struct ShareCard: View {
 private struct ShareBar: View {
     var fraction: Double?
     var colors: (Color, Color)
+    /// The first side grows from the start to its share as the bar appears.
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { proxy in
-            let f = min(1, max(0, fraction ?? 0))
+            let f = min(1, max(0, fraction ?? 0)) * (settled ? 1 : 0)
             HStack(spacing: f > 0 && f < 1 ? 3 : 0) {
                 if fraction != nil {
                     if f > 0 { Capsule().fill(colors.0).frame(width: max(6, (proxy.size.width - 3) * f)) }
@@ -366,6 +397,12 @@ private struct ShareBar: View {
             }
         }
         .frame(height: 10)
+        .onAppear {
+            guard !settled else { return }
+            if reduceMotion { settled = true } else { withAnimation(VoltaMotion.settle.delay(0.1)) { settled = true } }
+        }
+        // A new period's share glides from the old one.
+        .animation(VoltaMotion.animation(VoltaMotion.settle, reduceMotion: reduceMotion), value: fraction)
     }
 }
 
