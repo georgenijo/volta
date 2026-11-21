@@ -30,15 +30,15 @@ struct ElectricityRateSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     Text("Used to estimate costs for charging sessions your server didn't price. Prices recorded on the server always win.")
-                        .font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
+                        .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("screen.electricity-rate")
                     field("Home (\(symbol)/kWh)", text: $homeText, prompt: "0.15", input: home, field: .home,
                           caption: "Home and other AC charging.", identifier: "field.rate.home")
-                    field("Supercharger / DC fast (\(symbol)/kWh)", text: $dcText, prompt: "Same as home", input: dc, field: .dc,
+                    field("Supercharger and DC fast (\(symbol)/kWh)", text: $dcText, prompt: "Same as home", input: dc, field: .dc,
                           caption: "Leave blank to use your home rate.", identifier: "field.rate.dc")
                     Text("Enter 0 if charging is free. Currency follows Settings › General.")
-                        .font(.system(size: 12)).foregroundStyle(ScreenKit.tertiary)
+                        .font(.caption).foregroundStyle(ScreenKit.tertiary)
                 }
                 .padding(.horizontal, ScreenKit.horizontalPadding)
                 .padding(.top, 12)
@@ -73,18 +73,18 @@ struct ElectricityRateSheet: View {
                        field: Field, caption: String, identifier: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(ScreenKit.secondary)
             HStack(spacing: 6) {
-                Text(symbol).font(.system(size: 20, weight: .semibold)).foregroundStyle(ScreenKit.secondary)
+                Text(symbol).font(.title3.weight(.semibold)).foregroundStyle(ScreenKit.secondary)
                 TextField(text: text, prompt: Text(prompt).foregroundStyle(placeholder)) { Text(prompt) }
                     .keyboardType(.decimalPad)
-                    .font(.system(size: 22, weight: .semibold)).monospacedDigit()
+                    .font(.title2.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(.voltaTextPrimary)
                     .focused($focus, equals: field)
                     .accessibilityLabel(title)
                     .accessibilityIdentifier(identifier)
-                Text("/kWh").font(.system(size: 15, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                Text("/kWh").font(.subheadline.weight(.medium)).foregroundStyle(ScreenKit.secondary)
             }
             .padding(.horizontal, 16).frame(height: 56)
             .background(ScreenKit.card, in: .rect(cornerRadius: 14))
@@ -92,7 +92,8 @@ struct ElectricityRateSheet: View {
             .contentShape(.rect)
             .onTapGesture { focus = field }
             Text(input == .invalid ? "Enter a price from 0 to \(VoltaFormat.money(ElectricityRates.maximum, currency: rates.currency)) per kWh." : caption)
-                .font(.system(size: 12)).foregroundStyle(input == .invalid ? ScreenKit.red : ScreenKit.tertiary)
+                .font(.caption).foregroundStyle(input == .invalid ? ScreenKit.red : ScreenKit.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

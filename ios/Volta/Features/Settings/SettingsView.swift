@@ -18,7 +18,7 @@ struct SettingsView: View {
                     .accessibilityIdentifier("button.account")
 
                 Text("Volta reads your car's history from TeslaMate on your own server. Nothing is stored in anyone else's cloud.")
-                    .font(.system(size: 14))
+                    .font(.subheadline)
                     .foregroundStyle(ScreenKit.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, ScreenKit.horizontalPadding)
@@ -26,16 +26,18 @@ struct SettingsView: View {
                     .accessibilityIdentifier("screen.settings")
 
                 HairlineDivider()
-                row("car.fill", "Vehicle", vehicle.map { [$0.name, $0.model].compactMap { $0 }.joined(separator: " · ") } ?? "Manage your Tesla",
-                    trailing: vehicle == nil ? nil : "Active", trailingTint: ScreenKit.green, to: .vehicleSettings)
-                row("bolt.fill", "Charging", "Electricity rate & costs",
-                    trailing: model.settings.electricityRate.map { VoltaFormat.money($0, currency: model.units.currency) }, to: .chargingSettings)
-                row("slider.horizontal.3", "General", "Units, currency & language",
-                    trailing: model.units.distance == .miles ? "Miles" : "Km", to: .generalSettings)
-                row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work & saved places", to: .places)
-                row("lock.fill", "Security", "App Lock & privacy", trailing: model.appLockEnabled ? "On" : nil, trailingTint: ScreenKit.green, to: .security)
-                row("arrow.up.arrow.down", "Data Management", "Export JSON, CSV & GPX", to: .dataManagement)
-                row("questionmark.bubble.fill", "Support", "About Volta & help", to: .support)
+                Group {
+                    row("car", "Vehicle", vehicle.map { [$0.name, $0.model].compactMap { $0 }.joined(separator: " · ") } ?? "Manage your Tesla",
+                        to: .vehicleSettings)
+                    row("bolt", "Charging", "Electricity rate and costs",
+                        trailing: model.settings.electricityRate.map { VoltaFormat.money($0, currency: model.units.currency) + "/kWh" }, to: .chargingSettings)
+                    row("slider.horizontal.3", "General", "Units, currency and language",
+                        trailing: model.units.distance == .miles ? "Miles" : "Kilometres", to: .generalSettings)
+                    row("mappin.and.ellipse", "Places", placeCount.map { $0 == 0 ? "No saved places" : "\($0) saved place\($0 == 1 ? "" : "s")" } ?? "Home, work and saved places", to: .places)
+                    row("lock", "Security", "App lock and privacy", trailing: model.appLockEnabled ? "On" : "Off", to: .security)
+                    row("arrow.up.arrow.down", "Data management", "Export JSON, CSV and GPX", to: .dataManagement)
+                    row("questionmark.bubble", "Support", "About Volta and help", to: .support)
+                }
 
                 footer
             }
@@ -65,35 +67,33 @@ struct SettingsView: View {
             ZStack {
                 Circle().fill(Color.voltaCard)
                 Circle().strokeBorder(Color.voltaHairline, lineWidth: 1)
-                Image(systemName: "iphone").font(.system(size: 22, weight: .medium)).foregroundStyle(Color.voltaInk.opacity(0.85))
+                Image(systemName: "iphone").font(.title2.weight(.medium)).foregroundStyle(Color.voltaInk.opacity(0.85))
             }
             .frame(width: 58, height: 58)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Account").font(.system(size: 22, weight: .bold)).foregroundStyle(.voltaTextPrimary)
-                Text(serverHost).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary).lineLimit(1).truncationMode(.middle)
+                Text("Account").font(.title2.weight(.bold)).foregroundStyle(.voltaTextPrimary)
+                Text(serverHost).font(.subheadline).foregroundStyle(ScreenKit.secondary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 Image(systemName: model.isDemoMode ? "sparkles" : "checkmark.seal.fill")
                 Text(model.isDemoMode ? "Demo" : "Paired")
-                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold))
             }
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(model.isDemoMode ? Color.voltaBlueText : pillTint)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.voltaBlueText)
             .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(pillTint.opacity(0.12), in: .rect(cornerRadius: 12))
+            .background(ScreenKit.blue.opacity(0.12), in: .rect(cornerRadius: 12))
         }
         .padding(.horizontal, ScreenKit.horizontalPadding)
         .padding(.top, 12)
         .contentShape(Rectangle())
     }
 
-    private var pillTint: Color { model.isDemoMode ? ScreenKit.blue : ScreenKit.green }
-
     private func row(_ symbol: String, _ title: String, _ subtitle: String,
-                     trailing: String? = nil, trailingTint: Color = .voltaTextPrimary, to route: MoreRoute) -> some View {
+                     trailing: String? = nil, to route: MoreRoute) -> some View {
         NavigationLink(value: route) {
-            ScreenKit.CapsRow(symbol: symbol, title: title, subtitle: subtitle, trailing: trailing, trailingTint: trailingTint)
+            ScreenKit.CapsRow(symbol: symbol, title: title, subtitle: subtitle, trailing: trailing)
         }
         .buttonStyle(.plain)
         // `row.settings.<title>` for UI tests, as in `row.settings.data-management`.
@@ -107,13 +107,13 @@ struct SettingsView: View {
                 .accessibilityLabel("Volta")
                 .padding(.bottom, 4)
             Text("Your data stays on your server")
-                .font(.system(size: 11, weight: .semibold)).tracking(2).textCase(.uppercase)
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(ScreenKit.secondary)
-            Text("v\(AppInfo.version) (\(AppInfo.build))")
-                .font(.system(size: 13, weight: .medium, design: .monospaced)).tracking(1.5)
+            Text("Version \(AppInfo.version) (\(AppInfo.build))")
+                .font(.footnote).monospacedDigit()
                 .foregroundStyle(ScreenKit.secondary)
             Text("Volta is not affiliated with, endorsed by, or sponsored by Tesla, Inc. Tesla is a registered trademark of Tesla, Inc.")
-                .font(.system(size: 12)).foregroundStyle(ScreenKit.tertiary)
+                .font(.caption).foregroundStyle(ScreenKit.tertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
         }

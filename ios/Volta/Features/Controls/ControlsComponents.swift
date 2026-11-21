@@ -73,12 +73,13 @@ struct ChargeLimitStepper: View {
 
 // MARK: - Command log
 
-/// "SENT THIS SESSION": commands sent from this device since launch, newest
+/// "Sent this session": commands sent from this device since launch, newest
 /// first, with their outcome in words that match the evidence.
 struct CommandLogList: View {
     var log: VehicleCommandLog
     var key: String
     var limit = 8
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let entries = Array(log.entries(for: key).prefix(limit))
@@ -98,8 +99,10 @@ struct CommandLogList: View {
                     VStack(spacing: 0) {
                         ForEach(entries) { entry in
                             row(entry, now: context.date)
+                                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                         }
                     }
+                    .animation(VoltaMotion.animation(VoltaMotion.arrive, reduceMotion: reduceMotion), value: entries.map(\.id))
                 }
             }
         }
@@ -132,22 +135,36 @@ struct CommandLogList: View {
         .accessibilityLabel("\(entry.label), \(entry.outcome.text), \(time)")
     }
 
+    /// The outcome's symbol. It stays in place while the outcome changes, so
+    /// it can swap (replace), bounce when the command is accepted or
+    /// confirmed, and wiggle when it fails.
     @ViewBuilder
     private func icon(_ outcome: VehicleCommandLog.Outcome) -> some View {
-        Group {
-            switch outcome {
-            case .sending: ProgressView().controlSize(.mini).tint(Color.voltaTextSecondary)
-            case .simulated: Image(systemName: "theatermasks")
-            case .accepted: Image(systemName: "checkmark")
-            case .confirmed: Image(systemName: "checkmark.circle")
-            case .failed: Image(systemName: "xmark")
-            case .unknown: Image(systemName: "questionmark")
-            }
+        ZStack {
+            if outcome == .sending { ProgressView().controlSize(.mini).tint(Color.voltaTextSecondary) }
+            Image(systemName: Self.symbol(outcome))
+                .opacity(outcome == .sending ? 0 : 1)
+                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+                .symbolEffect(.bounce, options: .nonRepeating,
+                              isActive: !reduceMotion && [.accepted, .confirmed, .simulated].contains(outcome))
+                .symbolEffect(.wiggle, options: .nonRepeating, isActive: !reduceMotion && outcome == .failed)
         }
+        .animation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion), value: outcome)
         .font(.footnote.weight(.semibold))
         .foregroundStyle(Self.color(outcome))
         .frame(width: 18)
         .accessibilityHidden(true)
+    }
+
+    static func symbol(_ outcome: VehicleCommandLog.Outcome) -> String {
+        switch outcome {
+        case .sending: "clock"
+        case .simulated: "theatermasks"
+        case .accepted: "checkmark"
+        case .confirmed: "checkmark.circle"
+        case .failed: "xmark"
+        case .unknown: "questionmark"
+        }
     }
 
     /// Outcomes are neutral; only a failure is red and an unknown outcome amber.
@@ -202,16 +219,34 @@ struct VehicleCommandActivityBanner: View {
         let isRetry: Bool
     }
     @State private var confirmation: Confirmation?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let current = coordinator.activity(dataSource: dataSource, vehicleID: vehicleID)
         Group {
-            if let activity = coordinator.activity(dataSource: dataSource, vehicleID: vehicleID) {
+            if let activity = current {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     HStack(spacing: VoltaSpacing.md) {
-                        if activity.phase == .pending { ProgressView().tint(Color.voltaTextPrimary) }
-                        else { Image(systemName: symbol(activity.phase)).foregroundStyle(color(activity.phase)) }
+                        // One symbol for the whole life of the command: a
+                        // spinner over it while sending, then it swaps to the
+                        // outcome and bounces (accepted) or wiggles (failed).
+                        ZStack {
+                            if activity.phase == .pending { ProgressView().tint(Color.voltaTextPrimary) }
+                            Image(systemName: symbol(activity.phase))
+                                .foregroundStyle(color(activity.phase))
+                                .opacity(activity.phase == .pending ? 0 : 1)
+                                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+                                .symbolEffect(.bounce, options: .nonRepeating,
+                                              isActive: !reduceMotion && [.success, .simulated].contains(activity.phase))
+                                .symbolEffect(.wiggle, options: .nonRepeating,
+                                              isActive: !reduceMotion && activity.phase == .failure)
+                        }
+                        .font(.body.weight(.semibold))
+                        .frame(width: 24)
+                        .accessibilityHidden(true)
                         Text(activity.message).font(.subheadline).foregroundStyle(Color.voltaTextPrimary)
                             .fixedSize(horizontal: false, vertical: true)
+                            .contentTransition(.opacity)
                         Spacer(minLength: 0)
                         action(activity, now: context.date)
                     }
@@ -221,8 +256,10 @@ struct VehicleCommandActivityBanner: View {
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("banner.commandActivity")
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(VoltaMotion.animation(VoltaMotion.arrive, reduceMotion: reduceMotion), value: current)
         .alert(item: $confirmation) { item in
             let activity = item.activity
             if item.isRetry {
@@ -272,7 +309,8 @@ struct VehicleCommandActivityBanner: View {
     private func symbol(_ phase: VehicleCommandCoordinator.Phase) -> String {
         switch phase { case .success, .simulated: "checkmark.circle.fill"; case .failure: "xmark.circle.fill"; case .unknown: "questionmark.circle.fill"; case .pending: "clock" }
     }
+    /// Done reads in ink, failed in red, unknown in amber.
     private func color(_ phase: VehicleCommandCoordinator.Phase) -> Color {
-        switch phase { case .success, .simulated: .voltaTextSecondary; case .failure: .voltaRed; case .unknown: .voltaAmber; case .pending: .voltaTextSecondary }
+        switch phase { case .success, .simulated: .voltaTextPrimary; case .failure: .voltaRed; case .unknown: .voltaAmber; case .pending: .voltaTextSecondary }
     }
 }

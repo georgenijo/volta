@@ -16,6 +16,15 @@ enum TireHistoryMath {
             case .all: nil
             }
         }
+        /// The picker's label, spelled out.
+        var label: String {
+            switch self {
+            case .month: "30 days"
+            case .quarter: "90 days"
+            case .year: "1 year"
+            case .all: "All"
+            }
+        }
         var title: String {
             switch self {
             case .month: "last 30 days"

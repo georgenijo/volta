@@ -31,8 +31,8 @@ struct SpeedEfficiencyCard: View {
                             .font(.caption).foregroundStyle(ScreenKit.tertiary)
                             .frame(maxWidth: .infinity)
                         HStack(spacing: 14) {
-                            legend(ScreenKit.blue, "\(SpeedEfficiency.sparseBelow)+ drives")
-                            legend(ScreenKit.blue.opacity(0.35), "Sparse, under \(SpeedEfficiency.sparseBelow)")
+                            legend(Self.bar, "\(SpeedEfficiency.sparseBelow) or more drives")
+                            legend(Self.bar.opacity(0.35), "Sparse, under \(SpeedEfficiency.sparseBelow)")
                         }
                         Text(caption(used: used))
                             .font(.footnote).foregroundStyle(ScreenKit.secondary)
@@ -53,6 +53,9 @@ struct SpeedEfficiencyCard: View {
         }
     }
 
+    /// Efficiency readings take the efficiency green, as on the Dashboard.
+    static let bar = Color.voltaGreen
+
     private var speedUnit: String { units.distance == .miles ? "mph" : "km/h" }
 
     private func chart(_ bins: [SpeedEfficiency.Bin]) -> some View {
@@ -64,11 +67,11 @@ struct SpeedEfficiencyCard: View {
                 // An x interval with one y draws a thin band, so each bin is a rectangle from zero.
                 RectangleMark(xStart: .value("From", bin.lower + bin.width * 0.08), xEnd: .value("To", bin.upper - bin.width * 0.08),
                               yStart: .value("Zero", 0.0), yEnd: .value("Efficiency", value))
-                    .foregroundStyle(bin.isSparse ? AnyShapeStyle(ScreenKit.blue.opacity(0.35)) : AnyShapeStyle(ScreenKit.blue.gradient))
+                    .foregroundStyle(bin.isSparse ? AnyShapeStyle(Self.bar.opacity(0.35)) : AnyShapeStyle(Self.bar))
                     .clipShape(.rect(cornerRadius: 4))
                     .annotation(position: .top, spacing: 3) {
                         Text("\(bin.drives)")
-                            .font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                            .font(.caption2.weight(.semibold)).monospacedDigit()
                             .foregroundStyle(bin.isSparse ? ScreenKit.tertiary : ScreenKit.secondary)
                     }
                     .accessibilityLabel(label(bin, withUnit: true))
@@ -82,13 +85,13 @@ struct SpeedEfficiencyCard: View {
             let edges = bins.map(\.lower) + [bins.last?.upper ?? 0]
             AxisMarks(values: edges) { value in
                 AxisValueLabel(anchor: value.index == edges.count - 1 ? .topTrailing : .top)
-                    .foregroundStyle(ScreenKit.secondary).font(.system(size: 10))
+                    .foregroundStyle(ScreenKit.secondary).font(.caption2)
             }
         }
         .chartYAxis {
             AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
                 AxisGridLine().foregroundStyle(ScreenKit.hairline)
-                AxisValueLabel().foregroundStyle(ScreenKit.secondary).font(.system(size: 10))
+                AxisValueLabel().foregroundStyle(ScreenKit.secondary).font(.caption2)
             }
         }
         .frame(height: 190)

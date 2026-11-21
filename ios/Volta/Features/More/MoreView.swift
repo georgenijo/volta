@@ -89,30 +89,33 @@ struct MoreView: View {
 
     private struct Section: Identifiable {
         var title: String
-        var dot: Color
         /// Identifier on the section title; the first one marks the screen for UI tests.
         var identifier: String?
         var items: [Item]
         var id: String { title }
     }
 
+    /// Every row opens a page, so every icon takes the link blue; Settings,
+    /// which is app chrome rather than an area, stays neutral.
+    private static let link = Color.voltaBlue
+
     private let sections: [Section] = [
-        Section(title: "Areas", dot: ScreenKit.blue, identifier: "screen.more", items: [
-            Item(symbol: "chart.xyaxis.line", tint: ScreenKit.blue, title: "Stats", slug: "stats", route: .stats),
-            Item(symbol: "bolt.batteryblock", tint: ScreenKit.blue, title: "Charging Insights", slug: "charging-insights", route: .chargingInsights),
+        Section(title: "Areas", identifier: "screen.more", items: [
+            Item(symbol: "chart.xyaxis.line", tint: link, title: "Stats", slug: "stats", route: .stats),
+            Item(symbol: "bolt.batteryblock", tint: link, title: "Charging insights", slug: "charging-insights", route: .chargingInsights),
         ]),
-        Section(title: "Vehicle", dot: ScreenKit.mint, items: [
-            Item(symbol: "battery.100percent.bolt", tint: ScreenKit.mint, title: "Battery Health", slug: "battery-health", route: .batteryHealth),
-            Item(symbol: "thermometer.medium", tint: ScreenKit.mint, title: "Battery Climate", slug: "battery-climate", route: .batteryClimate),
-            Item(symbol: "circle.circle", tint: ScreenKit.mint, title: "Tires", slug: "tires", route: .tires),
-            Item(symbol: "wrench.and.screwdriver", tint: ScreenKit.mint, title: "Maintenance", slug: "maintenance", route: .maintenance),
-            Item(symbol: "cpu", tint: ScreenKit.mint, title: "Firmware Tracker", slug: "firmware", route: .firmware),
-            Item(symbol: "gauge.with.needle", tint: ScreenKit.mint, title: "Mileage Tracker", slug: "mileage", route: .mileage),
-            Item(symbol: "doc.text.magnifyingglass", tint: ScreenKit.mint, title: "Lease Mileage", slug: "lease", route: .leaseMileage),
-            Item(symbol: "checkmark.shield", tint: ScreenKit.mint, title: "Specs & Warranty", slug: "specs", route: .specs),
+        Section(title: "Vehicle", items: [
+            Item(symbol: "battery.100percent.bolt", tint: link, title: "Battery health", slug: "battery-health", route: .batteryHealth),
+            Item(symbol: "thermometer.medium", tint: link, title: "Battery climate", slug: "battery-climate", route: .batteryClimate),
+            Item(symbol: "circle.circle", tint: link, title: "Tires", slug: "tires", route: .tires),
+            Item(symbol: "wrench.and.screwdriver", tint: link, title: "Maintenance", slug: "maintenance", route: .maintenance),
+            Item(symbol: "cpu", tint: link, title: "Firmware tracker", slug: "firmware", route: .firmware),
+            Item(symbol: "gauge.with.needle", tint: link, title: "Mileage tracker", slug: "mileage", route: .mileage),
+            Item(symbol: "doc.text.magnifyingglass", tint: link, title: "Lease mileage", slug: "lease", route: .leaseMileage),
+            Item(symbol: "checkmark.shield", tint: link, title: "Specs & warranty", slug: "specs", route: .specs),
         ]),
-        Section(title: "Explore", dot: ScreenKit.blue, items: [
-            Item(symbol: "mappin.and.ellipse", tint: ScreenKit.blue, title: "Charger Map", slug: "charger-map", route: .chargerMap),
+        Section(title: "Explore", items: [
+            Item(symbol: "mappin.and.ellipse", tint: link, title: "Charger map", slug: "charger-map", route: .chargerMap),
         ]),
     ]
 
@@ -122,9 +125,9 @@ struct MoreView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if barsOnSide { indexTitle.padding(.top, VoltaSpacing.sm) }
-                ForEach(sections) { section in
+                ForEach(Array(sections.enumerated()), id: \.element.id) { sectionIndex, section in
                     VStack(alignment: .leading, spacing: 0) {
-                        ScreenKit.SectionHeader(title: section.title, dot: section.dot, identifier: section.identifier)
+                        ScreenKit.SectionHeader(title: section.title, identifier: section.identifier)
                         ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
                             Button { open(item.route) } label: {
                                 ScreenKit.NavRow(symbol: item.symbol, tint: item.tint, title: item.title,
@@ -132,20 +135,21 @@ struct MoreView: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("row.more.\(item.slug)")
+                            // The first screenful arrives in order, section by section.
+                            .voltaFocusIn(rowIndex(section: sectionIndex, item: index))
                         }
                     }
                 }
 
                 VStack(spacing: 0) {
-                    Rectangle().fill(ScreenKit.hairline).frame(height: 1)
+                    ScreenKit.SectionHeader(title: "App")
                     Button { open(.switchVehicle) } label: {
-                        ScreenKit.CapsRow(symbol: "car.2.fill", tint: ScreenKit.mint, title: "Switch Vehicle",
-                                          subtitle: vehicleName ?? "—")
+                        ScreenKit.NavRow(symbol: "car.2", tint: Self.link, title: "Switch vehicle",
+                                         subtitle: vehicleName ?? "—", showsDivider: false)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("row.more.switch-vehicle")
                 }
-                .padding(.top, 36)
 
                 footer.padding(.top, 40)
             }
@@ -191,18 +195,18 @@ struct MoreView: View {
                             .accessibilityIdentifier("row.more.\(item.slug)")
                     }
                 } header: {
-                    sidebarHeader(section.title, dot: section.dot, identifier: section.identifier)
+                    sidebarHeader(section.title, identifier: section.identifier)
                 }
             }
             SwiftUI.Section {
-                sidebarRow(symbol: "car.2.fill", tint: ScreenKit.mint, title: "Switch Vehicle", subtitle: vehicleName ?? "—")
+                sidebarRow(symbol: "car.2", tint: Self.link, title: "Switch vehicle", subtitle: vehicleName ?? "—")
                     .tag(MoreRoute.switchVehicle)
                     .accessibilityIdentifier("row.more.switch-vehicle")
-                sidebarRow(symbol: "gearshape.fill", tint: ScreenKit.secondary, title: "Settings")
+                sidebarRow(symbol: "gearshape", tint: ScreenKit.secondary, title: "Settings")
                     .tag(MoreRoute.settings)
                     .accessibilityIdentifier("row.more.settings")
             } header: {
-                sidebarHeader("App", dot: ScreenKit.secondary)
+                sidebarHeader("App")
             } footer: {
                 footer.padding(.top, 28)
             }
@@ -228,13 +232,14 @@ struct MoreView: View {
     private func sidebarRow(symbol: String, tint: Color, title: String, subtitle: String? = nil) -> some View {
         HStack(spacing: 14) {
             Image(systemName: symbol)
-                .font(.system(size: 17, weight: .regular))
+                .font(.system(.body, weight: .regular))
                 .foregroundStyle(tint)
                 .frame(width: 26)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.voltaTextPrimary)
+                Text(title).font(.system(.body, weight: .medium)).foregroundStyle(Color.voltaTextPrimary)
                 if let subtitle {
-                    Text(subtitle).font(.system(size: 13)).foregroundStyle(ScreenKit.secondary).lineLimit(1)
+                    Text(subtitle).font(.footnote).foregroundStyle(ScreenKit.secondary).lineLimit(1)
                 }
             }
         }
@@ -242,21 +247,22 @@ struct MoreView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func sidebarHeader(_ title: String, dot: Color, identifier: String? = nil) -> some View {
-        HStack(spacing: 10) {
-            Circle().fill(dot).frame(width: 6, height: 6)
-            Text(title.uppercased())
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(2)
-                .foregroundStyle(ScreenKit.secondary)
-                .accessibilityIdentifier(identifier ?? "")
-        }
-        .accessibilityAddTraits(.isHeader)
+    private func sidebarHeader(_ title: String, identifier: String? = nil) -> some View {
+        Text(title)
+            .voltaLabelStyle()
+            .textCase(nil)
+            .accessibilityIdentifier(identifier ?? "")
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Position of a row in the whole index, for the staggered entrance.
+    private func rowIndex(section: Int, item: Int) -> Int {
+        sections.prefix(section).reduce(0) { $0 + $1.items.count } + item
     }
 
     private var footer: some View {
         Text("Volta · v\(AppInfo.version) · private")
-            .font(.system(size: 12, weight: .medium)).tracking(1)
+            .font(.caption.weight(.medium))
             // Light: tertiary text (4.7:1 on the page). Dark keeps main's half-strength secondary.
             .foregroundStyle(Color(light: Color(hex: 0x6C6C70), dark: Color(hex: 0x9E9E9E).opacity(0.5)))
             .frame(maxWidth: .infinity)

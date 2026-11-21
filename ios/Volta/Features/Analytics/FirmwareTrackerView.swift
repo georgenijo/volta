@@ -9,10 +9,10 @@ struct FirmwareTrackerView: View {
     var body: some View {
         // Wide: current version and cadence beside the timeline.
         ScreenKit.Page(scroll: "firmware", splits: !sortedUpdates.isEmpty) {
-            LoadableContent(state: state, retry: load) { updates in
+            LoadableContent(state: state, retry: load, placeholder: Self.placeholder, errorTitle: "Couldn't load software history") { updates in
                 if updates.isEmpty {
                     EmptyState(systemImage: "cpu", title: "No updates recorded",
-                               message: "Software updates appear here as TeslaMate sees them install.")
+                               message: "Software updates appear here as TeslaMate sees them install. The next one the car installs starts the timeline.")
                         .padding(.top, 60)
                 } else {
                     summary(sortedUpdates)
@@ -21,7 +21,7 @@ struct FirmwareTrackerView: View {
         } secondary: {
             if !sortedUpdates.isEmpty { timeline(sortedUpdates) }
         }
-        .screenKitPage("Firmware Tracker", screen: "firmware")
+        .screenKitPage("Firmware tracker", screen: "firmware")
         .task(id: vehicleID) { await load() }
     }
 
@@ -38,20 +38,22 @@ struct FirmwareTrackerView: View {
         let lastYear = updates.filter { $0.installedAt > Date.now.addingTimeInterval(-365 * 86_400) }.count
 
         VStack(alignment: .leading, spacing: 18) {
-            Card(padding: 20, tint: ScreenKit.mint) {
+            Card(padding: 20) {
                 VStack(alignment: .leading, spacing: 12) {
                     SectionLabel("Current software", trailing: VoltaFormat.relativeDate(current.installedAt))
                     ScreenKit.Numeral(value: current.version, size: 40)
                     Text("Installed \(current.installedAt.formatted(date: .long, time: .omitted))")
-                        .font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
+                        .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                 }
             }
+            .voltaFocusIn(0)
 
-            LazyVGrid(columns: ScreenKit.metricColumns, spacing: 12) {
+            ScreenKit.MetricGroup {
                 ScreenKit.Metric(label: "Past year", value: "\(lastYear)", unit: lastYear == 1 ? "update" : "updates", symbol: "arrow.down.circle")
-                ScreenKit.Metric(label: "Cadence", value: avgGap.map { VoltaFormat.number($0, digits: 0) } ?? "—", unit: "days",
-                                 caption: "Average between updates", symbol: "calendar")
+                ScreenKit.Metric(label: "Time between updates", value: avgGap.map { VoltaFormat.number($0, digits: 0) } ?? "—", unit: "days",
+                                 caption: "On average", symbol: "calendar")
             }
+            .voltaFocusIn(1)
         }
     }
 
@@ -63,6 +65,7 @@ struct FirmwareTrackerView: View {
                     let next = index > 0 ? updates[index - 1].installedAt : Date.now
                     timelineRow(update, daysOn: next.timeIntervalSince(update.installedAt) / 86_400,
                                 isCurrent: index == 0, isLast: index == updates.count - 1)
+                        .voltaFocusIn(index)
                 }
             }
         }
@@ -71,11 +74,9 @@ struct FirmwareTrackerView: View {
     private func timelineRow(_ update: FirmwareUpdate, daysOn: Double, isCurrent: Bool, isLast: Bool) -> some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 0) {
-                ZStack {
-                    Circle().fill(isCurrent ? ScreenKit.mint : Color.voltaRaised).frame(width: 14, height: 14)
-                    if isCurrent { Circle().stroke(ScreenKit.mint.opacity(0.3), lineWidth: 6).frame(width: 14, height: 14) }
-                }
-                .padding(.top, 4)
+                // The current version is the live one: blue, with no halo.
+                Circle().fill(isCurrent ? ScreenKit.blue : Color.voltaRaised).frame(width: 14, height: 14)
+                    .padding(.top, 4)
                 if !isLast {
                     Rectangle().fill(Color.voltaHairline).frame(width: 2).frame(maxHeight: .infinity)
                 }
@@ -84,25 +85,25 @@ struct FirmwareTrackerView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(update.version).font(.system(size: 18, weight: .bold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
+                    Text(update.version).font(.headline).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                     if isCurrent {
-                        Text("CURRENT").font(.system(size: 10, weight: .bold)).tracking(1.2)
-                            .foregroundStyle(ScreenKit.mint)
+                        Text("Current").font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.voltaBlueText)
                             .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(ScreenKit.mint.opacity(0.14), in: .capsule)
+                            .background(ScreenKit.blue.opacity(0.14), in: .capsule)
                     }
                     Spacer()
                     Text(update.installedAt.formatted(.dateTime.month(.abbreviated).day().year()))
-                        .font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
+                        .font(.footnote).foregroundStyle(ScreenKit.secondary)
                 }
                 HStack(spacing: 6) {
                     if let previous = update.previousVersion {
-                        Text("from \(previous)")
+                        Text("From \(previous)")
                         Text("·")
                     }
                     Text(isCurrent ? "\(Int(daysOn.rounded())) days so far" : "\(Int(daysOn.rounded())) days on this version")
                 }
-                .font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
+                .font(.footnote).foregroundStyle(ScreenKit.secondary)
             }
             .padding(.bottom, isLast ? 0 : 26)
         }
@@ -115,6 +116,14 @@ struct FirmwareTrackerView: View {
         catch is CancellationError {}
         catch { state = .failed(error.localizedDescription) }
     }
+}
+
+extension FirmwareTrackerView {
+    /// Sample timeline for the loading skeleton.
+    static let placeholder: [FirmwareUpdate] = [
+        FirmwareUpdate(version: "2026.20.1", installedAt: .now.addingTimeInterval(-20 * 86_400), previousVersion: "2026.14.3"),
+        FirmwareUpdate(version: "2026.14.3", installedAt: .now.addingTimeInterval(-60 * 86_400), previousVersion: nil),
+    ]
 }
 
 #Preview("Populated") {

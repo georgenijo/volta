@@ -13,8 +13,8 @@ struct SpecsWarrantyView: View {
 
     /// Tesla's standard US coverage for Model 3/Y Long Range. Edit if your car differs.
     static let coverages = [
-        Coverage(name: "Basic Vehicle", symbol: "car", years: 4, miles: 50_000),
-        Coverage(name: "Battery & Drive Unit", symbol: "battery.100percent.bolt", years: 8, miles: 120_000),
+        Coverage(name: "Basic vehicle", symbol: "car", years: 4, miles: 50_000),
+        Coverage(name: "Battery & drive unit", symbol: "battery.100percent.bolt", years: 8, miles: 120_000),
     ]
 
     struct Snapshot: Sendable {
@@ -52,19 +52,19 @@ struct SpecsWarrantyView: View {
     var body: some View {
         // Wide: the car and its specs beside warranty coverage.
         ScreenKit.Page(scroll: "specs", splits: state.value != nil, spacing: 22) {
-            LoadableContent(state: state, retry: load) { snapshot in
+            LoadableContent(state: state, retry: load, errorTitle: "Couldn't load vehicle") { snapshot in
                 if let vehicle = snapshot.vehicle {
-                    hero(vehicle, odometer: snapshot.odometerKm)
-                    specs(vehicle)
+                    hero(vehicle, odometer: snapshot.odometerKm).voltaFocusIn(0)
+                    specs(vehicle).voltaFocusIn(1)
                 } else {
-                    EmptyState(systemImage: "car", title: "No vehicle", message: "TeslaMate hasn't reported a vehicle yet.")
+                    EmptyState(systemImage: "car", title: "No vehicle", message: "TeslaMate hasn't reported a vehicle yet. It appears here once the car is logged.")
                         .padding(.vertical, 40)
                 }
             }
         } secondary: {
             if let snapshot = state.value { warranty(odometerKm: snapshot.odometerKm) }
         }
-        .screenKitPage("Specs & Warranty", screen: "specs")
+        .screenKitPage("Specs & warranty", screen: "specs")
         .task(id: vehicleID) { await load() }
         .task(id: storageKey) {
             let raw = storageKey.map { UserDefaults.standard.double(forKey: $0) } ?? 0
@@ -74,11 +74,11 @@ struct SpecsWarrantyView: View {
     }
 
     private func hero(_ v: Vehicle, odometer: Double?) -> some View {
-        Card(padding: 20, tint: ScreenKit.mint) {
+        Card(padding: 20) {
             VStack(alignment: .leading, spacing: 12) {
                 SectionLabel(v.name, trailing: v.model)
-                ScreenKit.Numeral(value: odometer.map { VoltaFormat.number(units.distanceValue(km: $0), digits: 0) } ?? "—", unit: units.distanceUnit, size: 52)
-                Text("Odometer").font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
+                ScreenKit.RollingNumeral(value: odometer.map { units.distanceValue(km: $0) }, unit: units.distanceUnit, size: 52)
+                Text("Odometer").font(.subheadline).foregroundStyle(ScreenKit.secondary)
             }
         }
     }
@@ -91,7 +91,7 @@ struct SpecsWarrantyView: View {
         return ScreenKit.GroupCard(title: "Specs") {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                 ScreenKit.ValueRow(title: row.0, showsDivider: index < rows.count - 1) {
-                    Text(row.1 ?? "—").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                    Text(row.1 ?? "—").font(.subheadline).foregroundStyle(ScreenKit.secondary)
                         .multilineTextAlignment(.trailing)
                 }
             }
@@ -104,20 +104,20 @@ struct SpecsWarrantyView: View {
             SectionLabel("Warranty").padding(.horizontal, 4)
             Button { editingDate = true } label: {
                 ScreenKit.ValueRow(title: "Purchase date", subtitle: model.isLaunchDemo ? "Not saved in launch demo" : "Stored on this device only", showsDivider: false) {
-                    Text(purchaseDate?.formatted(date: .abbreviated, time: .omitted) ?? "Set")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(purchaseDate == nil ? ScreenKit.blue : ScreenKit.secondary)
+                    Text(purchaseDate?.formatted(date: .abbreviated, time: .omitted) ?? "Set date")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(purchaseDate == nil ? Color.voltaBlueText : ScreenKit.secondary)
                     ScreenKit.Chevron()
                 }
                 .voltaCardBackground()
             }
             .buttonStyle(VoltaPressStyle())
 
-            ForEach(Self.coverages) { coverage in
-                coverageCard(coverage, odometerKm: odometerKm)
+            ForEach(Array(Self.coverages.enumerated()), id: \.element.id) { index, coverage in
+                coverageCard(coverage, odometerKm: odometerKm).voltaFocusIn(index + 1)
             }
             Text("Tesla's standard US limited warranty terms. Coverage ends at whichever limit comes first.")
-                .font(.system(size: 12)).foregroundStyle(ScreenKit.secondary).padding(.horizontal, 4)
+                .font(.caption).foregroundStyle(ScreenKit.secondary).padding(.horizontal, 4)
         }
     }
 
@@ -132,33 +132,38 @@ struct SpecsWarrantyView: View {
         return Card(padding: 18) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
-                    Image(systemName: c.symbol).foregroundStyle(ScreenKit.mint)
-                    Text(c.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
+                    Image(systemName: c.symbol).foregroundStyle(ScreenKit.secondary).accessibilityHidden(true)
+                    Text(c.name).font(.headline).foregroundStyle(.voltaTextPrimary)
                     Spacer()
-                    Text(status == .expired ? "EXPIRED" : status == .active ? "ACTIVE" : "UNKNOWN")
-                        .font(.system(size: 11, weight: .bold)).tracking(1.2)
-                        .foregroundStyle(status == .expired ? ScreenKit.red : status == .active ? ScreenKit.green : ScreenKit.secondary)
+                    // Covered is the normal state, so it stays quiet; expired is the problem.
+                    Text(status == .expired ? "Expired" : status == .active ? "Covered" : "Unknown")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(status == .expired ? ScreenKit.red : ScreenKit.secondary)
                 }
                 progress(label: "Distance",
                          detail: "\(units.formatDistance(odometerKm, fractionDigits: 0)) of \(units.formatDistance(limitDistanceKm, fractionDigits: 0))",
-                         fraction: mileFraction)
+                         fraction: mileFraction, high: units.formatDistance(limitDistanceKm, fractionDigits: 0))
                 progress(label: "Time",
                          detail: yearsUsed.map { "\(VoltaFormat.number(min($0, c.years), digits: 1)) of \(Int(c.years)) years" } ?? "Set purchase date",
-                         fraction: yearFraction)
+                         fraction: yearFraction, high: "\(Int(c.years)) years")
             }
         }
     }
 
-    private func progress(label: String, detail: String, fraction: Double?) -> some View {
+    /// Coverage used, filled from zero to the limit: grey while there is room,
+    /// amber in the last tenth, red once a limit has passed.
+    private func progress(label: String, detail: String, fraction: Double?, high: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(label.uppercased()).font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(ScreenKit.secondary)
+                Text(label).voltaLabelStyle()
                 Spacer()
-                Text(detail).font(.system(size: 13)).foregroundStyle(fraction == nil ? ScreenKit.tertiary : Color.voltaTextPrimary).monospacedDigit()
+                Text(detail).font(.footnote).foregroundStyle(fraction == nil ? ScreenKit.tertiary : Color.voltaTextPrimary).monospacedDigit()
             }
-            ScreenKit.ProgressBar(fraction: fraction ?? 0,
-                                  tint: (fraction ?? 0) >= 0.9 ? ScreenKit.amber : ScreenKit.blue)
+            LevelBar(value: fraction.map { min($0, 1) },
+                     color: (fraction ?? 0) >= 1 ? ScreenKit.red : (fraction ?? 0) >= 0.9 ? ScreenKit.amber : ScreenKit.secondary,
+                     lowLabel: "Start", highLabel: high)
         }
+        .accessibilityElement(children: .combine)
     }
 
     private var purchaseSheet: some View {
@@ -171,7 +176,7 @@ struct SpecsWarrantyView: View {
                     .tint(ScreenKit.blue)
                 if purchaseDate != nil {
                     Button("Clear date", role: .destructive) { setPurchaseDate(nil); editingDate = false }
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.callout.weight(.medium))
                 }
                 Spacer()
             }

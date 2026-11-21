@@ -57,10 +57,10 @@ struct SecuritySettingsView: View {
     private func privacyRow(_ symbol: String, _ title: String, _ detail: String, last: Bool = false) -> some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: symbol).font(.system(size: 18)).foregroundStyle(ScreenKit.green).frame(width: 26)
+                Image(systemName: symbol).font(.body).foregroundStyle(ScreenKit.secondary).frame(width: 26).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
-                    Text(detail).font(.system(size: 13)).foregroundStyle(ScreenKit.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.voltaTextPrimary)
+                    Text(detail).font(.footnote).foregroundStyle(ScreenKit.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }

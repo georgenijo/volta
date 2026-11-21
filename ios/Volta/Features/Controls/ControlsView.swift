@@ -25,6 +25,9 @@ struct ControlsView: View {
     @State private var localCoordinator = VehicleCommandCoordinator()
     @State private var confirmation: CommandConfirmation?
     @State private var controlNotice: String?
+    /// Counts pulls to refresh that brought a status, for the refresh haptic.
+    @State private var refreshed = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// A sheet with its own model (the live charging sheet's "Manage charging").
     init(initialStatus: VehicleStatus?, vehicleName: String?) {
@@ -67,6 +70,13 @@ struct ControlsView: View {
         await context.refresh()
     }
 
+    /// A pull to refresh: buzzes once a fresh status arrived.
+    private func pullToRefresh() async {
+        let before = model.status?.updatedAt
+        await load()
+        if let after = model.status?.updatedAt, after != before || !model.showsSavedStatus { refreshed += 1 }
+    }
+
     // MARK: Forms
 
     private var sheet: some View {
@@ -97,13 +107,14 @@ struct ControlsView: View {
                         .tint(Color.voltaTextPrimary)
                 }
                 ToolbarItem(placement: .principal) {
-                    Text("CONTROLS").font(.system(.headline, weight: .semibold)).tracking(3)
+                    Text("Controls").font(.voltaScreenTitle)
                         .foregroundStyle(Color.voltaTextPrimary).accessibilityAddTraits(.isHeader)
                         .accessibilityIdentifier("screen.controls")
                 }
                 refreshItem
             }
-            .refreshable { await load() }
+            .refreshable { await pullToRefresh() }
+            .voltaFeedback(.refreshed, trigger: refreshed)
             .navigationDestination(isPresented: $model.climateOpen) { ClimateControlsView(model: model) }
         }
         .presentationDragIndicator(.visible)
@@ -136,7 +147,7 @@ struct ControlsView: View {
             }
             .scrollIndicators(.hidden)
             .accessibilityIdentifier(secondPane == .main ? "scroll.controls" : "")
-            .refreshable { await load() }
+            .refreshable { await pullToRefresh() }
         } secondary: {
             Group {
                 switch secondPane {
@@ -152,7 +163,7 @@ struct ControlsView: View {
                         .padding(.bottom, 96)
                     }
                     .scrollIndicators(.hidden)
-                    .refreshable { await load() }
+                    .refreshable { await pullToRefresh() }
                 case .climate:
                     ClimateControlsView(model: model, embedded: true)
                 }
@@ -160,6 +171,7 @@ struct ControlsView: View {
             .overlay(alignment: .bottom) { activityBanner }
         }
         .background(Color.voltaBackground.ignoresSafeArea())
+        .voltaFeedback(.refreshed, trigger: refreshed)
         .toolbarTitleDisplayMode(.inline)
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .toolbar { refreshItem }
@@ -196,8 +208,6 @@ struct ControlsView: View {
     private var statusName: some View {
         Text(vehicleName ?? "Vehicle")
             .font(.system(.subheadline, weight: .semibold))
-            .tracking(2)
-            .textCase(.uppercase)
             .foregroundStyle(Color.voltaTextPrimary)
     }
 
@@ -265,21 +275,29 @@ struct ControlsView: View {
                 HalfControl(systemImage: "car.side.front.open", title: "Frunk", button: "Open",
                             accessibilityLabel: "Open frunk") { request(.actuateTrunk(whichTrunk: .front)) }
                     .disabled(!canSend(.actuateTrunk(whichTrunk: .front)))
+                    .respondsToCommands(log: model.log, key: context.logKey) { $0 == .actuateTrunk(whichTrunk: .front) }
             } trailing: {
                 HalfControl(systemImage: "car.side.rear.open", title: "Trunk", button: "Open",
                             accessibilityLabel: "Open trunk") { request(.actuateTrunk(whichTrunk: .rear)) }
                     .disabled(!canSend(.actuateTrunk(whichTrunk: .rear)))
+                    .respondsToCommands(log: model.log, key: context.logKey) { $0 == .actuateTrunk(whichTrunk: .rear) }
             }
-            ControlRow(systemImage: "window.vertical.open", title: "Windows", subtitle: "Position not recorded") {
+            ControlRow(systemImage: "window.vertical.open", title: "Windows",
+                       subtitle: sendingText([.windowControl(command: .vent), .windowControl(command: .close)]) ?? "Position not recorded") {
                 button("Vent", .windowControl(command: .vent), accessibility: "Vent windows")
                 button("Close", .windowControl(command: .close), accessibility: "Close windows")
             }
-            ControlRow(systemImage: "powerplug", title: "Charge port", subtitle: chargePortStatus) {
+            .respondsToCommands(log: model.log, key: context.logKey) {
+                $0 == .windowControl(command: .vent) || $0 == .windowControl(command: .close)
+            }
+            ControlRow(systemImage: "powerplug", title: "Charge port",
+                       subtitle: sendingText([.openChargePort, .closeChargePort]) ?? chargePortStatus) {
                 ForEach(Self.chargePortCommands(doorOpen: model.status?.chargePortDoorOpen), id: \.self) { command in
                     button(command == .openChargePort ? "Open" : "Close", command,
                            accessibility: command == .openChargePort ? "Open charge port" : "Close charge port")
                 }
             }
+            .respondsToCommands(log: model.log, key: context.logKey) { $0 == .openChargePort || $0 == .closeChargePort }
         }
     }
 
@@ -287,10 +305,11 @@ struct ControlsView: View {
     /// unknown). Both keep their confirmation.
     private var doorsRow: some View {
         let display = StateDisplay.doors(model.locked)
+        let sending = sendingText([.lock, .unlock])
         return ControlRow(systemImage: display.symbol,
                           iconColor: model.locked == false ? .voltaAmber : .voltaTextPrimary.opacity(0.85),
-                          title: "Doors", subtitle: display.text,
-                          subtitleColor: model.locked == false ? .voltaAmber : .voltaTextSecondary) {
+                          title: "Doors", subtitle: sending ?? display.text,
+                          subtitleColor: sending == nil && model.locked == false ? .voltaAmber : .voltaTextSecondary) {
             switch model.locked {
             case true?: button("Unlock", .unlock, accessibility: "Doors locked. Unlock")
             case false?: button("Lock", .lock, accessibility: "Doors unlocked. Lock")
@@ -299,6 +318,8 @@ struct ControlsView: View {
                 button("Lock", .lock, accessibility: "Lock state unknown. Lock")
             }
         }
+        .respondsToCommands(log: model.log, key: context.logKey) { $0 == .lock || $0 == .unlock }
+        .stateSymbolTransition(value: model.locked)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("row.doors")
     }
@@ -339,7 +360,8 @@ struct ControlsView: View {
     @ViewBuilder private var chargingRow: some View {
         let state = model.chargingState
         let charging = state == .charging
-        let subtitle = Self.chargingSubtitle(state: state, status: model.status)
+        let subtitle = sendingText([.chargeStart, .chargeStop]) ?? Self.chargingSubtitle(state: state, status: model.status)
+        Group {
         if state == nil {
             ControlRow(systemImage: "bolt", iconColor: .voltaTextSecondary, title: "Charging", subtitle: subtitle) {
                 button("Start", .chargeStart, accessibility: "Charging state unknown. Start charging")
@@ -358,6 +380,9 @@ struct ControlsView: View {
                     .accessibilityValue(subtitle)
             }
         }
+        }
+        .respondsToCommands(log: model.log, key: context.logKey) { $0 == .chargeStart || $0 == .chargeStop }
+        .stateSymbolTransition(value: state)
     }
 
     /// "7.7 kW · 48m to 80%" while charging; "Not plugged in" explains the
@@ -382,7 +407,9 @@ struct ControlsView: View {
         ControlGroup(title: "Comfort") {
             toggleRow(StateDisplay.climate(model.climateOn), title: "Climate",
                       subtitle: climateSubtitle, value: model.climateOn, on: .climateOn, off: .climateOff,
-                      onLabel: "Start", offLabel: "Stop")
+                      onLabel: "Start", offLabel: "Stop", activeIcon: .voltaTeal)
+                // The fan turns while climate runs: a live process.
+                .symbolEffect(.rotate, options: .repeat(.continuous), isActive: model.climateOn == true && !reduceMotion)
             ControlRow(systemImage: "thermometer.medium", title: "Temperature") {
                 let target = model.displayedCabinTargetC
                 let command = VehicleCommand.setTemperatures(driverTempC: target ?? 20, passengerTempC: target ?? 20)
@@ -435,13 +462,15 @@ struct ControlsView: View {
                 HalfControl(systemImage: "headlight.high.beam", title: "Lights", button: "Flash",
                             accessibilityLabel: "Flash lights") { request(.flash) }
                     .disabled(!canSend(.flash))
+                    .respondsToCommands(log: model.log, key: context.logKey) { $0 == .flash }
             } trailing: {
                 HalfControl(systemImage: "megaphone", title: "Horn", button: "Honk",
                             accessibilityLabel: "Honk horn") { request(.honk) }
                     .disabled(!canSend(.honk))
+                    .respondsToCommands(log: model.log, key: context.logKey) { $0 == .honk }
             }
-            TimelineView(.periodic(from: .now, by: 10)) { context in
-                let nearby = Self.homeLinkCommand(status: model.status, now: context.date)
+            TimelineView(.periodic(from: .now, by: 10)) { timeline in
+                let nearby = Self.homeLinkCommand(status: model.status, now: timeline.date)
                 ControlRow(systemImage: "house", title: "HomeLink",
                            subtitle: nearby == nil ? "Needs a location observed within 5 minutes" : "Uses the car's location") {
                     ControlButton("Activate") {
@@ -451,12 +480,17 @@ struct ControlsView: View {
                     .disabled(nearby == nil || !canSend(nearby ?? .triggerHomeLink(latitude: 0, longitude: 0)))
                     .accessibilityLabel("Activate HomeLink")
                 }
+                .respondsToCommands(log: model.log, key: context.logKey) { command in
+                    if case .triggerHomeLink = command { return true }
+                    return false
+                }
             }
             if let state = model.status?.state, state == .asleep || state == .offline {
                 ControlRow(systemImage: "power", title: "Wake",
                            subtitle: "\(state.displayName) · last seen \(VoltaFormat.relativeDate(model.status?.updatedAt ?? .now))") {
                     button("Wake", .wakeUp, accessibility: "Wake the vehicle")
                 }
+                .respondsToCommands(log: model.log, key: context.logKey) { $0 == .wakeUp }
             }
         }
     }
@@ -480,22 +514,33 @@ struct ControlsView: View {
     private func toggleRow(_ display: StateDisplay, title: String, subtitle: String, value: Bool?,
                            on: VehicleCommand, off: VehicleCommand, onLabel: String, offLabel: String,
                            activeIcon: Color? = nil) -> some View {
-        if let value {
-            ControlRow(systemImage: display.symbol,
-                       iconColor: value ? (activeIcon ?? .voltaTextPrimary) : .voltaTextPrimary.opacity(0.85),
-                       title: title, subtitle: subtitle) {
-                Toggle(title, isOn: Binding(get: { value }, set: { request($0 ? on : off) }))
-                    .labelsHidden()
-                    .tint(.voltaBlue)
-                    .disabled(!canSend(value ? off : on))
-                    .accessibilityValue(display.text)
-            }
-        } else {
-            ControlRow(systemImage: display.symbol, iconColor: .voltaTextSecondary, title: title, subtitle: "Unknown") {
-                button(onLabel, on, accessibility: "\(title) state unknown. \(on.controlLabel)")
-                button(offLabel, off, accessibility: "\(title) state unknown. \(off.controlLabel)")
+        let sending = sendingText([on, off])
+        Group {
+            if let value {
+                ControlRow(systemImage: display.symbol,
+                           iconColor: value ? (activeIcon ?? .voltaTextPrimary) : .voltaTextPrimary.opacity(0.85),
+                           title: title, subtitle: sending ?? subtitle) {
+                    Toggle(title, isOn: Binding(get: { value }, set: { request($0 ? on : off) }))
+                        .labelsHidden()
+                        .tint(.voltaBlue)
+                        .disabled(!canSend(value ? off : on))
+                        .accessibilityValue(display.text)
+                }
+            } else {
+                ControlRow(systemImage: display.symbol, iconColor: .voltaTextSecondary, title: title, subtitle: sending ?? "Unknown") {
+                    button(onLabel, on, accessibility: "\(title) state unknown. \(on.controlLabel)")
+                    button(offLabel, off, accessibility: "\(title) state unknown. \(off.controlLabel)")
+                }
             }
         }
+        .respondsToCommands(log: model.log, key: context.logKey) { $0 == on || $0 == off }
+        .stateSymbolTransition(value: value)
+    }
+
+    /// "Sending…" while one of `commands` is on its way, so the row itself
+    /// says what is happening; nil otherwise.
+    private func sendingText(_ commands: [VehicleCommand]) -> String? {
+        commands.contains(where: context.isSending) ? "Sending…" : nil
     }
 
     private func button(_ title: String, _ command: VehicleCommand, accessibility: String) -> some View {
@@ -706,6 +751,51 @@ struct ClimateControlsView: View {
     private func send(_ command: VehicleCommand, label: String) {
         Task { await model.send(command, label: label, coordinator: coordinator, dataSource: dataSource,
                                 vehicleID: vehicleID, surfaces: surfaces) }
+    }
+}
+
+// MARK: - Command responses
+
+extension View {
+    /// The row's symbol answers the commands it sends: a bounce when the car
+    /// accepts or confirms one, a wiggle when one fails. The command haptics
+    /// are global (MainShell); this is what the eye gets.
+    func respondsToCommands(log: VehicleCommandLog, key: String,
+                            _ matches: @escaping (VehicleCommand) -> Bool) -> some View {
+        modifier(CommandResponse(log: log, key: key, matches: matches))
+    }
+
+    /// State symbols (lock, fan, shield, bolt) swap with a replace effect
+    /// when `value` changes. A fade at most under Reduce Motion.
+    func stateSymbolTransition<V: Equatable>(value: V) -> some View {
+        modifier(StateSymbolTransition(value: value))
+    }
+}
+
+private struct CommandResponse: ViewModifier {
+    let log: VehicleCommandLog
+    let key: String
+    let matches: (VehicleCommand) -> Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let entries = log.entries(for: key).filter { matches($0.command) }
+        let confirmed = entries.filter { [.accepted, .confirmed, .simulated].contains($0.outcome) }.count
+        let failed = entries.filter { $0.outcome == .failed }.count
+        content
+            .symbolEffect(.bounce, options: .nonRepeating, value: reduceMotion ? 0 : confirmed)
+            .symbolEffect(.wiggle, options: .nonRepeating, value: reduceMotion ? 0 : failed)
+    }
+}
+
+private struct StateSymbolTransition<V: Equatable>: ViewModifier {
+    let value: V
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+            .animation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion), value: value)
     }
 }
 
