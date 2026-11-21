@@ -30,7 +30,8 @@ struct BigNumber: View {
                 .tracking(-scaledSize * 0.03)
                 .foregroundStyle(color)
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                // Digits roll when the value changes in place.
+                .voltaRolling(value)
             if let unit {
                 Text(unit)
                     .font(.system(size: max(12, scaledSize * 0.36), weight: .regular))

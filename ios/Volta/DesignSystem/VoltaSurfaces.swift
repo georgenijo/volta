@@ -120,38 +120,6 @@ struct StatusDot: View {
     }
 }
 
-// MARK: - EmptyState
-
-/// Thin-line icon, bold title, one gray line. Left-aligned like the references.
-///
-///     EmptyState(systemImage: "bolt.slash", title: "No charges in 30 days",
-///                message: "Try a different range or wait for your next charge.")
-struct EmptyState: View {
-    var systemImage: String
-    var title: String
-    var message: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: VoltaSpacing.md) {
-            Image(systemName: systemImage)
-                .font(.system(size: 44, weight: .ultraLight))
-                .foregroundStyle(Color.voltaTextTertiary)
-                .padding(.bottom, VoltaSpacing.sm)
-            Text(title)
-                .font(.system(.title2, weight: .semibold))
-                .foregroundStyle(Color.voltaTextPrimary)
-            if let message {
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(Color.voltaTextSecondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, VoltaSpacing.xl + VoltaSpacing.xs)
-        .accessibilityElement(children: .combine)
-    }
-}
-
 // MARK: - InlineBanner
 
 /// Compact rounded banner for transient notices and errors
@@ -205,8 +173,6 @@ struct InlineBanner: View {
             Card(tint: .voltaAmber) { Text("Warm card").foregroundStyle(.voltaTextPrimary) }
             InlineBanner(systemImage: "lock.slash", message: "Vehicle commands aren't connected yet.", onDismiss: {})
             HStack { StatusDot(color: .voltaGreen); Text("Online").foregroundStyle(Color.voltaTextSecondary) }
-            EmptyState(systemImage: "bolt.slash", title: "No charges in 30 days",
-                       message: "Try a different range or wait for your next charge.")
         }
         .padding(VoltaSpacing.screen)
     }

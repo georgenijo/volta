@@ -63,7 +63,11 @@ struct MainShell: View {
         .onChange(of: app?.controlsPresentationRequested == true, initial: true) { _, requested in
             selection = ControlsRouting.shellTab(requested: requested, current: selection)
         }
-        .sensoryFeedback(.selection, trigger: selection)
+        .voltaFeedback(.selection, trigger: selection)
+        // One place for command haptics, whichever screen sent the command.
+        .voltaFeedback(trigger: CommandPulse(VehicleCommandLog.shared.entries.last)) { old, new in
+            CommandPulse.feedback(from: old, to: new)
+        }
     }
 
     @ViewBuilder
@@ -93,4 +97,33 @@ extension EnvironmentValues {
 #Preview("Shell – empty") {
     MainShell()
         .environment(\.dataSource, MockDataSource(empty: true))
+}
+
+/// The newest command and its outcome, as a haptic trigger: a tap as it
+/// goes out, success once the server or car takes it, an error if it fails.
+struct CommandPulse: Equatable {
+    var id: UUID?
+    var outcome: VehicleCommandLog.Outcome?
+
+    init(_ entry: VehicleCommandLog.Entry?) {
+        id = entry?.id
+        outcome = entry?.outcome
+    }
+
+    init(id: UUID?, outcome: VehicleCommandLog.Outcome?) {
+        self.id = id
+        self.outcome = outcome
+    }
+
+    static func feedback(from old: CommandPulse, to new: CommandPulse) -> VoltaFeedback? {
+        guard new.id != nil, new != old else { return nil }
+        switch new.outcome {
+        case .sending?: return .commandSent
+        // Once: an accepted command later confirmed by the car doesn't buzz twice.
+        case .accepted?, .simulated?: return .commandConfirmed
+        case .confirmed?: return old.id == new.id && old.outcome == .accepted ? nil : .commandConfirmed
+        case .failed?: return .commandFailed
+        case .unknown?, nil: return nil
+        }
+    }
 }

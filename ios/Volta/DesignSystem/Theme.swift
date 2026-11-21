@@ -182,10 +182,10 @@ extension Font {
     static func voltaNumeral(_ size: CGFloat) -> Font {
         .system(size: size, weight: .heavy, design: .default)
     }
-    /// Small-caps section label (11pt semibold). Pair with `.tracking(1.5)`,
-    /// or just use `SectionLabel`.
-    static let voltaLabel = Font.system(.caption2, weight: .semibold)
-    /// Card titles like "PACK TEMP" (slightly larger than section labels).
+    /// Section and field labels in sentence case ("Last 48 hours"). Use
+    /// through `voltaLabelStyle()` or `SectionLabel`.
+    static let voltaLabel = Font.system(.footnote, weight: .semibold)
+    /// Card titles like "Temperatures" (slightly larger than section labels).
     static let voltaCardTitle = Font.system(.caption, weight: .semibold)
     /// Row titles in lists.
     static let voltaRowTitle = Font.system(.callout, weight: .medium)
@@ -199,10 +199,10 @@ extension Font {
 
 extension View {
     /// Applies the small-caps label treatment: uppercase, 11pt semibold, +1.5 tracking, gray.
+    /// Sentence case, as written: Volta no longer shouts its labels in
+    /// tracked capitals (see DesignSystem/README.md "Design rules").
     func voltaLabelStyle(color: Color = .voltaTextSecondary) -> some View {
         self.font(.voltaLabel)
-            .tracking(1.5)
-            .textCase(.uppercase)
             .foregroundStyle(color)
     }
 

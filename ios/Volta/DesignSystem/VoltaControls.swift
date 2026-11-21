@@ -229,21 +229,35 @@ struct ValueStepper: View {
     var increase: () -> Void
     @ScaledMetric(relativeTo: .body) private var valueWidth: CGFloat = 58
     @ScaledMetric(relativeTo: .body) private var plate: CGFloat = 36
+    /// Each step plays a tick up or down.
+    @State private var step = Step(feedback: .stepUp, count: 0)
+
+    private struct Step: Equatable {
+        var feedback: VoltaFeedback
+        var count: Int
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            segment("minus", enabled: canDecrease, action: decrease)
+            segment("minus", enabled: canDecrease) {
+                decrease()
+                step = Step(feedback: .stepDown, count: step.count + 1)
+            }
             Text(value)
                 .font(.system(.title3, weight: .semibold))
                 .monospacedDigit()
-                .contentTransition(.numericText())
+                .voltaRolling(value)
                 .foregroundStyle(canDecrease || canIncrease ? Color.voltaTextPrimary : Color.voltaTextSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .frame(minWidth: valueWidth)
-            segment("plus", enabled: canIncrease, action: increase)
+            segment("plus", enabled: canIncrease) {
+                increase()
+                step = Step(feedback: .stepUp, count: step.count + 1)
+            }
         }
         .frame(minHeight: 44)
+        .voltaFeedback(trigger: step) { _, new in new.feedback }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(accessibilityValue)
