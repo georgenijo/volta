@@ -9,15 +9,16 @@ struct MileageTrackerView: View {
     @State private var bucket: MileageBucketSize = .week
     @State private var state: Loadable<[MileageBucket]> = .loading
     @State private var selected: Date?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // Wide: the chart and totals beside the history list.
         ScreenKit.Page(scroll: "mileage", splits: !sortedBuckets.isEmpty) {
             ScreenKit.Segmented(options: MileageBucketSize.allCases.map { ($0, $0.rawValue.capitalized) }, selection: $bucket)
-            LoadableContent(state: state, retry: load) { buckets in
+            LoadableContent(state: state, retry: load, placeholder: Self.placeholder, errorTitle: "Couldn't load mileage") { buckets in
                 if buckets.isEmpty {
                     EmptyState(systemImage: "gauge.with.needle", title: "No mileage yet",
-                               message: "Your distance per \(bucket.rawValue) appears after your first drive.")
+                               message: "Your distance per \(bucket.rawValue) appears after your first recorded drive.")
                         .padding(.top, 40)
                 } else {
                     overview(sortedBuckets)
@@ -26,7 +27,7 @@ struct MileageTrackerView: View {
         } secondary: {
             if !sortedBuckets.isEmpty { history(sortedBuckets) }
         }
-        .screenKitPage("Mileage Tracker", screen: "mileage")
+        .screenKitPage("Mileage tracker", screen: "mileage")
         .task(id: TaskKey(vehicleID: vehicleID, bucket: bucket)) { await load() }
     }
 
@@ -51,8 +52,8 @@ struct MileageTrackerView: View {
 
         Card(padding: 20) {
             VStack(alignment: .leading, spacing: 14) {
-                SectionLabel(focus.map { title(for: $0.start) } ?? "", trailing: focus.map { "\($0.driveCount) drives" })
-                ScreenKit.Numeral(value: VoltaFormat.number(units.distanceValue(km: focus?.distanceKm ?? 0), digits: 0), unit: units.distanceUnit, size: 52)
+                SectionLabel(focus.map { title(for: $0.start) } ?? "", trailing: focus.map { "\($0.driveCount) drive\($0.driveCount == 1 ? "" : "s")" })
+                ScreenKit.RollingNumeral(value: focus.map { units.distanceValue(km: $0.distanceKm) }, unit: units.distanceUnit, size: 52)
                 // Bars span each bucket's explicit interval, the same intervals selection uses.
                 Chart(AnalyticsMath.intervals(visible, size: bucket), id: \.bucket.start) { entry in
                     let b = entry.bucket
@@ -72,21 +73,26 @@ struct MileageTrackerView: View {
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     }
                 }
-                .chartXSelection(value: $selected.animation(.snappy))
+                .chartXSelection(value: $selected.animation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion)))
+                .voltaFeedback(.selection, trigger: focus?.start)
                 .chartStyled()
                 .frame(height: 190)
                 // Server buckets start at UTC boundaries; lay bars out on the same calendar.
                 .environment(\.calendar, AnalyticsMath.utcCalendar)
                 .environment(\.timeZone, AnalyticsMath.utcCalendar.timeZone)
+                Text("Tap a bar to see that \(bucket.rawValue). The dashed line is the average.")
+                    .font(.caption).foregroundStyle(ScreenKit.tertiary)
             }
         }
+        .voltaFocusIn(0)
 
-        LazyVGrid(columns: ScreenKit.metricColumns, spacing: 12) {
+        ScreenKit.MetricGroup {
             ScreenKit.Metric(label: "Total", value: VoltaFormat.number(units.distanceValue(km: total), digits: 0), unit: units.distanceUnit,
-                             caption: "\(drives) drives", symbol: "road.lanes")
-            ScreenKit.Metric(label: "Avg / \(bucket.rawValue)", value: VoltaFormat.number(units.distanceValue(km: average), digits: 0),
-                             unit: units.distanceUnit, caption: "\(all.count) \(bucket.rawValue)s", symbol: "chart.bar")
+                             caption: "\(drives) drive\(drives == 1 ? "" : "s")", symbol: "road.lanes")
+            ScreenKit.Metric(label: "Average per \(bucket.rawValue)", value: VoltaFormat.number(units.distanceValue(km: average), digits: 0),
+                             unit: units.distanceUnit, caption: "Over \(all.count) \(bucket.rawValue)\(all.count == 1 ? "" : "s")", symbol: "chart.bar")
         }
+        .voltaFocusIn(1)
     }
 
     private func history(_ all: [MileageBucket]) -> some View {
@@ -97,7 +103,7 @@ struct MileageTrackerView: View {
                                    subtitle: "\(b.driveCount) drive\(b.driveCount == 1 ? "" : "s")" + (b.energyUsedKwh.map { " · \(VoltaFormat.energy($0, fractionDigits: 0))" } ?? ""),
                                    showsDivider: index < rows.count - 1) {
                     Text(units.formatDistance(b.distanceKm, fractionDigits: 0))
-                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
+                        .font(.callout.weight(.semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                 }
             }
         }
@@ -118,7 +124,7 @@ struct MileageTrackerView: View {
         selected = nil
         do {
             let result = try await dataSource.mileage(vehicleID: vehicleID, bucket: bucket)
-            withAnimation(.smooth) { state = .loaded(result) }
+            withAnimation(VoltaMotion.animation(VoltaMotion.arrive, reduceMotion: reduceMotion)) { state = .loaded(result) }
         } catch is CancellationError {
         } catch {
             state = .failed(error.localizedDescription)
@@ -136,6 +142,12 @@ struct MileageTrackerView: View {
 }
 
 extension MileageTrackerView {
+    /// Sample buckets for the loading skeleton.
+    static let placeholder: [MileageBucket] = (0..<8).map { i in
+        MileageBucket(start: Date.now.addingTimeInterval(Double(i - 8) * 7 * 86_400), distanceKm: 120 + Double(i % 3) * 40,
+                      driveCount: 6, energyUsedKwh: nil)
+    }
+
     /// Unselected bars carry the history, so in light they are 3:1 on the card;
     /// dark keeps main's `voltaBlue` at 35%.
     static let pastBar = Color(light: Color(hex: 0x6692F1), dark: Color(hex: 0x3B82F6).opacity(0.35))

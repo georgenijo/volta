@@ -14,6 +14,8 @@ struct MaintenanceView: View {
     @State private var deletingEvent: ServiceEvent?
     @State private var mutationError: String?
     @State private var mutating = false
+    /// Counts pulls to refresh that brought data, for the refresh haptic.
+    @State private var refreshed = 0
     /// What the open form has typed. The system rebuilds a sheet's content
     /// when the window changes size class, as when iPhone Duo folds or
     /// unfolds, so the draft lives here and outlasts it.
@@ -23,12 +25,12 @@ struct MaintenanceView: View {
     var body: some View {
         // Wide: the odometer and service items beside the completion history.
         ScreenKit.Page(splits: state.value != nil) {
-            LoadableContent(state: state, retry: load) { data in
+            LoadableContent(state: state, retry: { await load() }, errorTitle: "Couldn't load maintenance") { data in
                 Card {
                     VStack(alignment: .leading, spacing: 12) {
                         SectionLabel("Recorded odometer")
                         if let km = data.odometerKm {
-                            ScreenKit.Numeral(value: VoltaFormat.number(units.distanceValue(km: km), digits: 0), unit: units.distanceUnit, size: 48)
+                            ScreenKit.RollingNumeral(value: units.distanceValue(km: km), unit: units.distanceUnit, size: 48)
                             if let date = data.recordedAt {
                                 Text("\(data.source == "fleet_telemetry" ? "Telemetry" : "TeslaMate") · \(VoltaFormat.dateTime(date))")
                                     .font(.caption).foregroundStyle(ScreenKit.secondary)
@@ -38,55 +40,34 @@ struct MaintenanceView: View {
                         }
                     }
                 }
+                .voltaFocusIn(0)
+                if let mutationError {
+                    InlineBanner(systemImage: "exclamationmark.triangle", message: mutationError, tint: ScreenKit.amber) { self.mutationError = nil }
+                }
+                if data.items.isEmpty {
+                    EmptyState(systemImage: "wrench.and.screwdriver", title: "Start your service log",
+                               message: "Add a suggested or custom item, then record the last service date and odometer to set its next due point.",
+                               action: .init("Add service item", systemImage: "plus") { adding = true })
+                } else {
+                    Button { adding = true } label: { Label("Add service item", systemImage: "plus.circle.fill").frame(maxWidth: .infinity) }
+                        .buttonStyle(.borderedProminent).tint(Color.voltaBlueFill)
+                        .voltaFocusIn(1)
+                }
+                ForEach(Array(data.items.enumerated()), id: \.element.id) { index, item in
+                    itemCard(item).voltaFocusIn(index + 2)
+                }
                 Text("Personal reminders, not a service recommendation. Set intervals for your vehicle. Suggested intervals to add: rotation 6,250 mi, filter 2 years, brake fluid check 4 years, wipers 1 year. Add an item and record its last completion to start reminders. Due status appears here when you open Maintenance.")
                     .font(.caption).foregroundStyle(ScreenKit.secondary)
-                Button { adding = true } label: { Label("Add service item", systemImage: "plus.circle.fill").frame(maxWidth: .infinity) }
-                    .buttonStyle(.borderedProminent).tint(ScreenKit.mint)
-                if data.items.isEmpty {
-                    EmptyState(systemImage: "wrench.and.screwdriver", title: "Start your service log", message: "Add a suggested or custom item, then record the last service date and odometer to establish its next due point.")
-                }
-                if let mutationError { Text(mutationError).foregroundStyle(ScreenKit.red) }
-                ForEach(data.items) { item in
-                    Card {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text(item.name).font(.headline)
-                                Spacer()
-                                Menu {
-                                    Button("Edit item") { editingItem = item }
-                                    Button("Delete item and history", role: .destructive) { deletingItem = item }
-                                } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
-                                if let progress = item.progress {
-                                    ZStack {
-                                        Circle().stroke(ScreenKit.hairline, lineWidth: 4)
-                                        Circle().trim(from: 0, to: progress).stroke(progress >= 1 ? ScreenKit.amber : ScreenKit.mint, style: StrokeStyle(lineWidth: 4, lineCap: .round)).rotationEffect(.degrees(-90))
-                                        Text("\(Int(progress * 100))%").font(.system(size: 10, weight: .semibold))
-                                    }.frame(width: 44, height: 44)
-                                }
-                            }
-                            Text(interval(item)).font(.caption).foregroundStyle(ScreenKit.secondary)
-                            if let km = item.remainingKm {
-                                Text(km > 0 ? "Due in \(units.formatDistance(km, fractionDigits: 0))" : "Distance interval reached · \(units.formatDistance(-km, fractionDigits: 0)) past due")
-                            } else if item.intervalKm != nil {
-                                Text("Distance due unknown — record a service odometer and wait for a current reading.").font(.caption).foregroundStyle(ScreenKit.secondary)
-                            }
-                            if let days = item.remainingDays {
-                                Text(days > 0 ? "Due in \(days) days" : days == 0 ? "Due today" : "\(-days) days past due")
-                                if let date = item.nextDate { Text("Next: \(date.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary) }
-                            } else if item.intervalMonths != nil {
-                                Text("Date due unknown — record the last completion.").font(.caption).foregroundStyle(ScreenKit.secondary)
-                            }
-                            if let progress = item.progress { ProgressView(value: progress).tint(progress >= 1 ? ScreenKit.amber : ScreenKit.mint) }
-                            Button("Record completion") { completing = item }.buttonStyle(.bordered).tint(Color.voltaBlueText)
-                        }
-                    }
-                }
+                    .fixedSize(horizontal: false, vertical: true)
             }
         } secondary: {
             if let data = state.value {
                 SectionLabel("Service history")
-                if data.events.isEmpty { Text("No completions logged yet.").foregroundStyle(ScreenKit.secondary) }
-                ForEach(data.events) { event in
+                if data.events.isEmpty {
+                    Text("No completions logged yet. Record completion on an item to start its history.")
+                        .font(.subheadline).foregroundStyle(ScreenKit.secondary)
+                }
+                ForEach(Array(data.events.enumerated()), id: \.element.id) { index, event in
                     Card {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
@@ -95,44 +76,48 @@ struct MaintenanceView: View {
                                 Menu {
                                     Button("Correct completion") { editingEvent = event }
                                     Button("Delete completion", role: .destructive) { deletingEvent = event }
-                                } label: { Image(systemName: "ellipsis.circle") }.disabled(mutating)
+                                } label: { Image(systemName: "ellipsis.circle") }
+                                    .disabled(mutating)
+                                    .accessibilityLabel("Completion actions")
                             }
                             Text(event.completedAt.formatted(date: .abbreviated, time: .omitted))
                             Text(event.odometerKm.map { units.formatDistance($0, fractionDigits: 0) } ?? "Odometer not recorded").foregroundStyle(ScreenKit.secondary)
                         }
                     }
+                    .voltaFocusIn(index)
                 }
             }
         }
         .screenKitPage("Maintenance", screen: "maintenance")
         .task(id: vehicleID) { await load() }
-        .refreshable { await load() }
+        .refreshable { if await load(reset: false) { refreshed += 1 } }
+        .voltaFeedback(.refreshed, trigger: refreshed)
         .onChange(of: vehicleID) { _, _ in adding = false; completing = nil; editingItem = nil; editingEvent = nil; deletingItem = nil; deletingEvent = nil }
         .sheet(isPresented: $adding, onDismiss: { itemDraft = .init() }) {
             let id = vehicleID
             ServiceItemForm(draft: $itemDraft) { input in
                 try await dataSource.addService(vehicleID: id, item: input)
-                await load()
+                await load(reset: false)
             }
         }
         .sheet(item: $completing, onDismiss: { eventDraft = .init() }) { item in
             let id = vehicleID
             ServiceCompletionForm(draft: $eventDraft, item: item, odometerKm: currentOdometer) { event in
                 try await dataSource.completeService(vehicleID: id, itemID: item.id, event: event)
-                await load()
+                await load(reset: false)
             }
         }
         .sheet(item: $editingItem, onDismiss: { itemDraft = .init() }) { item in
             let id = vehicleID
             ServiceItemForm(draft: $itemDraft, existing: item) { input in
-                try await dataSource.updateService(vehicleID: id, itemID: item.id, item: input); await load()
+                try await dataSource.updateService(vehicleID: id, itemID: item.id, item: input); await load(reset: false)
             }
         }
         .sheet(item: $editingEvent, onDismiss: { eventDraft = .init() }) { event in
             let id = vehicleID
             if let item = state.value?.items.first(where: { $0.id == event.itemId }) {
                 ServiceCompletionForm(draft: $eventDraft, item: item, odometerKm: event.odometerKm, existing: event) { input in
-                    try await dataSource.updateServiceEvent(vehicleID: id, eventID: event.id, event: input); await load()
+                    try await dataSource.updateServiceEvent(vehicleID: id, eventID: event.id, event: input); await load(reset: false)
                 }
             }
         }
@@ -151,23 +136,68 @@ struct MaintenanceView: View {
 
     }
     private var currentOdometer: Double? { if case .loaded(let data) = state { data.odometerKm } else { nil } }
+
+    /// One service item: its interval, what is due, and one gauge from the
+    /// last service (empty) to due (full), amber once it is due.
+    private func itemCard(_ item: ServiceItem) -> some View {
+        let due = (item.progress ?? 0) >= 1
+        return Card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(item.name).font(.headline)
+                    Spacer()
+                    Menu {
+                        Button("Edit item") { editingItem = item }
+                        Button("Delete item and history", role: .destructive) { deletingItem = item }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                        .disabled(mutating)
+                        .accessibilityLabel("\(item.name) actions")
+                }
+                Text(interval(item)).font(.caption).foregroundStyle(ScreenKit.secondary)
+                if let km = item.remainingKm {
+                    Text(km > 0 ? "Due in \(units.formatDistance(km, fractionDigits: 0))" : "Distance interval reached · \(units.formatDistance(-km, fractionDigits: 0)) past due")
+                        .foregroundStyle(km > 0 ? Color.voltaTextPrimary : ScreenKit.amber)
+                } else if item.intervalKm != nil {
+                    Text("Distance due unknown. Record a service odometer and wait for a current reading.").font(.caption).foregroundStyle(ScreenKit.secondary)
+                }
+                if let days = item.remainingDays {
+                    Text(days > 0 ? "Due in \(days) days" : days == 0 ? "Due today" : "\(-days) days past due")
+                        .foregroundStyle(days > 0 ? Color.voltaTextPrimary : ScreenKit.amber)
+                    if let date = item.nextDate { Text("Next: \(date.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(ScreenKit.secondary) }
+                } else if item.intervalMonths != nil {
+                    Text("Date due unknown. Record the last completion.").font(.caption).foregroundStyle(ScreenKit.secondary)
+                }
+                if let progress = item.progress {
+                    LevelBar(value: min(progress, 1), color: due ? ScreenKit.amber : ScreenKit.secondary,
+                             lowLabel: "Last service", highLabel: due ? "Due now" : "Due")
+                }
+                Button("Record completion") { completing = item }.buttonStyle(.bordered).tint(Color.voltaBlueText)
+            }
+        }
+    }
     private func interval(_ item: ServiceItem) -> String {
         [item.intervalKm.map { "Every \(units.formatDistance($0, fractionDigits: 0))" }, item.intervalMonths.map { "Every \($0) months" }].compactMap { $0 }.joined(separator: " · ")
     }
     @MainActor private func mutate(_ operation: () async throws -> Void) async {
         guard !mutating else { return }; mutating = true; mutationError = nil
         defer { mutating = false }
-        do { try await operation(); await load() } catch { mutationError = error.localizedDescription }
+        do { try await operation(); await load(reset: false) } catch { mutationError = error.localizedDescription }
     }
-    @MainActor private func load() async {
-        let id = vehicleID, token = UUID(); generation = token; state = .loading
+    /// True when data loaded. A pull to refresh (`reset` false) keeps the
+    /// page on screen while it reloads instead of returning to the skeleton.
+    @discardableResult
+    @MainActor private func load(reset: Bool = true) async -> Bool {
+        let id = vehicleID, token = UUID(); generation = token
+        if reset || state.value == nil { state = .loading }
         do {
             let result = try await dataSource.service(vehicleID: id)
-            guard !Task.isCancelled, generation == token, vehicleID == id else { return }
+            guard !Task.isCancelled, generation == token, vehicleID == id else { return false }
             state = .loaded(result)
+            return true
         } catch {
-            guard !Task.isCancelled, generation == token, vehicleID == id else { return }
+            guard !Task.isCancelled, generation == token, vehicleID == id else { return false }
             state = .failed(error.localizedDescription)
+            return false
         }
     }
 }
@@ -208,7 +238,7 @@ private struct ServiceItemForm: View {
                 TextField("Distance interval (\(units.distanceUnit), optional)", text: $draft.distance).keyboardType(.decimalPad)
                 TextField("Month interval (optional)", text: $draft.months).keyboardType(.numberPad)
                 Text("Set at least one interval. When both are set, the first reached is due. Log a completion to start the interval.").font(.caption)
-                if let error { Text(error).foregroundStyle(ScreenKit.red) }
+                if let error { Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(ScreenKit.red) }
                 Button(busy ? "Saving…" : existing == nil ? "Add item" : "Save item") { Task { await submit() } }.disabled(busy)
             }.navigationTitle(existing == nil ? "Add service item" : "Edit service item")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) } }
@@ -254,7 +284,7 @@ private struct ServiceCompletionForm: View {
                 DatePicker("Completed", selection: $draft.date, in: ...Date.now, displayedComponents: .date)
                 TextField("Odometer (\(units.distanceUnit), optional)", text: $draft.odometer).keyboardType(.decimalPad)
                 Text("Enter the odometer at the service date. The current recorded reading is suggested; adjust it for older service. A blank value leaves distance reminders unknown.").font(.caption)
-                if let error { Text(error).foregroundStyle(ScreenKit.red) }
+                if let error { Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(ScreenKit.red) }
                 Button(busy ? "Saving…" : "Save completion") { Task { await submit() } }.disabled(busy)
             }.navigationTitle("Record completion")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) } }

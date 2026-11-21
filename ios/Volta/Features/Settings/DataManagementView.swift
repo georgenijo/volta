@@ -103,6 +103,13 @@ struct DataManagementView: View {
         var charges: [ChargeSummary]
     }
 
+    struct Failure: Equatable {
+        var kind: Kind
+        var message: String
+        /// The drive a GPX export was for, so Try again repeats it.
+        var drive: DriveSummary?
+    }
+
     struct NoRouteError: LocalizedError {
         var errorDescription: String? { "This drive has no recorded route to export." }
     }
@@ -113,41 +120,43 @@ struct DataManagementView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var export: Export?
     @State private var preparing: Kind?
-    @State private var errorMessage: String?
+    /// The export that failed, shown in its own card with Try again.
+    @State private var failure: Failure?
     @State private var isSharing = false
     @State private var choosingDrive = false
     /// The in-flight preparation, cancelled when the screen goes away.
     @State private var prepareTask: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScreenKit.Page(spacing: 24) {
             exportCard(.json, symbol: "square.and.arrow.up.on.square", title: "Export history",
                        subtitle: "All drives and charges as one JSON file, metric units.",
                        prepare: "Prepare export", footer: nil) { start(.json) }
+                .voltaFocusIn(0)
             exportCard(.csv, symbol: "tablecells", title: "Spreadsheet (CSV)",
                        subtitle: "Drives, charges and idles as three CSV tables, metric units, times in UTC.",
                        prepare: "Prepare CSV files",
                        footer: "The tables include addresses and place names, but no coordinates. Unknown values are left blank.") { start(.csv) }
+                .voltaFocusIn(1)
             exportCard(.gpx, symbol: "point.topleft.down.to.point.bottomright.curvepath", title: "Drive route (GPX)",
                        subtitle: "One drive's recorded route, for maps and GPS apps.",
                        prepare: "Choose a drive",
                        footer: "A GPX file contains the GPS coordinates of the whole route, including where it starts and ends. Share it only with people and apps you trust.") {
                 choosingDrive = true
             }
-            if let errorMessage {
-                InlineBanner(systemImage: "exclamationmark.triangle", message: errorMessage, tint: ScreenKit.amber) { self.errorMessage = nil }
-            }
+            .voltaFocusIn(2)
             ScreenKit.GroupCard(title: "Where your data lives",
                                 footer: "Exports are made on this iPhone and only leave it through the share sheet. Volta keeps no copy of your history beyond what's on screen.") {
                 ScreenKit.ValueRow(title: "History", subtitle: "TeslaMate Postgres on your server") {
-                    Image(systemName: "server.rack").foregroundStyle(ScreenKit.green)
+                    Image(systemName: "server.rack").foregroundStyle(ScreenKit.secondary).accessibilityHidden(true)
                 }
                 ScreenKit.ValueRow(title: "Settings", subtitle: "This iPhone", showsDivider: false) {
-                    Image(systemName: "iphone").foregroundStyle(ScreenKit.secondary)
+                    Image(systemName: "iphone").foregroundStyle(ScreenKit.secondary).accessibilityHidden(true)
                 }
             }
         }
-        .screenKitPage("Data Management", screen: "data-management")
+        .screenKitPage("Data management", screen: "data-management")
         .sheet(isPresented: $isSharing, onDismiss: discardExport) {
             if let export {
                 ActivityView(items: export.urls) { isSharing = false }
@@ -183,9 +192,12 @@ struct DataManagementView: View {
                         }
                     }
                     if let export, export.kind == kind {
-                        if let title = export.title {
-                            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.voltaTextPrimary)
-                        }
+                        Label(export.title ?? "Ready to share", systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.voltaTextPrimary)
+                            .symbolRenderingMode(.hierarchical)
+                            // A small reward when the file is ready.
+                            .symbolEffect(.bounce, options: .nonRepeating, value: reduceMotion ? 0 : export.bytes)
+                            .transition(.opacity)
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 18) { stats(export) }
                             VStack(alignment: .leading, spacing: 6) { stats(export) }
@@ -209,6 +221,21 @@ struct DataManagementView: View {
                                 .frame(maxWidth: .infinity)
                                 .accessibilityIdentifier("button.export.gpx.another")
                         }
+                    } else if let failure, failure.kind == kind, preparing != kind {
+                        // The export failed: say why here, and offer it again.
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(ScreenKit.amber).accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Export failed").font(.subheadline.weight(.semibold)).foregroundStyle(.voltaTextPrimary)
+                                Text(failure.message).font(.footnote).foregroundStyle(ScreenKit.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("text.export.error.\(slug(kind))")
+                        PillButton("Try again", systemImage: "arrow.clockwise", size: .wide, style: .accent) { retry(failure) }
+                            .disabled(preparing != nil)
+                            .accessibilityIdentifier("button.export.\(slug(kind))")
                     } else {
                         PillButton(preparing == kind ? "Preparing…" : prepare, systemImage: kind == .gpx ? "list.bullet" : "doc.badge.arrow.up",
                                    size: .wide, style: .accent, isBusy: preparing == kind, action: action)
@@ -249,9 +276,13 @@ struct DataManagementView: View {
         ExportFiles.removeAll()
     }
 
+    private func retry(_ failure: Failure) {
+        if failure.kind == .gpx, failure.drive == nil { choosingDrive = true } else { start(failure.kind, drive: failure.drive) }
+    }
+
     private func start(_ kind: Kind, drive: DriveSummary? = nil) {
         prepareTask?.cancel()
-        errorMessage = nil
+        failure = nil
         // One export at a time: a new one replaces any file waiting to be shared.
         discardExport()
         // Captured before any request: unpair or leaving the screen sweeps exports
@@ -292,11 +323,11 @@ struct DataManagementView: View {
                 if ExportFiles.isCurrent(token) { ExportFiles.removeAll() }
                 return
             }
-            export = prepared
+            withAnimation(VoltaMotion.animation(VoltaMotion.pop, reduceMotion: reduceMotion)) { export = prepared }
         } catch is CancellationError {
         } catch is ExportFiles.StaleExportError {
         } catch {
-            if !Task.isCancelled { errorMessage = error.localizedDescription }
+            if !Task.isCancelled { failure = Failure(kind: kind, message: error.localizedDescription, drive: drive) }
         }
     }
 
@@ -376,9 +407,10 @@ private struct DrivePickerSheet: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    LoadableContent(state: phase, retry: { await load(reset: true) }) { _ in
+                    LoadableContent(state: phase, retry: { await load(reset: true) }, errorTitle: "Couldn't load drives") { _ in
                         if drives.isEmpty {
-                            EmptyState(systemImage: "car", title: "No drives yet", message: "Recorded drives will appear here.")
+                            EmptyState(systemImage: "car", title: "No drives yet",
+                                       message: "Drives TeslaMate records appear here, ready to export as a route.")
                                 .padding(.top, 60)
                         } else {
                             VStack(spacing: 0) {
@@ -393,6 +425,7 @@ private struct DrivePickerSheet: View {
                                     }
                                     .buttonStyle(VoltaPressStyle())
                                     .accessibilityIdentifier("row.export.drive.\(index)")
+                                    .voltaFocusIn(index)
                                 }
                             }
                             .voltaCardBackground()

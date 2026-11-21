@@ -7,29 +7,34 @@ struct PlacesView: View {
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
     @State private var state: Loadable<[Place]> = .loading
+    @Environment(\.openURL) private var openURL
+
+    static let geofenceDocs = URL(string: "https://docs.teslamate.org")!
 
     var body: some View {
         // Wide: the map fills one pane beside the list of geofences.
         ScreenKit.Page(splits: !(state.value ?? []).isEmpty, spacing: 22) {
-            LoadableContent(state: state, retry: load) { places in
+            LoadableContent(state: state, retry: load, errorTitle: "Couldn't load places") { places in
                 if places.isEmpty {
                     EmptyState(systemImage: "mappin.slash", title: "No saved places",
-                               message: "Add geofences in TeslaMate and they'll appear here, named in your drives and charges.")
+                               message: "Add geofences in TeslaMate and they'll appear here, named in your drives and charges.",
+                               action: .init("Open TeslaMate docs", systemImage: "arrow.up.right") { openURL(Self.geofenceDocs) })
                         .padding(.top, 60)
                 } else {
-                    map(places)
+                    map(places).voltaFocusIn(0)
                 }
             }
         } secondary: {
             if let places = state.value, !places.isEmpty {
-                ScreenKit.GroupCard(title: "Geofences", footer: "Managed in TeslaMate on your server.") {
+                ScreenKit.GroupCard(title: "Geofences", footer: "Managed in TeslaMate on your server. The price is TeslaMate's cost per kWh at that place.") {
                     ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
                         ScreenKit.ValueRow(title: place.name, subtitle: subtitle(place), showsDivider: index < places.count - 1) {
                             Text(place.costPerKwh.map { "\(VoltaFormat.money($0, currency: units.currency))/kWh" } ?? "—")
-                                .font(.system(size: 14, weight: .medium)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
+                                .font(.subheadline.weight(.medium)).foregroundStyle(ScreenKit.secondary).monospacedDigit()
                         }
                     }
                 }
+                .voltaFocusIn(1)
             }
         }
         .screenKitPage("Places", screen: "places")

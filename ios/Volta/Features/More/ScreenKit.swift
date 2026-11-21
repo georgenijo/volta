@@ -13,28 +13,20 @@ enum ScreenKit {
     static let green = Color.voltaGreen
     static let amber = Color.voltaAmber
     static let red = Color.voltaRed
-    /// Softer green used for VEHICLE-section icons, as in the references.
-    static let mint = Color(light: 0x1A7D49, dark: 0x4AC286)  // light: 5.2:1 on a card
     static let horizontalPadding = VoltaSpacing.screen
     static let bottomBarClearance = VoltaSpacing.tabBarClearance
 
-    // MARK: Section header — "• AREAS" with a hairline underneath.
+    // MARK: Section header — "Areas" with a hairline underneath.
 
     struct SectionHeader: View {
         var title: String
-        var dot: Color? = nil
         /// Optional accessibility identifier placed on the title text (a leaf).
         var identifier: String? = nil
         var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    if let dot { Circle().fill(dot).frame(width: 6, height: 6) }
-                    Text(title.uppercased())
-                        .font(.system(size: 12, weight: .semibold))
-                        .tracking(2)
-                        .foregroundStyle(ScreenKit.secondary)
-                        .accessibilityIdentifier(identifier ?? "")
-                }
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title)
+                    .voltaLabelStyle()
+                    .accessibilityIdentifier(identifier ?? "")
                 Rectangle().fill(ScreenKit.hairline).frame(height: 1)
             }
             .padding(.horizontal, ScreenKit.horizontalPadding)
@@ -50,67 +42,75 @@ enum ScreenKit {
         var symbol: String
         var tint: Color
         var title: String
+        var subtitle: String? = nil
         var trailing: String? = nil
         var showsDivider = true
         var body: some View {
             VStack(spacing: 0) {
-                HStack(spacing: 18) {
+                HStack(spacing: 16) {
                     Image(systemName: symbol)
-                        .font(.system(size: 20, weight: .regular))
+                        .font(.system(.title3, weight: .regular))
                         .foregroundStyle(tint)
                         .frame(width: 30)
-                    Text(title).font(.system(size: 18, weight: .semibold)).foregroundStyle(.voltaTextPrimary)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title).font(.system(.body, weight: .medium)).foregroundStyle(.voltaTextPrimary)
+                        if let subtitle {
+                            Text(subtitle).font(.subheadline).foregroundStyle(ScreenKit.secondary).lineLimit(1)
+                        }
+                    }
                     Spacer(minLength: 8)
                     if let trailing {
-                        Text(trailing).font(.system(size: 13, weight: .medium)).foregroundStyle(ScreenKit.secondary)
+                        Text(trailing).font(.subheadline).foregroundStyle(ScreenKit.secondary)
                     }
                     Chevron()
                 }
-                .padding(.vertical, 20)
+                .padding(.vertical, 16)
                 .contentShape(Rectangle())
-                if showsDivider { Rectangle().fill(ScreenKit.hairline).frame(height: 1) }
+                if showsDivider { Rectangle().fill(ScreenKit.hairline).frame(height: 1).padding(.leading, 46) }
             }
             .padding(.horizontal, ScreenKit.horizontalPadding)
         }
     }
 
-    /// Settings-style row: icon, SMALL-CAPS title, gray subtitle, trailing badge, chevron.
+    /// Settings-style row: icon, title, grey subtitle, trailing value, chevron.
     struct CapsRow: View {
         var symbol: String
         var tint: Color = ScreenKit.blue
         var title: String
         var subtitle: String
         var trailing: String? = nil
-        var trailingTint: Color = .voltaTextPrimary
+        var trailingTint: Color = ScreenKit.secondary
         var showsChevron = true
         var body: some View {
             VStack(spacing: 0) {
-                HStack(spacing: 18) {
+                HStack(spacing: 16) {
                     Image(systemName: symbol)
-                        .font(.system(size: 21, weight: .medium))
+                        .font(.system(.title3, weight: .regular))
                         .foregroundStyle(tint)
-                        .frame(width: 32)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(title.uppercased())
-                            .font(.system(size: 14, weight: .semibold)).tracking(2)
+                        .frame(width: 30)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(.body, weight: .medium))
                             .foregroundStyle(.voltaTextPrimary)
                         Text(subtitle)
-                            .font(.system(size: 14))
+                            .font(.subheadline)
                             .foregroundStyle(ScreenKit.secondary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
                     if let trailing {
-                        Text(trailing.uppercased())
-                            .font(.system(size: 14, weight: .semibold)).tracking(1.2)
+                        Text(trailing)
+                            .font(.subheadline)
                             .foregroundStyle(trailingTint)
                     }
                     if showsChevron { Chevron() }
                 }
-                .padding(.vertical, 22)
+                .padding(.vertical, 16)
                 .padding(.horizontal, ScreenKit.horizontalPadding)
                 .contentShape(Rectangle())
-                Rectangle().fill(ScreenKit.hairline).frame(height: 1)
+                Rectangle().fill(ScreenKit.hairline).frame(height: 1).padding(.leading, ScreenKit.horizontalPadding + 46)
             }
         }
     }
@@ -118,8 +118,9 @@ enum ScreenKit {
     struct Chevron: View {
         var body: some View {
             Image(systemName: "chevron.right")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(ScreenKit.secondary)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(ScreenKit.tertiary)
+                .accessibilityHidden(true)
         }
     }
 
@@ -133,9 +134,9 @@ enum ScreenKit {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.system(size: 16, weight: .medium)).foregroundStyle(.voltaTextPrimary)
+                        Text(title).font(.system(.callout, weight: .medium)).foregroundStyle(.voltaTextPrimary)
                         if let subtitle {
-                            Text(subtitle).font(.system(size: 13)).foregroundStyle(ScreenKit.secondary)
+                            Text(subtitle).font(.footnote).foregroundStyle(ScreenKit.secondary)
                         }
                     }
                     Spacer(minLength: 8)
@@ -162,7 +163,8 @@ enum ScreenKit {
                 VStack(spacing: 0) { content }
                     .voltaCardBackground()
                 if let footer {
-                    Text(footer).font(.system(size: 12)).foregroundStyle(ScreenKit.secondary)
+                    Text(footer).font(.caption).foregroundStyle(ScreenKit.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 4)
                 }
             }
@@ -170,75 +172,156 @@ enum ScreenKit {
     }
 
     /// DesignSystem BigNumber that shrinks rather than wraps in tight tiles.
+    /// For a value that updates in place; its digits roll on change.
     struct Numeral: View {
         var value: String
         var unit: String? = nil
         var size: CGFloat = 34
+        var weight: Font.Weight = .heavy
         var body: some View {
-            BigNumber(value, unit: unit, size: size)
+            BigNumber(value, unit: unit, size: size, weight: weight)
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
         }
     }
 
-    /// DesignSystem SegmentedRangePicker on a capsule track.
+    /// A headline figure that rolls up from zero as it appears, then rolls to
+    /// each new value. Nil is an em dash, never zero.
+    ///
+    ///     ScreenKit.RollingNumeral(value: 1234, digits: 0, unit: "mi", size: 52)
+    struct RollingNumeral: View {
+        var value: Double?
+        var digits: Int = 0
+        var unit: String? = nil
+        var size: CGFloat = 34
+        var weight: Font.Weight = .heavy
+        /// Text before the number, such as "≥ " or "+".
+        var prefix: String = ""
+        var color: Color = .voltaTextPrimary
+        @ScaledMetric(relativeTo: .largeTitle) private var scaledSize: CGFloat = 34
+
+        init(value: Double?, digits: Int = 0, unit: String? = nil, size: CGFloat = 34,
+             weight: Font.Weight = .heavy, prefix: String = "", color: Color = .voltaTextPrimary) {
+            self.value = value
+            self.digits = digits
+            self.unit = unit
+            self.size = size
+            self.weight = weight
+            self.prefix = prefix
+            self.color = color
+            _scaledSize = ScaledMetric(wrappedValue: size, relativeTo: .largeTitle)
+        }
+
+        var body: some View {
+            if let value {
+                HStack(alignment: .firstTextBaseline, spacing: max(2, scaledSize * 0.06)) {
+                    RollingNumber(value: value) { prefix + VoltaFormat.number($0, digits: digits) }
+                        .font(.system(size: scaledSize, weight: weight))
+                        .tracking(-scaledSize * 0.03)
+                        .foregroundStyle(color)
+                    if let unit {
+                        Text(unit)
+                            .font(.system(size: max(12, scaledSize * 0.36), weight: .regular))
+                            .foregroundStyle(Color.voltaTextSecondary)
+                    }
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .accessibilityElement(children: .combine)
+            } else {
+                Numeral(value: "—", unit: unit, size: size, weight: weight)
+            }
+        }
+    }
+
+    /// Text segments on a capsule track; the selected one sits in a raised
+    /// capsule. Labels are written in sentence case ("30 days") and shown as
+    /// written. A change of selection gives the selection haptic.
     struct Segmented<Value: Hashable>: View {
         var options: [(Value, String)]
         @Binding var selection: Value
+        @Namespace private var ns
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
         var body: some View {
-            HStack {
-                Spacer(minLength: 0)
-                SegmentedRangePicker(selection: $selection, options: options.map(\.0)) { value in
-                    options.first(where: { $0.0 == value })?.1 ?? ""
+            HStack(spacing: 2) {
+                ForEach(options.indices, id: \.self) { index in
+                    let option = options[index]
+                    let selected = option.0 == selection
+                    Button {
+                        withAnimation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion)) { selection = option.0 }
+                    } label: {
+                        Text(option.1)
+                            .font(.system(.footnote, weight: .semibold))
+                            .foregroundStyle(selected ? Color.voltaTextPrimary : ScreenKit.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .background {
+                                if selected {
+                                    Capsule().fill(Color.voltaRaised)
+                                        .matchedGeometryEffect(id: "selection", in: ns)
+                                }
+                            }
+                            .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
                 }
-                Spacer(minLength: 0)
             }
             .padding(4)
             .background(Color.voltaCard, in: .capsule)
             .overlay(Capsule().strokeBorder(Color.voltaHairline, lineWidth: 1))
+            .voltaFeedback(.selection, trigger: selection)
         }
     }
 
-    /// Compact metric tile: label, numeral, unit, optional caption.
+    /// One reading inside a `MetricGroup`: label, value and unit, optional
+    /// caption. Smaller than a card's headline, so the card keeps one big reading.
     struct Metric: View {
         var label: String
         var value: String
         var unit: String? = nil
         var caption: String? = nil
+        var captionColor: Color = ScreenKit.secondary
         var symbol: String? = nil
         var body: some View {
-            Card {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 6) {
-                        if let symbol {
-                            Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).foregroundStyle(ScreenKit.secondary)
-                        }
-                        Text(label).voltaLabelStyle()
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    if let symbol {
+                        Image(systemName: symbol).font(.caption.weight(.semibold)).foregroundStyle(ScreenKit.tertiary)
+                            .accessibilityHidden(true)
                     }
-                    Numeral(value: value, unit: unit, size: 28)
-                    if let caption {
-                        Text(caption).font(.system(size: 12)).foregroundStyle(ScreenKit.secondary).lineLimit(1)
-                    }
+                    Text(label).voltaLabelStyle()
+                }
+                Numeral(value: value, unit: unit, size: 24, weight: .bold)
+                if let caption {
+                    Text(caption).font(.caption).foregroundStyle(captionColor)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .accessibilityElement(children: .combine)
         }
     }
 
-    /// Thin capsule progress bar.
-    struct ProgressBar: View {
-        var fraction: Double
-        var tint: Color = ScreenKit.blue
-        var height: CGFloat = 6
+    /// Secondary readings together in one card, two to a row, instead of a
+    /// grid of identical tiles. An optional title names what they share.
+    ///
+    ///     ScreenKit.MetricGroup(title: "Energy and cost") { Metric(...); Metric(...) }
+    struct MetricGroup<Content: View>: View {
+        var title: String? = nil
+        @ViewBuilder var content: Content
         var body: some View {
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.voltaInk.opacity(0.08))
-                    Capsule().fill(tint)
-                        .frame(width: max(height, proxy.size.width * min(1, max(0, fraction))))
-                        .shadow(color: tint.opacity(0.5), radius: 6)
+            Card(padding: 18) {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let title { SectionLabel(title) }
+                    LazyVGrid(columns: ScreenKit.metricColumns, alignment: .leading, spacing: 18) { content }
                 }
             }
-            .frame(height: height)
         }
     }
 
@@ -414,29 +497,71 @@ enum Loadable<Value: Sendable>: Sendable {
     var value: Value? { if case .loaded(let v) = self { v } else { nil } }
 }
 
-/// Renders a `Loadable` with consistent loading and error chrome.
+/// Renders a `Loadable` with consistent loading and error chrome. While it
+/// loads, the page's own layout is drawn as a skeleton: `placeholder` values
+/// run through `content` when given, otherwise a generic card-and-rows shape.
+/// A failure is an `ErrorState` with Try again.
 struct LoadableContent<Value: Sendable, Content: View>: View {
     var state: Loadable<Value>
     var retry: () async -> Void
+    var placeholder: Value? = nil
+    var errorTitle = "Couldn't load"
     @ViewBuilder var content: (Value) -> Content
+
+    init(state: Loadable<Value>, retry: @escaping () async -> Void, placeholder: Value? = nil,
+         errorTitle: String = "Couldn't load", @ViewBuilder content: @escaping (Value) -> Content) {
+        self.state = state
+        self.retry = retry
+        self.placeholder = placeholder
+        self.errorTitle = errorTitle
+        self.content = content
+    }
+
     var body: some View {
         switch state {
         case .loading:
-            ProgressView().tint(ScreenKit.secondary)
-                .frame(maxWidth: .infinity).padding(.vertical, 120)
-        case .failed(let message):
-            VStack(spacing: 16) {
-                EmptyState(systemImage: "exclamationmark.icloud", title: "Couldn't load", message: message)
-                Button("Try again") { Task { await retry() } }
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ScreenKit.blue)
+            Group {
+                if let placeholder {
+                    VStack(alignment: .leading, spacing: 18) { content(placeholder) }
+                } else {
+                    ScreenKit.SkeletonLayout()
+                }
             }
+            .voltaSkeleton(true)
+        case .failed(let message):
+            ErrorState(title: errorTitle, message: message, retry: retry)
+                .padding(.top, 40)
         case .loaded(let value):
             content(value)
         }
     }
 }
 
+extension ScreenKit {
+    /// The usual shape of a More page, for skeletons without sample values:
+    /// a headline card and a card of rows.
+    struct SkeletonLayout: View {
+        var body: some View {
+            VStack(alignment: .leading, spacing: 18) {
+                Card(padding: 20) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Loading reading").voltaLabelStyle()
+                        Text("1,234 mi").font(.system(size: 48, weight: .heavy))
+                        Text("Placeholder detail line").font(.subheadline)
+                        RoundedRectangle(cornerRadius: 8).fill(Color.voltaTrack).frame(height: 120)
+                    }
+                }
+                GroupCard(title: "Details") {
+                    ForEach(0..<3, id: \.self) { index in
+                        ValueRow(title: "Placeholder row", subtitle: "Detail", showsDivider: index < 2) {
+                            Text("123 mi").font(.callout)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 extension ScreenKit {
     /// Height for a map in a page: a share of the visible height in one column,

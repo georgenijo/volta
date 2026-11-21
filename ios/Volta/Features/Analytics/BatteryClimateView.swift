@@ -25,11 +25,12 @@ struct BatteryClimateView: View {
     @Environment(\.vehicleID) private var vehicleID
     @Environment(\.units) private var units
     @State private var state: Loadable<Snapshot> = .loading
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // Wide: the sweet spot and band chart beside every drive and the range table.
         ScreenKit.Page(scroll: "battery-climate", splits: !usableDrives.isEmpty) {
-            LoadableContent(state: state, retry: load) { snapshot in
+            LoadableContent(state: state, retry: load, errorTitle: "Couldn't load drives") { snapshot in
                 // Shown with or without content: an empty page can be incomplete too.
                 if !snapshot.isComplete {
                     InlineBanner(systemImage: "exclamationmark.triangle",
@@ -38,7 +39,7 @@ struct BatteryClimateView: View {
                 }
                 if usableDrives.isEmpty {
                     EmptyState(systemImage: "thermometer.medium", title: "No climate data yet",
-                               message: "Drives with an outside temperature reading will show how weather changes your efficiency.")
+                               message: "Drives with an outside temperature reading from the past year show how weather changes your efficiency.")
                         .padding(.top, 60)
                 } else {
                     summary(usableDrives)
@@ -47,7 +48,7 @@ struct BatteryClimateView: View {
         } secondary: {
             if !usableDrives.isEmpty { detail(usableDrives, capacity: state.value?.capacityKwh) }
         }
-        .screenKitPage("Battery Climate", screen: "battery-climate")
+        .screenKitPage("Battery climate", screen: "battery-climate")
         .task(id: vehicleID) { await load() }
     }
 
@@ -64,13 +65,13 @@ struct BatteryClimateView: View {
         let worst = bands.filter { $0.drives >= 1 }.max { $0.whPerKm < $1.whPerKm }
 
         VStack(alignment: .leading, spacing: 18) {
-            Card(padding: 20, tint: ScreenKit.blue) {
+            Card(padding: 20) {
                 VStack(alignment: .leading, spacing: 14) {
                     SectionLabel("Sweet spot", trailing: "\(drives.count) drives")
                     if let best {
                         ScreenKit.Numeral(value: bandLabel(best, withUnit: false), unit: units.temperatureUnit, size: 48)
                         Text("Most efficient at \(units.formatEfficiency(best.whPerKm)).")
-                            .font(.system(size: 14)).foregroundStyle(ScreenKit.secondary)
+                            .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                     }
                     if let best, let worst, worst.id != best.id, worst.whPerKm / best.whPerKm > 1.02 {
                         let penalty = (worst.whPerKm / best.whPerKm - 1) * 100
@@ -80,10 +81,11 @@ struct BatteryClimateView: View {
                             Text("Uses \(VoltaFormat.number(penalty, digits: 0))% more energy at \(bandLabel(worst, withUnit: true)).")
                                 .foregroundStyle(.voltaTextPrimary)
                         }
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.subheadline.weight(.medium))
                     }
                 }
             }
+            .voltaFocusIn(0)
 
             Card(padding: 20) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -95,16 +97,17 @@ struct BatteryClimateView: View {
                             .clipShape(.rect(cornerRadius: 4))
                             .annotation(position: .top, spacing: 4) {
                                 Text(VoltaFormat.number(units.efficiencyValue(whPerKm: band.whPerKm), digits: 0))
-                                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(ScreenKit.secondary)
+                                    .font(.caption2.weight(.semibold)).foregroundStyle(ScreenKit.secondary)
                             }
                     }
                     .chartStyled()
                     .frame(height: 190)
-                    Text("Outside temperature, \(units.temperatureUnit)")
-                        .font(.system(size: 11)).foregroundStyle(ScreenKit.tertiary)
-                        .frame(maxWidth: .infinity)
+                    Text("Outside temperature, \(units.temperatureUnit). Bars take the temperature colours: blue cold, green mild, amber hot.")
+                        .font(.caption2).foregroundStyle(ScreenKit.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .voltaFocusIn(1)
         }
     }
 
@@ -127,9 +130,10 @@ struct BatteryClimateView: View {
                     .chartYScale(domain: scatterDomain(drives.map { units.efficiencyValue(whPerKm: ($0.energyUsedKwh ?? 0) * 1000 / $0.distanceKm) }))
                     .chartStyled()
                     .frame(height: 170)
-                    Text("Dot size reflects distance.").font(.system(size: 11)).foregroundStyle(ScreenKit.tertiary)
+                    Text("Dot size reflects distance.").font(.caption2).foregroundStyle(ScreenKit.tertiary)
                 }
             }
+            .voltaFocusIn(0)
 
             if let capacity {
                 ScreenKit.GroupCard(title: "Estimated full-charge range",
@@ -138,10 +142,11 @@ struct BatteryClimateView: View {
                         ScreenKit.ValueRow(title: bandLabel(band, withUnit: true), subtitle: "\(band.drives) drive\(band.drives == 1 ? "" : "s")",
                                            showsDivider: index < bands.count - 1) {
                             Text(units.formatDistance(band.whPerKm > 0 ? capacity * 1000 / band.whPerKm : nil, fractionDigits: 0))
-                                .font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
+                                .font(.callout.weight(.semibold)).foregroundStyle(.voltaTextPrimary).monospacedDigit()
                         }
                     }
                 }
+                .voltaFocusIn(1)
             }
         }
     }
@@ -176,7 +181,8 @@ struct BatteryClimateView: View {
         return map.values.sorted { $0.lower < $1.lower }
     }
 
-    /// Cold → blue, mild → green, hot → amber.
+    /// Cold → blue, mild → green, hot → amber: the temperature scale's own
+    /// colours, on a chart whose axis is temperature.
     static func tint(forC c: Double) -> Color {
         c < 5 ? ScreenKit.blue : c < 25 ? ScreenKit.green : ScreenKit.amber
     }
@@ -189,7 +195,7 @@ struct BatteryClimateView: View {
             let capacity = try? await source.battery(vehicleID: id).capacityNowKwh
             let paged = try await drives
             let snapshot = Snapshot(drives: paged.items, capacityKwh: capacity, isComplete: paged.isComplete)
-            withAnimation(.smooth) { state = .loaded(snapshot) }
+            withAnimation(VoltaMotion.animation(VoltaMotion.arrive, reduceMotion: reduceMotion)) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
             state = .failed(error.localizedDescription)

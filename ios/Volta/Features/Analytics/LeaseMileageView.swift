@@ -32,6 +32,7 @@ struct LeaseMileageView: View {
     @State private var editing = false
     /// Bumped by every load (terms change or retry); only the latest may set `state`.
     @State private var loadGeneration = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// UserDefaults key scoped like the warranty purchase date: per paired
     /// server (or demo) and vehicle. nil = don't persist (launch demo).
@@ -65,11 +66,11 @@ struct LeaseMileageView: View {
 
     var body: some View {
         ScreenKit.Page(scroll: "lease", splits: progress != nil) {
-            LoadableContent(state: shownState, retry: load) { snapshot in
+            LoadableContent(state: shownState, retry: load, errorTitle: "Couldn't load lease mileage") { snapshot in
                 if let terms, let progress {
-                    hero(progress)
-                    if progress.phase != .ended { pace(progress) }
-                    projection(progress, snapshot: snapshot)
+                    hero(progress).voltaFocusIn(0)
+                    if progress.phase != .ended { pace(progress).voltaFocusIn(1) }
+                    projection(progress, snapshot: snapshot).voltaFocusIn(2)
                     if progress.odometerBelowStart {
                         InlineBanner(systemImage: "exclamationmark.triangle",
                                      message: "The car's odometer (\(units.formatDistance(snapshot.odometerKm, fractionDigits: 0))) reads below your starting odometer (\(units.formatDistance(terms.startOdometerKm, fractionDigits: 0))). Check your lease figures.",
@@ -81,11 +82,11 @@ struct LeaseMileageView: View {
             }
         } secondary: {
             if let terms, let progress, let snapshot = shownState.value {
-                chart(progress, terms: terms, snapshot: snapshot)
-                termsCard(terms)
+                chart(progress, terms: terms, snapshot: snapshot).voltaFocusIn(0)
+                termsCard(terms).voltaFocusIn(1)
             }
         }
-        .screenKitPage("Lease Mileage", screen: "lease")
+        .screenKitPage("Lease mileage", screen: "lease")
         .task(id: LoadKey(vehicleID: vehicleID, terms: terms, termsLoaded: termsLoaded)) { await load() }
         .task(id: storageKey) {
             let data = storageKey.flatMap { UserDefaults.standard.data(forKey: $0) }
@@ -113,21 +114,22 @@ struct LeaseMileageView: View {
     // MARK: Hero
 
     private func hero(_ p: LeaseProgress) -> some View {
-        Card(padding: 20, tint: ScreenKit.mint) {
+        Card(padding: 20) {
             VStack(alignment: .leading, spacing: 14) {
                 if p.phase == .ended {
                     // Today's odometer is not the end-of-term reading: label it as what it is.
                     SectionLabel("Since lease start", trailing: phaseLabel(p))
-                    ScreenKit.Numeral(value: p.sinceStartKm.map { number($0) } ?? "—", unit: units.distanceUnit, size: 52)
+                    ScreenKit.RollingNumeral(value: p.sinceStartKm.map { units.distanceValue(km: $0) }, unit: units.distanceUnit, size: 52)
                     Text("Odometer now against your starting figure, including any driving after the lease ended on \(day(p.end)).")
                         .font(.subheadline).foregroundStyle(ScreenKit.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     SectionLabel("Used so far", trailing: phaseLabel(p))
-                    ScreenKit.Numeral(value: p.usedKm.map { number($0) } ?? "—", unit: units.distanceUnit, size: 52)
+                    ScreenKit.RollingNumeral(value: p.usedKm.map { units.distanceValue(km: $0) }, unit: units.distanceUnit, size: 52)
                     Text("of \(units.formatDistance(p.allowanceKm, fractionDigits: 0)) allowance")
                         .font(.subheadline).foregroundStyle(ScreenKit.secondary)
-                    LeaseProgressBar(used: p.usedFraction, time: p.timeFraction)
+                    LeaseProgressBar(used: p.usedFraction, time: p.timeFraction,
+                                     highLabel: "\(units.formatDistance(p.allowanceKm, fractionDigits: 0)) allowance")
                         .accessibilityElement()
                         .accessibilityLabel("Allowance used")
                         .accessibilityValue(p.usedFraction.map { "\(percent($0)) of allowance, \(percent(p.timeFraction)) of the term" }
@@ -156,17 +158,18 @@ struct LeaseMileageView: View {
 
     @ViewBuilder
     private func pace(_ p: LeaseProgress) -> some View {
-        LazyVGrid(columns: ScreenKit.metricColumns, spacing: 12) {
+        ScreenKit.MetricGroup(title: "Pace") {
             ScreenKit.Metric(label: "Remaining", value: p.remainingKm.map { number(max($0, 0)) } ?? "—", unit: units.distanceUnit,
                              caption: p.remainingKm.map { $0 < 0 ? "\(number(-$0)) \(units.distanceUnit) over" : "of allowance" },
                              symbol: "road.lanes")
-            ScreenKit.Metric(label: "Even pace", value: p.usedKm == nil ? "—" : aheadValue(p), unit: p.usedKm == nil ? nil : units.distanceUnit,
-                             caption: p.aheadOfPaceKm.map { $0 > 0 ? "Over an even pace" : "Under an even pace" }, symbol: "scalemass")
+            ScreenKit.Metric(label: "Against an even pace", value: p.usedKm == nil ? "—" : aheadValue(p), unit: p.usedKm == nil ? nil : units.distanceUnit,
+                             caption: p.aheadOfPaceKm.map { $0 > 0 ? "Over an even pace" : "Under an even pace" },
+                             captionColor: (p.aheadOfPaceKm ?? 0) > 0 ? ScreenKit.amber : ScreenKit.secondary, symbol: "scalemass")
             ScreenKit.Metric(label: "Needed pace", value: p.neededKmPerDay.map { monthly($0) } ?? "—",
-                             unit: p.neededKmPerDay == nil ? nil : "\(units.distanceUnit)/mo",
+                             unit: p.neededKmPerDay == nil ? nil : "\(units.distanceUnit) a month",
                              caption: p.phase == .active ? "To finish on allowance" : nil, symbol: "flag.checkered")
             ScreenKit.Metric(label: "Your pace", value: p.actualKmPerDay.map { monthly($0) } ?? "—",
-                             unit: p.actualKmPerDay == nil ? nil : "\(units.distanceUnit)/mo",
+                             unit: p.actualKmPerDay == nil ? nil : "\(units.distanceUnit) a month",
                              caption: paceCaption(p), symbol: "speedometer")
         }
     }
@@ -211,10 +214,11 @@ struct LeaseMileageView: View {
                         }
                     }
                 } else if let projected = p.projectedKmAtEnd, let over = p.projectedOverKm {
-                    ScreenKit.Numeral(value: number(projected), unit: units.distanceUnit, size: 40)
+                    ScreenKit.RollingNumeral(value: units.distanceValue(km: projected), unit: units.distanceUnit, size: 40, weight: .bold)
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        // Running over is a warning (amber), not yet a problem.
                         Image(systemName: over > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                            .foregroundStyle(over > 0 ? ScreenKit.red : ScreenKit.green)
+                            .foregroundStyle(over > 0 ? ScreenKit.amber : ScreenKit.secondary)
                             .accessibilityHidden(true)
                         Text(over > 0 ? "\(units.formatDistance(over, fractionDigits: 0)) over allowance"
                                       : "\(units.formatDistance(-over, fractionDigits: 0)) under allowance")
@@ -269,12 +273,12 @@ struct LeaseMileageView: View {
                             .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                         ForEach(recorded, id: \.self) { point in
                             AreaMark(x: .value("Date", point.date), y: .value("Distance", units.distanceValue(km: point.km)))
-                                .foregroundStyle(LinearGradient(colors: [ScreenKit.mint.opacity(0.3), ScreenKit.mint.opacity(0)],
+                                .foregroundStyle(LinearGradient(colors: [Self.recordedColor.opacity(0.18), Self.recordedColor.opacity(0)],
                                                                 startPoint: .top, endPoint: .bottom))
                                 .interpolationMethod(.stepEnd)
                             LineMark(x: .value("Date", point.date), y: .value("Distance", units.distanceValue(km: point.km)),
                                      series: .value("Series", "Recorded"))
-                                .foregroundStyle(ScreenKit.mint)
+                                .foregroundStyle(Self.recordedColor)
                                 .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
                                 .interpolationMethod(.stepEnd)
                         }
@@ -306,13 +310,13 @@ struct LeaseMileageView: View {
                     .chartXAxis {
                         AxisMarks(values: .automatic(desiredCount: 3)) { _ in
                             AxisValueLabel(format: .dateTime.month(.abbreviated).year())
-                                .foregroundStyle(ScreenKit.secondary).font(.system(size: 10))
+                                .foregroundStyle(ScreenKit.secondary).font(.caption2)
                         }
                     }
                     .chartYAxis {
                         AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
                             AxisGridLine().foregroundStyle(ScreenKit.hairline)
-                            AxisValueLabel().foregroundStyle(ScreenKit.secondary).font(.system(size: 10))
+                            AxisValueLabel().foregroundStyle(ScreenKit.secondary).font(.caption2)
                         }
                     }
                     .frame(height: 200)
@@ -398,7 +402,7 @@ struct LeaseMileageView: View {
     }
 
     @ViewBuilder private func chartLegend(_ p: LeaseProgress, odometer: Double?) -> some View {
-        legendDot(ScreenKit.mint, "Recorded drives")
+        legendDot(Self.recordedColor, "Recorded drives")
         legendDash("Allowance", color: ScreenKit.secondary)
         if odometer != nil {
             HStack(spacing: 6) {
@@ -409,9 +413,13 @@ struct LeaseMileageView: View {
         if p.phase == .active, p.projectedKmAtEnd != nil { legendDash("Projection (estimate)", color: projectionTint(p)) }
     }
 
+    /// Amber when the projection runs over the allowance; otherwise grey.
     private func projectionTint(_ p: LeaseProgress) -> Color {
-        (p.projectedOverKm ?? 0) > 0 ? ScreenKit.amber : ScreenKit.blue
+        (p.projectedOverKm ?? 0) > 0 ? ScreenKit.amber : ScreenKit.secondary
     }
+
+    /// The recorded distance line: ink, the chart's main reading.
+    static let recordedColor = Color.voltaTextPrimary
 
     private func legendTick(_ label: String) -> some View {
         HStack(spacing: 6) {
@@ -454,7 +462,7 @@ struct LeaseMileageView: View {
         do {
             let snapshot = try await Self.fetch(source: dataSource, vehicleID: vehicleID, terms: terms)
             guard !Task.isCancelled, mine == loadGeneration else { return }
-            withAnimation(.smooth) { state = .loaded(snapshot) }
+            withAnimation(VoltaMotion.animation(VoltaMotion.arrive, reduceMotion: reduceMotion)) { state = .loaded(snapshot) }
         } catch is CancellationError {
         } catch {
             guard !Task.isCancelled, mine == loadGeneration else { return }
@@ -463,27 +471,52 @@ struct LeaseMileageView: View {
     }
 }
 
-/// Distance used as a filled bar, with a tick where an even pace would be today.
+/// Distance used as a bar filled from zero to the allowance, both ends
+/// labelled, with a tick where an even pace would be today.
 private struct LeaseProgressBar: View {
     var used: Double?
     var time: Double
+    var highLabel: String
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Amber once distance runs ahead of time.
+    /// Amber once distance runs ahead of time; grey while it doesn't.
     static func tint(used: Double?, time: Double) -> Color {
-        (used ?? 0) > time * 1.02 ? ScreenKit.amber : ScreenKit.mint
+        (used ?? 0) > time * 1.02 ? ScreenKit.amber : ScreenKit.secondary
     }
 
     var body: some View {
-        ScreenKit.ProgressBar(fraction: used ?? 0, tint: Self.tint(used: used, time: time), height: 8)
-            .opacity(used == nil ? 0.4 : 1)
-            .overlay(alignment: .leading) {
-                GeometryReader { proxy in
+        let shown = settled || reduceMotion
+        VStack(spacing: VoltaSpacing.xs) {
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.voltaTrack).frame(height: 8)
+                    if let used {
+                        Capsule().fill(Self.tint(used: used, time: time))
+                            .frame(width: max(8, width * min(1, max(0, used)) * (shown ? 1 : 0)), height: 8)
+                    }
                     Capsule().fill(Color.voltaTextPrimary)
                         .frame(width: 2, height: 16)
-                        .offset(x: max(0, min(proxy.size.width - 2, proxy.size.width * time - 1)), y: -4)
+                        .offset(x: max(0, min(width - 2, width * time - 1)))
                 }
+                .frame(height: 16)
             }
-            .padding(.vertical, 4)
+            .frame(height: 16)
+            HStack {
+                Text("0")
+                Spacer(minLength: VoltaSpacing.sm)
+                Text(highLabel)
+            }
+            .font(.caption2)
+            .foregroundStyle(Color.voltaTextTertiary)
+            .lineLimit(1)
+        }
+        .animation(VoltaMotion.animation(VoltaMotion.settle, reduceMotion: reduceMotion), value: used)
+        .onAppear {
+            guard !settled else { return }
+            withAnimation(VoltaMotion.animation(VoltaMotion.settle.delay(0.15), reduceMotion: reduceMotion)) { settled = true }
+        }
     }
 }
 
@@ -556,6 +589,7 @@ struct LeaseTermsSheet: View {
                         .background(ScreenKit.card, in: .rect(cornerRadius: 14))
                         .accessibilityIdentifier("field.lease.term")
                     }
+                    .voltaFeedback(.selection, trigger: months)
 
                     numberField("Mileage allowance (\(units.distanceUnit), whole term)", text: $allowanceText, prompt: units.distance == .miles ? "36000" : "60000",
                                 field: .allowance, valid: Self.parse(allowanceText).map { $0 > 0 } ?? allowanceText.isEmpty,
@@ -615,7 +649,7 @@ struct LeaseTermsSheet: View {
     @ViewBuilder private var termButtons: some View {
         ForEach(Self.commonTerms, id: \.self) { value in
             Button { months = value } label: {
-                Text("\(value) mo")
+                Text("\(value) months")
                     .font(.subheadline.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(months == value ? Color.voltaTextPrimary : ScreenKit.secondary)
                     .padding(.horizontal, 14).padding(.vertical, 8)

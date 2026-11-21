@@ -14,6 +14,7 @@ struct TireHistorySection: View {
     @State private var choice: FocusChoice = .automatic
     @State private var selected: Date?
     @State private var attempt = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The focused wheel follows the flagged one until the owner picks.
     private enum FocusChoice: Hashable { case automatic, none, wheel(TireWheel) }
@@ -33,20 +34,20 @@ struct TireHistorySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             SectionLabel("Pressure history")
-            ScreenKit.Segmented(options: TireHistoryMath.Period.allCases.map { ($0, $0.rawValue) }, selection: $model.period)
+            ScreenKit.Segmented(options: TireHistoryMath.Period.allCases.map { ($0, $0.label) }, selection: $model.period)
             switch model.shown {
             case .loading:
+                // The chart card's shape while the history loads.
                 Card(padding: 20) {
-                    ProgressView().tint(Color.voltaTextSecondary).frame(maxWidth: .infinity, minHeight: 220)
-                }
-            case .failed(let message):
-                Card(padding: 20) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(message).font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        PillButton("Try again", systemImage: "arrow.clockwise") { attempt += 1 }
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Daily lowest · psi").voltaLabelStyle()
+                        RoundedRectangle(cornerRadius: 8).fill(Color.voltaTrack).frame(height: 180)
+                        Text("FL FR RL RR").font(.caption)
                     }
                 }
+                .voltaSkeleton(true)
+            case .failed(let message):
+                ErrorState(title: "Couldn't load pressure history", message: message) { attempt += 1 }
             case .loaded(let snapshot):
                 if snapshot.history.isEmpty {
                     EmptyState(systemImage: "gauge.with.dots.needle.33percent", title: "No pressure history",
@@ -58,6 +59,7 @@ struct TireHistorySection: View {
                 }
             }
         }
+        .voltaFeedback(.selection, trigger: choice)
         // Try again bumps `attempt`, so the retried load is this task too and is
         // cancelled with the screen.
         .task(id: TaskKey(vehicleID: vehicleID, period: model.period, attempt: attempt)) { await load() }
@@ -167,7 +169,7 @@ struct TireHistorySection: View {
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
                 AxisGridLine().foregroundStyle(Color.voltaHairline)
-                AxisValueLabel().font(.system(size: 10)).foregroundStyle(Color.voltaTextSecondary)
+                AxisValueLabel().font(.caption2).foregroundStyle(Color.voltaTextSecondary)
             }
         }
         .chartOverlay { proxy in
@@ -232,7 +234,7 @@ struct TireHistorySection: View {
             .foregroundStyle(Color.voltaAmber.opacity(0.7))
             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
             .annotation(position: .top, alignment: .leading, spacing: 2) {
-                Text("Low guide").font(.system(size: 10, weight: .medium)).foregroundStyle(Color.voltaAmber)
+                Text("Low guide").font(.caption2.weight(.medium)).foregroundStyle(Color.voltaAmber)
             }
             .accessibilityLabel("Low-pressure guide")
             .accessibilityValue(pressure(guide))
@@ -249,12 +251,12 @@ struct TireHistorySection: View {
     private func readout(_ date: Date, readings: [Reading]) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(date.formatted(.dateTime.month(.abbreviated).day()))
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(Color.voltaTextSecondary)
+                .font(.caption2.weight(.medium)).foregroundStyle(Color.voltaTextSecondary)
             ForEach(readings, id: \.wheel) { reading in
                 Text("\(reading.wheel.short) \(pressure(reading.plot.bar))")
                     .foregroundStyle(Self.color(reading.wheel))
             }
-            .font(.system(size: 11, weight: .bold)).monospacedDigit()
+            .font(.caption2.weight(.bold)).monospacedDigit()
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(Color.voltaRaised, in: .rect(cornerRadius: 8))
@@ -268,7 +270,7 @@ struct TireHistorySection: View {
             if let anchor = proxy.plotFrame, let x = proxy.position(forX: date), let y = proxy.position(forY: value) {
                 let frame = geo[anchor]
                 Text(text)
-                    .font(.system(size: 11, weight: .bold)).monospacedDigit()
+                    .font(.caption2.weight(.bold)).monospacedDigit()
                     .foregroundStyle(color)
                     .fixedSize()
                     .offset(x: frame.minX + x + 6, y: min(max(frame.minY + y - 7, frame.minY), frame.maxY - 14))
@@ -331,7 +333,7 @@ struct TireHistorySection: View {
 
     private func chip(_ wheel: TireWheel, on: Bool) -> some View {
         Button {
-            withAnimation(.snappy) { choice = on ? .none : .wheel(wheel) }
+            withAnimation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion)) { choice = on ? .none : .wheel(wheel) }
         } label: {
             HStack(spacing: 6) {
                 Capsule().fill(Self.color(wheel)).frame(width: 12, height: 3)
@@ -455,11 +457,11 @@ struct TireRotationRow: View {
             Button { push(.maintenance) } label: {
                 HStack(spacing: 14) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 18, weight: .medium)).foregroundStyle(ScreenKit.mint)
+                        .font(.body.weight(.medium)).foregroundStyle(ScreenKit.blue)
                         .frame(width: 28)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Tire rotation").font(.system(size: 16, weight: .medium)).foregroundStyle(Color.voltaTextPrimary)
-                        Text(status).font(.system(size: 13)).foregroundStyle(statusTint)
+                        Text("Tire rotation").font(.callout.weight(.medium)).foregroundStyle(Color.voltaTextPrimary)
+                        Text(status).font(.footnote).foregroundStyle(statusTint)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 8)

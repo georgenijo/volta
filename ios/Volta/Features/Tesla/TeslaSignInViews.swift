@@ -8,6 +8,7 @@ extension TeslaLinkModel {
         case .completing: "Connecting…"
         case .needsReauth: "Reconnect Tesla"
         case .failed(_, true): "Try again"
+        case .failed(_, false): "Start again"
         default: "Sign in with Tesla"
         }
     }
@@ -44,13 +45,22 @@ struct TeslaSignInPanel: View {
         state == .connected ? error : error ?? note
     }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         let tesla = model.tesla
         let caption = Self.caption(state: tesla.state, note: note, error: error)
         VStack(spacing: 14) {
             switch tesla.state {
             case .idle, .loading:
-                ProgressView()
+                // The panel's own shape while the server is asked whether Tesla is linked.
+                VStack(spacing: 14) {
+                    Text("Checking your Tesla connection on the server")
+                        .font(.subheadline)
+                    PillButton("Sign in with Tesla", systemImage: "car.side", size: .wide, style: .accent) {}
+                    Text(TeslaLinkModel.scopeDisclosure).font(.footnote)
+                }
+                .voltaSkeleton(true)
             case .notAvailable:
                 Text("Sign in with Tesla isn't set up on your server yet.")
                     .font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
@@ -66,9 +76,21 @@ struct TeslaSignInPanel: View {
                     InlineBanner(systemImage: "exclamationmark.triangle", message: caption)
                 }
             default:
-                noteLine(caption)
                 if let message = tesla.failureMessage {
-                    InlineBanner(systemImage: "exclamationmark.triangle", message: message)
+                    // Sign-in failed: say so plainly, then the reason, then Try again.
+                    VStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.title2).foregroundStyle(Color.voltaAmber)
+                            .symbolEffect(.wiggle, options: .nonRepeating, value: reduceMotion ? "" : message)
+                            .accessibilityHidden(true)
+                        Text("Sign-in didn't finish").font(.headline).foregroundStyle(Color.voltaTextPrimary)
+                        Text(message).font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("text.teslaSignIn.error")
+                } else {
+                    noteLine(caption)
                 }
                 TeslaSignInButton(tesla: tesla)
                 Text(TeslaLinkModel.scopeDisclosure)
@@ -93,6 +115,7 @@ struct TeslaSignInPanel: View {
 struct TeslaAccountSection: View {
     @Environment(AppModel.self) private var model
     @State private var confirmDisconnect = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let tesla = model.tesla
@@ -100,21 +123,32 @@ struct TeslaAccountSection: View {
             ScreenKit.GroupCard(title: "Tesla account", footer: footer(tesla)) {
                 ScreenKit.ValueRow(title: "Status", showsDivider: showsCollection(tesla)) {
                     HStack(spacing: 6) {
-                        StatusDot(color: statusColor(tesla))
-                        Text(statusText(tesla)).font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                        if tesla.state == .connected && tesla.status?.budget?.paused != true {
+                            // Connecting succeeded: the check pops in.
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(ScreenKit.blue)
+                                .transition(.symbolEffect(.appear))
+                                .accessibilityHidden(true)
+                        } else {
+                            StatusDot(color: statusColor(tesla))
+                        }
+                        Text(statusText(tesla)).font(.subheadline).foregroundStyle(ScreenKit.secondary)
                     }
+                    .animation(VoltaMotion.animation(VoltaMotion.pop, reduceMotion: reduceMotion), value: tesla.state)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("row.teslaStatus")
                 if showsCollection(tesla), let status = tesla.status {
                     ScreenKit.ValueRow(title: "Data collection", subtitle: budgetText(status), showsDivider: false) {
-                        Text(collectionText(status)).font(.system(size: 15))
+                        Text(collectionText(status)).font(.subheadline)
                             .foregroundStyle(status.budget?.paused == true ? ScreenKit.amber : ScreenKit.secondary)
                     }
                 }
             }
-            if let message = tesla.failureMessage ?? tesla.disconnectError {
-                InlineBanner(systemImage: "exclamationmark.triangle", message: message, tint: ScreenKit.amber)
+            if let message = tesla.failureMessage {
+                InlineBanner(systemImage: "exclamationmark.triangle", message: "Sign-in didn't finish. " + message, tint: ScreenKit.amber)
+                    .accessibilityIdentifier("text.teslaSignIn.error")
+            } else if let message = tesla.disconnectError {
+                InlineBanner(systemImage: "exclamationmark.triangle", message: "Couldn't disconnect. " + message, tint: ScreenKit.amber)
             }
             if tesla.canSignIn || tesla.isBusy {
                 TeslaSignInButton(tesla: tesla)
@@ -134,7 +168,7 @@ struct TeslaAccountSection: View {
                         if tesla.isDisconnecting { ProgressView().tint(ScreenKit.red) } else { Image(systemName: "link.badge.minus") }
                         Text("Disconnect Tesla")
                     }
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(ScreenKit.red)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 16)
@@ -168,7 +202,8 @@ struct TeslaAccountSection: View {
     }
     private func statusColor(_ tesla: TeslaLinkModel) -> Color {
         switch tesla.state {
-        case .connected: tesla.status?.budget?.paused == true ? ScreenKit.amber : ScreenKit.green
+        // Blue: online. Amber: collection paused or a reconnect is needed.
+        case .connected: tesla.status?.budget?.paused == true ? ScreenKit.amber : ScreenKit.blue
         case .needsReauth: ScreenKit.amber
         default: ScreenKit.secondary
         }

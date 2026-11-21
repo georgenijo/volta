@@ -7,12 +7,14 @@ struct SwitchVehicleView: View {
     @Environment(\.dataSource) private var dataSource
     @Environment(\.vehicleID) private var vehicleID
     @State private var state: Loadable<[Vehicle]> = .loading
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScreenKit.Page {
-            LoadableContent(state: state, retry: load) { vehicles in
+            LoadableContent(state: state, retry: load, errorTitle: "Couldn't load vehicles") { vehicles in
                 if vehicles.isEmpty {
-                    EmptyState(systemImage: "car", title: "No vehicles", message: "TeslaMate hasn't reported a vehicle to your server yet.")
+                    EmptyState(systemImage: "car", title: "No vehicles",
+                               message: "TeslaMate hasn't reported a vehicle to your server yet. Cars appear here once TeslaMate logs them.")
                 } else {
                     VStack(spacing: 18) {
                         ScreenKit.GroupCard(title: "Vehicles",
@@ -26,19 +28,25 @@ struct SwitchVehicleView: View {
                                                        subtitle: VehicleInfoSheet.detail(vehicle),
                                                        showsDivider: index < vehicles.count - 1) {
                                         if vehicle.id == model.selectedVehicleID {
-                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(ScreenKit.green)
+                                            // Blue: the selection.
+                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(ScreenKit.blue)
+                                                .transition(.symbolEffect(.appear))
                                         }
                                     }
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityAddTraits(vehicle.id == model.selectedVehicleID ? .isSelected : [])
                             }
                         }
                     }
                     .padding(.top, 4)
+                    .voltaFocusIn()
+                    .animation(VoltaMotion.animation(VoltaMotion.pop, reduceMotion: reduceMotion), value: model.selectedVehicleID)
+                    .voltaFeedback(.selection, trigger: model.selectedVehicleID)
                 }
             }
         }
-        .screenKitPage("Switch Vehicle")
+        .screenKitPage("Switch vehicle")
         .task(id: vehicleID) { await load() }
     }
 

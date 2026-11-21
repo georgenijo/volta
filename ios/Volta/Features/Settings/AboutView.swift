@@ -6,31 +6,31 @@ struct AboutView: View {
         ScreenKit.Page(spacing: 24) {
             VStack(spacing: 10) {
                 SettingsWordmark(height: 30)
-                Text("Your Tesla, your server.").font(.system(size: 15)).foregroundStyle(ScreenKit.secondary)
+                Text("Your Tesla, your server.").font(.subheadline).foregroundStyle(ScreenKit.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
 
             ScreenKit.GroupCard(title: "About") {
                 ScreenKit.ValueRow(title: "Version") {
-                    Text("\(AppInfo.version) (\(AppInfo.build))").font(.system(size: 15, design: .monospaced)).foregroundStyle(ScreenKit.secondary)
+                    Text("\(AppInfo.version) (\(AppInfo.build))").font(.subheadline).monospacedDigit().foregroundStyle(ScreenKit.secondary)
                 }
                 ScreenKit.ValueRow(title: "Data", subtitle: "Collected by TeslaMate, served by volta-api") {
-                    Image(systemName: "server.rack").foregroundStyle(ScreenKit.green)
+                    Image(systemName: "server.rack").foregroundStyle(ScreenKit.secondary).accessibilityHidden(true)
                 }
                 ScreenKit.ValueRow(title: "Privacy", subtitle: "Your data stays on your server. No analytics, no third parties.", showsDivider: false) {
-                    Image(systemName: "hand.raised.fill").foregroundStyle(ScreenKit.green)
+                    Image(systemName: "hand.raised").foregroundStyle(ScreenKit.secondary).accessibilityHidden(true)
                 }
             }
             ScreenKit.GroupCard(title: "Help", footer: "Volta is not affiliated with, endorsed by, or sponsored by Tesla, Inc.") {
                 Link(destination: URL(string: "https://github.com/georgenijo/volta")!) {
                     ScreenKit.ValueRow(title: "Project on GitHub", subtitle: "Docs, issues and server setup") {
-                        Image(systemName: "arrow.up.right").foregroundStyle(ScreenKit.secondary)
+                        Image(systemName: "arrow.up.right").foregroundStyle(Color.voltaBlueText).accessibilityHidden(true)
                     }
                 }
                 Link(destination: URL(string: "https://docs.teslamate.org")!) {
                     ScreenKit.ValueRow(title: "TeslaMate docs", subtitle: "Geofences, costs and data collection", showsDivider: false) {
-                        Image(systemName: "arrow.up.right").foregroundStyle(ScreenKit.secondary)
+                        Image(systemName: "arrow.up.right").foregroundStyle(Color.voltaBlueText).accessibilityHidden(true)
                     }
                 }
             }
