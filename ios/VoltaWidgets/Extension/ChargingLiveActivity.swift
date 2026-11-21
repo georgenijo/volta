@@ -43,16 +43,13 @@ struct ChargingLiveActivity: Widget {
                     .padding(.top, 4)
                 }
             } compactLeading: {
-                HStack(spacing: 3) {
-                    Image(systemName: look.symbol).foregroundStyle(look.tint)
-                    Text("\(s.batteryLevel)%").fontWeight(.semibold).opacity(look.dataOpacity)
-                        // "100%" must still fit when the island is narrow.
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                }
-                .font(.system(size: 14))
+                // iPhone Duo's compact slots are only a few characters wide, so
+                // the level is a bare tinted number and the time left lives in
+                // the expanded island and on the Lock Screen.
+                CompactLevel(level: s.batteryLevel, tint: look.tint, opacity: look.dataOpacity)
             } compactTrailing: {
-                ChargeTrailingValue(look: look, size: 14, compact: true)
-                    .frame(maxWidth: 52)
+                ChargeRing(state: s, look: look)
+                    .frame(width: 20, height: 20)
             } minimal: {
                 ChargeRing(state: s, look: look)
             }
@@ -184,55 +181,6 @@ struct ChargeFooter: View {
     }
 }
 
-/// Live countdown while charging; otherwise a frozen time or "—".
-struct ChargeTrailingValue: View {
-    var look: ChargeLook
-    var size: CGFloat
-    var compact = false
-    var body: some View {
-        Group {
-            if look.showsCountdown {
-                ChargeETA(fullAt: look.state.fullAt, size: size, compact: compact)
-            } else if look.phase == .charging {
-                // Stale: show when the data is from instead of a countdown that may be wrong.
-                (compact ? Text("Stale") : Text(look.state.updatedAt, style: .time))
-                    .foregroundStyle(WTheme.amber)
-            } else if compact {
-                Text(look.phase == .completed ? "Done" : "Stopped").foregroundStyle(look.tint)
-            } else if let endedAt = look.state.endedAt {
-                Text(endedAt, style: .time).foregroundStyle(WTheme.text)
-            } else {
-                Text("—").foregroundStyle(WTheme.text)
-            }
-        }
-        .font(.system(size: size, weight: compact ? .semibold : .bold))
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-    }
-}
-
-/// Live countdown to the charge limit.
-struct ChargeETA: View {
-    var fullAt: Date?
-    var size: CGFloat
-    var compact = false
-    var body: some View {
-        Group {
-            if let fullAt, fullAt > .now {
-                Text(timerInterval: Date.now...fullAt, countsDown: true, showsHours: true)
-                    .monospacedDigit()
-                    .multilineTextAlignment(.trailing)
-            } else {
-                Text("—")
-            }
-        }
-        .font(.system(size: size, weight: .bold))
-        .foregroundStyle(WTheme.text)
-        .lineLimit(1)
-        .minimumScaleFactor(compact ? 0.7 : 0.8)
-    }
-}
-
 /// "Stale · updated 3:42 PM" in amber.
 struct StaleNote: View {
     var updatedAt: Date
@@ -270,6 +218,23 @@ struct ChargeSegmentBar: View {
         if level > start { return tint.opacity(0.5) }
         if let limit = state.chargeLimit, Double(limit) > start { return tint.opacity(0.2) }
         return WTheme.track
+    }
+}
+
+/// The battery level as a bare number ("62"), sized for the narrowest compact slot.
+struct CompactLevel: View {
+    var level: Int
+    var tint: Color
+    var opacity: Double = 1
+    var body: some View {
+        Text("\(level)")
+            .font(.system(size: 15, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(tint)
+            .opacity(opacity)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .accessibilityLabel("\(level) percent")
     }
 }
 

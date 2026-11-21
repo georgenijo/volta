@@ -46,24 +46,19 @@ struct DrivingLiveActivity: Widget {
                         .padding(.horizontal, 4)
                 }
             } compactLeading: {
-                HStack(spacing: 3) {
-                    Image(systemName: look.symbol).foregroundStyle(look.tint)
-                    Text("\(s.batteryLevel)%").fontWeight(.semibold).opacity(look.dataOpacity)
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                }
-                .font(.system(size: 14))
+                CompactLevel(level: s.batteryLevel, tint: look.tint, opacity: look.dataOpacity)
             } compactTrailing: {
-                Group {
-                    if s.phase == .ended {
-                        Text("Ended").foregroundStyle(WTheme.label)
-                    } else if look.isStale {
-                        Text("Stale").foregroundStyle(WTheme.amber)
-                    } else {
-                        Text(s.distanceKm == nil ? "—" : "\(u.distance(s.distanceKm)) \(u.distanceUnit)")
-                    }
+                if s.phase == .driving && !look.isStale, s.distanceKm != nil {
+                    // "12mi": no space, so it fits iPhone Duo's narrow slot.
+                    Text(u.distance(s.distanceKm) + u.distanceUnit)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                } else {
+                    Image(systemName: look.symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(look.tint)
                 }
-                .font(.system(size: 14, weight: .semibold))
-                .lineLimit(1).minimumScaleFactor(0.7)
             } minimal: {
                 Image(systemName: look.symbol).foregroundStyle(look.tint)
             }
