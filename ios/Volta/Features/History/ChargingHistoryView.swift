@@ -74,10 +74,14 @@ struct ChargingHistoryView: View {
     @Environment(\.units) private var units
     @Environment(\.barsOnSide) private var barsOnSide
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Optional so previews without an app model still render.
     @Environment(AppModel.self) private var model: AppModel?
 
     @State private var feed = HistoryFeed<ChargeSummary>()
+    @State private var recap = ChargingRecapModel()
+    /// Bumped by a pull to refresh that brought data, for its haptic.
+    @State private var refreshes = 0
     @State private var range: HistoryRange
     @State private var filter: ChargeFilter = .all
     @State private var searching = false
@@ -148,6 +152,15 @@ struct ChargingHistoryView: View {
             openDemoCharge()
             #endif
         }
+        // The month's recap ignores the range; it reloads for another vehicle or month.
+        .task(id: vehicleID) { await recap.loadIfNeeded(source: dataSource, vehicleID: vehicleID) }
+        .voltaFeedback(.selection, trigger: range)
+        .voltaFeedback(.selection, trigger: filter)
+        .voltaFeedback(.refreshed, trigger: refreshes)
+    }
+
+    private func animate(_ change: () -> Void) {
+        withAnimation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion), change)
     }
 
     private var root: some View {
@@ -157,7 +170,7 @@ struct ChargingHistoryView: View {
             .overlay(alignment: .top) {
                 if searching {
                     HistorySearchField(text: $query, prompt: "Search locations") {
-                        withAnimation(.snappy) { searching = false }
+                        animate { searching = false }
                     }
                     .padding(.top, 4)
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -188,11 +201,11 @@ struct ChargingHistoryView: View {
         ToolbarItemGroup(placement: .topBarTrailing) {
             HistoryToolbarButton(title: "Search", systemImage: "magnifyingglass", isOn: searching,
                                  identifier: "button.history.search") {
-                withAnimation(.snappy) { searching.toggle(); if !searching { query = "" } }
+                animate { searching.toggle(); if !searching { query = "" } }
             }
             HistoryToolbarButton(title: showMap ? "List" : "Map", systemImage: showMap ? "list.bullet" : "map",
                                  isOn: showMap, identifier: "button.history.map") {
-                withAnimation(.snappy) { showMap.toggle() }
+                animate { showMap.toggle() }
             }
         }
     }
@@ -244,24 +257,33 @@ struct ChargingHistoryView: View {
     @ViewBuilder private var content: some View {
         switch feed.phase {
         case .loading:
-            HistorySkeletonList().padding(.top, searchHeight).safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
+            ChargingSkeleton(margin: Self.margin)
+                .padding(.top, searchHeight).safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .failed(let message):
-            HistoryErrorState(title: "Couldn't load charges", message: message) {
-                Task { await reload(skeleton: true) }
-            }
-            .padding(.top, searchHeight)
-            .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
+            ErrorState(title: "Couldn't load charges", message: message) { await reload(skeleton: true) }
+                .historyCentered()
+                .padding(.top, searchHeight)
+                .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
         case .loaded:
             if feed.items.isEmpty {
-                HistoryEmptyState(systemImage: "bolt.slash",
-                                  title: range.emptyPhrase.map { "No charges \($0)" } ?? "No charges yet",
-                                  message: "Try a different range or wait for your next charge.")
+                EmptyState(systemImage: "bolt.slash",
+                           title: range.emptyPhrase.map { "No charges \($0)" } ?? "No charges yet",
+                           message: range == .all
+                               ? "Sessions appear here once TeslaMate records a charge."
+                               : "Nothing was recorded in this range. A longer one may hold older sessions.",
+                           action: range == .all ? nil : .init("Show all time", systemImage: "calendar") { range = .all })
+                    .historyCentered()
                     .padding(.top, searchHeight)
                     .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
             } else if visible.isEmpty && !feed.hasMore {
-                HistoryEmptyState(systemImage: "line.3.horizontal.decrease",
-                                  title: "No matching charges",
-                                  message: "Try a different search or location filter.")
+                EmptyState(systemImage: "line.3.horizontal.decrease",
+                           title: "No matching charges",
+                           message: "No session in this range matches the search or location filter.",
+                           action: .init("Show every location", systemImage: "xmark.circle") {
+                               filter = .all
+                               query = ""
+                           })
+                    .historyCentered()
                     .padding(.top, searchHeight)
                     .safeAreaInset(edge: .top, spacing: 0) { inlineTitle }
             } else if showMap {
@@ -283,15 +305,25 @@ struct ChargingHistoryView: View {
                 let title: CGFloat = (barsOnSide ? 44 : 0) + searchHeight
                 SessionsMapHero(coordinates: located.map(\.0), kinds: located.map(\.1),
                                 height: top + title + page.reveal(barsOnSide ? 0.28 : 0.24, 140...190), topInset: top + title) {
-                    withAnimation(.snappy) { showMap = true }
+                    animate { showMap = true }
                 }
                 .overlay(alignment: .topLeading) { inlineTitle.padding(.top, top).historySides(sideBars) }
                 ChargingHero(scope: HistoryTotalsScope.title(period: range.periodLabel, hasMore: feed.hasMore, noun: "sessions"),
                              charges: visible, partial: feed.hasMore) { open(.insight($0)) }
                     .padding(.horizontal, Self.margin)
-                    .padding(.bottom, 29)
+                    .padding(.bottom, 24)
                     .voltaReadableWidth()
                     .historySides(sideBars)
+                    .voltaFocusIn(0)
+                ChargingRecapCard(state: recap.state, retry: { await recap.load(source: dataSource, vehicleID: vehicleID) }) {
+                    open(.insight(.chargingInsights))
+                }
+                .padding(.horizontal, HistoryTheme.gutter)
+                .padding(.bottom, 29)
+                .voltaReadableWidth()
+                .historySides(sideBars)
+                .voltaFocusIn(1)
+                let order = Dictionary(visible.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
                 ForEach(DayGroup.group(visible, by: \.start)) { group in
                     ChargeDayHeader(day: group.day, title: group.title, trailing: dayTrailing(group.items))
                         .voltaReadableWidth()
@@ -303,6 +335,7 @@ struct ChargingHistoryView: View {
                             }
                             .buttonStyle(VoltaPressStyle())
                             .accessibilityIdentifier("row.charge.\(charge.id)")
+                            .chargeRowFocusIn((order[charge.id] ?? 0) + 2)
                         }
                     }
                     .padding(.horizontal, HistoryTheme.gutter)
@@ -320,10 +353,20 @@ struct ChargingHistoryView: View {
         .contentMargins(.bottom, HistoryTheme.bottomInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.charging")
-        .refreshable { await reload() }
+        .refreshable { await refresh() }
         .task(id: needsPlaces) {
             if needsPlaces { await places.load(dataSource: dataSource, vehicleID: vehicleID) }
         }
+    }
+
+    /// Pull to refresh: the list and the month's recap together; the haptic
+    /// plays only when the list came back.
+    private func refresh() async {
+        let source = dataSource, vid = vehicleID, model = recap
+        async let month = model.load(source: source, vehicleID: vid)
+        await reload()
+        _ = await month
+        if feed.phase == .loaded, feed.refreshError == nil { refreshes += 1 }
     }
 
     /// "1 session • +47.6 kWh • $14.28". The cost shows only when every
@@ -437,7 +480,7 @@ struct SessionsMapHero: View {
                     if let kind = spot.kind {
                         ChargerBadge(kind: kind)
                     } else {
-                        Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13).blur(radius: 1)
+                        Circle().fill(pin.opacity(0.8)).frame(width: 13, height: 13)
                     }
                 }
                 .backdrop()
@@ -526,16 +569,20 @@ struct ChargingHero: View {
         let count = "\(charges.count)\(partial ? "+" : "") \(charges.count == 1 && !partial ? "session" : "sessions")"
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 15) {
-                Text("\(scope) • \(count)".uppercased())
-                    .scaledFont(11, weight: .medium).tracking(0.8)
+                Text("\(scope) · \(count)")
+                    .font(.voltaLabel)
                     .foregroundStyle(HistoryTheme.secondary)
                     .lineLimit(1).minimumScaleFactor(0.7)
                 HStack(alignment: .firstTextBaseline, spacing: 9) {
-                    Text(energy.map { VoltaFormat.number($0, digits: $0 >= 100 ? 0 : 1) } ?? "—")
-                        .font(.system(size: 47, weight: .heavy)).monospacedDigit()
-                        .foregroundStyle(.voltaTextPrimary)
-                        .lineLimit(1).minimumScaleFactor(0.6)
-                    Text("kWh").font(.system(size: 13, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
+                    if let energy {
+                        RollingNumber(value: energy) { VoltaFormat.number($0, digits: energy >= 100 ? 0 : 1) }
+                            .font(.system(size: 47, weight: .heavy))
+                            .foregroundStyle(.voltaTextPrimary)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                    } else {
+                        Text("—").font(.system(size: 47, weight: .heavy)).foregroundStyle(HistoryTheme.secondary)
+                    }
+                    Text("kWh added").font(.system(size: 13, weight: .regular)).foregroundStyle(HistoryTheme.secondary)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -543,16 +590,18 @@ struct ChargingHero: View {
             .accessibilityIdentifier("screen.charging")
             HistoryHeroNotes(notes: totals.notes).padding(.top, 8)
             HStack(spacing: 10) {
-                ChargingShortcut(title: "Costs & Locations") {
-                    Text("$").font(.system(size: 16, weight: .semibold)).foregroundStyle(HistoryTheme.green)
+                // Ink, not green: green is energy going in, and this is money and places.
+                ChargingShortcut(title: "Costs and places") {
+                    Image(systemName: "mappin.and.ellipse").font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.voltaTextPrimary)
                 } action: { open(.chargerMap) }
                 .accessibilityIdentifier("button.charging.costs")
-                ChargingShortcut(title: "Energy Mix") {
+                ChargingShortcut(title: "Energy mix") {
                     EnergyMixGlyph()
                 } action: { open(.chargingInsights) }
                 .accessibilityIdentifier("button.charging.energy-mix")
             }
-            .padding(.top, 33)
+            .padding(.top, 28)
         }
     }
 }
@@ -751,6 +800,71 @@ extension HistoryTheme {
     static let pin = Color(hex: 0xD9604C)  // appearance: fixed (a map marker, reads on both maps)
     /// Tesla Supercharger badge.
     static let teslaRed = Color(hex: 0xE0453A)  // appearance: fixed (the network's red)
+}
+
+// MARK: - States
+
+extension View {
+    /// An empty or error state in the middle of the tab, a little above centre.
+    func historyCentered() -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 0)
+            self
+            Spacer(minLength: 0)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(.bottom, 40)
+    }
+
+    /// Rows in the first screenful come into focus in turn; rows further down
+    /// appear as they scroll in, without an entrance.
+    @ViewBuilder func chargeRowFocusIn(_ index: Int) -> some View {
+        if index <= VoltaMotion.maxStaggered { voltaFocusIn(index) } else { self }
+    }
+}
+
+/// The Charging tab's own layout while the first page loads: totals, the
+/// month's recap and a day of rows, as placeholder shapes.
+private struct ChargingSkeleton: View {
+    var margin: CGFloat
+
+    var body: some View {
+        let rows = (0..<3).map(ChargeSummary.skeleton)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(height: 150)
+                ChargingHero(scope: "Last 30 days", charges: rows, partial: false) { _ in }
+                    .padding(.horizontal, margin)
+                    .padding(.bottom, 24)
+                ChargingRecapCard(state: .loading, retry: {}, open: {})
+                    .padding(.horizontal, HistoryTheme.gutter)
+                    .padding(.bottom, 29)
+                ChargeDayHeader(day: .now, title: "Today", trailing: "3 sessions • +90 kWh")
+                VStack(spacing: 12) {
+                    ForEach(rows) { ChargeRow(charge: $0) }
+                }
+                .padding(.horizontal, HistoryTheme.gutter)
+                .padding(.top, 14)
+            }
+            .voltaReadableWidth()
+            .voltaSkeleton(true)
+        }
+        .scrollDisabled(true)
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("charging.loading")
+    }
+}
+
+extension ChargeSummary {
+    /// A placeholder session for loading skeletons (synthetic values).
+    static func skeleton(_ index: Int) -> ChargeSummary {
+        let start = Date.now.addingTimeInterval(Double(-index) * 3 * 3600)
+        return ChargeSummary(id: -1 - index, start: start, end: start.addingTimeInterval(3600), address: nil,
+                             placeName: "Placeholder", energyAddedKwh: 30, energyUsedKwh: nil, startBatteryLevel: 40,
+                             endBatteryLevel: 80, durationMin: 60, maxPowerKw: 11, fastCharger: false, cost: 6,
+                             currency: "USD", outsideTempAvgC: nil, city: "Placeholder city")
+    }
 }
 
 #Preview("Charging") {

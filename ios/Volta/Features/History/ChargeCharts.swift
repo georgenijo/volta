@@ -18,6 +18,11 @@ struct ChargeCurveChart: View {
     var height: CGFloat = 200
 
     @State private var selected: Date?
+    /// The curve rises from the floor to its readings as it appears.
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var rise: Double { settled ? 1 : 0 }
 
     private var domain: ClosedRange<Double> { ChargeCurve.powerDomain(power.map(\.value), summaryPeak: summaryPeak) }
     private var top: Double { domain.upperBound }
@@ -47,18 +52,18 @@ struct ChargeCurveChart: View {
         let selectedSoc = selected.flatMap { nearest(soc, to: $0) }
         Chart {
             ForEach(power) { p in
-                AreaMark(x: .value("Time", p.t), y: .value("kW", p.value),
+                AreaMark(x: .value("Time", p.t), y: .value("kW", p.value * rise),
                          series: .value("Series", "power-fill-\(p.segment)"), stacking: .unstacked)
                     .interpolationMethod(.monotone)
                     .foregroundStyle(LinearGradient(colors: [powerColor.opacity(0.2), powerColor.opacity(0.06)],
                                                     startPoint: .top, endPoint: .bottom))
-                LineMark(x: .value("Time", p.t), y: .value("kW", p.value), series: .value("Series", "power-\(p.segment)"))
+                LineMark(x: .value("Time", p.t), y: .value("kW", p.value * rise), series: .value("Series", "power-\(p.segment)"))
                     .interpolationMethod(.monotone)
                     .foregroundStyle(stroke)
                     .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
             }
             ForEach(soc) { p in
-                LineMark(x: .value("Time", p.t), y: .value("kW", socY(p.value)), series: .value("Series", "soc-\(p.segment)"))
+                LineMark(x: .value("Time", p.t), y: .value("kW", socY(p.value) * rise), series: .value("Series", "soc-\(p.segment)"))
                     .interpolationMethod(.stepEnd)
                     .foregroundStyle(socColor)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
@@ -111,6 +116,10 @@ struct ChargeCurveChart: View {
             }
         }
         .frame(height: height)
+        .onAppear {
+            guard !settled else { return }
+            if reduceMotion { settled = true } else { withAnimation(VoltaMotion.settle.delay(0.1)) { settled = true } }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Charge curve, power and state of charge over time")
     }
@@ -296,6 +305,9 @@ struct ChargeSocBarView: View {
     var bar: ChargeSocBar
     var tint: Color = HistoryTheme.green
     var numberSize: CGFloat = 14
+    /// The added charge grows from the start level as it appears.
+    @State private var settled = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 13) {
@@ -305,9 +317,13 @@ struct ChargeSocBarView: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.voltaInk.opacity(0.14))
                     Capsule().fill(tint)
-                        .frame(width: max(5, w * (bar.upper - bar.lower)))
+                        .frame(width: max(5, w * (bar.upper - bar.lower) * (settled ? 1 : 0)))
                         .offset(x: w * bar.lower)
                 }
+            }
+            .onAppear {
+                guard !settled else { return }
+                if reduceMotion { settled = true } else { withAnimation(VoltaMotion.settle.delay(0.1)) { settled = true } }
             }
             .frame(height: 5)
             level(bar.end, color: tint)

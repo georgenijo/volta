@@ -55,6 +55,12 @@ enum ChargerKind: Hashable, Sendable {
     /// Badge fills: the same in both appearances by design, like a charger
     /// network's sign. Each sits on a white ring, so it reads on light and dark
     /// maps alike.
+    ///
+    /// An exception to "colour means one thing" (DesignSystem/README.md),
+    /// on purpose: these are wayfinding signs, not states. Each kind also has
+    /// its own glyph, so the colour is never the only cue, and the Tesla red
+    /// is the network's own sign. Screens where colour already means something
+    /// (a chart series) use `monochrome`.
     var fill: Color {
         switch self {
         case .home: Color(hex: 0x3B82F6)  // appearance: fixed (badge)
@@ -99,8 +105,8 @@ struct ChargerBadge: View {
             }
         }
         .frame(width: size, height: size)
+        // The white ring separates it from the tiles; no shadow or halo.
         .overlay(Circle().strokeBorder(monochrome ? Color.voltaHairline : Color.voltaOnAccent, lineWidth: monochrome ? 1 : ring))
-        .shadow(color: Color.voltaShadow.opacity(size >= 24 && !monochrome ? 0.35 : 0), radius: 3, y: 1)
         .accessibilityHidden(true)
     }
 }

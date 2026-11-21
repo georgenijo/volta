@@ -25,8 +25,12 @@ struct ChargeComparisonView: View {
     @State private var picking = false
     @State private var selectedX: Double?
     @State private var highlighted: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Session colours, in slot order. Red is left out: it reads as a fault.
+    /// An exception to "colour means one thing" (DesignSystem/README.md), on
+    /// purpose: here a colour only tells one session's line from another's,
+    /// and every line is also named by its date at its end and in the list.
     static let palette: [Color] = [Color.voltaBlue, Color.voltaAmber, Color.voltaTextPrimary, Color.voltaGreen, HistoryTheme.purple]
     static func color(slot: Int) -> Color { palette[slot % palette.count] }
 
@@ -45,20 +49,22 @@ struct ChargeComparisonView: View {
                 }
                 .padding(.top, 40)
             } else {
-                ScreenKit.Segmented(options: ChargeComparison.Axis.allCases.map { ($0, $0.rawValue) }, selection: $axis)
-                chartCard
+                ScreenKit.Segmented(options: ChargeComparison.Axis.allCases.map { ($0, $0 == .soc ? "Charge level" : "Time") },
+                                    selection: $axis)
+                    .voltaFeedback(.selection, trigger: axis)
+                chartCard.voltaFocusIn(0)
             }
         } secondary: {
             if !model.selection.isEmpty {
-                windowCard
-                sessionsCard
+                windowCard.voltaFocusIn(1)
+                sessionsCard.voltaFocusIn(2)
                 Text(footnote)
                     .font(.footnote).foregroundStyle(Color.voltaTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 4)
             }
         }
-        .screenKitPage("Compare Curves", screen: "charge-comparison")
+        .screenKitPage("Compare curves", screen: "charge-comparison")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { picking = true } label: { Label(Self.changeLabel, systemImage: "checklist") }
@@ -147,7 +153,10 @@ struct ChargeComparisonView: View {
         let pending = model.ordered.contains { model.curves[$0.id] == nil || model.curves[$0.id]?.isLoading == true }
         Group {
             if pending {
-                ProgressView().tint(Color.voltaTextSecondary)
+                // The chart's area, sweeping, while the curves load.
+                RoundedRectangle(cornerRadius: 12).fill(Color.voltaInk.opacity(0.06))
+                    .frame(height: 200)
+                    .voltaSkeleton(true)
             } else if axis == .soc, curves.contains(where: \.hasPower) {
                 Text("These sessions recorded power but no charge level, so they can't be lined up by charge level. Switch to Time to see them.")
             } else {
@@ -353,7 +362,9 @@ struct ChargeComparisonView: View {
         .background(on ? Color.voltaRaised : Color.clear)
         .contentShape(.rect)
         // Tapping a row picks out its line; tapping it again shows them all.
-        .onTapGesture { withAnimation(.snappy) { highlighted = on ? nil : session.id } }
+        .onTapGesture {
+            withAnimation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion)) { highlighted = on ? nil : session.id }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
         .accessibilityHint(on ? "Shows every line" : "Highlights this session's line")
@@ -366,10 +377,16 @@ struct ChargeComparisonView: View {
         VStack(alignment: .trailing, spacing: 3) {
             switch state {
             case nil, .loading?:
-                ProgressView().controlSize(.small).tint(Color.voltaTextSecondary)
+                // The peak's shape while this session's curve loads.
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("000 kW").font(.system(size: 15, weight: .semibold))
+                    Text("peak at 00%").font(.system(size: 11))
+                }
+                .foregroundStyle(Color.voltaTextSecondary)
+                .voltaSkeleton(true)
             case .failed?:
                 Text("Couldn’t load").font(.system(size: 12, weight: .medium)).foregroundStyle(Color.voltaAmber)
-                Button("Retry") { model.retry(session.id) }
+                Button("Try again") { model.retry(session.id) }
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.voltaBlue)
             case .loaded(let curve)?:
                 if let peak = curve.peakKw, curve.hasPower {
@@ -609,6 +626,7 @@ struct ChargeSessionPicker: View {
     var anchor: ChargeSummary?
     @State private var filter: ChargeComparison.Filter
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: ChargeComparisonModel, anchor: ChargeSummary?) {
         self.model = model
@@ -633,12 +651,28 @@ struct ChargeSessionPicker: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LoadableContent(state: model.candidates, retry: { model.retryCandidates() }) { candidates in
+                Group {
+                switch model.candidates {
+                case .loading:
+                    // The list's own rows, as placeholder shapes.
+                    VStack(spacing: 0) {
+                        ForEach(0..<6, id: \.self) { i in
+                            row(ChargeSummary.skeleton(i))
+                            if i < 5 { HairlineDivider(leadingInset: 56) }
+                        }
+                    }
+                    .voltaCardBackground()
+                    .voltaSkeleton(true)
+                case .failed(let message):
+                    ErrorState(title: "Couldn't load sessions", message: message) { model.retryCandidates() }
+                        .padding(.top, 40)
+                case .loaded(let candidates):
                     let shown = ChargeComparison.filtered(candidates, by: filter, anchor: anchor)
                     VStack(alignment: .leading, spacing: 14) {
                         if shown.isEmpty {
-                            Text("No sessions here in the last 12 months.")
-                                .font(.subheadline).foregroundStyle(Color.voltaTextSecondary)
+                            EmptyState(systemImage: "line.3.horizontal.decrease", title: "No sessions here",
+                                       message: "No session in the last 12 months matches this filter.",
+                                       action: filter == .all ? nil : .init("Show all sessions", systemImage: "list.bullet") { filter = .all })
                                 .padding(.vertical, 24)
                         } else {
                             VStack(spacing: 0) {
@@ -655,6 +689,7 @@ struct ChargeSessionPicker: View {
                         }
                     }
                 }
+                }
                 .column()
                 .padding(.vertical, 12)
             }
@@ -662,7 +697,7 @@ struct ChargeSessionPicker: View {
             .accessibilityIdentifier("scroll.comparison-picker")
             .safeAreaInset(edge: .top, spacing: 0) { header }
             .voltaScreenBackground()
-            .navigationTitle("Change Sessions")
+            .navigationTitle("Change sessions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -679,6 +714,7 @@ struct ChargeSessionPicker: View {
                     chip(option.1, on: filter == option.0) { filter = option.0 }
                 }
             }
+            .voltaFeedback(.selection, trigger: filter)
             Text(countText)
                 .font(.footnote.weight(.semibold)).monospacedDigit()
                 .foregroundStyle(model.selection.count >= ChargeComparison.maxSessions ? Color.voltaAmber : Color.voltaTextSecondary)
@@ -708,7 +744,9 @@ struct ChargeSessionPicker: View {
         let chosen = model.isChosen(session)
         let full = model.selection.count >= ChargeComparison.maxSessions
         let slot = model.slots[session.id]
-        return Button { withAnimation(.snappy) { model.toggle(session) } } label: {
+        return Button {
+            withAnimation(VoltaMotion.animation(VoltaMotion.snappy, reduceMotion: reduceMotion)) { model.toggle(session) }
+        } label: {
             HStack(spacing: 12) {
                 ZStack {
                     Circle().strokeBorder(Color.voltaTextTertiary, lineWidth: 1.5).opacity(chosen ? 0 : 1)
