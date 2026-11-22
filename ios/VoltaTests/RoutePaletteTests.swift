@@ -167,6 +167,24 @@ final class RoutePaletteTests: XCTestCase {
     }
 
     @MainActor
+    /// The full-screen map has no fade: its logo sits above the legend card,
+    /// and routes stay 24 pt above the logo, inside the screen.
+    func testFullScreenMapKeepsRoutesAboveTheLegendCard() {
+        let runs = [[CLLocationCoordinate2D(latitude: 37.33, longitude: -122.03),
+                     CLLocationCoordinate2D(latitude: 37.80, longitude: -122.27)]]
+        let size = CGSize(width: 900, height: 700), bottom: CGFloat = 104
+        XCTAssertEqual(DrivesRouteMap.mapSafe(bottom: bottom).bottom, bottom)
+        XCTAssertEqual(DrivesRouteMap.mapSafe(attribution: false, bottom: bottom).bottom, 0)
+        let clear = DrivesRouteMap.clearance(topInset: 80, fullBleed: true, bottom: bottom)
+        XCTAssertEqual(clear.bottom, bottom + VoltaMapChrome.attribution + 24)
+        XCTAssertEqual(clear.top, 96)
+        let safe = DrivesRouteMap.mapSafe(bottom: bottom)
+        let rect = try! XCTUnwrap(DrivesRouteMap.camera(runs, size: size, topInset: 80, fullBleed: true, safe: safe, bottom: bottom))
+        let content = try! XCTUnwrap(voltaBounds(runs.joined().map(MKMapPoint.init)))
+        let low = try! XCTUnwrap(TripRoute.project(MKMapPoint(x: content.maxX, y: content.maxY), visible: rect, size: size, safe: safe))
+        XCTAssertLessThanOrEqual(low.y, size.height - clear.bottom + 0.01)
+    }
+
     func testTheAllDrivesMapIsFramedToItsRoutes() {
         // The demo drives' routes, as the Drives hero and heatmap load them.
         let start = Date(timeIntervalSince1970: 1_800_000_000)

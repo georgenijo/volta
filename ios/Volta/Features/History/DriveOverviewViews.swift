@@ -112,6 +112,9 @@ struct DrivesRouteMap: View {
     /// Pan and zoom (the full-screen map). Once the user moves the camera it
     /// is refitted only when the map's size changes.
     var interactive = false
+    /// A full-screen map: no fade at the bottom, and MapKit's logo and Legal
+    /// link sit this far above the bottom edge (over whatever card is there).
+    var bottomInset: CGFloat?
 
     static let fade: CGFloat = VoltaMapChrome.fade
 
@@ -134,7 +137,7 @@ struct DrivesRouteMap: View {
     private struct FrameKey: Equatable { var size: CGSize; var insets: EdgeInsets?; var bars: EdgeInsets }
 
     /// The map's real safe area, once measured.
-    private var safe: EdgeInsets { mapInsets ?? Self.mapSafe(attribution: attribution) }
+    private var safe: EdgeInsets { mapInsets ?? Self.mapSafe(attribution: attribution, bottom: bottomInset) }
 
     private var runs: [[CLLocationCoordinate2D]] {
         drives.flatMap { drive in
@@ -149,8 +152,8 @@ struct DrivesRouteMap: View {
     /// logo on a short padded area, and the routes' clearance below the bars
     /// is kept by `camera` instead. Without `attribution`, no padding: the
     /// logo and link stay at the bottom edge, under the fade.
-    static func mapSafe(attribution: Bool = true) -> EdgeInsets {
-        EdgeInsets(top: 0, leading: 0, bottom: attribution ? fade : 0, trailing: 0)
+    static func mapSafe(attribution: Bool = true, bottom: CGFloat? = nil) -> EdgeInsets {
+        EdgeInsets(top: 0, leading: 0, bottom: attribution ? bottom ?? fade : 0, trailing: 0)
     }
 
     /// Where routes are kept in a map: at least 24 pt below the bars
@@ -162,9 +165,12 @@ struct DrivesRouteMap: View {
     /// strip, `bars`) is an obstruction: routes stay 32 pt inside its edge.
     /// `stroke` (half the casing) keeps the whole drawn line inside, not just
     /// its centre.
-    static func clearance(topInset: CGFloat, fullBleed: Bool, bars: EdgeInsets = EdgeInsets(), stroke: CGFloat = 0) -> EdgeInsets {
+    /// A full-screen map (`bottom`) keeps routes 24 pt above its attribution.
+    static func clearance(topInset: CGFloat, fullBleed: Bool, bars: EdgeInsets = EdgeInsets(), stroke: CGFloat = 0,
+                          bottom: CGFloat? = nil) -> EdgeInsets {
+        let low = bottom.map { $0 + VoltaMapChrome.attribution } ?? fade + (fullBleed ? 0 : VoltaMapChrome.attribution)
         let e = EdgeInsets(top: topInset + (fullBleed ? 16 : 24), leading: 32,
-                           bottom: fade + (fullBleed ? 0 : VoltaMapChrome.attribution) + 24, trailing: 32).clearing(bars: bars)
+                           bottom: low + 24, trailing: 32).clearing(bars: bars)
         return EdgeInsets(top: e.top + stroke, leading: e.leading + stroke, bottom: e.bottom + stroke, trailing: e.trailing + stroke)
     }
 
@@ -174,9 +180,10 @@ struct DrivesRouteMap: View {
     /// `safe` is the safe area MapKit fits into (measured; by default only
     /// our padding).
     static func camera(_ runs: [[CLLocationCoordinate2D]], size: CGSize, topInset: CGFloat, fullBleed: Bool,
-                       safe: EdgeInsets = mapSafe(), bars: EdgeInsets = EdgeInsets(), stroke: CGFloat = 0) -> MKMapRect? {
+                       safe: EdgeInsets = mapSafe(), bars: EdgeInsets = EdgeInsets(), stroke: CGFloat = 0,
+                       bottom: CGFloat? = nil) -> MKMapRect? {
         guard let content = voltaBounds(runs.joined().map(MKMapPoint.init)) else { return nil }
-        let insets = clearance(topInset: topInset, fullBleed: fullBleed, bars: bars, stroke: stroke)
+        let insets = clearance(topInset: topInset, fullBleed: fullBleed, bars: bars, stroke: stroke, bottom: bottom)
         return TripRoute.fitted(content, size: size, safe: safe, insets: insets, strict: true)
     }
 
@@ -186,7 +193,9 @@ struct DrivesRouteMap: View {
                 LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 24)  // appearance: mask (alpha only)
             }
             Color.black  // appearance: mask (alpha only)
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)  // appearance: mask (alpha only)
+            if bottomInset == nil {
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)  // appearance: mask (alpha only)
+            }
         }
     }
 
@@ -227,13 +236,13 @@ struct DrivesRouteMap: View {
                     Map(position: $position, interactionModes: interactive ? [.pan, .zoom] : [])
                         .mapControls { }
                         .voltaBasemap()
-                        .safeAreaPadding(Self.mapSafe(attribution: attribution))
+                        .safeAreaPadding(Self.mapSafe(attribution: attribution, bottom: bottomInset))
                         .onMapCameraChange(frequency: .continuous) { context in
                             visible = context.rect
                             measureArea(proxy, visible: context.rect)
                         }
                         // Dark: roads read as texture, labels stay dim; the attribution stays clear.
-                        .voltaMapDim(fullBleed ? 0.55 : 0.45, bottom: Self.fade, attribution: attribution)
+                        .voltaMapDim(fullBleed ? 0.55 : 0.45, bottom: bottomInset ?? Self.fade, attribution: attribution)
                         .overlay { routes(runs).allowsHitTesting(false) }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { mapSize = $0 }
                         .onChange(of: FrameKey(size: mapSize, insets: mapInsets, bars: sideBars), initial: true) { frame(runs: runs) }
@@ -277,7 +286,7 @@ struct DrivesRouteMap: View {
         framedSize = size
         guard size.width > 0, size.height > 0,
               let rect = Self.camera(runs, size: size, topInset: topInset, fullBleed: fullBleed, safe: safe,
-                                     bars: sideBars, stroke: casingWidth / 2) else { return }
+                                     bars: sideBars, stroke: casingWidth / 2, bottom: bottomInset) else { return }
         // Re-applied even when equal to the last fit: MapKit refits on resize.
         position = .fitting(rect, replacing: position)
     }
@@ -438,11 +447,10 @@ struct DrivesFullMap: View {
     var body: some View {
         GeometryReader { geo in
             let safe = geo.safeAreaInsets
+            // The whole screen, edge to edge; MapKit's logo and Legal link sit just above the legend card.
             DrivesRouteMap(drives: drives, height: geo.size.height + safe.top + safe.bottom, coloring: .density,
-                           fullBleed: true, topInset: safe.top + Self.bar + 12, interactive: true)
-                // The fade and MapKit's logo sit above the legend card.
-                .padding(.bottom, safe.bottom + Self.legendSpace - DrivesRouteMap.fade)
-                .frame(maxHeight: .infinity, alignment: .top)
+                           fullBleed: true, topInset: safe.top + Self.bar + 12, interactive: true,
+                           bottomInset: safe.bottom + Self.legendSpace)
                 .overlay(alignment: .top) { header.padding(.top, safe.top) }
                 .overlay(alignment: .bottom) {
                     RouteLegendStrip(model: .density)
