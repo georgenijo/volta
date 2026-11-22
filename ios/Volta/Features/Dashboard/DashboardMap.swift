@@ -201,14 +201,12 @@ struct AddressPill: View {
 
     static func title(for location: Location) -> String {
         if let place = location.placeName, !place.isEmpty { return place }
-        return location.address?.split(separator: ",").first.map { String($0).trimmed } ?? "Unknown location"
+        return PlaceAddress(location.address).name ?? "Unknown location"
     }
 
-    /// The town: the address's first part under a place name, else its second.
+    /// The town under the title, never a house number or postcode.
     static func locality(for location: Location) -> String? {
-        let parts = location.address?.split(separator: ",").map { String($0).trimmed } ?? []
-        if location.placeName != nil { return parts.first }
-        return parts.dropFirst().first
+        PlaceAddress(location.address).town(underPlace: location.placeName != nil)
     }
 
     /// Frosted plate over the map: dark glass on the dark map, light glass on
@@ -249,6 +247,50 @@ struct AddressPill: View {
 
 private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespaces) }
+}
+
+/// A recorded address split for display. TeslaMate stores OpenStreetMap's
+/// display name ("Coffee Shop, 120, University Avenue, Downtown North, Palo Alto, Santa Clara
+/// County, California, 94301, United States"); short forms ("Main Street,
+/// Palo Alto, CA") come from saved data and previews.
+struct PlaceAddress: Equatable {
+    /// The address's parts, house numbers and postcodes included.
+    var parts: [String]
+
+    init(_ address: String?) {
+        parts = (address ?? "").split(separator: ",").map { String($0).trimmed }.filter { !$0.isEmpty }
+    }
+
+    /// What the car is at: the first part, with a leading house number
+    /// joined to its street ("120 University Avenue").
+    var name: String? {
+        guard let first = parts.first else { return nil }
+        return Self.isNumber(first) && parts.count > 1 ? "\(first) \(parts[1])" : first
+    }
+
+    /// The town, never a house number or postcode. A saved place's name is
+    /// the title, so a short address ("Palo Alto, CA") starts with the town;
+    /// otherwise the address's own first part is the title.
+    func town(underPlace: Bool) -> String? {
+        var words = parts.filter { !Self.isNumber($0) }
+        if words.count >= 5 {
+            // OpenStreetMap order ends in state and country, sometimes a county
+            // before them: the town is the last part left.
+            words.removeLast(2)
+            if let county = words.last, county.hasSuffix(" County"), words.count > 1 { words.removeLast() }
+            return underPlace ? words.last : (words.count > 1 ? words.last : nil)
+        }
+        if underPlace { return words.first }
+        // Without a place name the title is the first word part (with its
+        // house number), so the town is the next.
+        return words.dropFirst().first
+    }
+
+    /// "120", "120A", "12-14", "94301", "94301-1234": digits, with at most a letter or hyphen.
+    static func isNumber(_ part: String) -> Bool {
+        guard let head = part.first, head.isNumber, !part.contains(" ") else { return false }
+        return part.allSatisfy { $0.isNumber || $0 == "-" } || (part.dropLast().allSatisfy(\.isNumber) && part.last!.isLetter)
+    }
 }
 
 #Preview("Map") {
