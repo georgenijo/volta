@@ -37,6 +37,12 @@ final class ScreenScreenshotTests: XCTestCase {
         try launchDemo()
         try navigate("tab.drives", to: "drives")
         capture("drives")
+        // A tap on the hero map opens every route full screen; close returns to the list.
+        try tap("drives.map.expand")
+        XCTAssertTrue(element("drives.map.close").waitForExistence(timeout: 10), "Tapping the Drives map must open the full-screen routes")
+        capture("drives-map-full")
+        try tap("drives.map.close")
+        try waitForScreen("drives")
         try scroll("drives", screenshot: "drives-day-sections")
     }
 

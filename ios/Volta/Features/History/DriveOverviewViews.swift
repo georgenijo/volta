@@ -109,6 +109,9 @@ struct DrivesRouteMap: View {
     var lineWidth: CGFloat = 3
     /// The dark casing under the routes.
     var casingWidth: CGFloat = 5
+    /// Pan and zoom (the full-screen map). Once the user moves the camera it
+    /// is refitted only when the map's size changes.
+    var interactive = false
 
     static let fade: CGFloat = VoltaMapChrome.fade
 
@@ -120,6 +123,7 @@ struct DrivesRouteMap: View {
     @State private var layer: RouteDensity.Layer?
     @State private var position: MapCameraPosition = .automatic
     @State private var mapSize: CGSize = .zero
+    @State private var framedSize: CGSize?
     private static let space = "drives.route.map"
     /// The area MapKit fits the camera into, as insets from the map's edges:
     /// our padding plus whatever safe area it inherits (iPhone Duo's side
@@ -220,7 +224,8 @@ struct DrivesRouteMap: View {
                     .padding(.top, topInset)
             } else {
                 MapReader { proxy in
-                    Map(position: $position, interactionModes: [])
+                    Map(position: $position, interactionModes: interactive ? [.pan, .zoom] : [])
+                        .mapControls { }
                         .voltaBasemap()
                         .safeAreaPadding(Self.mapSafe(attribution: attribution))
                         .onMapCameraChange(frequency: .continuous) { context in
@@ -267,6 +272,9 @@ struct DrivesRouteMap: View {
 
     private func frame(runs: [[CLLocationCoordinate2D]]) {
         let size = mapSize
+        // A camera the user moved stays put while the safe area settles.
+        if interactive, position.positionedByUser, framedSize == size { return }
+        framedSize = size
         guard size.width > 0, size.height > 0,
               let rect = Self.camera(runs, size: size, topInset: topInset, fullBleed: fullBleed, safe: safe,
                                      bars: sideBars, stroke: casingWidth / 2) else { return }
@@ -409,6 +417,62 @@ struct DriveRouteThumbnail: View {
             }
         }.background(HistoryTheme.background.opacity(0.6), in: .rect(cornerRadius: 12))
             .allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+/// Every drive's route full screen, opened by a tap on the Drives hero map:
+/// framed end to end, free to pan and zoom, coloured by road density with
+/// its legend under it.
+struct DrivesFullMap: View {
+    var drives: [DriveSummary]
+    var title: String
+    var subtitle: String?
+
+    @Environment(\.dismiss) private var dismiss
+
+    /// The close button and title capsule.
+    private static let bar: CGFloat = 48
+    /// Room kept for the legend card above the bottom edge.
+    private static let legendSpace: CGFloat = 84
+
+    var body: some View {
+        GeometryReader { geo in
+            let safe = geo.safeAreaInsets
+            DrivesRouteMap(drives: drives, height: geo.size.height + safe.top + safe.bottom, coloring: .density,
+                           fullBleed: true, topInset: safe.top + Self.bar + 12, interactive: true)
+                // The fade and MapKit's logo sit above the legend card.
+                .padding(.bottom, safe.bottom + Self.legendSpace - DrivesRouteMap.fade)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .overlay(alignment: .top) { header.padding(.top, safe.top) }
+                .overlay(alignment: .bottom) {
+                    RouteLegendStrip(model: .density)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                        .padding(.horizontal, HistoryTheme.gutter)
+                        .padding(.bottom, safe.bottom + 8)
+                        .voltaReadableWidth()
+                }
+                .ignoresSafeArea()
+        }
+        .background(HistoryTheme.background.ignoresSafeArea())
+        .accessibilityIdentifier("drives.map.full")
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            GlassCircleButton(systemImage: "xmark", size: Self.bar, accessibilityLabel: "Close map") { dismiss() }
+                .accessibilityIdentifier("drives.map.close")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(.voltaTextPrimary).lineLimit(1)
+                if let subtitle {
+                    Text(subtitle).font(.system(size: 12, weight: .medium)).foregroundStyle(HistoryTheme.secondary).lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 16).frame(height: Self.bar)
+            .glassEffect(.regular, in: .capsule)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, HistoryTheme.gutter)
     }
 }
 

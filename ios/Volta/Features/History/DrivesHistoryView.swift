@@ -102,6 +102,7 @@ struct DrivesHistoryView: View {
     @State private var query = ""
     @State private var path: [DriveRoute] = []
     @State private var showingCustomRange = false
+    @State private var showingMap = false
     /// The whole tab, which decides between a stack and a split.
     @State private var window = HistoryWindow()
     /// The list's own area, inside the system bars.
@@ -173,6 +174,10 @@ struct DrivesHistoryView: View {
                                         message: "Choose a drive to see its route, charts and cost.")
         }
         .readsHistoryWindow($window)
+        .fullScreenCover(isPresented: $showingMap) {
+            DrivesFullMap(drives: visible, title: "Drives",
+                          subtitle: "\(range.menuTitle) · \(visible.count) \(visible.count == 1 ? "drive" : "drives")")
+        }
         .task(id: loadKey) { await load() }
         .voltaFeedback(.selection, trigger: range)
         .voltaFeedback(.selection, trigger: filter)
@@ -291,6 +296,7 @@ struct DrivesHistoryView: View {
                                    topInset: topInset + title, attribution: false)
                         .padding(.top, -topInset)
                         .allowsHitTesting(false)
+                        .overlay { mapExpandTarget }
                         .overlay(alignment: .topLeading) { inlineTitle.historySides(sideBars) }
                 } else {
                     inlineTitle.historySides(sideBars)
@@ -342,6 +348,20 @@ struct DrivesHistoryView: View {
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("scroll.drives")
         .refreshable { await refresh() }
+    }
+
+    /// The hero map is a preview: a tap anywhere on it opens every route full
+    /// screen, and a drag on it scrolls the page.
+    private var mapExpandTarget: some View {
+        Color.clear
+            .contentShape(.rect)
+            .onTapGesture { showingMap = true }
+            .accessibilityElement()
+            .accessibilityLabel("Drives route map")
+            .accessibilityHint("Opens every route full screen")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { showingMap = true }
+            .accessibilityIdentifier("drives.map.expand")
     }
 
     /// Why nothing shows, and the next step: a wider range, or clearing the
