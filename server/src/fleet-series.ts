@@ -22,13 +22,17 @@ export class FleetSeries {
     // Retain the identity and windows validated above across both queries;
     // a concurrent drive edit must not redirect samples to another car.
     const windows = this.sql.json(bound.map(d => ({id:d.id,car_id:d.car_id,start:d.start,finish:d.finish})));
+    // One statement, one branch per drive with constant bounds: Postgres
+    // pushes those into session_samples' per-timestamp grouping and reads
+    // only each drive's samples. Joined to a set of windows instead, it
+    // grouped every sample ever recorded before matching (462 ms vs 127 ms
+    // for 49 drives on 44 days of history, growing with history).
+    const branches = bound.map(d => this.sql`(SELECT ${d.id}::integer AS id,p.source_ts AS t,p.energy_remaining_kwh AS remaining,
+        p.lifetime_energy_used_kwh AS lifetime,p.invalid_fields AS invalid FROM volta_telemetry.session_samples p
+        WHERE p.vehicle_id=${d.car_id}::integer AND p.source_ts>=${d.start}::timestamp AT TIME ZONE 'UTC'
+          AND p.source_ts<=${d.finish}::timestamp AT TIME ZONE 'UTC')`);
     const [samples,gaps] = await Promise.all([
-      this.sql`SELECT d.id,p.source_ts AS t,p.energy_remaining_kwh AS remaining,p.lifetime_energy_used_kwh AS lifetime,
-        p.invalid_fields AS invalid FROM jsonb_to_recordset(${windows}::jsonb)
-        AS d(id integer,car_id integer,start timestamp,finish timestamp) JOIN volta_telemetry.session_samples p
-        ON p.vehicle_id=d.car_id AND p.source_ts>=d.start AT TIME ZONE 'UTC'
-          AND p.source_ts<=d.finish AT TIME ZONE 'UTC'
-        ORDER BY d.id,p.source_ts`,
+      this.sql`${branches.reduce((all,branch) => this.sql`${all} UNION ALL ${branch}`)} ORDER BY id,t`,
       this.sql`SELECT d.id,g.start_ts AS start,g.end_ts AS end,g.reason FROM jsonb_to_recordset(${windows}::jsonb)
         AS d(id integer,car_id integer,start timestamp,finish timestamp) JOIN volta_telemetry.gaps g ON g.vehicle_id=d.car_id
           AND g.start_ts<=d.finish AT TIME ZONE 'UTC' AND g.end_ts>=d.start AT TIME ZONE 'UTC' AND (reason NOT IN ('disconnected','silence') OR end_ts-start_ts>=interval '90 seconds')`

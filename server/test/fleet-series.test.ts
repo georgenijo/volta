@@ -429,9 +429,13 @@ test('page energy batches disjoint and overlapping windows into three queries',a
   await owner`INSERT INTO volta_telemetry.gaps(vehicle_id,start_ts,end_ts,reason)
     VALUES(1,${third!.start_date},${third!.start_date},'disconnected'),
       (1,${third!.start_date},${new Date(+third!.start_date+90000)},'silence')`;
+  // Count statements sent, not query-builder calls: per-drive branches of
+  // one UNION ALL statement are fragments, not round trips.
   let queries=0;
-  const counted=new Proxy(reader,{apply(target,thisArg,args){queries++;return Reflect.apply(target,thisArg,args);}});
-  const energy=await new FleetSeries(counted).driveEnergy([1,2,3,4]);
+  const options=(reader as any).options;
+  options.debug=()=>{queries++;};
+  let energy: Awaited<ReturnType<FleetSeries['driveEnergy']>>;
+  try { energy=await new FleetSeries(reader).driveEnergy([1,2,3,4]); } finally { options.debug=undefined; }
   expect(queries).toBe(3);
   expect(energy.get(1)).toEqual({energy:1,source:'fleet_lifetime_energy'});
   expect(energy.get(2)).toEqual({energy:5,source:'fleet_energy_remaining'});
