@@ -34,14 +34,6 @@ extension DriveSummary {
               energyUsedKwh > 0 || (energyUsedKwh == 0 && distanceKm == 0) else { return nil }
         return energyUsedKwh
     }
-    var energyProvenance: String {
-        switch energySource {
-        case "teslamate_rated_range": "Estimated from TeslaMate rated-range change × car efficiency"
-        case "fleet_lifetime_energy": "Estimated from Fleet Telemetry lifetime energy-used counter"
-        case "fleet_energy_remaining": "Estimated net battery energy from Fleet Telemetry energy remaining; regeneration and temperature affect this value"
-        default: "Energy source not supplied by this server"
-        }
-    }
     /// The summary route with collector break jitter tolerated; what every
     /// route drawing of this drive uses.
     var drawableRoute: [DriveRoutePoint] { DriveRouteSegments.tolerant(route ?? []) }

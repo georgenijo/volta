@@ -10,8 +10,6 @@ struct StateDisplay: Equatable, Sendable {
     var symbol: String
     var tone: Tone
 
-    var isKnown: Bool { tone != .unknown }
-
     static func doors(_ locked: Bool?) -> StateDisplay {
         switch locked {
         case true?: .init(text: "Locked", symbol: "lock.fill", tone: .active)

@@ -62,12 +62,6 @@ extension DriveSummary {
         return s - e
     }
 
-    /// Efficiency tint relative to a typical Model Y (~165 Wh/km is average):
-    /// green efficient, ink ordinary, amber heavy.
-    var efficiencyTint: Color {
-        guard let e = displayEfficiencyWhPerKm else { return HistoryTheme.secondary }
-        return e < 140 ? HistoryTheme.green : e < 190 ? Color.voltaTextPrimary : HistoryTheme.amber
-    }
 }
 
 /// Where the Drives tab can navigate. Routes name what they show by ID

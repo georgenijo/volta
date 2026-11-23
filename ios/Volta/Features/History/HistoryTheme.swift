@@ -114,27 +114,6 @@ struct HistoryStat: View {
     }
 }
 
-/// A row of equally spaced, centered totals (dashboard "Activity" style).
-struct HistoryTotalsRow: View {
-    struct Item: Identifiable {
-        var label: String
-        var value: String
-        var unit: String?
-        var id: String { label }
-    }
-    var items: [Item]
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            ForEach(items) { item in
-                HistoryStat(label: item.label, value: item.value, unit: item.unit, size: 28, alignment: .center)
-                    .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(.vertical, 6)
-    }
-}
-
 // MARK: - Battery range bar
 
 /// Thin 0–100 % track with a filled segment between two battery levels.
@@ -206,24 +185,6 @@ struct BatteryRangeView: View {
 }
 
 // MARK: - Chips
-
-struct HistoryBadge: View {
-    var title: String
-    var systemImage: String? = nil
-    var tint: Color
-
-    var body: some View {
-        HStack(spacing: 3) {
-            if let systemImage { Image(systemName: systemImage) }
-            Text(title)
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(tint)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.14), in: .capsule)
-    }
-}
 
 /// Inline metric used in list cards: icon + value.
 struct HistoryInlineMetric: View {

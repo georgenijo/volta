@@ -108,31 +108,6 @@ struct MockDataSource: VoltaDataSource {
         } ?? DemoRoutes.points(for: drive.id, start: drive.start, durationMin: drive.durationMin, spacingM: 250)
         return drive
     }
-    /// Continuous synthetic polyline between two public town centres: street
-    /// legs, a curving arterial, street legs. Waypoints shift with the drive id
-    /// so cards differ. Generated, not a recorded route.
-    static func syntheticRoute(_ drive: DriveSummary, count: Int = 48) -> [(t: Date, latitude: Double, longitude: Double)] {
-        let v = Double(drive.id % 4)
-        let waypoints: [(lat: Double, lon: Double)] = [
-            (37.4419, -122.1430),
-            (37.4372 - 0.003 * v, -122.1372),
-            (37.4290 - 0.004 * v, -122.1170 - 0.006 * (v - 1.5)),
-            (37.4068 + 0.004 * v, -122.1120 + 0.002 * v),
-            (37.3950, -122.0950 - 0.004 * v),
-            (37.3861, -122.0839),
-        ]
-        let legs = zip(waypoints, waypoints.dropFirst()).map { hypot($1.lat - $0.lat, $1.lon - $0.lon) }
-        let total = legs.reduce(0, +)
-        return (0..<count).map { i in
-            let f = Double(i) / Double(count - 1)
-            var along = f * total, leg = 0
-            while leg < legs.count - 1 && along > legs[leg] { along -= legs[leg]; leg += 1 }
-            let a = waypoints[leg], b = waypoints[leg + 1], u = min(along / max(legs[leg], 1e-12), 1)
-            // A gentle bend that vanishes at both ends keeps the endpoints exact.
-            let bend = 0.003 * sin(f * .pi * (5 + v)) * sin(f * .pi)
-            return (drive.start.addingTimeInterval(drive.durationMin * 60 * f), a.lat + (b.lat - a.lat) * u + bend, a.lon + (b.lon - a.lon) * u - bend)
-        }
-    }
     /// Synthetic Bay Area sessions. The newest is a priced Tesla Supercharger
     /// visit from Fleet Telemetry (negative id, 238 kW peak from a low start,
     /// 1 Hz-derived curves); the next telemetry fast charge (196 kW) has no
