@@ -138,6 +138,28 @@ final class DriveInsightsTests: XCTestCase {
         }
         XCTAssertEqual(VoltaClockFormat().format(afternoon), VoltaFormat.clock(afternoon))
     }
+    func testCachedFormattersMatchFreshOnesAndFollowLocaleAndZone() throws {
+        let instant = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-09T14:05:00Z"))
+        func fresh(_ template: String, _ locale: Locale, _ zone: TimeZone) -> String {
+            let formatter = DateFormatter()
+            formatter.locale = locale; formatter.timeZone = zone
+            formatter.setLocalizedDateFormatFromTemplate(template)
+            return formatter.string(from: instant)
+        }
+        let zones = [TimeZone(identifier: "UTC")!, TimeZone(identifier: "America/Los_Angeles")!, TimeZone(identifier: "Asia/Tokyo")!]
+        let locales = ["en_US", "en_GB", "de_DE", "ja_JP"].map(Locale.init(identifier:))
+        for template in ["HHmm", "yMMMdHHmm", "MMMdHHmm"] {
+            for locale in locales {
+                for zone in zones {
+                    let cached = VoltaFormat.cachedFormatter(template: template, locale: locale, timeZone: zone)
+                    XCTAssertEqual(cached.string(from: instant), fresh(template, locale, zone), "\(template) \(locale.identifier) \(zone.identifier)")
+                    XCTAssertTrue(cached === VoltaFormat.cachedFormatter(template: template, locale: locale, timeZone: zone))
+                }
+            }
+        }
+        XCTAssertEqual(VoltaFormat.clock(instant, timeZone: zones[1], locale: locales[0]), "07:05")
+        XCTAssertEqual(VoltaFormat.clock(instant, timeZone: zones[2], locale: locales[0]), "23:05")
+    }
     private func route(_ count: Int, breaks: Set<Int> = [], seconds: Double = 10, step: Double = 0.001) -> [DriveRoutePoint] {
         (0..<count).map { i in
             DriveRoutePoint(t: Date(timeIntervalSince1970: Double(i) * seconds), latitude: 37.4 + Double(i) * step,

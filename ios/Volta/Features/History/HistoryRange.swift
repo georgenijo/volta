@@ -96,12 +96,9 @@ struct DayGroup<Item: Identifiable & Hashable>: Identifiable, Hashable {
         if calendar.isDate(day, inSameDayAs: now) { return "Today" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            calendar.isDate(day, inSameDayAs: yesterday) { return "Yesterday" }
-        let formatter = DateFormatter()
-        formatter.locale = .autoupdatingCurrent
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate(calendar.isDate(day, equalTo: now, toGranularity: .year) ? "EEE MMM d" : "EEE MMM d yyyy")
-        return formatter.string(from: day)
+        let template = calendar.isDate(day, equalTo: now, toGranularity: .year) ? "EEE MMM d" : "EEE MMM d yyyy"
+        return VoltaFormat.cachedFormatter(template: template, locale: .autoupdatingCurrent, timeZone: calendar.timeZone,
+                                           calendar: calendar).string(from: day)
     }
 
     static func group(_ items: [Item], by date: (Item) -> Date, calendar: Calendar = .current) -> [DayGroup] {
