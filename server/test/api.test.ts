@@ -770,6 +770,10 @@ describe('database privilege boundaries', () => {
     const unrestricted = connect(process.env.TESLAMATE_DATABASE_URL!);
     try { await unrestricted`SET default_transaction_read_only = off`; await expect(Promise.resolve(unrestricted`UPDATE public.cars SET name = 'bad' WHERE id = 1`)).rejects.toBeDefined(); } finally { await unrestricted.end(); }
   });
+  test('API connections turn JIT off, so cheap queries never pay LLVM compile time', async () => {
+    const [row] = await reader`SELECT current_setting('jit') AS jit, current_setting('transaction_read_only') AS ro`;
+    expect(row).toEqual({ jit: 'off', ro: 'on' });
+  });
   test('bootstrap rejects unsafe legacy PUBLIC CREATE without changing shared grants', async () => {
     try {
       await owner`GRANT CREATE ON SCHEMA public TO PUBLIC`;

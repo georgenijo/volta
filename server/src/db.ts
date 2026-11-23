@@ -3,7 +3,11 @@ import postgres from 'postgres';
 export function connect(url: string, readOnly = false, statementTimeout = 15000) {
   return postgres(url, {
     onnotice: () => {}, max: 5, idle_timeout: 20, connect_timeout: 5,
-    connection: { timezone: 'UTC', statement_timeout: statementTimeout, ...(readOnly ? { default_transaction_read_only: true } : {}) },
+    // JIT off: correlated TeslaMate lookups make plans look costly enough to
+    // trigger LLVM compilation, which took ~1 s per drives/mileage query
+    // while the queries themselves run in a few milliseconds. Results are
+    // unchanged; JIT only affects how expressions are evaluated.
+    connection: { timezone: 'UTC', statement_timeout: statementTimeout, jit: 'off', ...(readOnly ? { default_transaction_read_only: true } : {}) },
     // TeslaMate decimals are metric measurements; JSON numbers match Swift Double.
     types: {
       numeric: { to: 1700, from: [1700], serialize: String, parse: Number },
