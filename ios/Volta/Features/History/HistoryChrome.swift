@@ -509,63 +509,6 @@ extension HistoryErrorState {
     }
 }
 
-/// Placeholder blocks shown while the first page loads, drawn as a skeleton
-/// (`.voltaSkeleton`): a totals row, a section label and list cards.
-struct HistorySkeletonList: View {
-    var rows: Int = 5
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    ForEach(0..<3, id: \.self) { _ in
-                        VStack(spacing: 8) {
-                            bar(width: 70, height: 26)
-                            bar(width: 50, height: 9)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-                .padding(.vertical, 14)
-                bar(width: 80, height: 10).padding(.top, 8)
-                ForEach(0..<rows, id: \.self) { _ in
-                    HistoryCard {
-                        VStack(alignment: .leading, spacing: 14) {
-                            HStack(spacing: 12) {
-                                Circle().fill(HistoryTheme.track).frame(width: 38, height: 38)
-                                VStack(alignment: .leading, spacing: 7) {
-                                    bar(width: 150, height: 13)
-                                    bar(width: 100, height: 10)
-                                }
-                                Spacer()
-                                bar(width: 46, height: 14)
-                            }
-                            bar(width: nil, height: 6)
-                            HStack(spacing: 18) {
-                                bar(width: 60, height: 11)
-                                bar(width: 50, height: 11)
-                                bar(width: 56, height: 11)
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, HistoryTheme.gutter)
-            .voltaSkeleton(true)
-        }
-        .scrollDisabled(true)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Loading")
-    }
-
-    private func bar(width: CGFloat?, height: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: height / 2)
-            .fill(HistoryTheme.track)
-            .frame(width: width, height: height)
-            .frame(maxWidth: width == nil ? .infinity : nil)
-    }
-}
-
 /// Bottom of a paginated list. Loads the next page while visible.
 ///
 /// The container's identity never depends on loading state; the load is keyed
@@ -604,36 +547,5 @@ struct HistoryPageFooter<Item: Codable & Hashable & Sendable & Identifiable>: Vi
         .frame(maxWidth: .infinity)
         .padding(.vertical, 18)
         .task(id: feed.paginationTrigger) { await feed.loadMore() }
-    }
-}
-
-// MARK: - Totals
-
-/// Totals header: scope heading ("Last 30 days", or "Loaded drives — partial"
-/// when more pages exist), the totals row and any coverage notes.
-struct HistoryTotalsBlock: View {
-    var title: String
-    var isPartial: Bool
-    var items: [HistoryTotalsRow.Item]
-    var notes: [String] = []
-
-    var body: some View {
-        VStack(spacing: 12) {
-            HistorySectionLabel(title: title, systemImage: isPartial ? "circle.dashed" : nil)
-            HistoryTotalsRow(items: items)
-            if !notes.isEmpty {
-                VStack(spacing: 3) {
-                    ForEach(notes, id: \.self) { note in
-                        Text(note)
-                    }
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(HistoryTheme.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-            }
-            HairlineDivider()
-        }
-        .padding(.top, 8)
     }
 }

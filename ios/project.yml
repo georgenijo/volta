@@ -27,6 +27,8 @@ targets:
     platform: iOS
     sources:
       - path: Volta
+        excludes:
+          - "**/*.md"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.georgenijo.volta

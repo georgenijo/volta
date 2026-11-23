@@ -31,9 +31,6 @@ struct UnitPreferences: Codable, Hashable, Sendable {
         guard let whPerKm else { return "—" }
         return "\(VoltaFormat.number(efficiencyValue(whPerKm: whPerKm), digits: 0)) \(efficiencyUnit)"
     }
-    func formatMoney(_ amount: Double?, currency: String? = nil) -> String {
-        VoltaFormat.money(amount, currency: currency ?? self.currency)
-    }
 }
 
 private struct UnitsKey: EnvironmentKey { static let defaultValue = UnitPreferences.default }

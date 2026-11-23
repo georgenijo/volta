@@ -66,8 +66,6 @@ struct ChargeLook {
     var isStale: Bool
 
     var phase: ChargingActivityAttributes.Phase { state.phase }
-    /// The countdown runs only while charging on fresh data.
-    var showsCountdown: Bool { phase == .charging && !isStale }
     var staleCharging: Bool { isStale && phase == .charging }
 
     /// "Charging", "Supercharging", "Complete", "Stopped" or "Stale".

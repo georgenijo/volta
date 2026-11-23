@@ -113,8 +113,6 @@ struct ParkedPlace: Identifiable, Equatable {
     /// How many places an "other places" row stands for; 1 for a real place.
     var placeCount = 1
 
-    var isOthers: Bool { placeCount > 1 }
-
     static func key(_ stop: IdleSummary) -> String {
         if let name = stop.placeName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             return "name:" + name.lowercased()

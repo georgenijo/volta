@@ -466,10 +466,6 @@ struct HistoryLocationCard: View {
 
 /// Metrics of a stretch of recorded route; colours come from `RoutePalette`.
 enum RouteBuilder {
-    static func averageSpeedKph<C: Collection>(_ points: C) -> Double? where C.Element == DrivePoint {
-        let speeds = points.compactMap(\.speedKph)
-        return speeds.isEmpty ? nil : speeds.reduce(0, +) / Double(speeds.count)
-    }
 
     /// Wh/km from samples that recorded both speed and power. Nil (neutral
     /// color) when there are no such samples or the car was barely moving, so

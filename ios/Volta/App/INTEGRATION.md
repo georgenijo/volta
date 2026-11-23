@@ -35,8 +35,8 @@ Shared formatting uses `UnitPreferences.Distance` (`miles`, `kilometers`),
 `UnitPreferences.Temperature` (`fahrenheit`, `celsius`), and a currency code.
 `distanceValue(km:)`, `temperatureValue(celsius:)`, and
 `efficiencyValue(whPerKm:)` return converted numbers for charts.
-`formatDistance`, `formatTemperature`, `formatEfficiency`, `formatMoney`
-return display strings. `VoltaFormat` additionally supplies `energy`,
+`formatDistance`, `formatTemperature` and `formatEfficiency`
+return display strings. `VoltaFormat` additionally supplies `energy`, `money`,
 `duration(minutes:)`, `relativeDate`, and `number`. Unknown optional values
 format as an em dash, preserving the API's null-versus-zero distinction.
 

@@ -11,10 +11,6 @@ extension View {
             .lineLimit(1)
     }
 
-    /// Kept for older call sites: the same caption voice.
-    func tripCaption(_ color: Color = HistoryTheme.tertiary, size: CGFloat = 8) -> some View {
-        tripLabel(color, size: size)
-    }
 }
 
 /// A flat section of the trip screen: a hairline, an SF Symbol and a
