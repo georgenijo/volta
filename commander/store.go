@@ -228,6 +228,10 @@ func cloneState(d diskState) diskState {
 	return copy
 }
 
+// syncFile flushes a file or directory to stable storage. Only tests replace it
+// (see store_sync_test.go): production always uses File.Sync.
+var syncFile = (*os.File).Sync
+
 // Write temp -> fsync -> rename -> fsync directory before considering a token
 // rotation or an idempotency reservation committed.
 func (s *Store) update(fn func(*diskState)) error {
@@ -259,7 +263,7 @@ func (s *Store) updateChecked(fn func(*diskState) error) error {
 		_, err = f.Write(data)
 	}
 	if err == nil {
-		err = f.Sync()
+		err = syncFile(f)
 	}
 	closeErr := f.Close()
 	if err != nil {
@@ -278,5 +282,5 @@ func (s *Store) updateChecked(fn func(*diskState) error) error {
 		return err
 	}
 	defer dir.Close()
-	return dir.Sync()
+	return syncFile(dir)
 }
