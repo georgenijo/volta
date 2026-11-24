@@ -15,8 +15,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 # No persistent service; private socket directory, loopback only, synthetic data.
+# The cluster is deleted on exit, so crash safety buys nothing: skip fsync and
+# full-page writes. Memory settings stay at defaults so query timings stay comparable.
+durability="-c fsync=off -c synchronous_commit=off -c full_page_writes=off"
 "$PG_BIN/initdb" -D "$cluster/data" -A trust --no-instructions >"$cluster/init.log"
-"$PG_BIN/pg_ctl" -D "$cluster/data" -l "$cluster/postgres.log" -o "-h 127.0.0.1 -p $port -k $cluster" start >/dev/null
+"$PG_BIN/pg_ctl" -D "$cluster/data" -l "$cluster/postgres.log" -o "-h 127.0.0.1 -p $port -k $cluster $durability" start >/dev/null
 "$PG_BIN/createdb" -h 127.0.0.1 -p "$port" volta_test
 export TEST_DATABASE_URL="postgres://$(id -un)@127.0.0.1:$port/volta_test"
 "$PG_BIN/psql" "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f test/teslamate-v4.3.0.sql >"$cluster/restore.log"

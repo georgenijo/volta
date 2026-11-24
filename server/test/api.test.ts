@@ -714,7 +714,7 @@ describe('metric telemetry contract', () => {
     for (const path of ['/v1/vehicles/0/status','/v1/vehicles/1/drives?limit=101','/v1/vehicles/1/drives?limit=1.5','/v1/vehicles/1/drives?cursor=garbage','/v1/vehicles/1/drives?from=2026-02-30T00:00:00Z','/v1/vehicles/1/drives?from=2026-02-01T00:00:00Z&to=2026-01-01T00:00:00Z','/v1/vehicles/1/summary?range=forever','/v1/vehicles/1/timeline?hours=745','/v1/vehicles/1/mileage?bucket=year','/v1/vehicles/1/idles?minMinutes=0']) expect((await request(path)).status).toBe(400);
   });
   test('history analytics stay within SQL timeout at realistic recording volume', async () => {
-    await owner.file(new URL('./scale.sql', import.meta.url));
+    await owner.begin(tx => tx.file(new URL('./scale.sql', import.meta.url)));
     // VACUUM must be a separate autocommit statement, not part of the SQL file.
     await owner`VACUUM (ANALYZE) public.positions`;
     const started = performance.now(), timings: Record<string, number> = {};

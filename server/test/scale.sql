@@ -1,3 +1,7 @@
+-- Run inside one transaction (api.test.ts uses sql.begin). The bulk rows are
+-- validated with one check per foreign key instead of 3 million per-row
+-- trigger calls, and a failure rolls the constraints back with the rows.
+ALTER TABLE positions DROP CONSTRAINT positions_car_id_fkey, DROP CONSTRAINT positions_drive_id_fkey;
 -- Two years of synthetic driving volume; upstream indexes plus the production
 -- route-seek index installed by bootstrap. All prior charges have known prices.
 INSERT INTO drives (id, car_id, start_date, end_date, distance, duration_min, start_rated_range_km, end_rated_range_km, start_km, end_km)
@@ -41,3 +45,6 @@ SELECT 2000000+(n-1)*400+j,1,timestamp '2020-01-01'+n*interval '6 hours'+j*inter
 FROM generate_series(1,2500) n CROSS JOIN (SELECT generate_series(61,89) AS j UNION ALL SELECT generate_series(300,359)) parked;
 ANALYZE public.states;
 ANALYZE public.positions;
+ALTER TABLE positions
+  ADD CONSTRAINT positions_car_id_fkey FOREIGN KEY (car_id) REFERENCES cars(id) ON DELETE CASCADE,
+  ADD CONSTRAINT positions_drive_id_fkey FOREIGN KEY (drive_id) REFERENCES drives(id) ON DELETE SET NULL;
