@@ -18,7 +18,10 @@ bun run test:local
 `test:local` creates a fresh temporary PG17 cluster, binds only to loopback,
 restores `test/teslamate-v4.3.0.sql`, runs the production grants/bootstrap without
 interactive password prompts, seeds synthetic fixture data, and runs `bun test`.
-It always stops/removes its own cluster; it does not install a launch service or
+The full suite uses two such clusters in parallel: `test/api.test.ts` on one and
+every other file on the other. `bun run test:local ./test/<file>.test.ts` runs
+the given files on a single cluster.
+It always stops/removes its own clusters; it does not install a launch service or
 use an existing database. `PG_BIN=/path/to/postgresql17/bin` supports another
 local PG17 installation. Python 3 is used to pick an available port. Trust auth
 is only for this temporary localhost fixture cluster. Never use the test harness
